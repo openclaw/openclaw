@@ -22,6 +22,20 @@ function configureTerminalIO(params: {
   (process.stdin as { isPaused?: () => boolean }).isPaused = params.isPaused;
 }
 
+function setupPausedTTYStdin() {
+  const setRawMode = vi.fn();
+  const resume = vi.fn();
+  const isPaused = vi.fn(() => true);
+  configureTerminalIO({
+    stdinIsTTY: true,
+    stdoutIsTTY: false,
+    setRawMode,
+    resume,
+    isPaused,
+  });
+  return { setRawMode, resume };
+}
+
 describe("restoreTerminalState", () => {
   const originalStdinIsTTY = process.stdin.isTTY;
   const originalStdoutIsTTY = process.stdout.isTTY;
@@ -45,17 +59,7 @@ describe("restoreTerminalState", () => {
   });
 
   it("does not resume paused stdin by default", () => {
-    const setRawMode = vi.fn();
-    const resume = vi.fn();
-    const isPaused = vi.fn(() => true);
-
-    configureTerminalIO({
-      stdinIsTTY: true,
-      stdoutIsTTY: false,
-      setRawMode,
-      resume,
-      isPaused,
-    });
+    const { setRawMode, resume } = setupPausedTTYStdin();
 
     restoreTerminalState("test");
 
@@ -64,17 +68,7 @@ describe("restoreTerminalState", () => {
   });
 
   it("resumes paused stdin when resumeStdin is true", () => {
-    const setRawMode = vi.fn();
-    const resume = vi.fn();
-    const isPaused = vi.fn(() => true);
-
-    configureTerminalIO({
-      stdinIsTTY: true,
-      stdoutIsTTY: false,
-      setRawMode,
-      resume,
-      isPaused,
-    });
+    const { setRawMode, resume } = setupPausedTTYStdin();
 
     restoreTerminalState("test", { resumeStdinIfPaused: true });
 
@@ -99,5 +93,21 @@ describe("restoreTerminalState", () => {
 
     expect(setRawMode).not.toHaveBeenCalled();
     expect(resume).not.toHaveBeenCalled();
+  });
+
+  it("writes kitty and modifyOtherKeys reset sequences to stdout", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    configureTerminalIO({
+      stdinIsTTY: false,
+      stdoutIsTTY: true,
+    });
+
+    restoreTerminalState("test");
+
+    expect(writeSpy).toHaveBeenCalled();
+    const output = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("\x1b[<u");
+    expect(output).toContain("\x1b[>4;0m");
   });
 });

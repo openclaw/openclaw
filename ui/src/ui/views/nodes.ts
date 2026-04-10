@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
@@ -7,7 +8,9 @@ import type {
 } from "../controllers/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
+import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -49,9 +52,7 @@ export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return html`
-    ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)}
-    ${renderDevices(props)}
+    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)} ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -59,17 +60,13 @@ export function renderNodes(props: NodesProps) {
           <div class="card-sub">Paired devices and live links.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       <div class="list" style="margin-top: 16px;">
-        ${
-          props.nodes.length === 0
-            ? html`
-                <div class="muted">No nodes found.</div>
-              `
-            : props.nodes.map((n) => renderNode(n))
-        }
+        ${props.nodes.length === 0
+          ? html` <div class="muted">No nodes found.</div> `
+          : props.nodes.map((n) => renderNode(n))}
       </div>
     </section>
   `;
@@ -87,47 +84,38 @@ function renderDevices(props: NodesProps) {
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-          ${props.devicesLoading ? "Loading…" : "Refresh"}
+          ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
-      ${
-        props.devicesError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`
-          : nothing
-      }
+      ${props.devicesError
+        ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`
+        : nothing}
       <div class="list" style="margin-top: 16px;">
-        ${
-          pending.length > 0
-            ? html`
+        ${pending.length > 0
+          ? html`
               <div class="muted" style="margin-bottom: 8px;">Pending</div>
               ${pending.map((req) => renderPendingDevice(req, props))}
             `
-            : nothing
-        }
-        ${
-          paired.length > 0
-            ? html`
+          : nothing}
+        ${paired.length > 0
+          ? html`
               <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
               ${paired.map((device) => renderPairedDevice(device, props))}
             `
-            : nothing
-        }
-        ${
-          pending.length === 0 && paired.length === 0
-            ? html`
-                <div class="muted">No paired devices.</div>
-              `
-            : nothing
-        }
+          : nothing}
+        ${pending.length === 0 && paired.length === 0
+          ? html` <div class="muted">No paired devices.</div> `
+          : nothing}
       </div>
     </section>
   `;
 }
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
-  const name = req.displayName?.trim() || req.deviceId;
-  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
-  const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
+  const name = normalizeOptionalString(req.displayName) || req.deviceId;
+  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
+  const roleValue = normalizeOptionalString(req.role) || formatList(req.roles);
+  const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
@@ -136,7 +124,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">
-          ${role} · requested ${age}${repair}
+          role: ${roleValue} · scopes: ${scopesValue} · requested ${age}${repair}
         </div>
       </div>
       <div class="list-meta">
@@ -154,7 +142,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = device.displayName?.trim() || device.deviceId;
+  const name = normalizeOptionalString(device.displayName) || device.deviceId;
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
@@ -165,18 +153,14 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
         <div class="list-title">${name}</div>
         <div class="list-sub">${device.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
-        ${
-          tokens.length === 0
-            ? html`
-                <div class="muted" style="margin-top: 6px">Tokens: none</div>
-              `
-            : html`
+        ${tokens.length === 0
+          ? html` <div class="muted" style="margin-top: 6px">Tokens: none</div> `
+          : html`
               <div class="muted" style="margin-top: 10px;">Tokens</div>
               <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
                 ${tokens.map((token) => renderTokenRow(device.deviceId, token, props))}
               </div>
-            `
-        }
+            `}
       </div>
     </div>
   `;
@@ -198,18 +182,16 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
         >
           Rotate
         </button>
-        ${
-          token.revokedAtMs
-            ? nothing
-            : html`
+        ${token.revokedAtMs
+          ? nothing
+          : html`
               <button
                 class="btn btn--sm danger"
                 @click=${() => props.onDeviceRevoke(deviceId, token.role)}
               >
                 Revoke
               </button>
-            `
-        }
+            `}
       </div>
     </div>
   `;
@@ -217,16 +199,13 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
 
 type BindingAgent = {
   id: string;
-  name?: string;
+  name: string | undefined;
   index: number;
   isDefault: boolean;
-  binding?: string | null;
+  binding: string | null;
 };
 
-type BindingNode = {
-  id: string;
-  label: string;
-};
+type BindingNode = NodeTargetOption;
 
 type BindingState = {
   ready: boolean;
@@ -274,48 +253,42 @@ function renderBindings(state: BindingState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Exec node binding</div>
-          <div class="card-sub">
-            Pin agents to a specific node when using <span class="mono">exec host=node</span>.
-          </div>
+          <div class="card-title">${t("nodes.binding.execNodeBinding")}</div>
+          <div class="card-sub">${t("nodes.binding.execNodeBindingSubtitle")}</div>
         </div>
         <button
           class="btn"
           ?disabled=${state.disabled || !state.configDirty}
           @click=${state.onSave}
         >
-          ${state.configSaving ? "Saving…" : "Save"}
+          ${state.configSaving ? t("common.saving") : t("common.save")}
         </button>
       </div>
 
-      ${
-        state.formMode === "raw"
-          ? html`
-              <div class="callout warn" style="margin-top: 12px">
-                Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
-              </div>
-            `
-          : nothing
-      }
-
-      ${
-        !state.ready
-          ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">Load config to edit bindings.</div>
+      ${state.formMode === "raw"
+        ? html`
+            <div class="callout warn" style="margin-top: 12px">
+              ${t("nodes.binding.formModeHint")}
+            </div>
+          `
+        : nothing}
+      ${!state.ready
+        ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
+            <div class="muted">${t("nodes.binding.loadConfigHint")}</div>
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
-              ${state.configLoading ? "Loading…" : "Load config"}
+              ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
           </div>`
-          : html`
+        : html`
             <div class="list" style="margin-top: 16px;">
               <div class="list-item">
                 <div class="list-main">
-                  <div class="list-title">Default binding</div>
-                  <div class="list-sub">Used when agents do not override a node binding.</div>
+                  <div class="list-title">${t("nodes.binding.defaultBinding")}</div>
+                  <div class="list-sub">${t("nodes.binding.defaultBindingHint")}</div>
                 </div>
                 <div class="list-meta">
                   <label class="field">
-                    <span>Node</span>
+                    <span>${t("nodes.binding.node")}</span>
                     <select
                       ?disabled=${state.disabled || !supportsBinding}
                       @change=${(event: Event) => {
@@ -327,35 +300,23 @@ function renderBindings(state: BindingState) {
                       <option value="" ?selected=${defaultValue === ""}>Any node</option>
                       ${state.nodes.map(
                         (node) =>
-                          html`<option
-                            value=${node.id}
-                            ?selected=${defaultValue === node.id}
-                          >
+                          html`<option value=${node.id} ?selected=${defaultValue === node.id}>
                             ${node.label}
                           </option>`,
                       )}
                     </select>
                   </label>
-                  ${
-                    !supportsBinding
-                      ? html`
-                          <div class="muted">No nodes with system.run available.</div>
-                        `
-                      : nothing
-                  }
+                  ${!supportsBinding
+                    ? html` <div class="muted">No nodes with system.run available.</div> `
+                    : nothing}
                 </div>
               </div>
 
-              ${
-                state.agents.length === 0
-                  ? html`
-                      <div class="muted">No agents found.</div>
-                    `
-                  : state.agents.map((agent) => renderAgentBinding(agent, state))
-              }
+              ${state.agents.length === 0
+                ? html` <div class="muted">No agents found.</div> `
+                : state.agents.map((agent) => renderAgentBinding(agent, state))}
             </div>
-          `
-      }
+          `}
     </section>
   `;
 }
@@ -370,11 +331,9 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
         <div class="list-title">${label}</div>
         <div class="list-sub">
           ${agent.isDefault ? "default agent" : "agent"} ·
-          ${
-            bindingValue === "__default__"
-              ? `uses default (${state.defaultBinding ?? "any"})`
-              : `override: ${agent.binding}`
-          }
+          ${bindingValue === "__default__"
+            ? `uses default (${state.defaultBinding ?? "any"})`
+            : `override: ${agent.binding}`}
         </div>
       </div>
       <div class="list-meta">
@@ -393,10 +352,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
             </option>
             ${state.nodes.map(
               (node) =>
-                html`<option
-                  value=${node.id}
-                  ?selected=${bindingValue === node.id}
-                >
+                html`<option value=${node.id} ?selected=${bindingValue === node.id}>
                   ${node.label}
                 </option>`,
             )}
@@ -408,28 +364,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
 }
 
 function resolveExecNodes(nodes: Array<Record<string, unknown>>): BindingNode[] {
-  const list: BindingNode[] = [];
-  for (const node of nodes) {
-    const commands = Array.isArray(node.commands) ? node.commands : [];
-    const supports = commands.some((cmd) => String(cmd) === "system.run");
-    if (!supports) {
-      continue;
-    }
-    const nodeId = typeof node.nodeId === "string" ? node.nodeId.trim() : "";
-    if (!nodeId) {
-      continue;
-    }
-    const displayName =
-      typeof node.displayName === "string" && node.displayName.trim()
-        ? node.displayName.trim()
-        : nodeId;
-    list.push({
-      id: nodeId,
-      label: displayName === nodeId ? nodeId : `${displayName} · ${nodeId}`,
-    });
-  }
-  list.sort((a, b) => a.label.localeCompare(b.label));
-  return list;
+  return resolveNodeTargets(nodes, ["system.run"]);
 }
 
 function resolveAgentBindings(config: Record<string, unknown> | null): {
@@ -452,34 +387,22 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
     typeof exec.node === "string" && exec.node.trim() ? exec.node.trim() : null;
 
   const agentsNode = (config.agents ?? {}) as Record<string, unknown>;
-  const list = Array.isArray(agentsNode.list) ? agentsNode.list : [];
-  if (list.length === 0) {
+  if (!Array.isArray(agentsNode.list) || agentsNode.list.length === 0) {
     return { defaultBinding, agents: [fallbackAgent] };
   }
 
-  const agents: BindingAgent[] = [];
-  list.forEach((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      return;
-    }
-    const record = entry as Record<string, unknown>;
-    const id = typeof record.id === "string" ? record.id.trim() : "";
-    if (!id) {
-      return;
-    }
-    const name = typeof record.name === "string" ? record.name.trim() : undefined;
-    const isDefault = record.default === true;
-    const toolsEntry = (record.tools ?? {}) as Record<string, unknown>;
+  const agents = resolveConfigAgents(config).map((entry) => {
+    const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
     const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
     const binding =
       typeof execEntry.node === "string" && execEntry.node.trim() ? execEntry.node.trim() : null;
-    agents.push({
-      id,
-      name: name || undefined,
-      index,
-      isDefault,
+    return {
+      id: entry.id,
+      name: entry.name,
+      index: entry.index,
+      isDefault: entry.isDefault,
       binding,
-    });
+    };
   });
 
   if (agents.length === 0) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp, stripThinkingTags } from "./format.ts";
+import { formatRelativeTimestamp, formatUnknownText, stripThinkingTags } from "./format.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {
@@ -67,5 +67,51 @@ describe("stripThinkingTags", () => {
     // This should not crash and should handle gracefully
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
+  });
+
+  it("strips <relevant-memories> blocks", () => {
+    const input = [
+      "<relevant-memories>",
+      "The following memories may be relevant to this conversation:",
+      "- Internal memory note",
+      "</relevant-memories>",
+      "",
+      "User-visible answer",
+    ].join("\n");
+    expect(stripThinkingTags(input)).toBe("User-visible answer");
+  });
+
+  it("keeps relevant-memories tags in fenced code blocks", () => {
+    const input = [
+      "```xml",
+      "<relevant-memories>",
+      "sample",
+      "</relevant-memories>",
+      "```",
+      "",
+      "Visible text",
+    ].join("\n");
+    expect(stripThinkingTags(input)).toBe(input);
+  });
+
+  it("hides unfinished <relevant-memories> block tails", () => {
+    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
+    expect(stripThinkingTags(input)).toBe("Hello\n");
+  });
+});
+
+describe("formatUnknownText", () => {
+  it("stringifies plain objects without throwing", () => {
+    expect(formatUnknownText({ ok: true })).toBe('{"ok":true}');
+  });
+
+  it("falls back to object tags for non-serializable values", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(formatUnknownText(circular)).toBe("[object Object]");
+  });
+
+  it("formats symbols without relying on object coercion", () => {
+    expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
   });
 });

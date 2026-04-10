@@ -1,5 +1,6 @@
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
@@ -16,13 +17,11 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+    "inputTokens" | "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
   >,
 ) => {
   const used = sess.totalTokens;
   const ctx = sess.contextTokens;
-  const cacheRead = sess.cacheRead;
-  const cacheWrite = sess.cacheWrite;
 
   let result = "";
   if (used == null) {
@@ -34,18 +33,69 @@ export const formatTokensCompact = (
     result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
   }
 
-  // Add cache hit rate if there are cached reads
-  if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
-    result += ` · 🗄️ ${hitRate}% cached`;
+  const cacheStats = resolvePromptCacheStats(sess);
+  if (cacheStats && cacheStats.cacheRead > 0) {
+    result += ` · 🗄️ ${cacheStats.hitRate}% cached`;
   }
 
   return result;
 };
+
+export const formatPromptCacheCompact = (
+  sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
+) => {
+  const cacheStats = resolvePromptCacheStats(sess);
+  if (!cacheStats) {
+    return "";
+  }
+  const parts = [`${cacheStats.hitRate}% hit`];
+  if (cacheStats.cacheRead > 0) {
+    parts.push(`read ${formatKTokens(cacheStats.cacheRead)}`);
+  }
+  if (cacheStats.cacheWrite > 0) {
+    parts.push(`write ${formatKTokens(cacheStats.cacheWrite)}`);
+  }
+  return parts.join(" · ");
+};
+
+function resolvePromptCacheStats(
+  sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
+) {
+  const cacheRead =
+    typeof sess.cacheRead === "number" && Number.isFinite(sess.cacheRead) && sess.cacheRead >= 0
+      ? sess.cacheRead
+      : 0;
+  const cacheWrite =
+    typeof sess.cacheWrite === "number" && Number.isFinite(sess.cacheWrite) && sess.cacheWrite >= 0
+      ? sess.cacheWrite
+      : 0;
+  if (cacheRead <= 0 && cacheWrite <= 0) {
+    return null;
+  }
+  const inputTokens =
+    typeof sess.inputTokens === "number" &&
+    Number.isFinite(sess.inputTokens) &&
+    sess.inputTokens >= 0
+      ? sess.inputTokens
+      : undefined;
+  const promptTokensFromParts =
+    inputTokens != null ? inputTokens + cacheRead + cacheWrite : undefined;
+  const used = sess.totalTokens;
+  // Legacy entries can carry an undersized totalTokens value. Keep the cache
+  // denominator aligned with the prompt-side token fields when available, and
+  // never let the fallback denominator drop below the known cached prompt
+  // tokens.
+  const total =
+    promptTokensFromParts ??
+    (typeof used === "number" && Number.isFinite(used) && used > 0
+      ? Math.max(used, cacheRead + cacheWrite)
+      : cacheRead + cacheWrite);
+  return {
+    cacheRead,
+    cacheWrite,
+    hitRate: total > 0 ? Math.round((cacheRead / total) * 100) : 0,
+  };
+}
 
 export const formatDaemonRuntimeShort = (runtime?: {
   status?: string;
@@ -60,7 +110,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   const details: string[] = [];
   const detail = runtime.detail?.replace(/\s+/g, " ").trim() || "";
   const noisyLaunchctlDetail =
-    runtime.missingUnit === true && detail.toLowerCase().includes("could not find service");
+    runtime.missingUnit === true &&
+    normalizeLowercaseStringOrEmpty(detail).includes("could not find service");
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }

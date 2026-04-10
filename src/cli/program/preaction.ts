@@ -1,11 +1,20 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
-import { emitCliBanner } from "../banner.js";
+import { getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  applyCliExecutionStartupPresentation,
+  ensureCliExecutionBootstrap,
+  resolveCliExecutionStartupContext,
+} from "../command-execution-startup.js";
+import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallPreactionRequest,
+} from "../plugin-install-config-policy.js";
+import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -20,16 +29,17 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set([
-  "message",
-  "channels",
-  "directory",
-  "agents",
-  "configure",
-  "onboard",
-]);
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]);
+function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(
+      resolvePluginInstallPreactionRequest({
+        actionCommand,
+        commandPath,
+        argv: process.argv,
+      }),
+    ) === "allow-bundled-recovery"
+  );
+}
 
 function getRootCommand(command: Command): Command {
   let current = command;
@@ -58,15 +68,16 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (hasHelpOrVersion(argv)) {
       return;
     }
-    const commandPath = getCommandPath(argv, 2);
-    const hideBanner =
-      isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
-      commandPath[0] === "update" ||
-      commandPath[0] === "completion" ||
-      (commandPath[0] === "plugins" && commandPath[1] === "update");
-    if (!hideBanner) {
-      emitCliBanner(programVersion);
-    }
+    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
+      argv,
+      jsonOutputMode,
+      env: process.env,
+    });
+    await applyCliExecutionStartupPresentation({
+      startupPolicy,
+      version: programVersion,
+    });
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
@@ -76,15 +87,14 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (CONFIG_GUARD_BYPASS_COMMANDS.has(commandPath[0])) {
+    if (shouldBypassConfigGuardForCommandPath(commandPath)) {
       return;
     }
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
-    // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
-      const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");
-      ensurePluginRegistryLoaded();
-    }
+    await ensureCliExecutionBootstrap({
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+    });
   });
 }

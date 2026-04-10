@@ -1,6 +1,7 @@
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
+import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
@@ -39,7 +40,7 @@ function messageFromError(error: unknown): string {
 }
 
 function shouldFallbackToPairList(error: unknown): boolean {
-  const message = messageFromError(error).toLowerCase();
+  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
   if (!message.includes("node.list")) {
     return false;
   }
@@ -72,7 +73,7 @@ async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
-    node.platform?.toLowerCase().startsWith("mac") === true &&
+    normalizeOptionalLowercaseString(node.platform)?.startsWith("mac") === true &&
     typeof node.nodeId === "string" &&
     node.nodeId.startsWith("mac-")
   );
@@ -142,17 +143,10 @@ export function resolveNodeIdFromList(
   query?: string,
   allowDefault = false,
 ): string {
-  const q = String(query ?? "").trim();
-  if (!q) {
-    if (allowDefault) {
-      const picked = pickDefaultNode(nodes);
-      if (picked) {
-        return picked.nodeId;
-      }
-    }
-    throw new Error("node required");
-  }
-  return resolveNodeIdFromCandidates(nodes, q);
+  return resolveNodeIdFromNodeList(nodes, query, {
+    allowDefault,
+    pickDefaultNode: pickDefaultNode,
+  });
 }
 
 export async function resolveNodeId(
@@ -160,6 +154,17 @@ export async function resolveNodeId(
   query?: string,
   allowDefault = false,
 ) {
+  return (await resolveNode(opts, query, allowDefault)).nodeId;
+}
+
+export async function resolveNode(
+  opts: GatewayCallOptions,
+  query?: string,
+  allowDefault = false,
+): Promise<NodeListNode> {
   const nodes = await loadNodes(opts);
-  return resolveNodeIdFromList(nodes, query, allowDefault);
+  return resolveNodeFromNodeList(nodes, query, {
+    allowDefault,
+    pickDefaultNode: pickDefaultNode,
+  });
 }

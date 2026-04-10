@@ -18,15 +18,41 @@ const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT = /\.\w{1,10}$/;
 
-// Recognize local file path patterns. Security validation is deferred to the
-// load layer (loadWebMedia / resolveSandboxedMediaSource) which has the context
-// needed to enforce sandbox roots and allowed directories.
-function isLikelyLocalPath(candidate: string): boolean {
+// Matches ".." as a standalone path segment (start, middle, or end).
+const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
+
+function hasTraversalOrHomeDirPrefix(candidate: string): boolean {
+  return (
+    candidate.startsWith("../") ||
+    candidate === ".." ||
+    candidate.startsWith("~") ||
+    TRAVERSAL_SEGMENT_RE.test(candidate)
+  );
+}
+
+// Broad structural check: does this look like a local file path? Used only for
+// stripping MEDIA: lines from output text — never for media approval.
+function looksLikeLocalFilePath(candidate: string): boolean {
   return (
     candidate.startsWith("/") ||
     candidate.startsWith("./") ||
     candidate.startsWith("../") ||
     candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+// Recognize safe local file path patterns for media approval, rejecting
+// traversal and home-dir paths so they never reach downstream load/send logic.
+function isLikelyLocalPath(candidate: string): boolean {
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
+  }
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
@@ -54,6 +80,12 @@ function isValidMedia(
     return true;
   }
 
+  // Hard reject traversal/home-dir patterns before the bare-filename fallback
+  // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
+  }
+
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.
   // This avoids treating space-split path fragments as separate media items.
   if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
@@ -79,6 +111,10 @@ function unwrapQuoted(value: string): string | undefined {
   return trimmed.slice(1, -1).trim();
 }
 
+function mayContainFenceMarkers(input: string): boolean {
+  return input.includes("```") || input.includes("~~~");
+}
+
 // Check if a character offset is inside any fenced code block
 function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
@@ -96,12 +132,18 @@ export function splitMediaFromOutput(raw: string): {
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const mayContainAudioTag = trimmedRaw.includes("[[");
+  if (!mayContainMediaToken && !mayContainAudioTag) {
+    return { text: trimmedRaw };
+  }
 
   const media: string[] = [];
   let foundMediaToken = false;
 
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
-  const fenceSpans = parseFenceSpans(trimmedRaw);
+  const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
+  const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
   // Collect tokens line by line so we can strip them cleanly.
   const lines = trimmedRaw.split("\n");
@@ -110,7 +152,7 @@ export function splitMediaFromOutput(raw: string): {
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
     // Skip MEDIA extraction if this line is inside a fenced code block
-    if (isInsideFence(fenceSpans, lineOffset)) {
+    if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
@@ -159,7 +201,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&

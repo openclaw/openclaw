@@ -1,9 +1,16 @@
+import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../plugins/provider-model-defaults.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
   normalizeSecretInput,
@@ -15,25 +22,40 @@ import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
+const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
+// Azure OpenAI uses the Responses API which supports larger defaults
+const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
+const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 const VERIFY_TIMEOUT_MS = 30_000;
 
-/**
- * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
- * Matches both:
- * - https://*.services.ai.azure.com (Azure AI Foundry)
- * - https://*.openai.azure.com (classic Azure OpenAI)
- */
-function isAzureUrl(baseUrl: string): boolean {
+function normalizeContextWindowForCustomModel(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+}
+
+function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
+    return host.endsWith(".services.ai.azure.com");
   } catch {
     return false;
   }
+}
+
+function isAzureOpenAiUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
+    return host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+function isAzureUrl(baseUrl: string): boolean {
+  return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
 }
 
 /**
@@ -43,8 +65,8 @@ function isAzureUrl(baseUrl: string): boolean {
  * The api-version will be handled by the Azure OpenAI client or as a query param.
  *
  * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
+ *   https://my-resource.services.ai.azure.com + gpt-5.4-nano
+ *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5.4-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
@@ -53,6 +75,35 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
     return normalizedUrl;
   }
   return `${normalizedUrl}/openai/deployments/${modelId}`;
+}
+
+/**
+ * Transforms an Azure URL into the base URL stored in config.
+ *
+ * Example:
+ *   https://my-resource.openai.azure.com
+ *   => https://my-resource.openai.azure.com/openai/v1
+ */
+function transformAzureConfigUrl(baseUrl: string): string {
+  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  if (normalizedUrl.endsWith("/openai/v1")) {
+    return normalizedUrl;
+  }
+  // Strip a full deployment path back to the base origin
+  const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
+  const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
+  return `${base}/openai/v1`;
+}
+
+function hasSameHost(a: string, b: string): boolean {
+  try {
+    return (
+      normalizeLowercaseStringOrEmpty(new URL(a).hostname) ===
+      normalizeLowercaseStringOrEmpty(new URL(b).hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export type CustomApiCompatibility = "openai" | "anthropic";
@@ -142,7 +193,7 @@ const COMPATIBILITY_OPTIONS: Array<{
 ];
 
 function normalizeEndpointId(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return "";
   }
@@ -152,7 +203,7 @@ function normalizeEndpointId(raw: string): string {
 function buildEndpointIdFromUrl(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname.replace(/[^a-z0-9]+/gi, "-"));
     const port = url.port ? `-${url.port}` : "";
     const candidate = `custom-${host}${port}`;
     return normalizeEndpointId(candidate) || "custom";
@@ -168,7 +219,11 @@ function resolveUniqueEndpointId(params: {
 }) {
   const normalized = normalizeEndpointId(params.requestedId) || "custom";
   const existing = params.providers[normalized];
-  if (!existing?.baseUrl || existing.baseUrl === params.baseUrl) {
+  if (
+    !existing?.baseUrl ||
+    existing.baseUrl === params.baseUrl ||
+    (isAzureUrl(params.baseUrl) && hasSameHost(existing.baseUrl, params.baseUrl))
+  ) {
     return { providerId: normalized, renamed: false };
   }
   let suffix = 2;
@@ -199,7 +254,7 @@ function resolveAliasError(params: {
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  const aliasKey = normalized.toLowerCase();
+  const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);
   if (!existing) {
     return undefined;
@@ -209,6 +264,14 @@ function resolveAliasError(params: {
     return undefined;
   }
   return `Alias ${normalized} already points to ${existingKey}.`;
+}
+
+function buildAzureOpenAiHeaders(apiKey: string) {
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers["api-key"] = apiKey;
+  }
+  return headers;
 }
 
 function buildOpenAiHeaders(apiKey: string) {
@@ -306,21 +369,42 @@ async function requestOpenAiVerification(params: {
   apiKey: string;
   modelId: string;
 }): Promise<VerificationResult> {
-  const endpoint = resolveVerificationEndpoint({
-    baseUrl: params.baseUrl,
-    modelId: params.modelId,
-    endpointPath: "chat/completions",
-  });
-  return await requestVerification({
-    endpoint,
-    headers: buildOpenAiHeaders(params.apiKey),
-    body: {
-      model: params.modelId,
-      messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 1,
-      stream: false,
-    },
-  });
+  const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
+  const headers = isBaseUrlAzureUrl
+    ? buildAzureOpenAiHeaders(params.apiKey)
+    : buildOpenAiHeaders(params.apiKey);
+  if (isAzureOpenAiUrl(params.baseUrl)) {
+    const endpoint = new URL(
+      "responses",
+      transformAzureConfigUrl(params.baseUrl).replace(/\/?$/, "/"),
+    ).href;
+    return await requestVerification({
+      endpoint,
+      headers,
+      body: {
+        model: params.modelId,
+        input: "Hi",
+        max_output_tokens: 16,
+        stream: false,
+      },
+    });
+  } else {
+    const endpoint = resolveVerificationEndpoint({
+      baseUrl: params.baseUrl,
+      modelId: params.modelId,
+      endpointPath: "chat/completions",
+    });
+    return await requestVerification({
+      endpoint,
+      headers,
+      body: {
+        model: params.modelId,
+        messages: [{ role: "user", content: "Hi" }],
+        max_tokens: 1,
+        stream: false,
+      },
+    });
+  }
 }
 
 async function requestAnthropicVerification(params: {
@@ -359,7 +443,7 @@ async function promptBaseUrlAndKey(params: {
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
-    initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+    initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
       try {
@@ -448,7 +532,7 @@ function resolveProviderApi(
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
-  const compatibilityRaw = raw?.trim().toLowerCase();
+  const compatibilityRaw = normalizeOptionalLowercaseString(raw);
   if (!compatibilityRaw) {
     return "openai";
   }
@@ -493,8 +577,8 @@ export function resolveCustomProviderId(
 export function parseNonInteractiveCustomApiFlags(
   params: ParseNonInteractiveCustomApiFlagsParams,
 ): ParsedNonInteractiveCustomApiFlags {
-  const baseUrl = params.baseUrl?.trim() ?? "";
-  const modelId = params.modelId?.trim() ?? "";
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!baseUrl || !modelId) {
     throw new CustomApiError(
       "missing_required",
@@ -505,8 +589,8 @@ export function parseNonInteractiveCustomApiFlags(
     );
   }
 
-  const apiKey = params.apiKey?.trim();
-  const providerId = params.providerId?.trim();
+  const apiKey = normalizeOptionalString(params.apiKey);
+  const providerId = normalizeOptionalString(params.providerId);
   if (providerId && !normalizeEndpointId(providerId)) {
     throw new CustomApiError(
       "invalid_provider_id",
@@ -523,7 +607,7 @@ export function parseNonInteractiveCustomApiFlags(
 }
 
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
-  const baseUrl = params.baseUrl.trim();
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   try {
     new URL(baseUrl);
   } catch {
@@ -537,13 +621,14 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     );
   }
 
-  const modelId = params.modelId.trim();
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
 
-  // Transform Azure URLs to include the deployment path for API calls
-  const resolvedBaseUrl = isAzureUrl(baseUrl) ? transformAzureUrl(baseUrl, modelId) : baseUrl;
+  const isAzure = isAzureUrl(baseUrl);
+  const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
+  const resolvedBaseUrl = isAzure ? transformAzureConfigUrl(baseUrl) : baseUrl;
 
   const providerIdResult = resolveCustomProviderId({
     config: params.config,
@@ -554,7 +639,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const providers = params.config.models?.providers ?? {};
 
   const modelRef = modelKey(providerId, modelId);
-  const alias = params.alias?.trim() ?? "";
+  const alias = normalizeOptionalString(params.alias) ?? "";
   const aliasError = resolveAliasError({
     raw: alias,
     cfg: params.config,
@@ -567,20 +652,52 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingProvider = providers[providerId];
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
-  const nextModel = {
-    id: modelId,
-    name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-    input: ["text"] as ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: false,
-  };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
+  const isLikelyReasoningModel = isAzure && /\b(o[134]|gpt-([5-9]|\d{2,}))\b/i.test(modelId);
+  const nextModel = isAzure
+    ? {
+        id: modelId,
+        name: `${modelId} (Custom Provider)`,
+        contextWindow: AZURE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AZURE_DEFAULT_MAX_TOKENS,
+        input: isLikelyReasoningModel
+          ? (["text", "image"] as Array<"text" | "image">)
+          : (["text"] as ["text"]),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        reasoning: isLikelyReasoningModel,
+        compat: { supportsStore: false },
+      }
+    : {
+        id: modelId,
+        name: `${modelId} (Custom Provider)`,
+        contextWindow: DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEFAULT_MAX_TOKENS,
+        input: ["text"] as ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        reasoning: false,
+      };
+  const mergedModels = hasModel
+    ? existingModels.map((model) =>
+        model.id === modelId
+          ? {
+              ...model,
+              ...(isAzure ? nextModel : {}),
+              name: model.name ?? nextModel.name,
+              cost: model.cost ?? nextModel.cost,
+              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+              maxTokens: model.maxTokens ?? nextModel.maxTokens,
+            }
+          : model,
+      )
+    : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
+
+  const providerApi = isAzureOpenAi
+    ? ("azure-openai-responses" as const)
+    : resolveProviderApi(params.compatibility);
+  const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
 
   let config: OpenClawConfig = {
     ...params.config,
@@ -592,8 +709,10 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         [providerId]: {
           ...existingProviderRest,
           baseUrl: resolvedBaseUrl,
-          api: resolveProviderApi(params.compatibility),
+          api: providerApi,
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+          ...(isAzure ? { authHeader: false } : {}),
+          ...(azureHeaders ? { headers: azureHeaders } : {}),
           models: mergedModels.length > 0 ? mergedModels : [nextModel],
         },
       },
@@ -601,6 +720,30 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   };
 
   config = applyPrimaryModel(config, modelRef);
+  if (isAzure && isLikelyReasoningModel) {
+    const existingPerModelThinking = config.agents?.defaults?.models?.[modelRef]?.params?.thinking;
+    if (!existingPerModelThinking) {
+      config = {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            models: {
+              ...config.agents?.defaults?.models,
+              [modelRef]: {
+                ...config.agents?.defaults?.models?.[modelRef],
+                params: {
+                  ...config.agents?.defaults?.models?.[modelRef]?.params,
+                  thinking: "medium",
+                },
+              },
+            },
+          },
+        },
+      };
+    }
+  }
   if (alias) {
     config = {
       ...config,

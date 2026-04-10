@@ -3,16 +3,21 @@ import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getSecurityAuditCommandSecretTargetIds } from "./command-secret-targets.js";
 import { formatHelpExamples } from "./help-format.js";
 
 type SecurityAuditOptions = {
   json?: boolean;
   deep?: boolean;
   fix?: boolean;
+  token?: string;
+  password?: string;
 };
 
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
@@ -37,6 +42,11 @@ export function registerSecurityCli(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw security audit", "Run a local security audit."],
           ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
+          ["openclaw security audit --deep --token <token>", "Use explicit token for deep probe."],
+          [
+            "openclaw security audit --deep --password <password>",
+            "Use explicit password for deep probe.",
+          ],
           ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
           ["openclaw security audit --json", "Output machine-readable JSON."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
@@ -46,22 +56,40 @@ export function registerSecurityCli(program: Command) {
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
     .option("--deep", "Attempt live Gateway probe (best-effort)", false)
+    .option("--token <token>", "Use explicit gateway token for deep probe auth")
+    .option("--password <password>", "Use explicit gateway password for deep probe auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
+      const token = normalizeOptionalString(opts.token);
+      const password = normalizeOptionalString(opts.password);
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
-      const cfg = loadConfig();
+      const sourceConfig = loadConfig();
+      const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
+        await resolveCommandSecretRefsViaGateway({
+          config: sourceConfig,
+          commandName: "security audit",
+          targetIds: getSecurityAuditCommandSecretTargetIds(),
+          mode: "read_only_status",
+        });
       const report = await runSecurityAudit({
         config: cfg,
+        sourceConfig,
         deep: Boolean(opts.deep),
         includeFilesystem: true,
         includeChannelSecurity: true,
+        deepProbeAuth:
+          token || password
+            ? { ...(token ? { token } : {}), ...(password ? { password } : {}) }
+            : undefined,
       });
 
       if (opts.json) {
-        defaultRuntime.log(
-          JSON.stringify(fixResult ? { fix: fixResult, report } : report, null, 2),
+        defaultRuntime.writeJson(
+          fixResult
+            ? { fix: fixResult, report, secretDiagnostics }
+            : { ...report, secretDiagnostics },
         );
         return;
       }
@@ -74,6 +102,9 @@ export function registerSecurityCli(program: Command) {
       lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
+      for (const diagnostic of secretDiagnostics) {
+        lines.push(muted(`[secrets] ${diagnostic}`));
+      }
 
       if (opts.fix) {
         lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));

@@ -12,9 +12,12 @@ import {
   type SessionEntry,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { resolveSessionStoreTargets, type SessionStoreTarget } from "./session-store-targets.js";
+import {
+  resolveSessionStoreTargetsOrExit,
+  type SessionStoreTarget,
+} from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -291,16 +294,16 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
-  let targets: SessionStoreTarget[];
-  try {
-    targets = resolveSessionStoreTargets(cfg, {
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
       store: opts.store,
       agent: opts.agent,
       allAgents: opts.allAgents,
-    });
-  } catch (error) {
-    runtime.error(error instanceof Error ? error.message : String(error));
-    runtime.exit(1);
+    },
+    runtime,
+  });
+  if (!targets) {
     return;
   }
 
@@ -322,21 +325,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (opts.dryRun) {
     if (opts.json) {
       if (previewResults.length === 1) {
-        runtime.log(JSON.stringify(previewResults[0]?.summary ?? {}, null, 2));
+        writeRuntimeJson(runtime, previewResults[0]?.summary ?? {});
         return;
       }
-      runtime.log(
-        JSON.stringify(
-          {
-            allAgents: true,
-            mode,
-            dryRun: true,
-            stores: previewResults.map((result) => result.summary),
-          },
-          null,
-          2,
-        ),
-      );
+      writeRuntimeJson(runtime, {
+        allAgents: true,
+        mode,
+        dryRun: true,
+        stores: previewResults.map((result) => result.summary),
+      });
       return;
     }
 
@@ -433,21 +430,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
 
   if (opts.json) {
     if (appliedSummaries.length === 1) {
-      runtime.log(JSON.stringify(appliedSummaries[0] ?? {}, null, 2));
+      writeRuntimeJson(runtime, appliedSummaries[0] ?? {});
       return;
     }
-    runtime.log(
-      JSON.stringify(
-        {
-          allAgents: true,
-          mode,
-          dryRun: false,
-          stores: appliedSummaries,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      allAgents: true,
+      mode,
+      dryRun: false,
+      stores: appliedSummaries,
+    });
     return;
   }
 

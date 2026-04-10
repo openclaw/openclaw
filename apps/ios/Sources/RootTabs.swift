@@ -9,6 +9,7 @@ struct RootTabs: View {
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var showGatewayActions: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
 
     var body: some View {
         TabView(selection: self.$selectedTab) {
@@ -32,6 +33,8 @@ struct RootTabs: View {
                 onTap: {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
+                    } else if self.appModel.lastGatewayProblem != nil {
+                        self.showGatewayProblemDetails = true
                     } else {
                         self.selectedTab = 2
                     }
@@ -39,11 +42,29 @@ struct RootTabs: View {
                 .padding(.leading, 10)
                 .safeAreaPadding(.top, 10)
         }
+        .overlay(alignment: .top) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem,
+               self.gatewayStatus != .connected
+            {
+                GatewayProblemBanner(
+                    problem: gatewayProblem,
+                    primaryActionTitle: "Open Settings",
+                    onPrimaryAction: {
+                        self.selectedTab = 2
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+                    .padding(.horizontal, 12)
+                    .safeAreaPadding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                 VoiceWakeToast(command: voiceWakeToastText)
                     .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
+                    .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -70,38 +91,24 @@ struct RootTabs: View {
             self.toastDismissTask?.cancel()
             self.toastDismissTask = nil
         }
-        .confirmationDialog(
-            "Gateway",
+        .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
-            titleVisibility: .visible)
-        {
-            Button("Disconnect", role: .destructive) {
-                self.appModel.disconnectGateway()
+            onDisconnect: { self.appModel.disconnectGateway() },
+            onOpenSettings: { self.selectedTab = 2 })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: "Open Settings",
+                    onPrimaryAction: {
+                        self.selectedTab = 2
+                    })
             }
-            Button("Open Settings") {
-                self.selectedTab = 2
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Disconnect from the gateway?")
         }
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
-        }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
+        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private var statusActivity: StatusPill.Activity? {

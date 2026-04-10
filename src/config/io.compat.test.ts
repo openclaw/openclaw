@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
+import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -39,7 +40,6 @@ describe("config io paths", () => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
       const io = createIoForHome(home);
       expect(io.configPath).toBe(configPath);
-      expect(io.loadConfig().gateway?.port).toBe(19001);
     });
   });
 
@@ -65,76 +65,51 @@ describe("config io paths", () => {
       const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
       const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20002);
-    });
-  });
-
-  it("honors legacy CLAWDBOT_CONFIG_PATH override", async () => {
-    await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20003, "legacy-custom.json");
-      const io = createIoForHome(home, { CLAWDBOT_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
-      expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20003);
     });
   });
 
   it("normalizes safe-bin config entries at config load time", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
+    const cfg = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+          safeBinProfiles: {
+            " MyFilter ": {
+              allowedValueFlags: ["--limit", " --limit ", ""],
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
           {
+            id: "ops",
             tools: {
               exec: {
-                safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+                safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
                 safeBinProfiles: {
-                  " MyFilter ": {
-                    allowedValueFlags: ["--limit", " --limit ", ""],
+                  " Custom ": {
+                    deniedFlags: ["-f", " -f ", ""],
                   },
                 },
               },
             },
-            agents: {
-              list: [
-                {
-                  id: "ops",
-                  tools: {
-                    exec: {
-                      safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
-                      safeBinProfiles: {
-                        " Custom ": {
-                          deniedFlags: ["-f", " -f ", ""],
-                        },
-                      },
-                    },
-                  },
-                },
-              ],
-            },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-      const io = createIoForHome(home);
-      expect(io.configPath).toBe(configPath);
-      const cfg = io.loadConfig();
-      expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
-        myfilter: {
-          allowedValueFlags: ["--limit"],
-        },
-      });
-      expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
-        custom: {
-          deniedFlags: ["-f"],
-        },
-      });
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+        ],
+      },
+    };
+    normalizeExecSafeBinProfilesInConfig(cfg);
+    expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
+      myfilter: {
+        allowedValueFlags: ["--limit"],
+      },
     });
+    expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+      custom: {
+        deniedFlags: ["-f"],
+      },
+    });
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

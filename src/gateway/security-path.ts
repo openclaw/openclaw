@@ -1,11 +1,15 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
+  decodePasses: number;
+  decodePassLimitReached: boolean;
   malformedEncoding: boolean;
   rawNormalizedPath: string;
 };
 
-const MAX_PATH_DECODE_PASSES = 3;
+const MAX_PATH_DECODE_PASSES = 32;
 
 function normalizePathSeparators(pathname: string): string {
   const collapsed = pathname.replace(/\/{2,}/g, "/");
@@ -16,7 +20,7 @@ function normalizePathSeparators(pathname: string): string {
 }
 
 function normalizeProtectedPrefix(prefix: string): string {
-  return normalizePathSeparators(prefix.toLowerCase()) || "/";
+  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(prefix)) || "/";
 }
 
 function resolveDotSegments(pathname: string): string {
@@ -28,7 +32,9 @@ function resolveDotSegments(pathname: string): string {
 }
 
 function normalizePathForSecurity(pathname: string): string {
-  return normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/";
+  return (
+    normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolveDotSegments(pathname))) || "/"
+  );
 }
 
 function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
@@ -43,13 +49,19 @@ function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value:
 export function buildCanonicalPathCandidates(
   pathname: string,
   maxDecodePasses = MAX_PATH_DECODE_PASSES,
-): { candidates: string[]; malformedEncoding: boolean } {
+): {
+  candidates: string[];
+  decodePasses: number;
+  decodePassLimitReached: boolean;
+  malformedEncoding: boolean;
+} {
   const candidates: string[] = [];
   const seen = new Set<string>();
   pushNormalizedCandidate(candidates, seen, pathname);
 
   let decoded = pathname;
   let malformedEncoding = false;
+  let decodePasses = 0;
   for (let pass = 0; pass < maxDecodePasses; pass++) {
     let nextDecoded = decoded;
     try {
@@ -61,10 +73,24 @@ export function buildCanonicalPathCandidates(
     if (nextDecoded === decoded) {
       break;
     }
+    decodePasses += 1;
     decoded = nextDecoded;
     pushNormalizedCandidate(candidates, seen, decoded);
   }
-  return { candidates, malformedEncoding };
+  let decodePassLimitReached = false;
+  if (!malformedEncoding) {
+    try {
+      decodePassLimitReached = decodeURIComponent(decoded) !== decoded;
+    } catch {
+      malformedEncoding = true;
+    }
+  }
+  return {
+    candidates,
+    decodePasses,
+    decodePassLimitReached,
+    malformedEncoding,
+  };
 }
 
 export function canonicalizePathVariant(pathname: string): string {
@@ -82,14 +108,22 @@ function prefixMatch(pathname: string, prefix: string): boolean {
 }
 
 export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
-  const { candidates, malformedEncoding } = buildCanonicalPathCandidates(pathname);
+  const { candidates, decodePasses, decodePassLimitReached, malformedEncoding } =
+    buildCanonicalPathCandidates(pathname);
 
   return {
     canonicalPath: candidates[candidates.length - 1] ?? "/",
     candidates,
+    decodePasses,
+    decodePassLimitReached,
     malformedEncoding,
-    rawNormalizedPath: normalizePathSeparators(pathname.toLowerCase()) || "/",
+    rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
   };
+}
+
+export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
+  const canonical = canonicalizePathForSecurity(pathname);
+  return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();
@@ -112,6 +146,10 @@ export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly s
       normalizedPrefixes.some((prefix) => prefixMatch(candidate, prefix)),
     )
   ) {
+    return true;
+  }
+  // Fail closed when canonicalization depth cannot be fully resolved.
+  if (canonical.decodePassLimitReached) {
     return true;
   }
   if (!canonical.malformedEncoding) {

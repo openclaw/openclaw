@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test, loadUsage, type UsageState } from "./usage.ts";
+import {
+  __test,
+  loadSessionLogs,
+  loadSessionTimeSeries,
+  loadUsage,
+  type UsageState,
+} from "./usage.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -26,6 +32,23 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
   };
 }
 
+function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset: "UTC+5:30",
+    limit: 1000,
+    includeContextWeight: true,
+  });
+  expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset: "UTC+5:30",
+  });
+}
+
 describe("usage controller date interpretation params", () => {
   beforeEach(() => {
     __test.resetLegacyUsageDateParamsCache();
@@ -48,20 +71,7 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-    });
+    expectSpecificTimezoneCalls(request, 1);
   });
 
   it("sends utc mode without offset when usage timezone is utc", async () => {
@@ -124,20 +134,7 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-    });
+    expectSpecificTimezoneCalls(request, 1);
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
@@ -168,6 +165,38 @@ describe("usage controller date interpretation params", () => {
     expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
 
     vi.unstubAllGlobals();
+  });
+  it("keeps optional loaders resilient when requests fail", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
+        throw new Error("optional endpoint unavailable");
+      }
+      return {};
+    });
+    const state = createState(request);
+
+    await loadSessionTimeSeries(state, "session-1");
+    await loadSessionLogs(state, "session-1");
+
+    expect(state.usageTimeSeries).toBeNull();
+    expect(state.usageSessionLogs).toBeNull();
+    expect(state.usageTimeSeriesLoading).toBe(false);
+    expect(state.usageSessionLogsLoading).toBe(false);
+  });
+
+  it("normalizes usage logs payloads when logs is not an array", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage.logs") {
+        return { logs: "unexpected-shape" };
+      }
+      return {};
+    });
+    const state = createState(request);
+
+    await loadSessionLogs(state, "session-1");
+
+    expect(state.usageSessionLogs).toBeNull();
+    expect(state.usageSessionLogsLoading).toBe(false);
   });
 });
 

@@ -1,6 +1,46 @@
 import { describe, expect, test } from "vitest";
-import { buildSystemRunApprovalBindingV1 } from "../infra/system-run-approval-binding.js";
+import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
+
+const defaultBinding = {
+  cwd: null,
+  agentId: null,
+  sessionKey: null,
+};
+
+function expectMismatch(
+  result: ReturnType<typeof evaluateSystemRunApprovalMatch>,
+  code: "APPROVAL_REQUEST_MISMATCH" | "APPROVAL_ENV_BINDING_MISSING",
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("unreachable");
+  }
+  expect(result.code).toBe(code);
+}
+
+function expectV1BindingMatch(params: {
+  argv: string[];
+  requestCommand: string;
+  commandArgv?: string[];
+}) {
+  const result = evaluateSystemRunApprovalMatch({
+    argv: params.argv,
+    request: {
+      host: "node",
+      command: params.requestCommand,
+      commandArgv: params.commandArgv,
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: params.argv,
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      }).binding,
+    },
+    binding: defaultBinding,
+  });
+  expect(result).toEqual({ ok: true });
+}
 
 describe("evaluateSystemRunApprovalMatch", () => {
   test("rejects approvals that do not carry v1 binding", () => {
@@ -10,39 +50,16 @@ describe("evaluateSystemRunApprovalMatch", () => {
         host: "node",
         command: "echo SAFE",
       },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      binding: defaultBinding,
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("unreachable");
-    }
-    expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
+    expectMismatch(result, "APPROVAL_REQUEST_MISMATCH");
   });
 
   test("enforces exact argv binding in v1 object", () => {
-    const result = evaluateSystemRunApprovalMatch({
+    expectV1BindingMatch({
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo SAFE",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
-          argv: ["echo", "SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      requestCommand: "echo SAFE",
     });
-    expect(result).toEqual({ ok: true });
   });
 
   test("rejects argv mismatch in v1 object", () => {
@@ -51,24 +68,16 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "echo SAFE",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["echo SAFE"],
           cwd: null,
           agentId: null,
           sessionKey: null,
         }).binding,
       },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      binding: defaultBinding,
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("unreachable");
-    }
-    expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
+    expectMismatch(result, "APPROVAL_REQUEST_MISMATCH");
   });
 
   test("rejects env overrides when v1 binding has no env hash", () => {
@@ -77,7 +86,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "git diff",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["git", "diff"],
           cwd: null,
           agentId: null,
@@ -85,17 +94,11 @@ describe("evaluateSystemRunApprovalMatch", () => {
         }).binding,
       },
       binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
+        ...defaultBinding,
         env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
       },
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("unreachable");
-    }
-    expect(result.code).toBe("APPROVAL_ENV_BINDING_MISSING");
+    expectMismatch(result, "APPROVAL_ENV_BINDING_MISSING");
   });
 
   test("accepts matching env hash with reordered keys", () => {
@@ -104,7 +107,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "git diff",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["git", "diff"],
           cwd: null,
           agentId: null,
@@ -113,13 +116,37 @@ describe("evaluateSystemRunApprovalMatch", () => {
         }).binding,
       },
       binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
+        ...defaultBinding,
         env: { SAFE_B: "2", SAFE_A: "1" },
       },
     });
     expect(result).toEqual({ ok: true });
+  });
+
+  test("rejects mismatched Windows-compatible env override values", () => {
+    const result = evaluateSystemRunApprovalMatch({
+      argv: ["cmd.exe", "/c", "echo ok"],
+      request: {
+        host: "node",
+        command: "cmd.exe /c echo ok",
+        systemRunBinding: buildSystemRunApprovalBinding({
+          argv: ["cmd.exe", "/c", "echo ok"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+          env: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+        }).binding,
+      },
+      binding: {
+        ...defaultBinding,
+        env: { "ProgramFiles(x86)": "D:\\malicious" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.code).toBe("APPROVAL_ENV_MISMATCH");
   });
 
   test("rejects non-node host requests", () => {
@@ -129,39 +156,16 @@ describe("evaluateSystemRunApprovalMatch", () => {
         host: "gateway",
         command: "echo SAFE",
       },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      binding: defaultBinding,
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("unreachable");
-    }
-    expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
+    expectMismatch(result, "APPROVAL_REQUEST_MISMATCH");
   });
 
   test("uses v1 binding even when legacy command text diverges", () => {
-    const result = evaluateSystemRunApprovalMatch({
+    expectV1BindingMatch({
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo STALE",
-        commandArgv: ["echo STALE"],
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
-          argv: ["echo", "SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      requestCommand: "echo STALE",
+      commandArgv: ["echo STALE"],
     });
-    expect(result).toEqual({ ok: true });
   });
 });

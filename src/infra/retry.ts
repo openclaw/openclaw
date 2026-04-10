@@ -1,4 +1,6 @@
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
+import { generateSecureFraction } from "./secure-random.js";
 
 export type RetryConfig = {
   attempts?: number;
@@ -28,9 +30,6 @@ const DEFAULT_RETRY_CONFIG = {
   maxDelayMs: 30_000,
   jitter: 0,
 };
-
-const asFiniteNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
   const next = asFiniteNumber(value);
@@ -63,7 +62,7 @@ function applyJitter(delayMs: number, jitter: number): number {
   if (jitter <= 0) {
     return delayMs;
   }
-  const offset = (Math.random() * 2 - 1) * jitter;
+  const offset = (generateSecureFraction() * 2 - 1) * jitter;
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
@@ -128,7 +127,9 @@ export async function retryAsync<T>(
         err,
         label: options.label,
       });
-      await sleep(delay);
+      if (delay > 0) {
+        await sleep(delay);
+      }
     }
   }
 

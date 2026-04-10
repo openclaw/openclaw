@@ -8,6 +8,10 @@ import {
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -76,7 +80,7 @@ function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEn
   const includeTimestamp = options?.includeTimestamp !== false;
   const includeElapsed = options?.includeElapsed !== false;
   return {
-    timezone: options?.timezone?.trim() || "local",
+    timezone: normalizeOptionalString(options?.timezone) || "local",
     includeTimestamp,
     includeElapsed,
     userTimezone: options?.userTimezone,
@@ -88,7 +92,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }
@@ -102,7 +106,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-function formatTimestamp(
+export function formatEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -150,7 +154,7 @@ function formatTimestamp(
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const channel = sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel");
+  const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
   const parts: string[] = [channel];
   const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
@@ -167,19 +171,22 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
         ? formatTimeAgo(elapsedMs, { suffix: false })
         : undefined;
   }
-  if (params.from?.trim()) {
-    const from = sanitizeEnvelopeHeaderPart(params.from.trim());
-    parts.push(elapsed ? `${from} +${elapsed}` : from);
+  const from = normalizeOptionalString(params.from);
+  if (from) {
+    const fromLabel = sanitizeEnvelopeHeaderPart(from);
+    parts.push(elapsed ? `${fromLabel} +${elapsed}` : fromLabel);
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
-  if (params.host?.trim()) {
-    parts.push(sanitizeEnvelopeHeaderPart(params.host.trim()));
+  const host = normalizeOptionalString(params.host);
+  if (host) {
+    parts.push(sanitizeEnvelopeHeaderPart(host));
   }
-  if (params.ip?.trim()) {
-    parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
+  const ip = normalizeOptionalString(params.ip);
+  if (ip) {
+    parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatTimestamp(params.timestamp, resolved);
+  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }
@@ -197,12 +204,19 @@ export function formatInboundEnvelope(params: {
   sender?: SenderLabelParams;
   previousTimestamp?: number | Date;
   envelope?: EnvelopeFormatOptions;
+  fromMe?: boolean;
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
-  const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSenderRaw =
+    normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  const body =
+    isDirect && params.fromMe
+      ? `(self): ${params.body}`
+      : !isDirect && resolvedSender
+        ? `${resolvedSender}: ${params.body}`
+        : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,
@@ -223,7 +237,7 @@ export function formatInboundFromLabel(params: {
 }): string {
   // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
   if (params.isGroup) {
-    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
+    const label = normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group";
     const id = params.groupId?.trim();
     return id ? `${label} id:${id}` : label;
   }

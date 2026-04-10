@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -9,28 +6,24 @@ import {
   setConsoleTimestampPrefix,
   setLoggerOverride,
 } from "../logging.js";
+import { defaultRuntime } from "../runtime.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { loggingState } from "./state.js";
-
-type ConsoleSnapshot = {
-  log: typeof console.log;
-  info: typeof console.info;
-  warn: typeof console.warn;
-  error: typeof console.error;
-  debug: typeof console.debug;
-  trace: typeof console.trace;
-};
+import {
+  captureConsoleSnapshot,
+  type ConsoleSnapshot,
+  restoreConsoleSnapshot,
+} from "./test-helpers/console-snapshot.js";
 
 let snapshot: ConsoleSnapshot;
+const logPathTracker = createSuiteLogPathTracker("openclaw-log-");
+
+beforeAll(async () => {
+  await logPathTracker.setup();
+});
 
 beforeEach(() => {
-  snapshot = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    trace: console.trace,
-  };
+  snapshot = captureConsoleSnapshot();
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -39,12 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  console.log = snapshot.log;
-  console.info = snapshot.info;
-  console.warn = snapshot.warn;
-  console.error = snapshot.error;
-  console.debug = snapshot.debug;
-  console.trace = snapshot.trace;
+  restoreConsoleSnapshot(snapshot);
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -52,6 +40,10 @@ afterEach(() => {
   resetLogger();
   setLoggerOverride(null);
   vi.restoreAllMocks();
+});
+
+afterAll(async () => {
+  await logPathTracker.cleanup();
 });
 
 describe("enableConsoleCapture", () => {
@@ -93,16 +85,19 @@ describe("enableConsoleCapture", () => {
     vi.useRealTimers();
   });
 
-  it("suppresses discord EventQueue slow listener duplicates", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
-    console.warn(
-      "[EventQueue] Slow listener detected: DiscordMessageListener took 12.3 seconds for event MESSAGE_CREATE",
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["DiscordMessageListener", "DiscordReactionListener", "DiscordReactionRemoveListener"])(
+    "suppresses discord EventQueue slow listener duplicates for %s",
+    (listener) => {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      const warn = vi.fn();
+      console.warn = warn;
+      enableConsoleCapture();
+      console.warn(
+        `[EventQueue] Slow listener detected: ${listener} took 12.3 seconds for event MESSAGE_CREATE`,
+      );
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -114,7 +109,7 @@ describe("enableConsoleCapture", () => {
     expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
   });
 
-  it("leaves JSON output unchanged when timestamp prefix is enabled", () => {
+  it("prefixes JSON console output when timestamp prefix is enabled", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const log = vi.fn();
     console.log = log;
@@ -122,7 +117,24 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
-    expect(log).toHaveBeenCalledWith(payload);
+    expect(log).toHaveBeenCalledTimes(1);
+    const firstArg = String(log.mock.calls[0]?.[0] ?? "");
+    expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(firstArg.endsWith(` ${payload}`)).toBe(true);
+  });
+
+  it("keeps diagnostics on stderr while runtime JSON stays on stdout", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.log("diag");
+    defaultRuntime.writeJson({ ok: true });
+
+    expect(stderrWrite).toHaveBeenCalledWith("diag\n");
+    expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
   it.each([
@@ -146,7 +158,7 @@ describe("enableConsoleCapture", () => {
 });
 
 function tempLogPath() {
-  return path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
+  return logPathTracker.nextPath();
 }
 
 function eioError() {

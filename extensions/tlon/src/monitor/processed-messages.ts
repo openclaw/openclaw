@@ -1,4 +1,4 @@
-import { createDedupeCache } from "openclaw/plugin-sdk";
+import { createDedupeCache } from "../../api.js";
 
 export type ProcessedMessageTracker = {
   mark: (id?: string | null) => boolean;

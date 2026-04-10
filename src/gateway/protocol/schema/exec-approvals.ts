@@ -5,6 +5,7 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
     pattern: Type.String(),
+    argPattern: Type.Optional(Type.String()),
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),
     lastResolvedPath: Type.Optional(Type.String()),
@@ -85,20 +86,40 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ExecApprovalGetParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
-    command: NonEmptyString,
+    command: Type.Optional(NonEmptyString),
     commandArgv: Type.Optional(Type.Array(Type.String())),
-    systemRunPlanV2: Type.Optional(
+    systemRunPlan: Type.Optional(
       Type.Object(
         {
-          version: Type.Literal(2),
           argv: Type.Array(Type.String()),
           cwd: Type.Union([Type.String(), Type.Null()]),
-          rawCommand: Type.Union([Type.String(), Type.Null()]),
+          commandText: Type.String(),
+          commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
+          mutableFileOperand: Type.Optional(
+            Type.Union([
+              Type.Object(
+                {
+                  argvIndex: Type.Integer({ minimum: 0 }),
+                  path: Type.String(),
+                  sha256: Type.String(),
+                },
+                { additionalProperties: false },
+              ),
+              Type.Null(),
+            ]),
+          ),
         },
         { additionalProperties: false },
       ),

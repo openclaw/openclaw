@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
 
@@ -23,6 +23,8 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
+
 export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
@@ -36,43 +38,8 @@ export type TtsConfig = {
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */
   modelOverrides?: TtsModelOverrideConfig;
-  /** ElevenLabs configuration. */
-  elevenlabs?: {
-    apiKey?: string;
-    baseUrl?: string;
-    voiceId?: string;
-    modelId?: string;
-    seed?: number;
-    applyTextNormalization?: "auto" | "on" | "off";
-    languageCode?: string;
-    voiceSettings?: {
-      stability?: number;
-      similarityBoost?: number;
-      style?: number;
-      useSpeakerBoost?: boolean;
-      speed?: number;
-    };
-  };
-  /** OpenAI configuration. */
-  openai?: {
-    apiKey?: string;
-    model?: string;
-    voice?: string;
-  };
-  /** Microsoft Edge (node-edge-tts) configuration. */
-  edge?: {
-    /** Explicitly allow Edge TTS usage (no API key required). */
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
+  /** Provider-specific TTS settings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */

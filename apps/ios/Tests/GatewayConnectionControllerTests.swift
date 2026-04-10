@@ -4,31 +4,6 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
-private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
-    let defaults = UserDefaults.standard
-    var snapshot: [String: Any?] = [:]
-    for key in updates.keys {
-        snapshot[key] = defaults.object(forKey: key)
-    }
-    for (key, value) in updates {
-        if let value {
-            defaults.set(value, forKey: key)
-        } else {
-            defaults.removeObject(forKey: key)
-        }
-    }
-    defer {
-        for (key, value) in snapshot {
-            if let value {
-                defaults.set(value, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-    }
-    return try body()
-}
-
 @Suite(.serialized) struct GatewayConnectionControllerTests {
     @Test @MainActor func resolvedDisplayNameSetsDefaultWhenMissing() {
         let defaults = UserDefaults.standard
@@ -95,19 +70,84 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         }
     }
 
+    @Test @MainActor func operatorConnectOptionsOnlyRequestApprovalScopeWhenEnabled() {
+        let appModel = NodeAppModel()
+        let withoutApprovalScope = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: false)
+        let withApprovalScope = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: true)
+
+        #expect(withoutApprovalScope.role == "operator")
+        #expect(withoutApprovalScope.scopes.contains("operator.read"))
+        #expect(withoutApprovalScope.scopes.contains("operator.write"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
+
+        #expect(withApprovalScope.scopes.contains("operator.approvals"))
+    }
+
+    @Test func operatorApprovalScopeRequestsStayBackwardCompatible() {
+        #expect(
+            !NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: [
+                    "operator.approvals",
+                    "operator.read",
+                    "operator.write",
+                    "operator.talk.secrets",
+                ])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: "shared-token",
+                password: nil,
+                storedOperatorScopes: [])
+        )
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
-        withUserDefaults([:]) {
-            GatewaySettingsStore.saveLastGatewayConnectionManual(
-                host: "gateway.example.com",
-                port: 443,
-                useTLS: true,
-                stableID: "manual|gateway.example.com|443")
-            let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
+        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+            }
         }
+        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+
+        GatewaySettingsStore.saveLastGatewayConnectionManual(
+            host: "gateway.example.com",
+            port: 443,
+            useTLS: true,
+            stableID: "manual|gateway.example.com|443")
+        let loaded = GatewaySettingsStore.loadLastGatewayConnection()
+        #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
+        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+            }
+        }
+        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+
+        // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
         withUserDefaults([
             "gateway.last.kind": "manual",
             "gateway.last.host": "",

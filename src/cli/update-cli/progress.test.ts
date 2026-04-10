@@ -26,6 +26,36 @@ function makeResult(
 }
 
 describe("inferUpdateFailureHints", () => {
+  it("returns a package-manager bootstrap hint for pnpm npm-bootstrap failures", () => {
+    const result = {
+      status: "error",
+      mode: "git",
+      reason: "pnpm-npm-bootstrap-failed",
+      steps: [],
+      durationMs: 1,
+    } satisfies UpdateRunResult;
+
+    const hints = inferUpdateFailureHints(result);
+
+    expect(hints.join("\n")).toContain("bootstrap pnpm from npm");
+    expect(hints.join("\n")).toContain("Install pnpm manually");
+  });
+
+  it("returns a corepack hint when corepack is missing", () => {
+    const result = {
+      status: "error",
+      mode: "git",
+      reason: "pnpm-corepack-missing",
+      steps: [],
+      durationMs: 1,
+    } satisfies UpdateRunResult;
+
+    const hints = inferUpdateFailureHints(result);
+
+    expect(hints.join("\n")).toContain("corepack is missing");
+    expect(hints.join("\n")).toContain("Install pnpm manually");
+  });
+
   it("returns EACCES hint for global update permission failures", () => {
     const result = makeResult(
       "global update",
@@ -36,11 +66,8 @@ describe("inferUpdateFailureHints", () => {
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
   });
 
-  it("returns native optional dependency hint for node-gyp/opus failures", () => {
-    const result = makeResult(
-      "global update",
-      "node-pre-gyp ERR!\n@discordjs/opus\nnode-gyp rebuild failed",
-    );
+  it("returns native optional dependency hint for node-gyp failures", () => {
+    const result = makeResult("global update", "node-pre-gyp ERR!\nnode-gyp rebuild failed");
     const hints = inferUpdateFailureHints(result);
     expect(hints.join("\n")).toContain("--omit=optional");
   });

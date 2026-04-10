@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
 
 type Args = {
   agentId: string;
@@ -36,7 +37,7 @@ const parseArgs = (): Args => {
       continue;
     }
     if (arg === "--session-key" && args[i + 1]) {
-      sessionKey = String(args[++i]).trim() || undefined;
+      sessionKey = normalizeOptionalString(String(args[++i]));
       continue;
     }
   }
@@ -45,10 +46,7 @@ const parseArgs = (): Args => {
 };
 
 const loadAuthProfiles = (agentId: string) => {
-  const stateRoot =
-    process.env.OPENCLAW_STATE_DIR?.trim() ||
-    process.env.CLAWDBOT_STATE_DIR?.trim() ||
-    path.join(os.homedir(), ".openclaw");
+  const stateRoot = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
   if (!fs.existsSync(authPath)) {
     throw new Error(`Missing: ${authPath}`);

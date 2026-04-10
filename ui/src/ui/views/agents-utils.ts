@@ -1,18 +1,159 @@
-import { html } from "lit";
-import {
-  listCoreToolSections,
-  PROFILE_OPTIONS as TOOL_PROFILE_OPTIONS,
-} from "../../../../src/agents/tool-catalog.js";
+import { html, nothing } from "lit";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+  ModelCatalogEntry,
+  ToolCatalogProfile,
+  ToolsCatalogResult,
+} from "../types.ts";
 
-export const TOOL_SECTIONS = listCoreToolSections();
+export type AgentToolEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source?: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles?: string[];
+};
 
-export const PROFILE_OPTIONS = TOOL_PROFILE_OPTIONS;
+export type AgentToolSection = {
+  id: string;
+  label: string;
+  source?: "core" | "plugin";
+  pluginId?: string;
+  tools: AgentToolEntry[];
+};
+
+export const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
+  {
+    id: "fs",
+    label: "Files",
+    tools: [
+      { id: "read", label: "read", description: "Read file contents" },
+      { id: "write", label: "write", description: "Create or overwrite files" },
+      { id: "edit", label: "edit", description: "Make precise edits" },
+      { id: "apply_patch", label: "apply_patch", description: "Patch files (OpenAI)" },
+    ],
+  },
+  {
+    id: "runtime",
+    label: "Runtime",
+    tools: [
+      { id: "exec", label: "exec", description: "Run shell commands" },
+      { id: "process", label: "process", description: "Manage background processes" },
+    ],
+  },
+  {
+    id: "web",
+    label: "Web",
+    tools: [
+      { id: "web_search", label: "web_search", description: "Search the web" },
+      { id: "web_fetch", label: "web_fetch", description: "Fetch web content" },
+    ],
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    tools: [
+      { id: "memory_search", label: "memory_search", description: "Semantic search" },
+      { id: "memory_get", label: "memory_get", description: "Read memory files" },
+    ],
+  },
+  {
+    id: "sessions",
+    label: "Sessions",
+    tools: [
+      { id: "sessions_list", label: "sessions_list", description: "List sessions" },
+      { id: "sessions_history", label: "sessions_history", description: "Session history" },
+      { id: "sessions_send", label: "sessions_send", description: "Send to session" },
+      { id: "sessions_spawn", label: "sessions_spawn", description: "Spawn sub-agent" },
+      { id: "session_status", label: "session_status", description: "Session status" },
+    ],
+  },
+  {
+    id: "ui",
+    label: "UI",
+    tools: [
+      { id: "browser", label: "browser", description: "Control web browser" },
+      { id: "canvas", label: "canvas", description: "Control canvases" },
+    ],
+  },
+  {
+    id: "messaging",
+    label: "Messaging",
+    tools: [{ id: "message", label: "message", description: "Send messages" }],
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    tools: [
+      { id: "cron", label: "cron", description: "Schedule tasks" },
+      { id: "gateway", label: "gateway", description: "Gateway control" },
+    ],
+  },
+  {
+    id: "nodes",
+    label: "Nodes",
+    tools: [{ id: "nodes", label: "nodes", description: "Nodes + devices" }],
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    tools: [{ id: "agents_list", label: "agents_list", description: "List agents" }],
+  },
+  {
+    id: "media",
+    label: "Media",
+    tools: [{ id: "image", label: "image", description: "Image understanding" }],
+  },
+];
+
+export const PROFILE_OPTIONS = [
+  { id: "minimal", label: "Minimal" },
+  { id: "coding", label: "Coding" },
+  { id: "messaging", label: "Messaging" },
+  { id: "full", label: "Full" },
+] as const;
+
+export function resolveToolSections(
+  toolsCatalogResult: ToolsCatalogResult | null,
+): AgentToolSection[] {
+  if (toolsCatalogResult?.groups?.length) {
+    return toolsCatalogResult.groups.map((group) => ({
+      id: group.id,
+      label: group.label,
+      source: group.source,
+      pluginId: group.pluginId,
+      tools: group.tools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        description: tool.description,
+        source: tool.source,
+        pluginId: tool.pluginId,
+        optional: tool.optional,
+        defaultProfiles: [...tool.defaultProfiles],
+      })),
+    }));
+  }
+  return FALLBACK_TOOL_SECTIONS;
+}
+
+export function resolveToolProfileOptions(
+  toolsCatalogResult: ToolsCatalogResult | null,
+): readonly ToolCatalogProfile[] | typeof PROFILE_OPTIONS {
+  if (toolsCatalogResult?.profiles?.length) {
+    return toolsCatalogResult.profiles;
+  }
+  return PROFILE_OPTIONS;
+}
 
 type ToolPolicy = {
   allow?: string[];
@@ -52,7 +193,36 @@ export function normalizeAgentLabel(agent: {
   name?: string;
   identity?: { name?: string };
 }) {
-  return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
+  return (
+    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+  );
+}
+
+const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+
+export function resolveAgentAvatarUrl(
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const candidates = [
+    normalizeOptionalString(agentIdentity?.avatar),
+    normalizeOptionalString(agent.identity?.avatarUrl),
+    normalizeOptionalString(agent.identity?.avatar),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (AVATAR_URL_RE.test(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function agentLogoUrl(basePath: string): string {
+  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
+  return base ? `${base}/favicon.svg` : "favicon.svg";
 }
 
 function isLikelyEmoji(value: string) {
@@ -83,19 +253,19 @@ export function resolveAgentEmoji(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ) {
-  const identityEmoji = agentIdentity?.emoji?.trim();
+  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji);
   if (identityEmoji && isLikelyEmoji(identityEmoji)) {
     return identityEmoji;
   }
-  const agentEmoji = agent.identity?.emoji?.trim();
+  const agentEmoji = normalizeOptionalString(agent.identity?.emoji);
   if (agentEmoji && isLikelyEmoji(agentEmoji)) {
     return agentEmoji;
   }
-  const identityAvatar = agentIdentity?.avatar?.trim();
+  const identityAvatar = normalizeOptionalString(agentIdentity?.avatar);
   if (identityAvatar && isLikelyEmoji(identityAvatar)) {
     return identityAvatar;
   }
-  const avatar = agent.identity?.avatar?.trim();
+  const avatar = normalizeOptionalString(agent.identity?.avatar);
   if (avatar && isLikelyEmoji(avatar)) {
     return avatar;
   }
@@ -104,6 +274,14 @@ export function resolveAgentEmoji(
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
+}
+
+export function agentAvatarHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
 }
 
 export function formatBytes(bytes?: number) {
@@ -138,7 +316,7 @@ export type AgentContext = {
   workspace: string;
   model: string;
   identityName: string;
-  identityEmoji: string;
+  identityAvatar: string;
   skillsLabel: string;
   isDefault: boolean;
 };
@@ -154,24 +332,30 @@ export function buildAgentContext(
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
-    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
+    workspaceFromFiles ||
+    config.entry?.workspace ||
+    config.defaults?.workspace ||
+    agent.workspace ||
+    "default";
   const modelLabel = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
+    : config.defaults?.model
+      ? resolveModelLabel(config.defaults?.model)
+      : resolveModelLabel(agent.model);
   const identityName =
-    agentIdentity?.name?.trim() ||
-    agent.identity?.name?.trim() ||
-    agent.name?.trim() ||
+    normalizeOptionalString(agentIdentity?.name) ||
+    normalizeOptionalString(agent.identity?.name) ||
+    normalizeOptionalString(agent.name) ||
     config.entry?.name ||
     agent.id;
-  const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
     identityName,
-    identityEmoji,
+    identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
@@ -182,11 +366,11 @@ export function resolveModelLabel(model?: unknown): string {
     return "-";
   }
   if (typeof model === "string") {
-    return model.trim() || "-";
+    return normalizeOptionalString(model) || "-";
   }
   if (typeof model === "object" && model) {
     const record = model as { primary?: string; fallbacks?: string[] };
-    const primary = record.primary?.trim();
+    const primary = normalizeOptionalString(record.primary);
     if (primary) {
       const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
       return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
@@ -205,7 +389,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
     return null;
   }
   if (typeof model === "string") {
-    const trimmed = model.trim();
+    const trimmed = normalizeOptionalString(model);
     return trimmed || null;
   }
   if (typeof model === "object" && model) {
@@ -220,7 +404,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
             : typeof record.value === "string"
               ? record.value
               : null;
-    const primary = candidate?.trim();
+    const primary = normalizeOptionalString(candidate);
     return primary || null;
   }
   return null;
@@ -249,6 +433,114 @@ export function resolveEffectiveModelFallbacks(
   defaultModel?: unknown,
 ): string[] | null {
   return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
+}
+
+function addModelId(target: Set<string>, value: unknown) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  target.add(trimmed);
+}
+
+function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
+  if (!modelConfig) {
+    return;
+  }
+  if (typeof modelConfig === "string") {
+    addModelId(target, modelConfig);
+    return;
+  }
+  if (typeof modelConfig !== "object") {
+    return;
+  }
+  const record = modelConfig as Record<string, unknown>;
+  addModelId(target, record.primary);
+  addModelId(target, record.model);
+  addModelId(target, record.id);
+  addModelId(target, record.value);
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
+      : [];
+  for (const fallback of fallbacks) {
+    addModelId(target, fallback);
+  }
+}
+
+export function sortLocaleStrings(values: Iterable<string>): string[] {
+  const sorted = Array.from(values);
+  const buffer = Array.from({ length: sorted.length }, () => "");
+
+  const merge = (left: number, middle: number, right: number): void => {
+    let i = left;
+    let j = middle;
+    let k = left;
+    while (i < middle && j < right) {
+      buffer[k++] = sorted[i].localeCompare(sorted[j]) <= 0 ? sorted[i++] : sorted[j++];
+    }
+    while (i < middle) {
+      buffer[k++] = sorted[i++];
+    }
+    while (j < right) {
+      buffer[k++] = sorted[j++];
+    }
+    for (let idx = left; idx < right; idx += 1) {
+      sorted[idx] = buffer[idx];
+    }
+  };
+
+  const sortRange = (left: number, right: number): void => {
+    if (right - left <= 1) {
+      return;
+    }
+
+    const middle = (left + right) >>> 1;
+    sortRange(left, middle);
+    sortRange(middle, right);
+    merge(left, middle, right);
+  };
+
+  sortRange(0, sorted.length);
+  return sorted;
+}
+
+export function resolveConfiguredCronModelSuggestions(
+  configForm: Record<string, unknown> | null,
+): string[] {
+  if (!configForm || typeof configForm !== "object") {
+    return [];
+  }
+  const agents = (configForm as { agents?: unknown }).agents;
+  if (!agents || typeof agents !== "object") {
+    return [];
+  }
+  const out = new Set<string>();
+  const defaults = (agents as { defaults?: unknown }).defaults;
+  if (defaults && typeof defaults === "object") {
+    const defaultsRecord = defaults as Record<string, unknown>;
+    addModelConfigIds(out, defaultsRecord.model);
+    const defaultsModels = defaultsRecord.models;
+    if (defaultsModels && typeof defaultsModels === "object") {
+      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
+        addModelId(out, modelId);
+      }
+    }
+  }
+  const list = (agents as { list?: unknown }).list;
+  if (list && typeof list === "object") {
+    for (const entry of Object.values(list as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      addModelConfigIds(out, (entry as Record<string, unknown>).model);
+    }
+  }
+  return sortLocaleStrings(out);
 }
 
 export function parseFallbackList(value: string): string[] {
@@ -292,16 +584,38 @@ function resolveConfiguredModels(
 export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
+  catalog?: ModelCatalogEntry[],
 ) {
-  const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
+  const seen = new Set<string>();
+  const options: ConfiguredModelOption[] = [];
+  const addOption = (value: string, label: string) => {
+    const key = normalizeLowercaseStringOrEmpty(value);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({ value, label });
+  };
+
+  for (const opt of resolveConfiguredModels(configForm)) {
+    addOption(opt.value, opt.label);
+  }
+
+  if (catalog) {
+    for (const entry of catalog) {
+      const provider = entry.provider?.trim();
+      const value = provider ? `${provider}/${entry.id}` : entry.id;
+      const label = provider ? `${entry.id} · ${provider}` : entry.id;
+      addOption(value, label);
+    }
+  }
+
+  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
+
   if (options.length === 0) {
-    return html`
-      <option value="" disabled>No configured models</option>
-    `;
+    return nothing;
   }
   return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
 }

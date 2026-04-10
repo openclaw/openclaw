@@ -4,12 +4,18 @@
     "declaration": true,
     "declarationMap": false,
     "emitDeclarationOnly": true,
+    "incremental": true,
     "noEmit": false,
-    "noEmitOnError": true,
+    "noEmitOnError": false,
     "outDir": "dist/plugin-sdk",
-    "rootDir": "src",
+    "rootDir": ".",
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
-  "include": ["src/plugin-sdk/index.ts", "src/plugin-sdk/account-id.ts", "src/types/**/*.d.ts"],
+  "include": [
+    "src/plugin-sdk/**/*.ts",
+    "src/video-generation/dashscope-compatible.ts",
+    "src/video-generation/types.ts",
+    "src/types/**/*.d.ts"
+  ],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }

@@ -90,7 +90,7 @@ more natural.
 - Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
-## “Stream chunks or everything”
+## "Stream chunks or everything"
 
 This maps to:
 
@@ -126,19 +126,20 @@ Modes:
 
 Slack-only:
 
-- `channels.slack.nativeStreaming` toggles Slack native streaming API calls when `streaming=partial` (default: `true`).
+- `channels.slack.streaming.nativeTransport` toggles Slack native streaming API calls when `channels.slack.streaming.mode="partial"` (default: `true`).
+- Slack native streaming and Slack assistant thread status require a reply thread target; top-level DMs do not show that thread-style preview.
 
 Legacy key migration:
 
 - Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
 - Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming` enum; boolean `streaming` auto-migrates to `nativeStreaming`.
+- Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
 
 ### Runtime behavior
 
 Telegram:
 
-- Uses Bot API `sendMessage` + `editMessageText`.
+- Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to preview.
 
@@ -153,3 +154,9 @@ Slack:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+
+## Related
+
+- [Messages](/concepts/messages) — message lifecycle and delivery
+- [Retry](/concepts/retry) — retry behavior on delivery failure
+- [Channels](/channels) — per-channel streaming support

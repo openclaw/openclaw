@@ -1,5 +1,10 @@
-type SessionTranscriptUpdate = {
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+export type SessionTranscriptUpdate = {
   sessionFile: string;
+  sessionKey?: string;
+  message?: unknown;
+  messageId?: string;
 };
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
@@ -13,13 +18,35 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
-export function emitSessionTranscriptUpdate(sessionFile: string): void {
-  const trimmed = sessionFile.trim();
+export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
+  const normalized =
+    typeof update === "string"
+      ? { sessionFile: update }
+      : {
+          sessionFile: update.sessionFile,
+          sessionKey: update.sessionKey,
+          message: update.message,
+          messageId: update.messageId,
+        };
+  const trimmed = normalizeOptionalString(normalized.sessionFile);
   if (!trimmed) {
     return;
   }
-  const update = { sessionFile: trimmed };
+  const nextUpdate: SessionTranscriptUpdate = {
+    sessionFile: trimmed,
+    ...(normalizeOptionalString(normalized.sessionKey)
+      ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
+      : {}),
+    ...(normalized.message !== undefined ? { message: normalized.message } : {}),
+    ...(normalizeOptionalString(normalized.messageId)
+      ? { messageId: normalizeOptionalString(normalized.messageId) }
+      : {}),
+  };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
-    listener(update);
+    try {
+      listener(nextUpdate);
+    } catch {
+      /* ignore */
+    }
   }
 }

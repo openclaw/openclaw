@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 
@@ -12,6 +13,13 @@ type EnvSnapshot = {
   openclawHome: string | undefined;
   stateDir: string | undefined;
 };
+
+type SharedHomeRootState = {
+  rootPromise: Promise<string>;
+  nextCaseId: number;
+};
+
+const SHARED_HOME_ROOTS = new Map<string, SharedHomeRootState>();
 
 function snapshotEnv(): EnvSnapshot {
   return {
@@ -76,11 +84,31 @@ function setTempHome(base: string) {
   process.env.HOMEPATH = match[2] || "\\";
 }
 
+async function allocateTempHomeBase(prefix: string): Promise<string> {
+  let state = SHARED_HOME_ROOTS.get(prefix);
+  if (!state) {
+    state = {
+      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)),
+      nextCaseId: 0,
+    };
+    SHARED_HOME_ROOTS.set(prefix, state);
+  }
+  const root = await state.rootPromise;
+  const base = path.join(root, `case-${state.nextCaseId++}`);
+  await fs.mkdir(base, { recursive: true });
+  return base;
+}
+
 export async function withTempHome<T>(
   fn: (home: string) => Promise<T>,
-  opts: { env?: Record<string, EnvValue>; prefix?: string } = {},
+  opts: {
+    env?: Record<string, EnvValue>;
+    prefix?: string;
+    skipSessionCleanup?: boolean;
+  } = {},
 ): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), opts.prefix ?? "openclaw-test-home-"));
+  const prefix = opts.prefix ?? "openclaw-test-home-";
+  const base = await allocateTempHomeBase(prefix);
   const snapshot = snapshotEnv();
   const envKeys = Object.keys(opts.env ?? {});
   for (const key of envKeys) {
@@ -106,6 +134,9 @@ export async function withTempHome<T>(
   try {
     return await fn(base);
   } finally {
+    if (!opts.skipSessionCleanup) {
+      await cleanupSessionStateForTest().catch(() => undefined);
+    }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);
     try {

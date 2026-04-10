@@ -63,7 +63,7 @@ describe("normalizeUsage", () => {
       cached_tokens: 19,
     });
     expect(usage).toEqual({
-      input: 30,
+      input: 11,
       output: 9,
       cacheRead: 19,
       cacheWrite: undefined,
@@ -80,11 +80,58 @@ describe("normalizeUsage", () => {
       prompt_tokens_details: { cached_tokens: 1024 },
     });
     expect(usage).toEqual({
-      input: 1113,
+      input: 89,
       output: 5,
       cacheRead: 1024,
       cacheWrite: undefined,
       total: 1118,
+    });
+  });
+
+  it("handles OpenAI Responses input_tokens_details.cached_tokens field", () => {
+    const usage = normalizeUsage({
+      input_tokens: 120,
+      output_tokens: 30,
+      total_tokens: 250,
+      input_tokens_details: { cached_tokens: 100 },
+    });
+    expect(usage).toEqual({
+      input: 20,
+      output: 30,
+      cacheRead: 100,
+      cacheWrite: undefined,
+      total: 250,
+    });
+  });
+
+  it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
+    // pi-ai OpenAI-format providers subtract cached_tokens from prompt_tokens
+    // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.
+    const usage = normalizeUsage({
+      input: -4900,
+      output: 200,
+      cacheRead: 5000,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 200,
+      cacheRead: 5000,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("clamps negative prompt_tokens alias to zero", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: -12,
+      completion_tokens: 4,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 4,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
     });
   });
 

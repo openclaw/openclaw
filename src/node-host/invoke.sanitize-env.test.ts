@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { sanitizeEnv } from "./invoke.js";
+import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
+
+function getEnvValueCaseInsensitive(
+  env: Record<string, string>,
+  expectedKey: string,
+): string | undefined {
+  const direct = env[expectedKey];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const upper = expectedKey.toUpperCase();
+  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === upper);
+  return actualKey ? env[actualKey] : undefined;
+}
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
@@ -50,6 +63,43 @@ describe("node-host sanitizeEnv", () => {
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
     });
+  });
+
+  it("preserves inherited non-portable Windows-style env keys", () => {
+    withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(getEnvValueCaseInsensitive(env, "ProgramFiles(x86)")).toBe("C:\\Program Files (x86)");
+    });
+  });
+});
+
+describe("node-host output decoding", () => {
+  it("parses code pages from chcp output text", () => {
+    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
+    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
+    expect(parseWindowsCodePage("no code page")).toBeNull();
+  });
+
+  it("decodes GBK output on Windows when code page is known", () => {
+    let supportsGbk = true;
+    try {
+      void new TextDecoder("gbk");
+    } catch {
+      supportsGbk = false;
+    }
+
+    const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
+    const decoded = decodeCapturedOutputBuffer({
+      buffer: raw,
+      platform: "win32",
+      windowsEncoding: "gbk",
+    });
+
+    if (!supportsGbk) {
+      expect(decoded).toContain("�");
+      return;
+    }
+    expect(decoded).toBe("测试～；");
   });
 });
 

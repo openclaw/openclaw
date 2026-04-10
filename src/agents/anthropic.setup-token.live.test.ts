@@ -9,19 +9,19 @@ import {
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
@@ -51,7 +51,7 @@ function listSetupTokenProfiles(store: {
       if (normalizeProviderId(cred.provider) !== "anthropic") {
         return false;
       }
-      return isSetupToken(cred.token);
+      return isSetupToken(cred.token ?? "");
     })
     .map(([id]) => id);
 }
@@ -141,9 +141,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   }
 
   const preferred = [
-    "claude-opus-4-5",
+    "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-0",
     "claude-haiku-3-5",
   ];

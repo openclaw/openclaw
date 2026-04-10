@@ -1,50 +1,98 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  loadSanitizeSessionHistoryWithCleanMocks,
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
+  type SanitizeSessionHistoryHarness,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
+import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+
+vi.mock("./pi-embedded-helpers.js", async () => ({
+  ...(await vi.importActual("./pi-embedded-helpers.js")),
+  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
+}));
+
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+  };
+});
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {
-  it("keeps canonical call_id|fc_id pairings for same-model openai replay", async () => {
-    const sessionEntries = [
+  let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
+
+  beforeEach(async () => {
+    const harness = await loadSanitizeSessionHistoryWithCleanMocks();
+    sanitizeSessionHistory = harness.sanitizeSessionHistory;
+  });
+
+  const makeSessionManager = () =>
+    makeInMemorySessionManager([
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
-    ];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    ]);
 
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} }],
-      } as unknown as AgentMessage,
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "noop",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      } as unknown as AgentMessage,
-    ];
+  const makeMessages = (withReasoning: boolean): AgentMessage[] => [
+    castAgentMessage({
+      role: "assistant",
+      content: [
+        ...(withReasoning
+          ? [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+              },
+            ]
+          : []),
+        { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
+      ],
+    }),
+    castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_123|fc_123",
+      toolName: "noop",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    }),
+  ];
 
+  it.each([
+    {
+      name: "strips fc ids when replayable reasoning metadata is missing",
+      withReasoning: false,
+      expectedToolId: "call_123",
+    },
+    {
+      name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
+      withReasoning: true,
+      expectedToolId: "call_123|fc_123",
+    },
+  ])("$name", async ({ withReasoning, expectedToolId }) => {
     const result = await sanitizeSessionHistory({
-      messages,
+      messages: makeMessages(withReasoning),
       modelApi: "openai-responses",
       provider: "openai",
-      modelId: "gpt-5.2-codex",
-      sessionManager,
+      modelId: "gpt-5.4",
+      sessionManager: makeSessionManager(),
       sessionId: "test-session",
     });
 
     const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
     const toolCall = assistant.content?.find((block) => block.type === "toolCall");
-    expect(toolCall?.id).toBe("call_123|fc_123");
+    expect(toolCall?.id).toBe(expectedToolId);
 
     const toolResult = result[1] as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe("call_123|fc_123");
+    expect(toolResult.toolCallId).toBe(expectedToolId);
   });
 });

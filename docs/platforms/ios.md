@@ -38,9 +38,13 @@ openclaw gateway --port 18789
 3. Approve the pairing request on the gateway host:
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
 ```
+
+If the app retries pairing with changed auth details (role/scopes/public key),
+the previous pending request is superseded and a new `requestId` is created.
+Run `openclaw devices list` again before approval.
 
 4. Verify connection:
 
@@ -49,15 +53,142 @@ openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
 
+## Relay-backed push for official builds
+
+Official distributed iOS builds use the external push relay instead of publishing the raw APNs
+token to the gateway.
+
+Gateway-side requirement:
+
+```json5
+{
+  gateway: {
+    push: {
+      apns: {
+        relay: {
+          baseUrl: "https://relay.example.com",
+        },
+      },
+    },
+  },
+}
+```
+
+How the flow works:
+
+- The iOS app registers with the relay using App Attest and the app receipt.
+- The relay returns an opaque relay handle plus a registration-scoped send grant.
+- The iOS app fetches the paired gateway identity and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
+- The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
+- The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
+- The gateway relay base URL must match the relay URL baked into the official/TestFlight iOS build.
+- If the app later connects to a different gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
+
+What the gateway does **not** need for this path:
+
+- No deployment-wide relay token.
+- No direct APNs key for official/TestFlight relay-backed sends.
+
+Expected operator flow:
+
+1. Install the official/TestFlight iOS build.
+2. Set `gateway.push.apns.relay.baseUrl` on the gateway.
+3. Pair the app to the gateway and let it finish connecting.
+4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
+5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
+
+Compatibility note:
+
+- `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
+
+## Authentication and trust flow
+
+The relay exists to enforce two constraints that direct APNs-on-gateway cannot provide for
+official iOS builds:
+
+- Only genuine OpenClaw iOS builds distributed through Apple can use the hosted relay.
+- A gateway can send relay-backed pushes only for iOS devices that paired with that specific
+  gateway.
+
+Hop by hop:
+
+1. `iOS app -> gateway`
+   - The app first pairs with the gateway through the normal Gateway auth flow.
+   - That gives the app an authenticated node session plus an authenticated operator session.
+   - The operator session is used to call `gateway.identity.get`.
+
+2. `iOS app -> relay`
+   - The app calls the relay registration endpoints over HTTPS.
+   - Registration includes App Attest proof plus the app receipt.
+   - The relay validates the bundle ID, App Attest proof, and Apple receipt, and requires the
+     official/production distribution path.
+   - This is what blocks local Xcode/dev builds from using the hosted relay. A local build may be
+     signed, but it does not satisfy the official Apple distribution proof the relay expects.
+
+3. `gateway identity delegation`
+   - Before relay registration, the app fetches the paired gateway identity from
+     `gateway.identity.get`.
+   - The app includes that gateway identity in the relay registration payload.
+   - The relay returns a relay handle and a registration-scoped send grant that are delegated to
+     that gateway identity.
+
+4. `gateway -> relay`
+   - The gateway stores the relay handle and send grant from `push.apns.register`.
+   - On `push.test`, reconnect wakes, and wake nudges, the gateway signs the send request with its
+     own device identity.
+   - The relay verifies both the stored send grant and the gateway signature against the delegated
+     gateway identity from registration.
+   - Another gateway cannot reuse that stored registration, even if it somehow obtains the handle.
+
+5. `relay -> APNs`
+   - The relay owns the production APNs credentials and the raw APNs token for the official build.
+   - The gateway never stores the raw APNs token for relay-backed official builds.
+   - The relay sends the final push to APNs on behalf of the paired gateway.
+
+Why this design was created:
+
+- To keep production APNs credentials out of user gateways.
+- To avoid storing raw official-build APNs tokens on the gateway.
+- To allow hosted relay usage only for official/TestFlight OpenClaw builds.
+- To prevent one gateway from sending wake pushes to iOS devices owned by a different gateway.
+
+Local/manual builds remain on direct APNs. If you are testing those builds without the relay, the
+gateway still needs direct APNs credentials:
+
+```bash
+export OPENCLAW_APNS_TEAM_ID="TEAMID"
+export OPENCLAW_APNS_KEY_ID="KEYID"
+export OPENCLAW_APNS_PRIVATE_KEY_P8="$(cat /path/to/AuthKey_KEYID.p8)"
+```
+
+These are gateway-host runtime env vars, not Fastlane settings. `apps/ios/fastlane/.env` only stores
+App Store Connect / TestFlight auth such as `ASC_KEY_ID` and `ASC_ISSUER_ID`; it does not configure
+direct APNs delivery for local iOS builds.
+
+Recommended gateway-host storage:
+
+```bash
+mkdir -p ~/.openclaw/credentials/apns
+chmod 700 ~/.openclaw/credentials/apns
+mv /path/to/AuthKey_KEYID.p8 ~/.openclaw/credentials/apns/AuthKey_KEYID.p8
+chmod 600 ~/.openclaw/credentials/apns/AuthKey_KEYID.p8
+export OPENCLAW_APNS_PRIVATE_KEY_PATH="$HOME/.openclaw/credentials/apns/AuthKey_KEYID.p8"
+```
+
+Do not commit the `.p8` file or place it under the repo checkout.
+
 ## Discovery paths
 
 ### Bonjour (LAN)
 
-The Gateway advertises `_openclaw-gw._tcp` on `local.`. The iOS app lists these automatically.
+The iOS app browses `_openclaw-gw._tcp` on `local.` and, when configured, the same
+wide-area DNS-SD discovery domain. Same-LAN gateways appear automatically from `local.`;
+cross-network discovery can use the configured wide-area domain without changing the beacon type.
 
 ### Tailnet (cross-network)
 
-If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `openclaw.internal.`) and Tailscale split DNS.
+If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example:
+`openclaw.internal.`) and Tailscale split DNS.
 See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### Manual host/port
@@ -98,11 +229,11 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
 - `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [Gateway configuration](/gateway/configuration).
-- Pairing prompt never appears: run `openclaw nodes pending` and approve manually.
+- Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 
 ## Related docs
 
-- [Pairing](/gateway/pairing)
+- [Pairing](/channels/pairing)
 - [Discovery](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)

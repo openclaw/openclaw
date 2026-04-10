@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
-vi.mock("./openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
-}));
+vi.mock("./openclaw-root.js", async () => {
+  const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: vi.fn(),
+  };
+});
 
 vi.mock("./update-check.js", async () => {
   const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
@@ -40,8 +44,7 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 describe("update-startup", () => {
-  let suiteRoot = "";
-  let suiteCase = 0;
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-check-suite-" });
   let tempDir: string;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -56,14 +59,13 @@ describe("update-startup", () => {
   let loaded = false;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-suite-"));
+    await suiteRootTracker.setup();
   });
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
-    tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
-    await fs.mkdir(tempDir);
+    tempDir = await suiteRootTracker.make("case");
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "NODE_ENV", "VITEST"]);
     process.env.OPENCLAW_STATE_DIR = tempDir;
 
@@ -99,20 +101,24 @@ describe("update-startup", () => {
   });
 
   afterAll(async () => {
-    if (suiteRoot) {
-      await fs.rm(suiteRoot, { recursive: true, force: true });
-    }
-    suiteRoot = "";
-    suiteCase = 0;
+    await suiteRootTracker.cleanup();
   });
 
   function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {
+    mockPackageInstallStatus();
+    mockNpmChannelTag(tag, version);
+  }
+
+  function mockPackageInstallStatus() {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
+  }
+
+  function mockNpmChannelTag(tag: string, version: string) {
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag,
       version,
@@ -144,6 +150,48 @@ describe("update-startup", () => {
     return vi.fn().mockResolvedValue({
       ok: true,
       code: 0,
+    });
+  }
+
+  function createBetaAutoUpdateConfig(params?: { checkOnStart?: boolean }) {
+    return {
+      update: {
+        ...(params?.checkOnStart === false ? { checkOnStart: false } : {}),
+        channel: "beta" as const,
+        auto: {
+          enabled: true,
+          betaCheckIntervalHours: 1,
+        },
+      },
+    };
+  }
+
+  async function runAutoUpdateCheckWithDefaults(params: {
+    cfg: { update?: Record<string, unknown> };
+    runAutoUpdate?: ReturnType<typeof createAutoUpdateSuccessMock>;
+  }) {
+    await runGatewayUpdateCheck({
+      cfg: params.cfg,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      ...(params.runAutoUpdate ? { runAutoUpdate: params.runAutoUpdate } : {}),
+    });
+  }
+
+  async function runStableUpdateCheck(params: {
+    onUpdateAvailableChange?: Parameters<
+      typeof runGatewayUpdateCheck
+    >[0]["onUpdateAvailableChange"];
+  }) {
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      ...(params.onUpdateAvailableChange
+        ? { onUpdateAvailableChange: params.onUpdateAvailableChange }
+        : {}),
     });
   }
 
@@ -206,12 +254,7 @@ describe("update-startup", () => {
   });
 
   it("emits update change callback when update state clears", async () => {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    } satisfies UpdateCheckResult);
+    mockPackageInstallStatus();
     vi.mocked(resolveNpmChannelTag)
       .mockResolvedValueOnce({
         tag: "latest",
@@ -223,21 +266,9 @@ describe("update-startup", () => {
       });
 
     const onUpdateAvailableChange = vi.fn();
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      onUpdateAvailableChange,
-    });
+    await runStableUpdateCheck({ onUpdateAvailableChange });
     vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      onUpdateAvailableChange,
-    });
+    await runStableUpdateCheck({ onUpdateAvailableChange });
 
     expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(1, {
       currentVersion: "1.0.0",
@@ -310,19 +341,8 @@ describe("update-startup", () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
-    await runGatewayUpdateCheck({
-      cfg: {
-        update: {
-          channel: "beta",
-          auto: {
-            enabled: true,
-            betaCheckIntervalHours: 1,
-          },
-        },
-      },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
       runAutoUpdate,
     });
 
@@ -338,20 +358,8 @@ describe("update-startup", () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
-    await runGatewayUpdateCheck({
-      cfg: {
-        update: {
-          checkOnStart: false,
-          channel: "beta",
-          auto: {
-            enabled: true,
-            betaCheckIntervalHours: 1,
-          },
-        },
-      },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig({ checkOnStart: false }),
       runAutoUpdate,
     });
 
@@ -359,16 +367,8 @@ describe("update-startup", () => {
   });
 
   it("uses current runtime + entrypoint for default auto-update command execution", async () => {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    } satisfies UpdateCheckResult);
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "beta",
-      version: "2.0.0-beta.1",
-    });
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
     vi.mocked(runCommandWithTimeout).mockResolvedValue({
       stdout: "{}",
       stderr: "",
@@ -381,19 +381,8 @@ describe("update-startup", () => {
     const originalArgv = process.argv.slice();
     process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
     try {
-      await runGatewayUpdateCheck({
-        cfg: {
-          update: {
-            channel: "beta",
-            auto: {
-              enabled: true,
-              betaCheckIntervalHours: 1,
-            },
-          },
-        },
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
+      await runAutoUpdateCheckWithDefaults({
+        cfg: createBetaAutoUpdateConfig(),
       });
     } finally {
       process.argv = originalArgv;

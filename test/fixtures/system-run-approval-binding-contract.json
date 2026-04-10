@@ -1,11 +1,11 @@
 {
   "cases": [
     {
-      "name": "v1 matches when env key order changes",
+      "name": "binding matches when env key order changes",
       "request": {
         "host": "node",
         "command": "git diff",
-        "bindingV1": {
+        "binding": {
           "argv": ["git", "diff"],
           "cwd": null,
           "agentId": null,
@@ -25,11 +25,11 @@
       "expected": { "ok": true }
     },
     {
-      "name": "v1 rejects env mismatch",
+      "name": "binding rejects env mismatch",
       "request": {
         "host": "node",
         "command": "git diff",
-        "bindingV1": {
+        "binding": {
           "argv": ["git", "diff"],
           "cwd": null,
           "agentId": null,
@@ -49,11 +49,35 @@
       "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
     },
     {
-      "name": "v1 rejects unbound env overrides",
+      "name": "binding rejects mismatched Windows-compatible env values",
+      "request": {
+        "host": "node",
+        "command": "cmd.exe /c echo ok",
+        "binding": {
+          "argv": ["cmd.exe", "/c", "echo", "ok"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "C:\\Program Files (x86)" }
+        }
+      },
+      "invoke": {
+        "argv": ["cmd.exe", "/c", "echo", "ok"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "D:\\malicious" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
+    },
+    {
+      "name": "binding rejects unbound env overrides",
       "request": {
         "host": "node",
         "command": "git diff",
-        "bindingV1": {
+        "binding": {
           "argv": ["git", "diff"],
           "cwd": null,
           "agentId": null,
@@ -89,12 +113,12 @@
       "expected": { "ok": false, "code": "APPROVAL_REQUEST_MISMATCH" }
     },
     {
-      "name": "v1 stays authoritative when legacy command text diverges",
+      "name": "binding stays authoritative when legacy command text diverges",
       "request": {
         "host": "node",
         "command": "echo STALE",
         "commandArgv": ["echo", "STALE"],
-        "bindingV1": {
+        "binding": {
           "argv": ["echo", "SAFE"],
           "cwd": null,
           "agentId": null,

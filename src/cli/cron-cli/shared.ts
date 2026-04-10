@@ -2,14 +2,34 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
+import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import { defaultRuntime } from "../../runtime.js";
+import {
+  isOffsetlessIsoDateTime,
+  parseOffsetlessIsoDateTimeInTimeZone,
+} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
-export const getCronChannelOptions = () =>
-  ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+export const getCronChannelOptions = () => {
+  // Keep help truthful even before the plugin registry is bootstrapped.
+  const pluginIds = listChannelPlugins()
+    .map((plugin) => plugin.id)
+    .filter(Boolean);
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+};
+
+export function printCronJson(value: unknown) {
+  defaultRuntime.writeJson(value);
+}
+
+export function handleCronCliError(err: unknown) {
+  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.exit(1);
+}
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -48,7 +68,7 @@ export function parseDurationMs(input: string): number | null {
   if (!Number.isFinite(n) || n <= 0) {
     return null;
   }
-  const unit = (match[2] ?? "").toLowerCase();
+  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
   const factor =
     unit === "ms"
       ? 1
@@ -62,11 +82,42 @@ export function parseDurationMs(input: string): number | null {
   return Math.floor(n * factor);
 }
 
-export function parseAt(input: string): string | null {
+export function parseCronStaggerMs(params: {
+  staggerRaw: string;
+  useExact: boolean;
+}): number | undefined {
+  if (params.useExact) {
+    return 0;
+  }
+  if (!params.staggerRaw) {
+    return undefined;
+  }
+  const parsed = parseDurationMs(params.staggerRaw);
+  if (!parsed) {
+    throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
+  return parsed;
+}
+
+/**
+ * Parse a one-shot `--at` value into an ISO string (UTC).
+ *
+ * When `tz` is provided and the input is an offset-less datetime
+ * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
+ * that IANA timezone instead of UTC.
+ */
+export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
   }
+
+  // If a timezone is provided and the input looks like an offset-less ISO datetime,
+  // resolve it in the given IANA timezone so users get the time they expect.
+  if (tz && isOffsetlessIsoDateTime(raw)) {
+    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+  }
+
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
     return new Date(absolute).toISOString();
@@ -86,6 +137,7 @@ const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
 const CRON_AGENT_PAD = 10;
+const CRON_MODEL_PAD = 20;
 
 const pad = (value: string, width: number) => value.padEnd(width);
 
@@ -156,7 +208,7 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
+export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;
@@ -171,7 +223,8 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
-    pad("Agent", CRON_AGENT_PAD),
+    pad("Agent ID", CRON_AGENT_PAD),
+    pad("Model", CRON_MODEL_PAD),
   ].join(" ");
 
   runtime.log(rich ? theme.heading(header) : header);
@@ -192,7 +245,14 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
-    const agentLabel = pad(truncate(job.agentId ?? "default", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const modelLabel = pad(
+      truncate(
+        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        CRON_MODEL_PAD,
+      ),
+      CRON_MODEL_PAD,
+    );
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") {
@@ -211,9 +271,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     })();
 
     const coloredTarget =
-      job.sessionTarget === "isolated"
-        ? colorize(rich, theme.accentBright, targetLabel)
-        : colorize(rich, theme.accent, targetLabel);
+      job.sessionTarget === "main"
+        ? colorize(rich, theme.accent, targetLabel)
+        : colorize(rich, theme.accentBright, targetLabel);
     const coloredAgent = job.agentId
       ? colorize(rich, theme.info, agentLabel)
       : colorize(rich, theme.muted, agentLabel);
@@ -227,6 +287,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       coloredStatus,
       coloredTarget,
       coloredAgent,
+      job.payload.kind === "agentTurn" && job.payload.model
+        ? colorize(rich, theme.info, modelLabel)
+        : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
     runtime.log(line.trimEnd());

@@ -1,3 +1,5 @@
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 
@@ -14,6 +16,11 @@ export type DeliveryContextSessionSource = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   deliveryContext?: DeliveryContext;
 };
 
@@ -25,13 +32,13 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     typeof context.channel === "string"
       ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
       : undefined;
-  const to = typeof context.to === "string" ? context.to.trim() : undefined;
+  const to = normalizeOptionalString(context.to);
   const accountId = normalizeAccountId(context.accountId);
   const threadId =
     typeof context.threadId === "number" && Number.isFinite(context.threadId)
       ? Math.trunc(context.threadId)
       : typeof context.threadId === "string"
-        ? context.threadId.trim()
+        ? normalizeOptionalString(context.threadId)
         : undefined;
   const normalizedThreadId =
     typeof threadId === "string" ? (threadId ? threadId : undefined) : threadId;
@@ -47,6 +54,100 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     normalized.threadId = normalizedThreadId;
   }
   return normalized;
+}
+
+export function formatConversationTarget(params: {
+  channel?: string;
+  conversationId?: string | number;
+  parentConversationId?: string | number;
+}): string | undefined {
+  const channel =
+    typeof params.channel === "string"
+      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      : undefined;
+  const conversationId =
+    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
+      ? String(Math.trunc(params.conversationId))
+      : typeof params.conversationId === "string"
+        ? normalizeOptionalString(params.conversationId)
+        : undefined;
+  if (!channel || !conversationId) {
+    return undefined;
+  }
+  const parentConversationId =
+    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
+      ? String(Math.trunc(params.parentConversationId))
+      : typeof params.parentConversationId === "string"
+        ? normalizeOptionalString(params.parentConversationId)
+        : undefined;
+  const pluginTarget = normalizeChannelId(channel)
+    ? getChannelPlugin(normalizeChannelId(channel)!)?.messaging?.resolveDeliveryTarget?.({
+        conversationId,
+        parentConversationId,
+      })
+    : null;
+  if (pluginTarget?.to?.trim()) {
+    return pluginTarget.to.trim();
+  }
+  return `channel:${conversationId}`;
+}
+
+export function resolveConversationDeliveryTarget(params: {
+  channel?: string;
+  conversationId?: string | number;
+  parentConversationId?: string | number;
+}): { to?: string; threadId?: string } {
+  const channel =
+    typeof params.channel === "string"
+      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      : undefined;
+  const conversationId =
+    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
+      ? String(Math.trunc(params.conversationId))
+      : typeof params.conversationId === "string"
+        ? normalizeOptionalString(params.conversationId)
+        : undefined;
+  const parentConversationId =
+    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
+      ? String(Math.trunc(params.parentConversationId))
+      : typeof params.parentConversationId === "string"
+        ? normalizeOptionalString(params.parentConversationId)
+        : undefined;
+  const pluginTarget =
+    channel && conversationId
+      ? getChannelPlugin(
+          normalizeChannelId(channel) ?? channel,
+        )?.messaging?.resolveDeliveryTarget?.({
+          conversationId,
+          parentConversationId,
+        })
+      : null;
+  if (pluginTarget) {
+    return {
+      ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
+      ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
+    };
+  }
+  const isThreadChild =
+    conversationId && parentConversationId && parentConversationId !== conversationId;
+  if (channel && isThreadChild) {
+    if (
+      channel === "matrix" ||
+      channel === "slack" ||
+      channel === "mattermost" ||
+      channel === "telegram"
+    ) {
+      return {
+        to: formatConversationTarget({
+          channel,
+          conversationId: parentConversationId,
+        }),
+        threadId: conversationId,
+      };
+    }
+  }
+  const to = formatConversationTarget(params);
+  return { to };
 }
 
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
@@ -96,17 +197,18 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 }
 
 export function deliveryContextFromSession(
-  entry?: DeliveryContextSessionSource & { origin?: { threadId?: string | number } },
+  entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
   if (!entry) {
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
-    channel: entry.channel,
+    channel: entry.channel ?? entry.origin?.provider,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
+    lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    origin: entry.origin,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;
@@ -121,11 +223,23 @@ export function mergeDeliveryContext(
   if (!normalizedPrimary && !normalizedFallback) {
     return undefined;
   }
+  const channelsConflict =
+    normalizedPrimary?.channel &&
+    normalizedFallback?.channel &&
+    normalizedPrimary.channel !== normalizedFallback.channel;
   return normalizeDeliveryContext({
     channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    to: normalizedPrimary?.to ?? normalizedFallback?.to,
-    accountId: normalizedPrimary?.accountId ?? normalizedFallback?.accountId,
-    threadId: normalizedPrimary?.threadId ?? normalizedFallback?.threadId,
+    // Keep route fields paired to their channel; avoid crossing fields between
+    // unrelated channels during session context merges.
+    to: channelsConflict
+      ? normalizedPrimary?.to
+      : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: channelsConflict
+      ? normalizedPrimary?.accountId
+      : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    threadId: channelsConflict
+      ? normalizedPrimary?.threadId
+      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });
 }
 

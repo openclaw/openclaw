@@ -2,6 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isRecord } from "../src/utils.js";
+
+function writeStdoutLine(message = ""): void {
+  process.stdout.write(`${message}\n`);
+}
 
 const BUG_LABEL = "bug";
 const ENHANCEMENT_LABEL = "enhancement";
@@ -182,6 +187,12 @@ type LoadedState = {
 };
 
 type LabelTarget = "issue" | "pr";
+type LabelItemBatch = {
+  batchIndex: number;
+  items: LabelItem[];
+  totalCount: number;
+  fetchedCount: number;
+};
 
 function parseArgs(argv: string[]): ScriptOptions {
   let limit = Number.POSITIVE_INFINITY;
@@ -225,25 +236,20 @@ function parseArgs(argv: string[]): ScriptOptions {
 }
 
 function logHeader(title: string) {
-  // eslint-disable-next-line no-console
-  console.log(`\n${title}`);
-  // eslint-disable-next-line no-console
-  console.log("=".repeat(title.length));
+  writeStdoutLine(`\n${title}`);
+  writeStdoutLine("=".repeat(title.length));
 }
 
 function logStep(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`• ${message}`);
+  writeStdoutLine(`• ${message}`);
 }
 
 function logSuccess(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`✓ ${message}`);
+  writeStdoutLine(`✓ ${message}`);
 }
 
 function logInfo(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`  ${message}`);
+  writeStdoutLine(`  ${message}`);
 }
 
 function createEmptyState(): LoadedState {
@@ -408,9 +414,22 @@ function fetchPullRequestPage(repo: RepoInfo, after: string | null): PullRequest
   return pullRequests;
 }
 
-function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
+function mapNodeToLabelItem(node: IssuePage["nodes"][number]): LabelItem {
+  return {
+    number: node.number,
+    title: node.title,
+    body: node.body ?? "",
+    labels: node.labels?.nodes ?? [],
+  };
+}
+
+function* fetchOpenLabelItemBatches(params: {
+  limit: number;
+  kindPlural: "issues" | "pull requests";
+  fetchPage: (repo: RepoInfo, after: string | null) => IssuePage | PullRequestPage;
+}): Generator<LabelItemBatch> {
   const repo = resolveRepo();
-  const results: Issue[] = [];
+  const results: LabelItem[] = [];
   let page = 1;
   let after: string | null = null;
   let totalCount = 0;
@@ -419,33 +438,28 @@ function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
 
   logStep(`Repository: ${repo.owner}/${repo.name}`);
 
-  while (fetchedCount < limit) {
-    const pageData = fetchIssuePage(repo, after);
+  while (fetchedCount < params.limit) {
+    const pageData = params.fetchPage(repo, after);
     const nodes = pageData.nodes ?? [];
     totalCount = pageData.totalCount ?? totalCount;
 
     if (page === 1) {
-      logSuccess(`Found ${totalCount} open issues.`);
+      logSuccess(`Found ${totalCount} open ${params.kindPlural}.`);
     }
 
-    logInfo(`Fetched page ${page} (${nodes.length} issues).`);
+    logInfo(`Fetched page ${page} (${nodes.length} ${params.kindPlural}).`);
 
     for (const node of nodes) {
-      if (fetchedCount >= limit) {
+      if (fetchedCount >= params.limit) {
         break;
       }
-      results.push({
-        number: node.number,
-        title: node.title,
-        body: node.body ?? "",
-        labels: node.labels?.nodes ?? [],
-      });
+      results.push(mapNodeToLabelItem(node));
       fetchedCount += 1;
 
       if (results.length >= WORK_BATCH_SIZE) {
         yield {
           batchIndex,
-          issues: results.splice(0, results.length),
+          items: results.splice(0, results.length),
           totalCount,
           fetchedCount,
         };
@@ -464,72 +478,39 @@ function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
   if (results.length) {
     yield {
       batchIndex,
-      issues: results,
+      items: results,
       totalCount,
       fetchedCount,
     };
   }
 }
 
-function* fetchOpenPullRequestBatches(limit: number): Generator<PullRequestBatch> {
-  const repo = resolveRepo();
-  const results: PullRequest[] = [];
-  let page = 1;
-  let after: string | null = null;
-  let totalCount = 0;
-  let fetchedCount = 0;
-  let batchIndex = 1;
-
-  logStep(`Repository: ${repo.owner}/${repo.name}`);
-
-  while (fetchedCount < limit) {
-    const pageData = fetchPullRequestPage(repo, after);
-    const nodes = pageData.nodes ?? [];
-    totalCount = pageData.totalCount ?? totalCount;
-
-    if (page === 1) {
-      logSuccess(`Found ${totalCount} open pull requests.`);
-    }
-
-    logInfo(`Fetched page ${page} (${nodes.length} pull requests).`);
-
-    for (const node of nodes) {
-      if (fetchedCount >= limit) {
-        break;
-      }
-      results.push({
-        number: node.number,
-        title: node.title,
-        body: node.body ?? "",
-        labels: node.labels?.nodes ?? [],
-      });
-      fetchedCount += 1;
-
-      if (results.length >= WORK_BATCH_SIZE) {
-        yield {
-          batchIndex,
-          pullRequests: results.splice(0, results.length),
-          totalCount,
-          fetchedCount,
-        };
-        batchIndex += 1;
-      }
-    }
-
-    if (!pageData.pageInfo.hasNextPage) {
-      break;
-    }
-
-    after = pageData.pageInfo.endCursor ?? null;
-    page += 1;
-  }
-
-  if (results.length) {
+function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
+  for (const batch of fetchOpenLabelItemBatches({
+    limit,
+    kindPlural: "issues",
+    fetchPage: fetchIssuePage,
+  })) {
     yield {
-      batchIndex,
-      pullRequests: results,
-      totalCount,
-      fetchedCount,
+      batchIndex: batch.batchIndex,
+      issues: batch.items,
+      totalCount: batch.totalCount,
+      fetchedCount: batch.fetchedCount,
+    };
+  }
+}
+
+function* fetchOpenPullRequestBatches(limit: number): Generator<PullRequestBatch> {
+  for (const batch of fetchOpenLabelItemBatches({
+    limit,
+    kindPlural: "pull requests",
+    fetchPage: fetchPullRequestPage,
+  })) {
+    yield {
+      batchIndex: batch.batchIndex,
+      pullRequests: batch.items,
+      totalCount: batch.totalCount,
+      fetchedCount: batch.fetchedCount,
     };
   }
 }
@@ -564,10 +545,6 @@ function extractResponseText(payload: OpenAIResponse): string {
   }
 
   return chunks.join("\n").trim();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function fallbackCategory(issueText: string): "bug" | "enhancement" {
@@ -767,8 +744,7 @@ async function main() {
     logInfo(`Processing ${pendingIssues.length} issues (scanned so far: ${scannedCount}).`);
 
     for (const issue of pendingIssues) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${issue.number} — ${issue.title}`);
+      writeStdoutLine(`\n#${issue.number} — ${issue.title}`);
 
       const labels = new Set(issue.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
@@ -843,8 +819,7 @@ async function main() {
     );
 
     for (const pullRequest of pendingPullRequests) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${pullRequest.number} — ${pullRequest.title}`);
+      writeStdoutLine(`\n#${pullRequest.number} — ${pullRequest.title}`);
 
       const labels = new Set(pullRequest.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);

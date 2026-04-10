@@ -1,14 +1,19 @@
 import path from "node:path";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidFileSecretRefId,
+} from "../secrets/ref-contract.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -65,12 +70,7 @@ const ExecSecretRefSchema = z
         SECRET_PROVIDER_ALIAS_PATTERN,
         'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
       ),
-    id: z
-      .string()
-      .regex(
-        EXEC_SECRET_REF_ID_PATTERN,
-        'Exec secret reference id must match /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/ (example: "vault/openai/api-key").',
-      ),
+    id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
   })
   .strict();
 
@@ -188,15 +188,114 @@ export const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
+    supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    requiresStringContent: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    thinkingFormat: z
+      .union([
+        z.literal("openai"),
+        z.literal("openrouter"),
+        z.literal("zai"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
+      ])
+      .optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    toolSchemaProfile: z.string().optional(),
+    unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
+    nativeWebSearchTool: z.boolean().optional(),
+    toolCallArgumentsEncoding: z.string().optional(),
     requiresMistralToolIds: z.boolean().optional(),
+    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+type AssertAssignable<_T extends U, U> = true;
+type _ModelCompatSchemaAssignableToType = AssertAssignable<
+  z.infer<typeof ModelCompatSchema>,
+  ModelCompatConfig | undefined
+>;
+type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+  ModelCompatConfig | undefined,
+  z.infer<typeof ModelCompatSchema>
+>;
+
+const ConfiguredProviderRequestTlsSchema = z
+  .object({
+    ca: SecretInputSchema.optional().register(sensitive),
+    cert: SecretInputSchema.optional().register(sensitive),
+    key: SecretInputSchema.optional().register(sensitive),
+    passphrase: SecretInputSchema.optional().register(sensitive),
+    serverName: z.string().optional(),
+    insecureSkipVerify: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ConfiguredProviderRequestAuthSchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("provider-default"),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("authorization-bearer"),
+        token: SecretInputSchema.register(sensitive),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("header"),
+        headerName: z.string().min(1),
+        value: SecretInputSchema.register(sensitive),
+        prefix: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestProxySchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("env-proxy"),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("explicit-proxy"),
+        url: z.string().min(1),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
+const ConfiguredProviderRequestSchema = z
+  .object(ConfiguredProviderRequestFields)
+  .strict()
+  .optional();
+
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -218,6 +317,7 @@ export const ModelDefinitionSchema = z
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
@@ -233,8 +333,9 @@ export const ModelProviderSchema = z
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
+    request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
@@ -255,7 +356,6 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
-    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();
@@ -298,7 +398,12 @@ export const QueueDropSchema = z.union([
   z.literal("new"),
   z.literal("summarize"),
 ]);
-export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
+export const ReplyToModeSchema = z.union([
+  z.literal("off"),
+  z.literal("first"),
+  z.literal("all"),
+  z.literal("batched"),
+]);
 export const TypingModeSchema = z.union([
   z.literal("never"),
   z.literal("instant"),
@@ -313,6 +418,7 @@ export const TypingModeSchema = z.union([
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const ContextVisibilityModeSchema = z.enum(["all", "allowlist", "allowlist_quote"]);
 
 export const BlockStreamingCoalesceSchema = z
   .object({
@@ -325,6 +431,7 @@ export const BlockStreamingCoalesceSchema = z
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
@@ -344,7 +451,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
   .object({
@@ -353,9 +460,23 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+const TtsProviderConfigSchema = z
+  .object({
+    apiKey: SecretInputSchema.optional().register(sensitive),
+  })
+  .catchall(
+    z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.null(),
+      z.array(z.unknown()),
+      z.record(z.string(), z.unknown()),
+    ]),
+  );
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -376,51 +497,7 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
-    elevenlabs: z
-      .object({
-        apiKey: z.string().optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        voiceId: z.string().optional(),
-        modelId: z.string().optional(),
-        seed: z.number().int().min(0).max(4294967295).optional(),
-        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
-        languageCode: z.string().optional(),
-        voiceSettings: z
-          .object({
-            stability: z.number().min(0).max(1).optional(),
-            similarityBoost: z.number().min(0).max(1).optional(),
-            style: z.number().min(0).max(1).optional(),
-            useSpeakerBoost: z.boolean().optional(),
-            speed: z.number().min(0.5).max(2).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
-    openai: z
-      .object({
-        apiKey: z.string().optional().register(sensitive),
-        model: z.string().optional(),
-        voice: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    edge: z
-      .object({
-        enabled: z.boolean().optional(),
-        voice: z.string().optional(),
-        lang: z.string().optional(),
-        outputFormat: z.string().optional(),
-        pitch: z.string().optional(),
-        rate: z.string().optional(),
-        volume: z.string().optional(),
-        saveSubtitles: z.boolean().optional(),
-        proxy: z.string().optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).optional(),
-      })
-      .strict()
-      .optional(),
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
@@ -466,12 +543,15 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileConfigArg: z.string().optional(),
+    systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
     systemPromptWhen: z
       .union([z.literal("first"), z.literal("always"), z.literal("never")])
       .optional(),
     imageArg: z.string().optional(),
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
+    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
     reliability: z
       .object({
@@ -489,7 +569,7 @@ export const CliBackendSchema = z
   .strict();
 
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  (values ?? []).map((v) => String(v).trim()).filter(Boolean);
+  normalizeStringEntries(values);
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;
@@ -652,6 +732,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  request: ConfiguredProviderRequestSchema,
 };
 
 export const MediaUnderstandingModelSchema = z
@@ -680,6 +761,8 @@ export const ToolsMediaUnderstandingSchema = z
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
+    echoTranscript: z.boolean().optional(),
+    echoFormat: z.string().optional(),
   })
   .strict()
   .optional();

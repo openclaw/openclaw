@@ -1,53 +1,85 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  ACPX_BUNDLED_BIN,
-  createAcpxPluginConfigSchema,
-  resolveAcpxPluginConfig,
-} from "./config.js";
+import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
-describe("acpx plugin config parsing", () => {
-  it("resolves a strict plugin-local acpx command", () => {
+describe("embedded acpx plugin config", () => {
+  it("resolves workspace stateDir and cwd by default", () => {
+    const workspaceDir = "/tmp/openclaw-acpx";
     const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        cwd: "/tmp/workspace",
-      },
-      workspaceDir: "/tmp/workspace",
+      rawConfig: undefined,
+      workspaceDir,
     });
 
-    expect(resolved.command).toBe(ACPX_BUNDLED_BIN);
-    expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
+    expect(resolved.cwd).toBe(workspaceDir);
+    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
+    expect(resolved.permissionMode).toBe("approve-reads");
+    expect(resolved.nonInteractivePermissions).toBe("fail");
+    expect(resolved.timeoutSeconds).toBe(120);
+    expect(resolved.agents).toEqual({});
   });
 
-  it("rejects command overrides", () => {
-    expect(() =>
-      resolveAcpxPluginConfig({
-        rawConfig: {
-          command: "acpx-custom",
+  it("keeps explicit timeoutSeconds config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        timeoutSeconds: 300,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.timeoutSeconds).toBe(300);
+  });
+
+  it("accepts agent command overrides", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          claude: { command: "claude --acp" },
+          codex: { command: "codex custom-acp" },
         },
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).toThrow("unknown config key: command");
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      claude: "claude --acp",
+      codex: "codex custom-acp",
+    });
   });
 
-  it("rejects commandArgs overrides", () => {
-    expect(() =>
-      resolveAcpxPluginConfig({
-        rawConfig: {
-          commandArgs: ["--foo"],
-        },
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).toThrow("unknown config key: commandArgs");
+  it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        pluginToolsMcpBridge: true,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    const server = resolved.mcpServers["openclaw-plugin-tools"];
+    expect(server).toBeDefined();
+    expect(server.command).toBe(process.execPath);
+    expect(Array.isArray(server.args)).toBe(true);
+    expect(server.args?.length).toBeGreaterThan(0);
   });
 
-  it("schema rejects empty cwd", () => {
-    const schema = createAcpxPluginConfigSchema();
-    if (!schema.safeParse) {
-      throw new Error("acpx config schema missing safeParse");
-    }
-    const parsed = schema.safeParse({ cwd: "   " });
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const pluginRoot = resolveAcpxPluginRoot();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
+    ) as { configSchema?: unknown };
 
-    expect(parsed.success).toBe(false);
+    expect(manifest.configSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        cwd: expect.any(Object),
+        stateDir: expect.any(Object),
+        timeoutSeconds: expect.objectContaining({
+          default: 120,
+        }),
+        agents: expect.any(Object),
+        mcpServers: expect.any(Object),
+      }),
+    });
   });
 });
