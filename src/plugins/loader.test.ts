@@ -1018,7 +1018,7 @@ describe("loadOpenClawPlugins", () => {
         expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
         expect(
           registry.diagnostics.some((diag) =>
-            String(diag.message).includes(
+            diag.message.includes(
               `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
             ),
           ),
@@ -2530,7 +2530,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
     expect(
       registry.diagnostics.some((diag) =>
-        String(diag.message).includes("service already registered: shared-service"),
+        diag.message.includes("service already registered: shared-service"),
       ),
     ).toBe(false);
   });
@@ -2563,7 +2563,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(loaded?.error).toContain("registerPluginHttpRoute(...)");
     expect(
       registry.diagnostics.some((diag) =>
-        String(diag.message).includes("api.registerHttpHandler(...) was removed"),
+        diag.message.includes("api.registerHttpHandler(...) was removed"),
       ),
     ).toBe(true);
     expect(errors.some((entry) => entry.includes("api.registerHttpHandler(...) was removed"))).toBe(
@@ -2614,7 +2614,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           ).toBeUndefined();
           expect(
             registry.diagnostics.some((diag) =>
-              String(diag.message).includes("http route registration missing or invalid auth"),
+              diag.message.includes("http route registration missing or invalid auth"),
             ),
           ).toBe(true);
         },
@@ -2663,7 +2663,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           expect(route?.pluginId).toBe("http-route-owner-a");
           expect(
             registry.diagnostics.some((diag) =>
-              String(diag.message).includes("http route replacement rejected"),
+              diag.message.includes("http route replacement rejected"),
             ),
           ).toBe(true);
         },
@@ -2688,7 +2688,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           expect(routes[0]?.path).toBe("/plugin/secure");
           expect(
             registry.diagnostics.some((diag) =>
-              String(diag.message).includes("http route overlap rejected"),
+              diag.message.includes("http route overlap rejected"),
             ),
           ).toBe(true);
         },
@@ -3037,13 +3037,13 @@ module.exports = {
       providerOverride: "demo-legacy-provider",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
-      String(diag.message).includes(
+      diag.message.includes(
         "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
     const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
-      String(diag.message).includes(
+      diag.message.includes(
         "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
       ),
     );
@@ -3096,17 +3096,17 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "hook-unknown")?.status).toBe("loaded");
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
     const unknownHookDiagnostics = registry.diagnostics.filter((diag) =>
-      String(diag.message).includes('unknown typed hook "'),
+      diag.message.includes('unknown typed hook "'),
     );
     expect(unknownHookDiagnostics).toHaveLength(2);
     expect(
       unknownHookDiagnostics.some((diag) =>
-        String(diag.message).includes('unknown typed hook "totally_unknown_hook_name" ignored'),
+        diag.message.includes('unknown typed hook "totally_unknown_hook_name" ignored'),
       ),
     ).toBe(true);
     expect(
       unknownHookDiagnostics.some((diag) =>
-        String(diag.message).includes('unknown typed hook "123" ignored'),
+        diag.message.includes('unknown typed hook "123" ignored'),
       ),
     ).toBe(true);
   });
@@ -3209,7 +3209,7 @@ module.exports = {
           const a = registry.plugins.find((entry) => entry.id === "memory-a");
           const b = registry.plugins.find((entry) => entry.id === "memory-b");
           expect(a?.status).toBe("disabled");
-          expect(String(a?.error ?? "")).toContain('memory slot set to "memory-b"');
+          expect(a?.error ?? "").toContain('memory slot set to "memory-b"');
           expect(b?.status).toBe("loaded");
         },
       },
@@ -3589,9 +3589,9 @@ module.exports = {
 
     expect(registry.plugins.find((entry) => entry.id === "@team/shadowed")?.status).toBe("loaded");
     expect(registry.plugins.find((entry) => entry.id === "shadowed")?.status).toBe("loaded");
-    expect(
-      registry.diagnostics.some((diag) => String(diag.message).includes("duplicate plugin id")),
-    ).toBe(false);
+    expect(registry.diagnostics.some((diag) => diag.message.includes("duplicate plugin id"))).toBe(
+      false,
+    );
   });
 
   it("evaluates load-path provenance warnings", () => {
