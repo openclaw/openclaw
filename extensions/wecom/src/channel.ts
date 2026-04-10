@@ -46,7 +46,8 @@ async function sendWeComMessage({
   accountId?: string;
   cfg?: OpenClawConfig;
 }): Promise<{ channel: string; messageId: string; chatId: string }> {
-  const resolvedAccountId = accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
+  const resolvedAccountId =
+    accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
 
   // Extract target from `to` (format is "${CHANNEL_ID}:xxx" or a plain target string)
   const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
@@ -333,7 +334,8 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       return sendWeComMessage({ to, content: text, accountId: accountId ?? undefined, cfg });
     },
     sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, cfg }) => {
-      const resolvedAccountId = accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
+      const resolvedAccountId =
+        accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
       const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
       const chatId = to.replace(channelPrefix, "");
 
@@ -446,7 +448,11 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
             const realRoots = await Promise.all(
               roots.map((r) => fsMod.realpath(pathMod.resolve(r)).catch(() => pathMod.resolve(r))),
             );
-            if (!realRoots.some((root) => resolved === root || resolved.startsWith(root + pathMod.sep))) {
+            if (
+              !realRoots.some(
+                (root) => resolved === root || resolved.startsWith(root + pathMod.sep),
+              )
+            ) {
               throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
             }
           }
@@ -472,16 +478,16 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           });
           if (text) {
             await sendAgentText({
-                agent,
-                toUser: target.touser,
-                toParty: target.toparty,
-                toTag: target.totag,
-                chatId: target.chatid,
-                text,
-              });
-            }
-            return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
+              agent,
+              toUser: target.touser,
+              toParty: target.toparty,
+              toTag: target.totag,
+              chatId: target.chatid,
+              text,
+            });
           }
+          return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
+        }
       } catch (err) {
         console.warn(`[wecom-outbound] Agent media upload failed, falling back to text:`, err);
       }
@@ -745,11 +751,13 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           delete nextAccount.encodingAESKey;
           // Clear Agent credentials
           if (nextAccount.agent && typeof nextAccount.agent === "object") {
-            const nextAgent = { ...nextAccount.agent as Record<string, unknown> };
+            const nextAgent = { ...(nextAccount.agent as Record<string, unknown>) };
             delete nextAgent.corpId;
             delete nextAgent.corpSecret;
             delete nextAgent.agentId;
-            nextAccount.agent = Object.keys(nextAgent).length > 0 ? nextAgent : undefined;
+            nextAccount.agent = (
+              Object.keys(nextAgent).length > 0 ? nextAgent : undefined
+            ) as typeof nextAccount.agent;
           }
           cleared = true;
           changed = true;

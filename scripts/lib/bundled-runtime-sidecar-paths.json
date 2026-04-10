@@ -34,6 +34,7 @@
   "dist/extensions/twitch/runtime-api.js",
   "dist/extensions/voice-call/runtime-api.js",
   "dist/extensions/webhooks/runtime-api.js",
+  "dist/extensions/wecom/runtime-api.js",
   "dist/extensions/whatsapp/light-runtime-api.js",
   "dist/extensions/whatsapp/runtime-api.js",
   "dist/extensions/zai/runtime-api.js",
