@@ -57,6 +57,8 @@ export type SubagentRunRecord = {
   fallbackFrozenResultCapturedAt?: number;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
+  /** Timestamp when this run's completion announce was successfully delivered. */
+  completionAnnouncedAt?: number;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

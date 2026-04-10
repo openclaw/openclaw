@@ -362,18 +362,34 @@ export function createSubagentRegistryLifecycleController(params: {
     runId: string,
     cleanup: "delete" | "keep",
     didAnnounce: boolean,
+    options?: {
+      skipAnnounce?: boolean;
+    },
   ) => {
     const entry = params.runs.get(runId);
     if (!entry) {
       return;
     }
     if (didAnnounce) {
-      setDetachedTaskDeliveryStatusByRunId({
-        runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        deliveryStatus: "delivered",
-      });
+      if (!options?.skipAnnounce) {
+        entry.completionAnnouncedAt = Date.now();
+        params.persist();
+      }
+      try {
+        setDetachedTaskDeliveryStatusByRunId({
+          runId,
+          runtime: "subagent",
+          sessionKey: entry.childSessionKey,
+          deliveryStatus: "delivered",
+        });
+      } catch (err) {
+        params.warn("failed to update subagent background task delivery state", {
+          error: buildSafeLifecycleErrorMeta(err),
+          runId: maskRunId(runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+          deliveryStatus: "delivered",
+        });
+      }
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -463,6 +479,23 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   const startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean => {
+    if (typeof entry.completionAnnouncedAt === "number") {
+      if (!beginSubagentCleanup(runId)) {
+        return false;
+      }
+      void finalizeSubagentCleanup(runId, entry.cleanup, true, {
+        skipAnnounce: true,
+      }).catch((err) => {
+        defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+        const current = params.runs.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        params.persist();
+      });
+      return true;
+    }
     if (!beginSubagentCleanup(runId)) {
       return false;
     }
@@ -536,6 +569,7 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.suppressAnnounceReason = undefined;
       entry.cleanupHandled = false;
       entry.cleanupCompletedAt = undefined;
+      entry.completionAnnouncedAt = undefined;
       mutated = true;
     }
 
