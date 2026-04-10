@@ -153,7 +153,6 @@ export type SlackMediaResult = {
   path: string;
   contentType?: string;
   placeholder: string;
-  /** Original Slack file ID — needed for agent actions like download-file. */
   fileId?: string;
 };
 
