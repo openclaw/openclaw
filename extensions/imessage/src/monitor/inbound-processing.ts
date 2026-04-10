@@ -207,8 +207,11 @@ export function resolveIMessageInboundDecision(params: {
   const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
   const destinationCallerIdNormalized =
     normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
+  // Require an explicit destination handle that matches the sender. When
+  // destination_caller_id is missing, sender === chat_identifier is ambiguous:
+  // it is true for some DM SQLite rows as well as true self-chat (#63980).
   const matchesSelfChatDestination =
-    destinationCallerIdNormalized == null || destinationCallerIdNormalized === senderNormalized;
+    destinationCallerIdNormalized != null && destinationCallerIdNormalized === senderNormalized;
   const isSelfChat =
     !isGroup &&
     chatIdentifierNormalized != null &&
