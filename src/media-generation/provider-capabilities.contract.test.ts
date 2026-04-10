@@ -12,6 +12,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "qwen",
   "runway",
   "together",
+  "vidu",
   "vydra",
   "xai",
 ] as const;

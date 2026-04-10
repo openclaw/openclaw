@@ -1,0 +1,44 @@
+{
+  "id": "vidu",
+  "enabledByDefault": true,
+  "providers": ["vidu"],
+  "providerAuthEnvVars": {
+    "vidu": ["VIDU_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "vidu",
+      "method": "api-key",
+      "choiceId": "vidu-api-key",
+      "choiceLabel": "Vidu API key (Global)",
+      "groupId": "vidu",
+      "groupLabel": "Vidu",
+      "groupHint": "Video generation (Global / China)",
+      "optionKey": "viduApiKey",
+      "cliFlag": "--vidu-api-key",
+      "cliOption": "--vidu-api-key <key>",
+      "cliDescription": "Vidu API key (Global)"
+    },
+    {
+      "provider": "vidu",
+      "method": "api-key-cn",
+      "choiceId": "vidu-api-key-cn",
+      "choiceLabel": "Vidu API key (China)",
+      "groupId": "vidu",
+      "groupLabel": "Vidu",
+      "groupHint": "Video generation (Global / China)",
+      "optionKey": "viduApiKeyCn",
+      "cliFlag": "--vidu-api-key-cn",
+      "cliOption": "--vidu-api-key-cn <key>",
+      "cliDescription": "Vidu API key (China)"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["vidu"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

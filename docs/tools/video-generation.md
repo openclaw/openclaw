@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos from text, images, or existing videos using 14 provider backends"
+summary: "Generate videos from text, images, or existing videos using 15 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -9,7 +9,7 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Fourteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Fifteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
@@ -92,6 +92,7 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 | Qwen                  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video          | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No               | `TOGETHER_API_KEY`                       |
+| Vidu                  | `viduq3-pro`                    | Yes  | 1-7 images                                           | Yes (remote URL) | `VIDU_API_KEY`                           |
 | Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            | Yes  | 1 image                                              | 1 video          | `XAI_API_KEY`                            |
 
@@ -117,6 +118,7 @@ and the shared live sweep.
 | Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
 | Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                      |
 | Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| Vidu     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `viduq2-pro`                                             |
 | Vydra    | Yes        | Yes            | No             | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL            |
 | xAI      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL                                |
 
@@ -264,6 +266,7 @@ entries.
 | Qwen                  | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Runway                | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Together              | Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Vidu                  | Supports text2video, img2video, start-end2video, and reference2video. Video references require `viduq2-pro`. Audio supported on q3 models.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Vydra                 | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | xAI                   | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
@@ -378,6 +381,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)
+- [Vidu](/providers/vidu)
 - [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults)
