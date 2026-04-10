@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
@@ -526,11 +527,20 @@ async function waitForGatewayReady(params: {
     }
     for (const healthPath of ["/readyz", "/healthz"]) {
       try {
-        const response = await fetch(`${params.baseUrl}${healthPath}`, {
-          signal: AbortSignal.timeout(2_000),
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${params.baseUrl}${healthPath}`,
+          init: {
+            signal: AbortSignal.timeout(2_000),
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-gateway-child-health",
         });
-        if (response.ok) {
-          return;
+        try {
+          if (response.ok) {
+            return;
+          }
+        } finally {
+          await release();
         }
       } catch {
         // retry until timeout
