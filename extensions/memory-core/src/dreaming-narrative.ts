@@ -4,6 +4,7 @@ import {
   extractErrorCode,
   formatErrorMessage,
   RequestScopedSubagentRuntimeError,
+  readErrorName,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 
@@ -81,8 +82,25 @@ const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
     err instanceof RequestScopedSubagentRuntimeError ||
-    extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE
+    (err instanceof Error &&
+      err.name === "RequestScopedSubagentRuntimeError" &&
+      extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE)
   );
+}
+
+function formatFallbackWriteFailure(err: unknown): string {
+  const code = extractErrorCode(err);
+  const name = readErrorName(err);
+  if (code && name) {
+    return `code=${code} name=${name}`;
+  }
+  if (code) {
+    return `code=${code}`;
+  }
+  if (name) {
+    return `name=${name}`;
+  }
+  return "unknown error";
 }
 
 function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
@@ -128,7 +146,7 @@ async function startNarrativeRunOrFallback(params: {
       );
     } catch (fallbackErr) {
       params.logger.warn(
-        `memory-core: narrative fallback failed for ${params.data.phase} phase: ${formatErrorMessage(fallbackErr)}`,
+        `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
       );
     }
     return null;
