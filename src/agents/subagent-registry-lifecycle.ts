@@ -478,6 +478,14 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
+    // Skip the announce flow for delegate runs (expectsCompletionMessage: false).
+    // The delegate tool already read and returned the child output as a tool result,
+    // so an auto-announce would cause duplicate or out-of-band parent responses.
+    if (entry.expectsCompletionMessage === false) {
+      finalizeAnnounceCleanup(false);
+      return true;
+    }
+
     void params
       .runSubagentAnnounceFlow({
         childSessionKey: entry.childSessionKey,

@@ -244,11 +244,9 @@ describe("subagent registry lifecycle hardening", () => {
         onWarn: expect.any(Function),
       },
     );
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        childSessionKey: entry.childSessionKey,
-      }),
-    );
+    // Delegate runs (expectsCompletionMessage: false) skip the announce flow
+    // since the delegate tool already returned the child output as a tool result.
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("does not wait for a completion reply when the run does not expect one", async () => {

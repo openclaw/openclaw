@@ -73,6 +73,22 @@ describe("sessions_delegate", () => {
     expect(readLatestAssistantReplyMock).toHaveBeenCalled();
   });
 
+  it("falls back to readLatestAssistantReply when frozenResultText is null", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "ok" });
+    // frozenResultText: null means the lifecycle capture ran but found nothing
+    // (waitForReply: false race). The delegate tool should still try history.
+    subagentRunsMap.set("run-1", { frozenResultText: null });
+    readLatestAssistantReplyMock.mockResolvedValue("History reply.");
+
+    const result = await tool.execute("call-1", { task: "Do something" });
+    const payload = result.details as Record<string, unknown>;
+
+    expect(payload.status).toBe("ok");
+    expect(payload.output).toBe("History reply.");
+    expect(readLatestAssistantReplyMock).toHaveBeenCalled();
+  });
+
   it("returns error when spawn fails", async () => {
     spawnSubagentDirectMock.mockResolvedValue({
       status: "error",

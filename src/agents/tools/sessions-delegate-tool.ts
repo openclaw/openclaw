@@ -85,8 +85,16 @@ async function readChildOutput(params: {
   const deadline = Date.now() + FROZEN_RESULT_MAX_POLL_MS;
   while (Date.now() < deadline) {
     const entry = subagentRuns.get(params.runId);
-    if (entry && entry.frozenResultText !== undefined) {
-      return entry.frozenResultText ?? undefined;
+    // frozenResultText is a string when captured, null when the immediate capture
+    // missed the reply (waitForReply: false for delegate runs), or undefined when
+    // the lifecycle controller has not yet processed the end event.
+    if (entry && typeof entry.frozenResultText === "string") {
+      return entry.frozenResultText;
+    }
+    // null means capture ran but found nothing — stop polling, fall through to
+    // the history-based fallback which can read the reply even after a race.
+    if (entry && entry.frozenResultText === null) {
+      break;
     }
     await new Promise((resolve) => setTimeout(resolve, FROZEN_RESULT_POLL_INTERVAL_MS));
   }
