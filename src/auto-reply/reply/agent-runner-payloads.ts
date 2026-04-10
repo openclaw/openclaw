@@ -36,13 +36,8 @@ async function normalizeReplyPayloadMedia(params: {
   try {
     return await params.normalizeMediaPaths(params.payload);
   } catch (err) {
-    logVerbose(`reply payload media normalization failed: ${String(err)}`);
-    return {
-      ...params.payload,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      audioAsVoice: false,
-    };
+    logVerbose(`reply payload media normalization failed, keeping original media: ${String(err)}`);
+    return params.payload;
   }
 }
 
