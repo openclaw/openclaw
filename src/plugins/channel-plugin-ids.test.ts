@@ -67,6 +67,15 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "memory-lancedb",
+        kind: "memory",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "demo-global-sidecar",
         channels: [],
         origin: "global",
@@ -112,6 +121,7 @@ function createStartupConfig(params: {
   channelIds?: string[];
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
+  memorySlot?: string;
 }) {
   return {
     ...(params.noConfiguredChannels
@@ -129,6 +139,7 @@ function createStartupConfig(params: {
       ? {
           plugins: {
             ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
+            ...(params.memorySlot ? { slots: { memory: params.memorySlot } } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
@@ -140,6 +151,14 @@ function createStartupConfig(params: {
               allow: params.allowPluginIds,
             },
           }
+        : params.memorySlot
+          ? {
+              plugins: {
+                slots: {
+                  memory: params.memorySlot,
+                },
+              },
+            }
         : {}),
     ...(params.providerIds?.length
       ? {
@@ -206,9 +225,9 @@ describe("resolveGatewayStartupPluginIds", () => {
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar", "voice-call", "memory-core"],
+        enabledPluginIds: ["demo-global-sidecar", "voice-call"],
       }),
-      ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
+      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
     ],
     [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
@@ -255,12 +274,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes explicitly enabled memory plugins in startup scope", () => {
+  it("includes the explicitly selected memory slot plugin in startup scope", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-lancedb"],
+        memorySlot: "memory-lancedb",
+      }),
+      expected: ["demo-channel", "browser", "memory-lancedb"],
+    });
+  });
+
+  it("normalizes the raw memory slot id before startup filtering", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["memory-core"],
+        memorySlot: "Memory-Core",
       }),
       expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("does not include non-selected memory plugins only because they are enabled", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-lancedb"],
+      }),
+      expected: ["demo-channel", "browser"],
     });
   });
 });
