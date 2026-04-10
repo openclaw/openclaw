@@ -67,4 +67,15 @@ describe("isMatrixLegacyCryptoInspectorAvailable", () => {
 
     expect(isMatrixLegacyCryptoInspectorAvailable()).toBe(false);
   });
+
+  it("does not confuse hashed availability helper chunks with the real inspector", () => {
+    availabilityState.dirEntries = [
+      {
+        name: "legacy-crypto-inspector-availability-TPlLnFSE.js",
+        isFile: () => true,
+      },
+    ];
+
+    expect(isMatrixLegacyCryptoInspectorAvailable()).toBe(false);
+  });
 });

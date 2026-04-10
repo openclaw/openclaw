@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const LEGACY_CRYPTO_INSPECTOR_FILE = "legacy-crypto-inspector.js";
 const LEGACY_CRYPTO_INSPECTOR_CHUNK_PREFIX = "legacy-crypto-inspector-";
+const LEGACY_CRYPTO_INSPECTOR_HELPER_CHUNK_PREFIX = "availability-";
 const JAVASCRIPT_MODULE_SUFFIX = ".js";
 
 function isLegacyCryptoInspectorArtifactName(name: string): boolean {
@@ -20,7 +21,11 @@ function isLegacyCryptoInspectorArtifactName(name: string): boolean {
     LEGACY_CRYPTO_INSPECTOR_CHUNK_PREFIX.length,
     -JAVASCRIPT_MODULE_SUFFIX.length,
   );
-  return chunkSuffix.length > 0 && chunkSuffix !== "availability";
+  return (
+    chunkSuffix.length > 0 &&
+    chunkSuffix !== "availability" &&
+    !chunkSuffix.startsWith(LEGACY_CRYPTO_INSPECTOR_HELPER_CHUNK_PREFIX)
+  );
 }
 
 function hasSourceInspectorArtifact(currentDir: string): boolean {
