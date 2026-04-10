@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
+
 export interface FeishuSessionTraceArgs {
   sessionFile: string;
   target: string;
@@ -79,6 +82,85 @@ export function redactTraceText(text: string): string {
     .replace(/\bghp_[A-Za-z0-9]{10,}\b/g, "ghp_***")
     .replace(/\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "xox***")
     .replace(/\b(OPENAI_API_KEY|ANTHROPIC_API_KEY|FEISHU_APP_SECRET)\s*=\s*[^ \n]+/g, "$1=***");
+}
+
+export async function* followAppendedFileLines(
+  filePath: string,
+  opts?: {
+    pollMs?: number;
+    signal?: AbortSignal;
+    startAtEnd?: boolean;
+  },
+): AsyncGenerator<string> {
+  const pollMs = Math.max(10, opts?.pollMs ?? 250);
+  let initialized = false;
+  let offset = 0;
+  let remainder = "";
+  let lastIdentity = "";
+
+  while (!opts?.signal?.aborted) {
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stat = await fs.stat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      try {
+        await sleep(pollMs, undefined, { signal: opts?.signal });
+      } catch (sleepError) {
+        if ((sleepError as Error).name === "AbortError") {
+          return;
+        }
+        throw sleepError;
+      }
+      continue;
+    }
+
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (!initialized) {
+      offset = opts?.startAtEnd === false ? 0 : stat.size;
+      initialized = true;
+      lastIdentity = identity;
+    } else if (stat.size < offset || identity !== lastIdentity) {
+      offset = 0;
+      remainder = "";
+      lastIdentity = identity;
+    }
+
+    if (stat.size > offset) {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const bytesToRead = stat.size - offset;
+        const chunk = Buffer.alloc(bytesToRead);
+        const { bytesRead } = await handle.read(chunk, 0, bytesToRead, offset);
+        offset += bytesRead;
+        remainder += chunk.toString("utf8", 0, bytesRead);
+      } finally {
+        await handle.close();
+      }
+
+      while (true) {
+        const newlineIndex = remainder.search(/\r?\n/u);
+        if (newlineIndex < 0) {
+          break;
+        }
+        const newlineLength = remainder[newlineIndex] === "\r" ? 2 : 1;
+        const line = remainder.slice(0, newlineIndex);
+        remainder = remainder.slice(newlineIndex + newlineLength);
+        yield line;
+      }
+    }
+
+    try {
+      await sleep(pollMs, undefined, { signal: opts?.signal });
+    } catch (sleepError) {
+      if ((sleepError as Error).name === "AbortError") {
+        return;
+      }
+      throw sleepError;
+    }
+  }
 }
 
 const TOOL_CALL_TYPES = new Set([

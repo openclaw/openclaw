@@ -1,10 +1,10 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn } from "node:child_process";
-import readline from "node:readline";
 import {
   clampOneLine,
   extractTraceMessagesFromSessionLine,
+  followAppendedFileLines,
   parseFeishuSessionTraceArgs,
   redactTraceText,
   type FeishuSessionTraceArgs,
@@ -54,24 +54,9 @@ async function sendFeishuMessage(text: string, args: FeishuSessionTraceArgs): Pr
 
 async function main() {
   const args = parseFeishuSessionTraceArgs(process.argv.slice(2));
-  const tail = spawn("tail", ["-n", "0", "-F", args.sessionFile], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  tail.stderr.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text) {
-      console.error(text);
-    }
-  });
-
-  const lines = readline.createInterface({
-    input: tail.stdout,
-    crlfDelay: Infinity,
-  });
 
   let lastSentAt = 0;
-  for await (const line of lines) {
+  for await (const line of followAppendedFileLines(args.sessionFile)) {
     for (const summary of extractTraceMessagesFromSessionLine(line)) {
       const now = Date.now();
       if (now - lastSentAt < args.minIntervalMs) {

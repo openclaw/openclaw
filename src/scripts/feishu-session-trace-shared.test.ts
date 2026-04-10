@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   clampOneLine,
   extractTraceMessagesFromSessionLine,
+  followAppendedFileLines,
   parseFeishuSessionTraceArgs,
   redactTraceText,
   summarizeToolCall,
@@ -131,5 +135,30 @@ describe("feishu session trace shared helpers", () => {
     });
 
     expect(extractTraceMessagesFromSessionLine(line)).toEqual(["Run command pnpm build"]);
+  });
+
+  it("follows appended lines without relying on tail", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-trace-"));
+    const file = path.join(dir, "session.jsonl");
+    await fs.writeFile(file, "old\n");
+
+    const controller = new AbortController();
+    const lines = followAppendedFileLines(file, {
+      pollMs: 10,
+      signal: controller.signal,
+    });
+
+    const firstLine = lines.next();
+    await fs.appendFile(file, "new-one\n");
+    await expect(firstLine).resolves.toEqual({ done: false, value: "new-one" });
+
+    const secondLine = lines.next();
+    await fs.appendFile(file, "new");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await fs.appendFile(file, "-two\r\n");
+    await expect(secondLine).resolves.toEqual({ done: false, value: "new-two" });
+
+    controller.abort();
+    await lines.return(undefined);
   });
 });

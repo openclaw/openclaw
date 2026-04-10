@@ -92,7 +92,7 @@ Create `~/Library/LaunchAgents/ai.openclaw.session-trace.plist`:
     <string>tsx</string>
     <string>/path/to/openclaw/scripts/feishu-session-trace.ts</string>
     <string>--session-file</string>
-    <string>/Users/you/.openclaw/agents/main/sessions/<session-id>.jsonl</string>
+    <string>/Users/you/.openclaw/agents/main/sessions/&lt;session-id&gt;.jsonl</string>
     <string>--target</string>
     <string>chat:oc_xxx</string>
   </array>
