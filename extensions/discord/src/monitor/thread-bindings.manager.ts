@@ -126,6 +126,18 @@ function isDirectConversationBindingId(value?: string | null): boolean {
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
 }
 
+function normalizeDiscordParentChannelId(value?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const explicitChannelMatch = trimmed.match(/^channel:(.+)$/i);
+  if (explicitChannelMatch?.[1]) {
+    return explicitChannelMatch[1].trim() || undefined;
+  }
+  return trimmed;
+}
+
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -615,7 +627,7 @@ export function createThreadBindingManager(
           ? normalizeOptionalString(metadata.agentId)
           : undefined;
       let threadId: string | undefined;
-      let channelId = normalizeOptionalString(input.conversation.parentConversationId);
+      let channelId = normalizeDiscordParentChannelId(input.conversation.parentConversationId);
       let createThread = false;
 
       if (placement === "child") {
