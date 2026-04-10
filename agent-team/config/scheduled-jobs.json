@@ -1,0 +1,54 @@
+{
+  "$comment": "Scheduled skill invocations for the investment team. Timezone is America/New_York. Registered on --clean deploys via the openclaw CLI / scheduled-tasks MCP surface. Keep cron expressions in sync with each skill's trigger section.",
+  "timezone": "America/New_York",
+  "jobs": [
+    {
+      "id": "scout-build-morning-watchlist",
+      "agent": "scout",
+      "skill": "build_morning_watchlist",
+      "cron": "30 6 * * 1-5",
+      "description": "Pre-market watchlist rebuild. Posts to #watchlist tagging @Orchestrator for approval.",
+      "enabled": true
+    },
+    {
+      "id": "scout-scan-pre-market",
+      "agent": "scout",
+      "skill": "scan_pre_market",
+      "cron": "0 8 * * 1-5",
+      "description": "Pre-market window scan (04:00-09:30 ET). Posts to #market-signals.",
+      "enabled": true
+    },
+    {
+      "id": "scout-scan-mid-day",
+      "agent": "scout",
+      "skill": "scan_mid_day",
+      "cron": "0 12 * * 1-5",
+      "description": "Mid-day window scan (09:30-13:00 ET). Posts to #market-signals.",
+      "enabled": true
+    },
+    {
+      "id": "scout-scan-post-market",
+      "agent": "scout",
+      "skill": "scan_post_market",
+      "cron": "30 16 * * 1-5",
+      "description": "Post-market window scan (16:00-20:00 ET). Posts to #market-signals.",
+      "enabled": true
+    },
+    {
+      "id": "scout-earnings-beat-tracker",
+      "agent": "scout",
+      "skill": "earnings_beat_tracker",
+      "cron": "0 17 * * 1-5",
+      "description": "Daily earnings beat/miss roundup + 7-day rolling tracker. Posts to #market-signals.",
+      "enabled": true
+    },
+    {
+      "id": "scout-weekly-outlook",
+      "agent": "scout",
+      "skill": "weekly_outlook",
+      "cron": "0 17 * * 0",
+      "description": "Sunday evening weekly wrap + red-folder calendar for the coming week. Posts to #weekly-outlook.",
+      "enabled": true
+    }
+  ]
+}

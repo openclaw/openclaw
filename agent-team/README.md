@@ -1,81 +1,104 @@
 # Investment Agent Team
 
-This folder is the canonical source for the multi-agent investment team
-workspace files that get synced into OpenClaw runtime workspaces.
+Canonical source for the multi-agent investment research team that gets synced into OpenClaw runtime workspaces.
 
 ## Layout
 
 - `agents/<agentId>/`
-  - Versioned workspace files for one OpenClaw agent.
+  - Versioned workspace files for one OpenClaw agent (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `MEMORY.md`, `skills/*`).
 - `shared-skills/`
   - Reusable `SKILL.md` packages shared across all agents.
 - `shared-state/portfolio/`
-  - Small canonical files with portfolio context and Slack conventions.
-  - Includes protocol docs for lifecycle, conflict, and failure handling.
-  - Includes `team-memory.md` as the compact role-and-handoff reference.
+  - Small canonical reference files (positions, operating protocol, lifecycle patterns, conflict + error handling, dispatch template, channel map, team memory).
 - `config/`
-  - `openclaw.json` - Production config with `${ENV_VAR}` interpolation for all secrets and channel IDs.
-  - `.env` - Environment variable template (gitignored, real tokens only on VM).
-  - `slack-app-manifest.example.json` - Generic Socket Mode manifest template for each bot.
-  - `slack-rollout-checklist.md` - Five-bot, seven-channel rollout steps.
-  - `openclaw.multi-agent.example.json5` - Original reference config skeleton.
+  - `openclaw.json` — runtime config with `${ENV_VAR}` interpolation for secrets and channel IDs.
+  - `.env.example` — environment template (gitignored in real form, real tokens only on VM).
+  - `scheduled-jobs.json` — cron-driven skill invocations (scout scans, weekly outlook, etc.).
+  - `slack-app-manifest.example.json` — Socket Mode manifest template.
+  - `slack-rollout-checklist.md` — five-bot, eleven-channel rollout.
+- `scripts/`
+  - `sync-agent-workspaces.sh` — bash deploy script (supports `--clean`).
+  - `sync-agent-workspaces.ps1` — PowerShell equivalent (supports `-Clean`).
 
 ## Runtime mapping
 
-The deploy script (`scripts/sync-agent-workspaces.sh`) places these into `~/.openclaw`:
+The deploy script places these into `~/.openclaw`:
 
-- `config/openclaw.json` -> `~/.openclaw/openclaw.json`
-- `config/.env` -> `~/.openclaw/.env` (first run only, never overwrites)
-- `agents/orchestrator/*` -> `~/.openclaw/workspace-orchestrator`
-- `agents/scout/*` -> `~/.openclaw/workspace-scout`
-- `agents/analyst/*` -> `~/.openclaw/workspace-analyst`
-- `agents/quant/*` -> `~/.openclaw/workspace-quant`
-- `agents/devils-advocate/*` -> `~/.openclaw/workspace-devils-advocate`
-- `shared-skills/*` -> `~/.openclaw/skills/*`
-- `shared-state/` -> each workspace's `shared/` directory
+- `config/openclaw.json` → `~/.openclaw/openclaw.json`
+- `config/scheduled-jobs.json` → `~/.openclaw/scheduled-jobs.json`
+- `config/.env` → `~/.openclaw/.env` (first run only, never overwrites)
+- `agents/<id>/*` → `~/.openclaw/workspace-<id>/`
+- `shared-skills/*` → `~/.openclaw/skills/*`
+- `shared-state/` → each workspace's `shared/` directory
+- each workspace gets a `files/` + `files/index.md` created on first run
 
-## Config approach
+## Canonical state model
 
-All secrets (Slack bot tokens, app tokens, gateway token) and Slack channel IDs
-are referenced in `openclaw.json` via `${ENV_VAR}` interpolation. The `.env`
-file holds the actual values and is gitignored. Real tokens live only on the VM
-at `~/.openclaw/.env`.
+- **Watchlist** lives in the `#watchlist` Slack channel (rebuilt every morning by Scout, mutated during the day by Orchestrator). There is no `watchlist.md`.
+- **Decisions** live in the `#portfolio-daily` Slack channel (published by Orchestrator). There is no `recent-decisions.md`.
+- **Per-agent memory** lives in each agent's `MEMORY.md` (append-only session log).
+- **Per-agent artifacts** live in `files/YYYY-MM-DD/<category>-<slug>.<ext>`, indexed by `files/index.md`. Agents post short pointers to Slack and retrieve full files via A2A (artifact pull only).
 
-Environment variables used:
+## Channel topology (11 channels)
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENCLAW_GATEWAY_TOKEN` | Gateway auth token |
-| `SLACK_<AGENT>_BOT_TOKEN` | Per-agent Slack bot token (5 agents) |
-| `SLACK_<AGENT>_APP_TOKEN` | Per-agent Slack app token (5 agents) |
-| `SLACK_CHANNEL_MARKET_SIGNALS` | Channel ID for #market-signals |
-| `SLACK_CHANNEL_RESEARCH` | Channel ID for #research |
-| `SLACK_CHANNEL_QUANT_SIGNALS` | Channel ID for #quant-signals |
-| `SLACK_CHANNEL_CONTRARIAN` | Channel ID for #contrarian |
-| `SLACK_CHANNEL_DISPATCH` | Channel ID for #dispatch |
-| `SLACK_CHANNEL_PORTFOLIO_DAILY` | Channel ID for #portfolio-daily |
-| `SLACK_CHANNEL_PORTFOLIO_WEEKLY` | Channel ID for #portfolio-weekly |
+| Channel | Post | Env var |
+|---|---|---|
+| `#dispatch` | Orchestrator | `SLACK_CHANNEL_DISPATCH` |
+| `#market-signals` | Scout | `SLACK_CHANNEL_MARKET_SIGNALS` |
+| `#research` | Analyst | `SLACK_CHANNEL_RESEARCH` |
+| `#quant-signals` | Quant | `SLACK_CHANNEL_QUANT_SIGNALS` |
+| `#contrarian` | Devil's Advocate | `SLACK_CHANNEL_CONTRARIAN` |
+| `#portfolio-daily` | Orchestrator (canonical decisions) | `SLACK_CHANNEL_PORTFOLIO_DAILY` |
+| `#portfolio-weekly` | Orchestrator | `SLACK_CHANNEL_PORTFOLIO_WEEKLY` |
+| `#watchlist` | Orchestrator + Scout morning | `SLACK_CHANNEL_WATCHLIST` |
+| `#weekly-outlook` | Scout | `SLACK_CHANNEL_WEEKLY_OUTLOOK` |
+| `#themes` | any | `SLACK_CHANNEL_THEMES` |
+| `#agents` | any | `SLACK_CHANNEL_AGENTS` |
+
+All secrets and channel IDs are referenced via `${ENV_VAR}` interpolation in `config/openclaw.json`. Real values live only on the VM at `~/.openclaw/.env`.
+
+## Scheduled jobs
+
+See `config/scheduled-jobs.json`. Current cron map (America/New_York):
+
+| Skill | Agent | Cron | Posts to |
+|---|---|---|---|
+| `build_morning_watchlist` | Scout | `30 6 * * 1-5` | `#watchlist` |
+| `scan_pre_market` | Scout | `0 8 * * 1-5` | `#market-signals` |
+| `scan_mid_day` | Scout | `0 12 * * 1-5` | `#market-signals` |
+| `scan_post_market` | Scout | `30 16 * * 1-5` | `#market-signals` |
+| `earnings_beat_tracker` | Scout | `0 17 * * 1-5` | `#market-signals` |
+| `weekly_outlook` | Scout | `0 17 * * 0` | `#weekly-outlook` |
+
+## A2A policy
+
+Agent-to-agent direct (A2A) is **enabled but restricted**: use it only for pulling finished artifacts from another agent's `files/` folder after a Slack pointer has been posted. Never use A2A for tasking, discussion, or coordination — those stay in Slack. See `shared-skills/a2a-artifact-pull/SKILL.md`.
 
 ## Deploy
 
 ```bash
-./scripts/sync-agent-workspaces.sh
+./agent-team/scripts/sync-agent-workspaces.sh            # additive sync
+./agent-team/scripts/sync-agent-workspaces.sh --clean    # wipe workspace-*/ + skills/, then sync (.env and openclaw.json preserved)
 ```
 
 PowerShell alternative (Windows):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sync-agent-workspaces.ps1 -All -IncludeSharedSkills -IncludeSharedState -IncludeConfig
+powershell -NoProfile -ExecutionPolicy Bypass -File agent-team/scripts/sync-agent-workspaces.ps1 -All -IncludeSharedSkills -IncludeSharedState -IncludeConfig
+powershell -NoProfile -ExecutionPolicy Bypass -File agent-team/scripts/sync-agent-workspaces.ps1 -All -Clean -IncludeSharedSkills -IncludeSharedState -IncludeConfig
 ```
+
+`--clean` / `-Clean` wipes `~/.openclaw/workspace-*/` and `~/.openclaw/skills/` before syncing. It never touches `~/.openclaw/.env`; it does rewrite `~/.openclaw/openclaw.json` when `-IncludeConfig` is passed.
 
 ## Notes
 
-- `SOUL.md` carries the primary persona and boundaries.
-- `AGENTS.md` carries startup rules, channel ownership, and collaboration rules.
-- `skills/` is intentionally lean. Built-in OpenClaw tools still handle web
-  search, file access, and Slack usage.
-- No workspace or skill in this tree should ever grant trade execution.
-- Cross-agent coordination is channel-visible by design; specialists do not
-  dispatch hidden work to each other.
+- `SOUL.md` — voice, authority, non-negotiables.
+- `AGENTS.md` — 4-file progressive startup list, channel ownership, file-layout rule, A2A rule, hard rules.
+- `IDENTITY.md` / `USER.md` — fallback identity + user context templates (required reads at startup).
+- `MEMORY.md` — append-only session log; read the tail at startup.
+- `skills/` — per-agent playbooks (`Trigger → Inputs → Steps → Output format → Where to post → Next step`).
+- No workspace or skill in this tree grants trade execution.
+- Cross-agent coordination is channel-visible by design. Specialists do not dispatch hidden work to each other.
+- Reuters is on the source denylist — see `shared-skills/approved-sources/SKILL.md`.
 
 For the full setup walkthrough, see [SETUP.md](SETUP.md).

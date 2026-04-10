@@ -67,7 +67,8 @@
   "tools": {
     "profile": "full",
     "agentToAgent": {
-      "enabled": false
+      "enabled": true,
+      "$comment": "A2A is enabled ONLY for pulling finished artifacts from another agent's files/ folder. Never use A2A for tasking, discussion, or coordination - those stay in Slack. See shared-skills/a2a-artifact-pull/SKILL.md."
     },
     "web": {
       "search": {
@@ -162,6 +163,16 @@
           "allowBots": true
         },
         "C0APH5991U2": {
+          "allow": true,
+          "requireMention": true,
+          "allowBots": true
+        },
+        "${SLACK_CHANNEL_WATCHLIST}": {
+          "allow": true,
+          "requireMention": true,
+          "allowBots": true
+        },
+        "${SLACK_CHANNEL_WEEKLY_OUTLOOK}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true

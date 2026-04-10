@@ -1,6 +1,6 @@
-# Investment Agent Team - Fork Setup Guide
+# Investment Agent Team — Fork Setup Guide
 
-This fork extends OpenClaw with a 5-agent investment team that collaborates through Slack channels. Each agent has a specialized role, its own Slack bot, and isolated workspace with personality files.
+This fork extends OpenClaw with a 5-agent investment research team that collaborates through Slack channels. Each agent has a specialized role, its own Slack bot, and an isolated workspace with personality, skills, and an append-only memory.
 
 ## What this fork adds
 
@@ -8,54 +8,72 @@ This fork extends OpenClaw with a 5-agent investment team that collaborates thro
 
 | Agent | Role | Primary Channel |
 |-------|------|-----------------|
-| **Orchestrator** | Portfolio manager. Triages signals, dispatches work, publishes final briefs. | `#portfolio-daily`, `#portfolio-weekly` |
-| **Scout** | Market intelligence. Detects and reports high-signal developments. | `#market-signals` |
-| **Analyst** | Fundamental research. Builds source-backed investment theses. | `#research` |
-| **Quant** | Technical and quantitative analysis. Reproducible data-driven outputs. | `#quant-signals` |
-| **Devil's Advocate** | Risk and contrarian. Stress-tests every thesis, surfaces the bear case. | `#contrarian` |
+| **Orchestrator** | Portfolio manager. Triages signals, dispatches work, publishes canonical decisions. | `#portfolio-daily`, `#portfolio-weekly`, `#dispatch`, `#watchlist` |
+| **Scout** | Market intelligence. Detects and reports facts, runs scheduled scans, rebuilds morning watchlist. | `#market-signals`, `#watchlist`, `#weekly-outlook` |
+| **Analyst** | Fundamental research. Builds source-backed investment theses; posts pointers to files. | `#research` |
+| **Quant** | Technical and quantitative analysis. Compute-first; saves large artifacts to files. | `#quant-signals` |
+| **Devil's Advocate** | Risk and contrarian. Stress-tests theses with measurable kill conditions; asks follow-ups in any specialist channel. | `#contrarian` (+ read-everywhere) |
 
-Coordination happens in `#dispatch`. No agent executes trades. All handoffs are channel-visible.
+Dispatch happens in `#dispatch`. No agent executes trades. All handoffs are channel-visible.
+
+### Canonical state lives in channels, not files
+
+- **Watchlist** → `#watchlist` (Scout rebuilds each morning; Orchestrator mutates during the day).
+- **Decisions** → `#portfolio-daily` (Orchestrator publishes decisions as the record).
+
+There is no `watchlist.md` and no `recent-decisions.md`. Every agent reads the tails of these two channels on startup.
 
 ### Files added
 
 ```
 agent-team/
-  agents/                        # Personality files per agent
-    orchestrator/                 #   SOUL.md, AGENTS.md, TOOLS.md, skills/
+  agents/
+    orchestrator/   # SOUL.md, AGENTS.md, IDENTITY.md, USER.md, TOOLS.md, MEMORY.md, skills/
     scout/
     analyst/
     quant/
     devils-advocate/
-  shared-skills/                 # Skills shared across all agents
-  shared-state/portfolio/        # Shared portfolio context (watchlist, positions, etc.)
+  shared-skills/
+    channel-directory/
+    source-and-confidence/
+    approved-sources/
+    agent-communication-protocol/
+    receive-and-execute-work/
+    file-layout-discipline/
+    a2a-artifact-pull/
+    emotion-regulation/
+    finance-focused/
+  shared-state/portfolio/
+    channel-map.md, positions.md, team-memory.md,
+    operating-protocol.md, lifecycle-patterns.md,
+    conflict-resolution.md, error-handling.md, dispatch-template.md
   config/
-    openclaw.json                # Production config (env var references for secrets + channel IDs)
-    .env                         # Environment variable template (gitignored)
+    openclaw.json               # ${ENV_VAR} interpolation for secrets + channel IDs
+    .env.example                # Environment template
+    scheduled-jobs.json         # Cron map for Scout scheduled skills
     slack-app-manifest.example.json
     slack-rollout-checklist.md
-    openclaw.multi-agent.example.json5
-
-scripts/
-  sync-agent-workspaces.sh       # Bash deploy script (Linux/macOS VMs)
-  sync-agent-workspaces.ps1      # PowerShell deploy script (Windows)
+  scripts/
+    sync-agent-workspaces.sh    # Bash deploy (--clean supported)
+    sync-agent-workspaces.ps1   # PowerShell deploy (-Clean supported)
 ```
 
 ### Config approach
 
-All secrets and Slack channel IDs are referenced in `openclaw.json` via `${ENV_VAR}` interpolation. Nothing sensitive is hardcoded in the config. The `.env` file holds the actual values and is gitignored -- real tokens live only on the VM at `~/.openclaw/.env`.
+All secrets and Slack channel IDs are referenced in `openclaw.json` via `${ENV_VAR}` interpolation. Nothing sensitive is hardcoded. Real values live on the VM at `~/.openclaw/.env`.
 
 ## Prerequisites
 
-- An Azure VM (or any Linux host) with Node 22+ and OpenClaw installed globally (`sudo npm i -g openclaw@latest`)
-- 5 Slack Socket Mode apps (one per agent), each with:
-  - Socket Mode enabled
-  - An app-level token (`xapp-`) with `connections:write` scope
-  - A bot token (`xoxb-`) with scopes: `chat:write`, `app_mentions:read`, `channels:history`, `channels:read`
-  - The orchestrator additionally needs: `im:history`, `im:read`, `im:write`
-  - Event subscriptions: `message.channels`, `app_mention` (orchestrator also: `message.im`)
-- 7 Slack channels created: `#market-signals`, `#research`, `#quant-signals`, `#contrarian`, `#dispatch`, `#portfolio-daily`, `#portfolio-weekly`
+- A Linux VM (or any Linux host) with Node 22+ and OpenClaw installed globally (`sudo npm i -g openclaw@latest`).
+- **5 Slack Socket Mode apps** (one per agent), each with:
+  - Socket Mode enabled.
+  - An app-level token (`xapp-`) with `connections:write`.
+  - A bot token (`xoxb-`) with scopes: `chat:write`, `app_mentions:read`, `channels:history`, `channels:read`, `reactions:write`, `reactions:read`, `files:read`, `files:write`.
+  - The Orchestrator additionally needs: `im:history`, `im:read`, `im:write`.
+  - Event subscriptions: `message.channels`, `app_mention`, `reaction_added` (Orchestrator also: `message.im`).
+- **11 Slack channels** created: `#market-signals`, `#research`, `#quant-signals`, `#contrarian`, `#dispatch`, `#portfolio-daily`, `#portfolio-weekly`, `#themes`, `#agents`, `#watchlist`, `#weekly-outlook`.
 
-See `agent-team/config/slack-app-manifest.example.json` for a ready-to-import manifest template and `agent-team/config/slack-rollout-checklist.md` for the full step-by-step.
+See `config/slack-app-manifest.example.json` for a manifest template and `config/slack-rollout-checklist.md` for the full rollout.
 
 ## Setup
 
@@ -64,15 +82,14 @@ See `agent-team/config/slack-app-manifest.example.json` for a ready-to-import ma
 ```bash
 git clone <your-fork-url>
 cd openclaw
+cp agent-team/config/.env.example agent-team/config/.env
 ```
 
-Edit `agent-team/config/.env` and fill in all values:
+Edit `agent-team/config/.env` and fill in every value — 5 bot+app token pairs, the gateway token, and all 11 channel IDs:
 
 ```
-# Gateway token (generate with: openssl rand -hex 24)
-OPENCLAW_GATEWAY_TOKEN=<your-token>
+OPENCLAW_GATEWAY_TOKEN=<openssl rand -hex 24>
 
-# Slack bot + app tokens (one pair per agent)
 SLACK_ORCHESTRATOR_BOT_TOKEN=xoxb-...
 SLACK_ORCHESTRATOR_APP_TOKEN=xapp-...
 SLACK_SCOUT_BOT_TOKEN=xoxb-...
@@ -84,37 +101,45 @@ SLACK_QUANT_APP_TOKEN=xapp-...
 SLACK_DEVILS_ADVOCATE_BOT_TOKEN=xoxb-...
 SLACK_DEVILS_ADVOCATE_APP_TOKEN=xapp-...
 
-# Slack channel IDs
-# Right-click channel in Slack -> View channel details -> ID at bottom
-SLACK_CHANNEL_MARKET_SIGNALS=C0ABC...
-SLACK_CHANNEL_RESEARCH=C0DEF...
-SLACK_CHANNEL_QUANT_SIGNALS=C0GHI...
-SLACK_CHANNEL_CONTRARIAN=C0JKL...
-SLACK_CHANNEL_DISPATCH=C0MNO...
-SLACK_CHANNEL_PORTFOLIO_DAILY=C0PQR...
-SLACK_CHANNEL_PORTFOLIO_WEEKLY=C0STU...
+SLACK_CHANNEL_MARKET_SIGNALS=C0...
+SLACK_CHANNEL_RESEARCH=C0...
+SLACK_CHANNEL_QUANT_SIGNALS=C0...
+SLACK_CHANNEL_CONTRARIAN=C0...
+SLACK_CHANNEL_DISPATCH=C0...
+SLACK_CHANNEL_PORTFOLIO_DAILY=C0...
+SLACK_CHANNEL_PORTFOLIO_WEEKLY=C0...
+SLACK_CHANNEL_THEMES=C0...
+SLACK_CHANNEL_AGENTS=C0...
+SLACK_CHANNEL_WATCHLIST=C0...
+SLACK_CHANNEL_WEEKLY_OUTLOOK=C0...
 ```
 
-The `openclaw.json` config references all of these via `${VAR_NAME}` -- you never need to edit the JSON directly.
-
-### 2. Deploy to the VM
-
-SSH into the VM, pull the code, and run the deploy script:
+### 2. Deploy
 
 ```bash
-ssh your-vm
-cd /path/to/openclaw
-git pull
-./scripts/sync-agent-workspaces.sh
+# First-time deploy
+./agent-team/scripts/sync-agent-workspaces.sh
+
+# Clean deploy (wipes ~/.openclaw/workspace-*/ and ~/.openclaw/skills/, preserves .env + openclaw.json)
+./agent-team/scripts/sync-agent-workspaces.sh --clean
 ```
 
-This script:
-- Copies `openclaw.json` to `~/.openclaw/openclaw.json`
-- Copies `.env` to `~/.openclaw/.env` (only on first run, never overwrites existing)
+PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File agent-team/scripts/sync-agent-workspaces.ps1 -All -IncludeSharedSkills -IncludeSharedState -IncludeConfig
+powershell -NoProfile -ExecutionPolicy Bypass -File agent-team/scripts/sync-agent-workspaces.ps1 -All -Clean -IncludeSharedSkills -IncludeSharedState -IncludeConfig
+```
+
+The sync script:
+- Copies `openclaw.json` → `~/.openclaw/openclaw.json`
+- Copies `scheduled-jobs.json` → `~/.openclaw/scheduled-jobs.json` (if present)
+- Copies `.env` → `~/.openclaw/.env` (first run only)
 - Deploys all 5 agent workspaces to `~/.openclaw/workspace-<agentId>/`
-- Copies shared state into each workspace
+- Copies shared state into each workspace's `shared/`
+- Creates each workspace's `files/` + `files/index.md` boilerplate on first run
 - Copies shared skills to `~/.openclaw/skills/`
-- Restarts the gateway
+- Restarts the gateway (bash version)
 
 ### 3. Verify
 
@@ -122,40 +147,55 @@ This script:
 openclaw channels status --probe
 ```
 
-All 5 Slack accounts should show as connected.
+All 5 Slack accounts should show connected, and all 11 channels should be resolvable.
 
 ### 4. Invite bots to channels
 
-In Slack, invite each bot to its channels:
+- **Orchestrator**: all 11 channels (including `#watchlist`, `#weekly-outlook`).
+- **Scout**: `#market-signals`, `#dispatch`, `#watchlist`, `#weekly-outlook`, `#agents`.
+- **Analyst**: `#research`, `#market-signals`, `#dispatch`, `#watchlist`, `#agents`.
+- **Quant**: `#quant-signals`, `#research`, `#dispatch`, `#watchlist`, `#agents`.
+- **Devil's Advocate**: `#contrarian`, `#research`, `#quant-signals`, `#market-signals`, `#dispatch`, `#watchlist`, `#weekly-outlook`, `#agents`.
 
-- **Orchestrator**: all 7 channels
-- **Scout**: `#market-signals`, `#dispatch`
-- **Analyst**: `#research`, `#market-signals`, `#dispatch`
-- **Quant**: `#quant-signals`, `#research`, `#dispatch`
-- **Devil's Advocate**: `#contrarian`, `#research`, `#quant-signals`, `#market-signals`, `#dispatch`
+### 5. Register scheduled jobs
 
-### 5. Test
+After deploy, register the scheduled-jobs map (or use the `scheduled-tasks` MCP surface):
 
-DM the Orchestrator in Slack -- it will respond with a pairing code. The other 4 agents have DMs disabled by default; interact with them by @mentioning them in their channels.
+```bash
+# The sync script deploys ~/.openclaw/scheduled-jobs.json.
+# Registration depends on your openclaw CLI version; see project docs.
+```
+
+The scheduled job set fires Scout's morning watchlist, pre-market / mid-day / post-market scans, daily earnings tracker, and Sunday weekly outlook. All cron expressions use America/New_York.
+
+### 6. Test
+
+- DM the Orchestrator in Slack → pairing code.
+- In `#dispatch`, ask the Orchestrator to run `explicit_dispatch` against Scout for a manual `build_morning_watchlist` and watch the flow through `#watchlist`.
+- Trigger `compute_technical_signals` on Quant for a couple of watchlist names and watch the pointer + JSON flow into `#quant-signals`.
+- Trigger `thesis_stress_test` on Devil's Advocate against an Analyst thesis and verify the follow-up question flow via `follow_up_questions` in `#research`.
 
 ## Updating
-
-After making changes to workspace files, config, or personality:
 
 ```bash
 # On the VM
 git pull
-./scripts/sync-agent-workspaces.sh
+./agent-team/scripts/sync-agent-workspaces.sh             # additive
+./agent-team/scripts/sync-agent-workspaces.sh --clean     # full clean resync
 ```
 
-The script always overwrites `openclaw.json` and workspace files but preserves your existing `.env` (with real tokens).
+`--clean` never touches `~/.openclaw/.env`. It does rewrite `~/.openclaw/openclaw.json` from the source config each run.
 
 ## Architecture notes
 
-- **No agent-to-agent hidden messaging.** `agentToAgent` is disabled. All coordination happens in Slack channels.
-- **No trade execution.** No agent has the ability to execute trades. Humans make all execution decisions.
-- **Orchestrator is the only dispatcher.** Specialists never assign work to each other directly.
-- **Channel-visible handoffs.** All task assignments go through `#dispatch` so nothing is hidden.
-- **Shared portfolio state.** Every agent reads the same `watchlist.md`, `positions.md`, and `recent-decisions.md` from their `shared/portfolio/` directory. Only the Orchestrator updates these files.
-- **DM policy.** Only the Orchestrator accepts DMs (`dmPolicy: "pairing"`). Specialists have DMs disabled. Change per-agent `dmPolicy` in `openclaw.json` under `channels.slack.accounts` if needed.
-- **Mention-gated channels.** All channels use `requireMention: true` -- agents only respond when @mentioned. This prevents noise from cross-channel chatter.
+- **A2A is enabled for artifact pull only.** `agentToAgent.enabled: true`, but the hard team rule is: A2A is ONLY for pulling finished artifacts from another agent's `files/` folder after a Slack pointer has been posted. Tasking, discussion, and coordination stay in Slack. See `shared-skills/a2a-artifact-pull/SKILL.md`.
+- **No trade execution.** No agent has tooling to execute trades. Humans make all execution decisions.
+- **Orchestrator is the only dispatcher.** Via `explicit_dispatch` — one question, one specialist, one reply channel, one deadline.
+- **Channel-visible handoffs.** All tasking goes through `#dispatch`. Follow-up questions go in the specialist's own channel via `follow_up_questions`.
+- **Canonical state = channels.** `#watchlist` replaces `watchlist.md`; `#portfolio-daily` replaces `recent-decisions.md`. Every agent reads these two channel tails on startup.
+- **Per-agent MEMORY.md.** Append-only session log. Read tail at startup. Every 5 sessions (or after a weekend gap) also scan the `files/index.md` tail.
+- **Per-agent files discipline.** Each workspace keeps `files/YYYY-MM-DD/<category>-<slug>.<ext>` plus `files/index.md`. Large artifacts live here; Slack gets short pointers.
+- **DM policy.** Only the Orchestrator accepts DMs (`dmPolicy: "pairing"`). Specialists have DMs disabled.
+- **Mention-gated channels.** All channels use `requireMention: true` — agents only respond when `@mentioned`.
+- **Source discipline.** Allowlist of approved sources; Reuters is denied. See `shared-skills/approved-sources/SKILL.md`.
+- **Voice rule.** Human-facing answers are minimal and to the point.
