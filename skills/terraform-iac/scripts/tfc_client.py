@@ -1931,6 +1931,35 @@ resource "aws_ssoadmin_account_assignment" "{grp_safe}_workload" {{
     if extra_principals:
         extra_principals_str = "\n".join([f"    {p}," for p in extra_principals])
 
+    guardduty_admin_block = ""
+    if enable_gd:
+        guardduty_admin_block = f"""
+resource \"aws_guardduty_organization_admin_account\" \"audit\" {{
+  admin_account_id = aws_organizations_account.audit.id
+  depends_on       = [aws_organizations_organization.this]
+}}
+
+resource \"aws_guardduty_organization_configuration\" \"this\" {{
+  auto_enable = true
+  detector_id  = aws_guardduty_detector.audit.id
+  depends_on   = [aws_guardduty_organization_admin_account.audit]
+}}
+"""
+
+    guardduty_block = f"""
+resource \"aws_guardduty_detector\" \"audit\" {{
+  enable                               = true
+  finding_publishing_frequency        = \"SIX_HOURS\"
+  datasources {{
+    s3_logs {{ enable = true }}
+    kubernetes {{ audit_logs {{ enable = true }} }}
+    malware_protection {{ scan_ec2_instance_with_findings {{ ebs_volumes = true }} }}
+  }}
+  tags = local.tags
+}}
+
+{guardduty_admin_block}"""
+
     # Generate import block for existing organizations
     org_import_block = ""
     if has_existing_org:
@@ -2587,6 +2616,9 @@ Best practice:
 ────────────────────────────────────────────────────────""")
 
     name   = prompt("Trail name (e.g. marsmovers-audit-trail)")
+    if not validate_landing_zone_name(name):
+        print("  ❌ Trail name must be a valid landing-zone style name: lowercase letters, numbers, and hyphens only, 3-63 chars.")
+        sys.exit(1)
     region = prompt("AWS region", default="us-east-1")
     env    = prompt("Environment", default="prod", choices=["dev", "staging", "prod"])
 
@@ -2607,6 +2639,9 @@ Best practice:
     bucket_choice = prompt("Create a new bucket or use existing?", default="new", choices=["new", "existing"])
     if bucket_choice == "existing":
         bucket_name = prompt("Existing S3 bucket name")
+        if not validate_s3_bucket_name(bucket_name):
+            print(f"  ❌ Invalid S3 bucket name: {bucket_name}")
+            sys.exit(1)
         bucket_block = ""
         bucket_policy_block = ""
         bucket_ref = f'"{bucket_name}"'
