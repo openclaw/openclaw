@@ -240,7 +240,7 @@ function summarizeTraceToolCall(value: unknown): string | null {
 }
 
 export function summarizeToolCall(toolName: unknown, args: unknown): string | null {
-  const name = String(toolName);
+  const name = String(toolName).trim().toLowerCase();
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
   if (name === "read") {
@@ -249,9 +249,9 @@ export function summarizeToolCall(toolName: unknown, args: unknown): string | nu
   }
 
   if (
-    name === "applyPatch" ||
+    name === "applypatch" ||
     name === "apply_patch" ||
-    name === "editFile" ||
+    name === "editfile" ||
     name === "edit" ||
     name === "write"
   ) {
@@ -269,7 +269,7 @@ export function summarizeToolCall(toolName: unknown, args: unknown): string | nu
     return command ? `Run command ${command}` : "Run command";
   }
 
-  if (name === "webSearch" || name === "web_search") {
+  if (name === "websearch" || name === "web_search") {
     const query =
       typeof record.search_term === "string"
         ? record.search_term
@@ -279,12 +279,12 @@ export function summarizeToolCall(toolName: unknown, args: unknown): string | nu
     return query ? `Search web ${query}` : "Search web";
   }
 
-  if (name === "webFetch" || name === "web_fetch") {
+  if (name === "webfetch" || name === "web_fetch") {
     const url = typeof record.url === "string" ? record.url : undefined;
     return url ? `Fetch web ${url}` : "Fetch web";
   }
 
-  if (name === "todoWrite" || name === "todo_write") {
+  if (name === "todowrite" || name === "todo_write") {
     return "Update todo list";
   }
 

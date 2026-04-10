@@ -63,6 +63,11 @@ describe("feishu session trace shared helpers", () => {
     expect(summarizeToolCall("unknown_tool", {})).toBeNull();
   });
 
+  it("normalizes tool names before summary matching", () => {
+    expect(summarizeToolCall(" Read ", { path: "/tmp/a.txt" })).toBe("Read file /tmp/a.txt");
+    expect(summarizeToolCall(" BASH ", { cmd: "pnpm test" })).toBe("Run command pnpm test");
+  });
+
   it("extracts summaries from assistant tool-call session lines", () => {
     const line = JSON.stringify({
       type: "message",
