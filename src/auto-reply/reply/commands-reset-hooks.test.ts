@@ -6,6 +6,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const routeReplyMock = vi.hoisted(() =>
+  vi.fn<(params: unknown) => Promise<{ ok: boolean }>>(async () => ({ ok: true })),
+);
 const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
   resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
@@ -47,6 +50,10 @@ vi.mock("./commands-acp/targets.js", () => ({
 
 vi.mock("./commands-handlers.runtime.js", () => ({
   loadCommandHandlers: () => [],
+}));
+
+vi.mock("./route-reply.runtime.js", () => ({
+  routeReply: (params: unknown) => routeReplyMock(params),
 }));
 
 function buildResetParams(
@@ -102,6 +109,7 @@ describe("handleCommands reset hooks", () => {
     vi.clearAllMocks();
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
+    triggerInternalHookMock.mockResolvedValue(undefined);
   });
 
   it("triggers hooks for /new commands", async () => {
@@ -212,5 +220,39 @@ describe("handleCommands reset hooks", () => {
     expect(params.ctx.Body).toBe("who are you");
     expect(params.ctx.CommandBody).toBe("who are you");
     expect(params.ctx.AcpDispatchTailAfterReset).toBe(true);
+  });
+
+  it("forwards non-id sender fields when reset hooks emit routed replies", async () => {
+    triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
+      event.messages.push("Reset hook says hi");
+    });
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        SenderId: "id:whatsapp:123",
+        SenderName: "Alice",
+        SenderUsername: "alice_u",
+        SenderE164: "+15551234567",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "group:ops",
+        MessageThreadId: "thread-1",
+      },
+    );
+
+    await maybeHandleResetCommand(params);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "id:whatsapp:123",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+        threadId: "thread-1",
+      }),
+    );
   });
 });
