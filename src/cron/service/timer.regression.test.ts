@@ -280,6 +280,54 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
+  it("#63770: deleteAfterRun removes recurring jobs after a transient failure then success", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "every-delete-after-run-retry-then-success",
+      name: "delete recurring after retry success",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "run once" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = true;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: "transient failure" })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+    const jobAfterFailure = state.store?.jobs.find(
+      (j) => j.id === "every-delete-after-run-retry-then-success",
+    );
+    expect(jobAfterFailure).toBeDefined();
+    expect(jobAfterFailure?.state.lastStatus).toBe("error");
+    expect(jobAfterFailure?.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    now = (jobAfterFailure?.state.nextRunAtMs ?? scheduledAt) + 1;
+    await onTimer(state);
+
+    const deletedJob = state.store?.jobs.find(
+      (j) => j.id === "every-delete-after-run-retry-then-success",
+    );
+    expect(deletedJob).toBeUndefined();
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
   it("#63770: deleteAfterRun keeps recurring jobs when run fails", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
