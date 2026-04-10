@@ -144,6 +144,54 @@ describe("cli-session helpers", () => {
     ).toEqual({ sessionId: "cli-session-1" });
   });
 
+  it("accepts a stored legacy mcpConfigHash on the first post-upgrade turn", () => {
+    // Bindings persisted before the canonicalization fix hashed the raw
+    // merged MCP config (including the ephemeral loopback port). Those
+    // bindings must survive one turn under the new code — the current run
+    // passes both the canonical hash and the legacy hash, and a match on
+    // either is considered valid. The next call to `setCliSessionBinding`
+    // will rewrite the stored hash to the canonical form.
+    const binding = {
+      sessionId: "cli-session-legacy",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "legacy-hash-with-port",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "canonical-hash-port-stripped",
+        legacyMcpConfigHash: "legacy-hash-with-port",
+      }),
+    ).toEqual({ sessionId: "cli-session-legacy" });
+  });
+
+  it("still invalidates when neither canonical nor legacy mcpConfigHash matches", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "unrelated-stored-hash",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "canonical-hash",
+        legacyMcpConfigHash: "legacy-hash",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
+  });
+
   it("clears provider-scoped and global CLI session state", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",

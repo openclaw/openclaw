@@ -120,6 +120,16 @@ export function resolveCliSessionReuse(params: {
   authEpoch?: string;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  /**
+   * SHA-256 of the raw (non-canonicalized) merged MCP config. Bindings
+   * persisted before the canonicalization fix hashed the config verbatim,
+   * embedding the ephemeral loopback port. Accept a stored hash that
+   * matches either the current canonical hash or this legacy form so that
+   * existing sessions survive the upgrade; the binding is rewritten with
+   * the canonical hash after the first post-upgrade turn, so the legacy
+   * path decays naturally.
+   */
+  legacyMcpConfigHash?: string;
 }): {
   sessionId?: string;
   invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
@@ -133,6 +143,7 @@ export function resolveCliSessionReuse(params: {
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
+  const currentLegacyMcpConfigHash = normalizeOptionalString(params.legacyMcpConfigHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
     return { invalidatedReason: "auth-profile" };
@@ -146,7 +157,10 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
-  if (storedMcpConfigHash !== currentMcpConfigHash) {
+  const matchesCurrent = storedMcpConfigHash === currentMcpConfigHash;
+  const matchesLegacy =
+    currentLegacyMcpConfigHash !== undefined && storedMcpConfigHash === currentLegacyMcpConfigHash;
+  if (!matchesCurrent && !matchesLegacy) {
     return { invalidatedReason: "mcp" };
   }
   return { sessionId };

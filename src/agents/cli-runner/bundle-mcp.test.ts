@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -370,6 +371,60 @@ describe("prepareCliBundleMcpConfig", () => {
 
     await preparedWithLoopback.cleanup?.();
     await preparedWithoutLoopback.cleanup?.();
+  });
+
+  it("exposes a legacyMcpConfigHash that matches what pre-fix gateway builds produced", async () => {
+    // Upgrade-compatibility: `legacyMcpConfigHash` must be the sha256 of the
+    // raw merged config *including* the ephemeral loopback port, so that
+    // `resolveCliSessionReuse` can accept bindings persisted by pre-fix
+    // gateways. It must differ from the canonical `mcpConfigHash` when any
+    // loopback URL contains a port.
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-legacy-hash-");
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config: {},
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http" as const,
+            url: "http://127.0.0.1:62949/mcp",
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
+        },
+      },
+    });
+
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(prepared.legacyMcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(prepared.legacyMcpConfigHash).not.toBe(prepared.mcpConfigHash);
+
+    // Byte-exact reproduction of what the pre-fix code hashed: JSON.stringify
+    // of the merged config (with the literal port) followed by a trailing
+    // newline. Any drift here would mean pre-fix bindings still get wiped.
+    const expectedLegacyInput = `${JSON.stringify(
+      {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:62949/mcp",
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    const expectedLegacyHash = crypto
+      .createHash("sha256")
+      .update(expectedLegacyInput)
+      .digest("hex");
+    expect(prepared.legacyMcpConfigHash).toBe(expectedLegacyHash);
+
+    await prepared.cleanup?.();
   });
 
   it("changes mcpConfigHash when the loopback overlay headers change", async () => {
