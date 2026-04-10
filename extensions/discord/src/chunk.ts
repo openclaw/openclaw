@@ -148,6 +148,11 @@ function splitLongLine(
     let breakIdx = -1;
     for (let i = window.length - 1; i >= 0; i--) {
       if (/\s/.test(window[i])) {
+        // Don't break inside a markdown link [text](url).
+        // Check if this position is between an unmatched [ and its closing ](...).
+        if (isInsideMarkdownLink(remaining, i)) {
+          continue;
+        }
         breakIdx = i;
         break;
       }
@@ -163,6 +168,49 @@ function splitLongLine(
     out.push(remaining);
   }
   return out;
+}
+
+/**
+ * Check whether position `idx` in `text` falls inside a markdown link
+ * `[...](...)`. We scan backwards for `[` and forward for `](...)`.
+ */
+function isInsideMarkdownLink(text: string, idx: number): boolean {
+  // Scan backwards from idx for an unmatched `[`
+  let bracketDepth = 0;
+  let openBracketIdx = -1;
+  for (let i = idx; i >= 0; i--) {
+    if (text[i] === "]" && (i === 0 || text[i - 1] !== "\\")) {
+      bracketDepth++;
+    } else if (text[i] === "[" && (i === 0 || text[i - 1] !== "\\")) {
+      if (bracketDepth > 0) {
+        bracketDepth--;
+      } else {
+        openBracketIdx = i;
+        break;
+      }
+    }
+  }
+  if (openBracketIdx === -1) {
+    return false;
+  }
+  // Scan forward from idx for `](`
+  for (let i = idx; i < text.length - 1; i++) {
+    if (text[i] === "]" && text[i + 1] === "(") {
+      // Found the close bracket + open paren - find the matching close paren
+      let parenDepth = 1;
+      for (let j = i + 2; j < text.length; j++) {
+        if (text[j] === "(") { parenDepth++; }
+        else if (text[j] === ")") {
+          parenDepth--;
+          if (parenDepth === 0) {
+            // idx is between [ and the end of ](url)
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -460,7 +508,25 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       const wouldExceedLines = nextLines > lineLimit;
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
+        // Before flushing, check if the last line in `current` is an orphaned
+        // list marker (e.g. "12." without content). If so, pull it back so
+        // it joins the next chunk with its content.
+        const lastNewline = current.lastIndexOf("\n");
+        let orphanedMarker = "";
+        if (lastNewline !== -1) {
+          const lastLine = current.slice(lastNewline + 1);
+          if (/^\s*(?:\d+\.|[-*+])\s*$/.test(lastLine)) {
+            current = current.slice(0, lastNewline);
+            currentLines -= 1;
+            orphanedMarker = lastLine;
+          }
+        }
         flush();
+        // If we pulled back an orphaned marker, prepend it to the segment
+        if (orphanedMarker) {
+          segment = `${orphanedMarker} ${segment.trimStart()}`;
+          addition = `${delimiter}${segment}`;
+        }
       }
 
       // After flush, if we're inside a blockquote, prefix the segment.

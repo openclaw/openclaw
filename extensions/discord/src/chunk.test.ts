@@ -229,4 +229,33 @@ describe("chunkDiscordText", () => {
       expect(stars % 2).toBe(0);
     }
   });
+
+  it("does not split inside markdown links", () => {
+    // Build text where the char limit forces a break inside [text](url)
+    const padding = "W ".repeat(985); // ~1970 chars
+    const text = `${padding}[**Link text with spaces**](https://example.com/path) tail text`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // The link should be fully contained in one chunk, not split
+    const fullLink = "[**Link text with spaces**](https://example.com/path)";
+    const chunkWithLink = chunks.find((c) => c.includes(fullLink));
+    expect(chunkWithLink).toBeDefined();
+  });
+
+  it("does not orphan list markers at chunk boundaries", () => {
+    // 17 short list items - the 17th item's marker would be orphaned
+    // at the maxLines boundary without the fix
+    const items = Array.from({ length: 17 }, (_, i) => `${i + 1}. Item content`);
+    const text = items.join("\n") + " with trailing text";
+
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 17 });
+    // No chunk should end with a bare list marker
+    for (const chunk of chunks) {
+      const lastLine = chunk.split("\n").at(-1) ?? "";
+      expect(lastLine).not.toMatch(/^\s*\d+\.\s*$/);
+      expect(lastLine).not.toMatch(/^\s*[-*+]\s*$/);
+    }
+  });
 });
