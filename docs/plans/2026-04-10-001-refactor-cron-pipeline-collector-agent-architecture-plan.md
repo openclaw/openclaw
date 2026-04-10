@@ -261,7 +261,15 @@ Progress note (2026-04-10): completed 1.6-1.8 in `/home/codex/clawd/` during thi
 
 Progress note (2026-04-10): Phase 2 execution started from the live scheduler state after re-reading the current OpenClaw cron CLI source. This build expects `--timeout-seconds` (not `--timeout`) and `--best-effort-deliver` (not a generic delivery mode flag), so the rollout commands below should use the actual CLI surface when executed.
 
-- [ ] **2.1** Create Morning Data Collect cron job
+Live rollout note (2026-04-10): the first force-run of `Morning Data Collect` succeeded functionally, but its initial `Run: ...` prompt was too permissive for an isolated cron agent. The session wandered into `git pull`, `brv query`, and `brv curate` before/after the collector script, pushing the run to ~170s and ~30.8k tokens. The stored cron job payload still shows `openai-codex/gpt-5.4-mini`, but the persisted cron run telemetry recorded `model: gpt-5.4`; subsequent hardened reruns reproduced the same telemetry drift, so treat the model-routing/cost assumption as unresolved until the backend behavior is explained or fixed.
+
+Collector hardening note (2026-04-10): `Morning Data Collect` was then edited to use `lightContext: true` and `toolsAllow: ["exec"]` with a strict single-command prompt. The rerun stayed within the intended scope (single `exec`, one `process` poll, no `git`/`brv`) and dropped runtime from ~170s to ~38s, but cron telemetry still reported `provider=openai-codex model=gpt-5.4` instead of the requested `openai-codex/gpt-5.4-mini`. Treat the model-routing/cost assumption as unresolved until the backend behavior is explained or fixed.
+
+Planner validation note (2026-04-10): `Morning Planner` was hardened before first execution with `lightContext: true` and `toolsAllow: ["exec","process"]`. The force-run finished `status=ok`, delivered the Telegram payload, and wrote `## Plan (pipeline)` into `/home/codex/second-brain/logs/daily-summaries/2026-04-10.md` in ~113s. The transcript stayed off `git`/`brv`, but it still started on `provider=openai-codex model=gpt-5.4` and even invoked `update_plan` despite the narrowed tool allowlist, so the functional path is validated while the isolated-agent runtime contract still needs follow-up.
+
+Runtime defect tracking note (2026-04-10): Linear issue `LS-1409` tracks the isolated cron runtime drift (`openai-codex/gpt-5.4-mini` payloads executing as `gpt-5.4`, plus tool-allowlist leakage in the planner transcript). Phase 2 can continue functional monitoring under `2.5`, but `2.6` must stay open until that defect is explained or fixed.
+
+- [x] **2.1** Create Morning Data Collect cron job
   ```bash
   openclaw cron add \
     --name "Morning Data Collect" \
@@ -274,7 +282,7 @@ Progress note (2026-04-10): Phase 2 execution started from the live scheduler st
     --message "Run: python3 /home/codex/second-brain/scripts/openclaw-pipeline/morning_collect.py" \
     --announce --channel telegram --to 183115134 --best-effort-deliver
   ```
-- [ ] **2.2** Create Morning Planner cron job
+- [x] **2.2** Create Morning Planner cron job
 
   ```bash
   openclaw cron add \
@@ -341,11 +349,11 @@ Progress note (2026-04-10): Phase 2 execution started from the live scheduler st
 
   Note: During Phase 2, uses heading `## Plan (pipeline)` to avoid collision with old job's `## Plan`.
 
-- [ ] **2.3** Swap Readwise Auto-Ingest model to `openai-codex/gpt-5.4-mini`
+- [x] **2.3** Swap Readwise Auto-Ingest model to `openai-codex/gpt-5.4-mini`
   ```bash
   openclaw cron edit <readwise-ingest-id> --model openai-codex/gpt-5.4-mini
   ```
-- [ ] **2.4** Force-run both new jobs to validate:
+- [x] **2.4** Force-run both new jobs to validate:
   ```bash
   openclaw cron run <morning-collect-id>
   # Wait for completion

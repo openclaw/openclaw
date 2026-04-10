@@ -3,19 +3,19 @@
     {
       "order": 3,
       "path": "_index.md",
-      "tokens": 332,
+      "tokens": 362,
       "type": "summary"
     },
     {
       "order": 2,
       "path": "project/_index.md",
-      "tokens": 327,
+      "tokens": 474,
       "type": "summary"
     },
     {
       "order": 1,
       "path": "project/operations/_index.md",
-      "tokens": 278,
+      "tokens": 567,
       "type": "summary"
     },
     {
@@ -26,8 +26,14 @@
     },
     {
       "importance": 50,
+      "path": "project/operations/cron_pipeline_collector_agent_architecture.md",
+      "tokens": 575,
+      "type": "context"
+    },
+    {
+      "importance": 50,
       "path": "project/operations/cron_pipeline_collector_agent_refactor.md",
-      "tokens": 448,
+      "tokens": 450,
       "type": "context"
     },
     {
@@ -37,13 +43,13 @@
       "type": "context"
     }
   ],
-  "generated_at": "2026-04-10T10:05:26.519Z",
+  "generated_at": "2026-04-10T10:34:17.759Z",
   "lane_tokens": {
-    "contexts": 782,
+    "contexts": 1359,
     "stubs": 0,
-    "summaries": 937
+    "summaries": 1403
   },
-  "source_fingerprint": "8d2176a7b74de067b7d3566bdb80a0e33fc795609ae782e4877a3844faf667da",
-  "total_tokens": 1719,
+  "source_fingerprint": "e45ffd814f96d161bdc28eba701d9ae42c90cf480f0232cde00eff8bd874e06a",
+  "total_tokens": 2762,
   "version": 1
 }

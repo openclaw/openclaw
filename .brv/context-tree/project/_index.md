@@ -1,50 +1,53 @@
 ---
-children_hash: e9c280def25927943e693b5e6a9c286cf84447a7378a9b1b1158f845b9eab9fd
-compression_ratio: 0.7465753424657534
+children_hash: d8c573cd15c2df97aafca53e82c76676a8004512f9d7d0861372cc1b1155ef32
+compression_ratio: 0.6405405405405405
 condensation_order: 2
 covers: [context.md, operations/_index.md]
-covers_token_total: 438
+covers_token_total: 740
 summary_level: d2
-token_count: 327
+token_count: 474
 type: summary
 ---
 
-# Project Operations
+# project/operations
 
 ## Overview
 
-Operational domain for system maintenance, configuration, and remediation.
+Operational knowledge for OpenClaw's cron pipeline architecture and maintenance. Replaced 11 monolithic agent sessions with lightweight collectors feeding specialized agents.
 
-## Scope
+## Architecture
 
-Health audits, configuration changes, remediation actions, operational procedures. Excludes architecture decisions and feature development.
+**Pipeline Structure**: 9 active cron jobs — 3 collectors (300s timeout), 6 agents (1800s timeout). Data exchange via `/tmp/openclaw-pipeline/{am,pm,tomorrow.json}`. Model: `openai-codex/gpt-5.4-mini` via ChatGPT Pro OAuth with `minimax/minimax-m2.7` fallback.
 
-## Key Activities
+**Token Efficiency**: ~40% reduction (5000 → ~2400 tokens/day).
 
-### Collector-Agent Refactor (cron_pipeline_collector_agent_refactor)
+## Status
 
-Phase 1 validated with tests passing. Implements atomic wipe-before-write pattern with per-source error isolation. Morning pipeline rollout awaiting passive context documentation.
+- **Refactor Phase 1**: Complete — atomic wipe-before-write and per-source error handling validated
+- **Phase 2**: Morning pipeline with `lightContext` optimization validated
+- **Phase 3**: Evening pipeline with Knowledge Processor and Evening Analyst — in progress
+- **Phases 3.5–6**: Pending — operational file updates, weekly consolidation, cleanup, finalization
 
-### Health Audit (health_audit_2026_04_08)
+## Critical Rules
 
-Single-session remediation addressing:
+- Zero JSON files in `am/`/`pm/` → Telegram alert + EXIT
+- `tomorrow.json` expires after 36 hours
+- Data older than 2 hours flagged stale
+- Git push failures log and continue; no retry
+- Use explicit model ID `openai-codex/gpt-5.4-mini` (not alias)
 
-- **Model routing**: Requires `openrouter/` prefix for OpenRouter guardrail compliance
-- **Compaction threshold**: 4000→80000 (20x increase)
-- **Cron targets**: 4 delivery targets configured
-- **Plugin config**: 10 plugins allowed, acpx 0.5.1 installed
-- **brv model**: minimax/minimax-mini
+## Health Audit Remediation (2026-04-08)
 
-## Architectural Patterns
+Completed fixes: model routing (`openrouter/` prefix required), compaction threshold (4000→80000), 4 cron targets corrected, `acpx 0.5.1` installed, `moltbot.json` archived, brv model switched to `minimax/minimax-m2.7`.
 
-- Atomic operations with per-source error isolation
-- OpenRouter compliance driving routing changes
-- 20x compaction threshold adjustment
+## Key Files
 
-## Dependencies
+- `src/gateway/server-lanes.ts`
+- `docs/plans/2026-04-10-001-refactor-cron-pipeline-collector-agent-architecture-plan.md`
+- `/home/codex/clawd/USER.md`, `PRINCIPLES.md`, `TOOLS.md`
 
-Collector-agent refactor depends on passive context changes in execution plan. Health audit fixes were self-contained.
+## Child Entry Reference
 
----
-
-Drill-down: See `operations/_index.md` for detailed coverage of refactor and audit entries.
+- `cron_pipeline_collector_agent_architecture` — Core architecture details
+- `cron_pipeline_collector_agent_refactor` — Phase 1 validation and execution plan
+- `health_audit_2026_04_08` — Remediation actions

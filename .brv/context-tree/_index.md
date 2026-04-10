@@ -1,50 +1,39 @@
 ---
-children_hash: 03196a06a66a732ac8792d590035e07af91c2b6aec2b2f4a9ba8e24dd74f492e
-compression_ratio: 0.8447837150127226
+children_hash: 5be3c31f0f8aec7ca567bc74eb5a266e0104a4d5d9ea52baa13a4d2cdd2bbe91
+compression_ratio: 0.6703703703703704
 condensation_order: 3
 covers: [project/_index.md]
-covers_token_total: 393
+covers_token_total: 540
 summary_level: d3
-token_count: 332
+token_count: 362
 type: summary
 ---
 
-# Project Operations Summary
+# project/operations Summary
 
-## Overview
+The **operations** domain covers OpenClaw's cron pipeline architecture and maintenance.
 
-Operations domain covering system maintenance, configuration, and remediation. Excludes architecture decisions and feature development.
+## Core Architecture
 
-## Core Activities
+9 active cron jobs: 3 collectors (300s timeout) + 6 agents (1800s timeout). Data exchange via `/tmp/openclaw-pipeline/{am,pm,tomorrow.json}`. Model: `openai-codex/gpt-5.4-mini` via ChatGPT Pro OAuth with `minimax/minimax-m2.7` fallback. Achieved ~40% token reduction (5000 → ~2400 tokens/day).
 
-### Collector-Agent Refactor
+## Refactor Status
 
-- **Entry**: `cron_pipeline_collector_agent_refactor`
-- Phase 1 validated (tests passing)
-- **Pattern**: Atomic wipe-before-write with per-source error isolation
-- **Status**: Morning pipeline rollout awaiting passive context documentation
+- **Phase 1**: Complete — atomic wipe-before-write, per-source error handling
+- **Phase 2**: Complete — morning pipeline with `lightContext`
+- **Phase 3**: In progress — Knowledge Processor + Evening Analyst
+- **Phases 3.5–6**: Pending
 
-### Health Audit (2026-04-08)
+## Critical Rules
 
-- **Entry**: `health_audit_2026_04_08`
-- **Fixes applied**:
-  - Model routing: `openrouter/` prefix required for OpenRouter guardrail compliance
-  - Compaction threshold: 4000→80000 (20x increase)
-  - Cron targets: 4 delivery targets
-  - Plugin config: 10 plugins allowed, acpx 0.5.1 installed
-  - brv model: `minimax/minimax-mini`
+Zero JSON files in `am/`/`pm/` triggers Telegram alert + EXIT. `tomorrow.json` expires after 36h. Data older than 2h flagged stale. Git push failures log and continue. Use explicit model ID `openai-codex/gpt-5.4-mini`.
 
-## Architectural Patterns
+## Health Audit (2026-04-08)
 
-- Atomic operations with per-source error isolation
-- OpenRouter compliance driving routing prefix requirements
-- 20x compaction threshold adjustment
+Remediation complete: model routing fixed (`openrouter/` prefix), compaction threshold (4000→80000), 4 cron targets corrected, `acpx 0.5.1` installed, `moltbot.json` archived, brv switched to `minimax/minimax-m2.7`.
 
-## Dependencies
+## Drill-Down
 
-Collector-agent refactor depends on passive context changes in execution plan. Health audit fixes were self-contained.
-
-## Drill-down
-
-- `operations/cron_pipeline_collector_agent_refactor` — Detailed refactor documentation
-- `operations/health_audit_2026_04_08` — Full audit findings and remediation
+- `project/operations/cron_pipeline_collector_agent_architecture` — Core architecture details
+- `project/operations/cron_pipeline_collector_agent_refactor` — Phase 1 validation/execution
+- `project/operations/health_audit_2026_04_08` — Remediation details
