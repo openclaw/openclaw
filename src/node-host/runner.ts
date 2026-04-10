@@ -70,33 +70,57 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
   );
 }
 
+type SkillBinsCacheEntry = {
+  bins: SkillBinTrustEntry[];
+  lastRefresh: number;
+};
+
+/**
+ * Per-agent TTL cache over the gateway's skills.bins RPC.
+ *
+ * Historically this was a single shared cache for the whole node host, which
+ * made it impossible to isolate skill-bin trust between agents: a skill in
+ * agent A's workspace would auto-allow its bins for every exec on the host,
+ * including execs originating from agent B. Now we key the cache by agentId
+ * and fetch each agent's view independently. Callers that still pass no
+ * agentId (legacy transitional callers, tests, etc.) fall through to an
+ * `__all__` bucket that preserves the old union-across-agents behavior.
+ */
 class SkillBinsCache implements SkillBinsProvider {
-  private bins: SkillBinTrustEntry[] = [];
-  private lastRefresh = 0;
+  private readonly cache = new Map<string, SkillBinsCacheEntry>();
   private readonly ttlMs = 90_000;
-  private readonly fetch: () => Promise<string[]>;
+  private readonly fetch: (agentId: string | undefined) => Promise<string[]>;
   private readonly pathEnv: string;
 
-  constructor(fetch: () => Promise<string[]>, pathEnv: string) {
+  constructor(
+    fetch: (agentId: string | undefined) => Promise<string[]>,
+    pathEnv: string,
+  ) {
     this.fetch = fetch;
     this.pathEnv = pathEnv;
   }
 
-  async current(force = false): Promise<SkillBinTrustEntry[]> {
-    if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
+  async current(agentId?: string, force = false): Promise<SkillBinTrustEntry[]> {
+    const key = agentId?.trim() ? agentId.trim() : "__all__";
+    const entry = this.cache.get(key);
+    if (force || !entry || Date.now() - entry.lastRefresh > this.ttlMs) {
+      await this.refresh(key, agentId);
     }
-    return this.bins;
+    return this.cache.get(key)?.bins ?? [];
   }
 
-  private async refresh() {
+  private async refresh(key: string, agentId: string | undefined) {
     try {
-      const bins = await this.fetch();
-      this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
-      this.lastRefresh = Date.now();
+      const bins = await this.fetch(agentId);
+      this.cache.set(key, {
+        bins: resolveSkillBinTrustEntries(bins, this.pathEnv),
+        lastRefresh: Date.now(),
+      });
     } catch {
-      if (!this.lastRefresh) {
-        this.bins = [];
+      // Preserve any prior value on transient failure; only seed an empty
+      // entry if we have never successfully fetched this key before.
+      if (!this.cache.has(key)) {
+        this.cache.set(key, { bins: [], lastRefresh: Date.now() });
       }
     }
   }
@@ -217,8 +241,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
   });
 
-  const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
+  const skillBins = new SkillBinsCache(async (agentId) => {
+    const params: { agentId?: string } = {};
+    if (agentId && agentId.trim()) {
+      params.agentId = agentId.trim();
+    }
+    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", params);
     const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
   }, pathEnv);

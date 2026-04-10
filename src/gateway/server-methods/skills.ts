@@ -34,7 +34,7 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function collectSkillBins(entries: SkillEntry[]): string[] {
+export function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
     const required = entry.metadata?.requires?.bins ?? [];
@@ -119,12 +119,37 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
-    for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+    const agentIdRaw = normalizeOptionalString(params?.agentId) ?? "";
+    if (agentIdRaw) {
+      // Per-agent resolution: return only the bins declared by skills this
+      // agent can actually see (its own workspace skills plus any globally
+      // shared skills that survive the agent-level skill/tag filter).
+      const agentId = normalizeAgentId(agentIdRaw);
+      const knownAgents = listAgentIds(cfg);
+      if (!knownAgents.includes(agentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
+        );
+        return;
+      }
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg, agentId });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
+      }
+    } else {
+      // Legacy behavior: union of bins across every agent workspace. Kept
+      // for back-compat with callers that do not yet pass agentId; the
+      // exec allowlist path should always pass agentId to get isolation.
+      const workspaceDirs = listAgentWorkspaceDirs(cfg);
+      for (const workspaceDir of workspaceDirs) {
+        const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+        for (const bin of collectSkillBins(entries)) {
+          bins.add(bin);
+        }
       }
     }
     respond(true, { bins: [...bins].toSorted() }, undefined);

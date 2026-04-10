@@ -335,7 +335,9 @@ async function evaluateSystemRunPolicyPhase(
     local: agentExec,
     onWarning: warnWritableTrustedDirOnce,
   });
-  const bins = autoAllowSkills ? await opts.skillBins.current() : [];
+  const bins = autoAllowSkills
+    ? await opts.skillBins.current(parsed.agentId ?? undefined)
+    : [];
   let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
     evaluateSystemRunAllowlist({
       shellCommand: parsed.shellPayload,

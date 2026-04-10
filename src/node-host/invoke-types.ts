@@ -57,5 +57,20 @@ export type ExecFinishedEventParams = {
 };
 
 export type SkillBinsProvider = {
-  current(force?: boolean): Promise<SkillBinTrustEntry[]>;
+  /**
+   * Return the set of skill-declared bins that are trusted for exec on behalf
+   * of the given agent. Providers should resolve each bin to an absolute path
+   * in the current environment and return one `SkillBinTrustEntry` per (name,
+   * resolvedPath) pair.
+   *
+   * @param agentId
+   *   Agent this lookup is for. When omitted, providers fall back to the
+   *   union of bins across all agents, which preserves legacy behavior but
+   *   disables per-agent exec isolation. Call sites on the exec approval
+   *   path MUST pass the active agentId so a skill in one agent's workspace
+   *   does not leak an auto-allow into a different agent.
+   * @param force
+   *   Bypass any TTL cache and force a fresh fetch.
+   */
+  current(agentId?: string, force?: boolean): Promise<SkillBinTrustEntry[]>;
 };
