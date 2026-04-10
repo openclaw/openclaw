@@ -1328,6 +1328,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
         throw new Error("expected payload");
       }
       expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(payload.text).toContain("agents.defaults.compaction.reserveTokensFloor");
+      expect(payload.text).toContain("20000 or higher");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       expect(sessionStore.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(sessionStore.main.fallbackNoticeActiveModel).toBeUndefined();
@@ -1370,6 +1372,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
+        runOverrides: {
+          config: {
+            agents: {
+              defaults: {
+                compaction: {
+                  reserveTokensFloor: 50_000,
+                },
+              },
+            },
+          },
+        },
       });
       const res = await run();
 
@@ -1382,6 +1395,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
         throw new Error("expected payload");
       }
       expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(payload.text).toContain("agents.defaults.compaction.model");
+      expect(payload.text).not.toContain("20000 or higher");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
         key: "main",

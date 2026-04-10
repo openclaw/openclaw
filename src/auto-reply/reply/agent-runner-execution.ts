@@ -63,6 +63,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { buildCompactionResetReplyText } from "./compaction-reset-reply.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
@@ -1177,7 +1178,10 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: buildCompactionResetReplyText({
+              duringCompaction: false,
+              config: runtimeConfig,
+            }),
           },
         };
       }
@@ -1289,7 +1293,10 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: buildCompactionResetReplyText({
+              duringCompaction: true,
+              config: runtimeConfig,
+            }),
           },
         };
       }
