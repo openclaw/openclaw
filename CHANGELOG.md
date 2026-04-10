@@ -140,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/ACPX: wrap plugin tools on the MCP bridge with the shared `before_tool_call` handler so block and approval hooks fire consistently across all execution paths. (#63886) Thanks @eleqtrizit.
 
 - Logging/security: redact Gmail watcher `--hook-token` values from startup logging and `logs.tail` output. (#62661) Thanks @eleqtrizit.
+- Models/fallback: preserve `/models` selection across transient primary-model failures and config reloads so the fallback chain no longer permanently clobbers a user-chosen model. (#64471) Thanks @hoyyeva.
 
 - Sandbox/security: auto-derive CDP source-range from Docker network gateway and refuse to start the socat relay without one, so peer containers cannot reach CDP unauthenticated. (#61404) Thanks @dims.
 
