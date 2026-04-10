@@ -373,13 +373,27 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
   }
-  // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  // Clear model/provider overrides on /new and /reset so the session starts
+  // fresh with the configured default model. Do NOT preserve old overrides.
+  // Preserve other per-session settings (thinking, verbose, reasoning, ttsAuto)
+  // which were explicitly carried over in sessionEntry construction above.
+  if (resetTriggered) {
+    const { modelOverride: _, providerOverride: __, ...rest } = sessionEntry;
+    sessionStore[sessionKey] = { ...rest };
+  } else {
+    // Preserve per-session overrides for non-reset session updates.
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  }
   await updateSessionStore(
     storePath,
     (store) => {
-      // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      // Apply the same logic as the in-memory update above.
+      if (resetTriggered) {
+        const { modelOverride: _, providerOverride: __, ...rest } = sessionEntry;
+        store[sessionKey] = { ...rest };
+      } else {
+        store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      }
     },
     {
       activeSessionKey: sessionKey,
