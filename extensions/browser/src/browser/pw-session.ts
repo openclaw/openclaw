@@ -709,7 +709,11 @@ function isSubframeDocumentNavigationRequest(page: Page, request: Request): bool
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
-    return false;
+    // Fail closed: if frame resolution throws after the top-level check already
+    // determined this is NOT the main frame, treat it as a subframe document
+    // navigation so the SSRF guard still fires. Returning false here would let
+    // transient renderer churn skip the policy check entirely.
+    return true;
   }
   if (sameMainFrame) {
     return false;
