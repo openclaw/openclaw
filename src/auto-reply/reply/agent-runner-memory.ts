@@ -376,7 +376,16 @@ export async function runPreflightCompactionIfNeeded(params: {
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
   const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
+  const preflightThreshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const freshPersistedTokensBelowThreshold =
+    typeof freshPersistedTokens === "number" && freshPersistedTokens < preflightThreshold;
+  // Skip preflight only when fresh persisted tokens are still below the
+  // compaction threshold. Without this guard, the first compaction sets
+  // entry.totalTokensFresh = true, and every subsequent run short-circuits
+  // here without re-checking the (now-growing) token count, so proactive
+  // compaction never re-fires. Overflow-retry remains unaffected because it
+  // runs through a separate path in pi-embedded-runner/run.ts. (#63892)
+  if (!shouldUseTranscriptFallback && freshPersistedTokensBelowThreshold) {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
@@ -401,11 +410,10 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
-      `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `contextWindow=${contextWindowTokens} threshold=${preflightThreshold} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -426,7 +434,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
-      `threshold=${threshold}`,
+      `threshold=${preflightThreshold}`,
   );
 
   params.replyOperation.setPhase("preflight_compacting");

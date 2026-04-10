@@ -8,13 +8,18 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
-import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
+import {
+  runMemoryFlushIfNeeded,
+  runPreflightCompactionIfNeeded,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.js";
 import type { FollowupRun } from "./queue.js";
 
 const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
+const compactEmbeddedPiSessionMock = vi.fn();
 
 function createReplyOperation() {
   return {
@@ -104,11 +109,13 @@ describe("runMemoryFlushIfNeeded", () => {
       }
       return nextEntry.compactionCount;
     });
+    compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({ ok: false, reason: "test_skip" });
     setAgentRunnerMemoryTestDeps({
       runWithModelFallback: runWithModelFallbackMock as never,
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
       registerAgentRunContext: vi.fn() as never,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
@@ -286,5 +293,87 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+describe("runPreflightCompactionIfNeeded", () => {
+  beforeEach(() => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "flush",
+      systemPrompt: "flush",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({ ok: false, reason: "test_skip" });
+    setAgentRunnerMemoryTestDeps({
+      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
+      registerAgentRunContext: vi.fn() as never,
+    });
+  });
+
+  afterEach(() => {
+    setAgentRunnerMemoryTestDeps();
+    clearMemoryPluginState();
+  });
+
+  // Regression for #63892: after the first compaction, `totalTokensFresh` is
+  // set to `true`. The early-return gate used to short-circuit unconditionally
+  // in that state, so proactive compaction never re-fired once fresh tokens
+  // grew back past the threshold. The gate must now also check that fresh
+  // persisted tokens are still below the compaction threshold before skipping.
+  it("re-runs preflight when totalTokensFresh is true but tokens exceed threshold (#63892)", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 90_000,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: {} } } },
+      followupRun: createFollowupRun(),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // threshold = 100_000 - 20_000 - 4_000 = 76_000; 90_000 > 76_000, so the
+    // early-return must fall through and compaction must be attempted.
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips preflight when totalTokensFresh is true and tokens are below threshold", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10_000,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: {} } } },
+      followupRun: createFollowupRun(),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // Fresh tokens are below threshold — the fast-path early return must fire.
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
   });
 });
