@@ -83,6 +83,16 @@ to:
 
 - “the model either acted, or OpenClaw surfaced the exact reason it could not”
 
+## Before vs after for GPT-5.4 users
+
+| Before this program                                                                            | After PR A-D                                                                             |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| GPT-5.4 could stop after a reasonable plan without taking the next tool step                   | PR A turns “plan only” into “act now or surface a blocked state”                         |
+| Strict tool schemas could reject parameter-free or OpenAI/Codex-shaped tools in confusing ways | PR C makes provider-owned tool registration and invocation more predictable              |
+| `/elevated full` guidance could be vague or wrong in blocked runtimes                          | PR B gives GPT-5.4 and the user truthful runtime and permission hints                    |
+| Replay or compaction failures could feel like the task silently disappeared                    | PR C surfaces paused, blocked, abandoned, and replay-invalid outcomes explicitly         |
+| “GPT-5.4 feels worse than Opus” was mostly anecdotal                                           | PR D turns that into the same scenario pack, the same metrics, and a hard pass/fail gate |
+
 ## Architecture
 
 ```mermaid
@@ -169,6 +179,15 @@ Parity evidence is intentionally split across two layers:
 
 - PR D proves same-scenario GPT-5.4 vs Opus 4.6 behavior with QA-lab
 - PR B deterministic suites prove auth, proxy, DNS, and `/elevated full` truthfulness outside the harness
+
+## How to read the parity verdict
+
+Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readable decision for the first-wave parity pack.
+
+- `pass` means GPT-5.4 covered the same scenarios as Opus 4.6 and did not regress on the agreed aggregate metrics.
+- `fail` means at least one hard gate tripped: weaker completion, worse unintended stops, weaker valid tool use, any fake-success case, or mismatched scenario coverage.
+- “shared/base CI issue” is not itself a parity result. If CI noise outside PR D blocks a run, the verdict should wait for a clean merged-runtime execution instead of being inferred from branch-era logs.
+- Auth, proxy, DNS, and `/elevated full` truthfulness still come from PR B’s deterministic suites, so the final release claim needs both: a passing PR D parity verdict and green PR B truthfulness coverage.
 
 ## Who should enable `strict-agentic`
 

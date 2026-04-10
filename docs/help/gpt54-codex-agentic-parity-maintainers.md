@@ -141,3 +141,13 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 
 - PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
 - PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
+
+## Reviewer shorthand: before vs after
+
+| User-visible problem before                                 | Review signal after                                                                     |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| GPT-5.4 stopped after planning                              | PR A shows act-or-block behavior instead of commentary-only completion                  |
+| Tool use felt brittle with strict OpenAI/Codex schemas      | PR C keeps tool registration and parameter-free invocation predictable                  |
+| `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
+| Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
+| Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
