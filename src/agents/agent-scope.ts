@@ -183,28 +183,6 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
-export function isStrictAgenticExecutionContractActive(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  agentId?: string | null;
-  provider?: string | null;
-  modelId?: string | null;
-}): boolean {
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId ?? undefined,
-  });
-  if (resolveAgentExecutionContract(params.config, sessionAgentId) !== "strict-agentic") {
-    return false;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (provider !== "openai" && provider !== "openai-codex") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId?.trim() ?? "");
-}
-
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

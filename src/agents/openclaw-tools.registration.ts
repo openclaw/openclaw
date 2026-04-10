@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { isStrictAgenticExecutionContractActive } from "./agent-scope.js";
+import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export function collectPresentOpenClawTools(

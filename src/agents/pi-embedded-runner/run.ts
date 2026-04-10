@@ -16,7 +16,6 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
-  isStrictAgenticExecutionContractActive,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
@@ -32,6 +31,7 @@ import {
   resolveStoredSessionKeyForSessionId,
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
   describeFailoverError,

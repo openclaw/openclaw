@@ -38,6 +38,8 @@ const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
+const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
+const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
@@ -85,7 +87,7 @@ export const PLANNING_ONLY_RETRY_INSTRUCTION =
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
-  "⚠️ Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
+  "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
 export type PlanningOnlyPlanDetails = {
   explanation: string;
@@ -233,7 +235,9 @@ function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): bo
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedPiExecutionContract,
 ): number {
-  return executionContract === "strict-agentic" ? 2 : 1;
+  return executionContract === "strict-agentic"
+    ? STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT
+    : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
 export function resolvePlanningOnlyRetryInstruction(params: {
