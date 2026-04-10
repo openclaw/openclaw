@@ -134,7 +134,7 @@ injection:
 
 Sub-agent sessions still use a reduced bootstrap allowlist to keep context
 smaller. Today that minimal set includes `AGENTS.md`, `TOOLS.md`, `SOUL.md`,
-`IDENTITY.md`, and `USER.md`. The selected AGENTS *content* can change by run
+`IDENTITY.md`, and `USER.md`. The selected AGENTS _content_ can change by run
 role and model, but the reduced sub-agent allowlist still applies around it.
 
 Selection is exact-match and runtime-aware:

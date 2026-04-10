@@ -156,6 +156,7 @@ Migration note: if you previously used the SubAgent Context Limiter plugin only
 to swap `SubAgentMD` into sub-agent runs, the core config above is the direct
 replacement. The plugin is still useful for more custom hook behavior, but it is
 no longer required just to give sub-agents a different AGENTS file.
+
 ## Tool
 
 Use `sessions_spawn`:
