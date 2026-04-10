@@ -89,4 +89,20 @@ describe("readLatestAssistantReply", () => {
       timeoutMs: 37_000,
     });
   });
+
+  it("returns undefined when agent.wait transport fails", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({ runId: "run-step-timeout" })
+      .mockRejectedValueOnce(new Error("gateway timeout"));
+
+    const result = await runAgentStep({
+      sessionKey: "agent:main:child",
+      message: "status",
+      extraSystemPrompt: "step prompt",
+      timeoutMs: 30_000,
+    });
+
+    expect(result).toBeUndefined();
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+  });
 });

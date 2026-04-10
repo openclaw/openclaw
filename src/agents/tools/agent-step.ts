@@ -81,14 +81,23 @@ export async function runAgentStep(params: {
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
   const stepWaitMs = Math.min(params.timeoutMs, 60_000);
-  const wait = await agentStepDeps.callGateway<{ status?: string }>({
-    method: "agent.wait",
-    params: {
-      runId: resolvedRunId,
-      timeoutMs: stepWaitMs,
-    },
-    timeoutMs: resolveGatewayWaitCallTimeoutMs(params.config, stepWaitMs),
-  });
+  let wait:
+    | {
+        status?: string;
+      }
+    | undefined;
+  try {
+    wait = await agentStepDeps.callGateway<{ status?: string }>({
+      method: "agent.wait",
+      params: {
+        runId: resolvedRunId,
+        timeoutMs: stepWaitMs,
+      },
+      timeoutMs: resolveGatewayWaitCallTimeoutMs(params.config, stepWaitMs),
+    });
+  } catch {
+    return undefined;
+  }
   if (wait?.status !== "ok") {
     return undefined;
   }

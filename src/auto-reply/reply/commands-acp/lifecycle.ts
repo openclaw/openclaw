@@ -15,6 +15,7 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
+import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
@@ -431,16 +432,20 @@ async function cleanupFailedSpawn(params: {
 }
 
 async function persistSpawnedAcpSessionLabel(params: {
+  cfg: OpenClawConfig;
   sessionKey: string;
   label?: string;
-  storePath?: string;
 }) {
   const label = params.label?.trim();
-  if (!label || !params.storePath) {
+  if (!label) {
     return;
   }
+  const { storePath } = resolveSessionStorePathForAcp({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
   const updated = await updateSessionStoreEntry({
-    storePath: params.storePath,
+    storePath,
     sessionKey: params.sessionKey,
     update: async () => ({ label }),
   });
@@ -554,9 +559,9 @@ export async function handleAcpSpawnAction(
 
   try {
     await persistSpawnedAcpSessionLabel({
+      cfg: params.cfg,
       sessionKey,
       label: spawn.label,
-      storePath: params.storePath,
     });
   } catch (err) {
     await cleanupFailedSpawn({
