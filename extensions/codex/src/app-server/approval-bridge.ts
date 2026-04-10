@@ -47,7 +47,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
 
   try {
     const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
-    const requestResult = await callGatewayTool<ApprovalRequestResult>(
+    const requestResult: ApprovalRequestResult | undefined = await callGatewayTool(
       "plugin.approval.request",
       { timeoutMs: timeoutMs + 10_000 },
       {
@@ -235,7 +235,7 @@ async function waitForApprovalDecision(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<ExecApprovalDecision | null | undefined> {
-  const waitPromise = callGatewayTool<ApprovalWaitResult>(
+  const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
     { timeoutMs: params.timeoutMs + 10_000 },
     { id: params.approvalId },
