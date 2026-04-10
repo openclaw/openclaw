@@ -31,6 +31,58 @@ function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
 }
 
 /**
+ * Maximum characters in a generated slug.
+ */
+const MAX_SLUG_LENGTH = 30;
+
+/**
+ * Sanity-check thresholds for raw LLM responses. The prompt asks for a
+ * 1-2 word slug, so anything longer is almost certainly not a slug
+ * (for example an error message that the embedded agent returned as
+ * payload text instead of throwing).
+ */
+const MAX_RESPONSE_WORDS = 5;
+const MAX_RESPONSE_CHARS = 80;
+
+/**
+ * Convert a raw LLM response into a filename-safe slug.
+ *
+ * Returns null if the response does not look like a slug (multi-line,
+ * too many words, too long). This guards against error messages or
+ * rambling responses leaking into memory filenames.
+ *
+ * Exported for unit testing.
+ */
+export function slugifyLLMResponse(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  // Reject responses that clearly are not a 1-2 word slug.
+  if (trimmed.includes("\n")) {
+    return null;
+  }
+  if (trimmed.length > MAX_RESPONSE_CHARS) {
+    return null;
+  }
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  if (wordCount > MAX_RESPONSE_WORDS) {
+    return null;
+  }
+
+  // Slugify, then strip leading/trailing dashes AFTER truncation so a
+  // dash that lands at position MAX_SLUG_LENGTH-1 is removed.
+  const slug = normalizeLowercaseStringOrEmpty(trimmed)
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, MAX_SLUG_LENGTH)
+    .replace(/^-|-$/g, "");
+
+  return slug || null;
+}
+
+/**
  * Generate a short 1-2 word filename slug from session content using LLM
  */
 export async function generateSlugViaLLM(params: {
@@ -81,14 +133,13 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     if (result.payloads && result.payloads.length > 0) {
       const text = result.payloads[0]?.text;
       if (text) {
-        // Clean up the response - extract just the slug
-        const slug = normalizeLowercaseStringOrEmpty(text)
-          .replace(/[^a-z0-9-]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30); // Max 30 chars
-
-        return slug || null;
+        const slug = slugifyLLMResponse(text);
+        if (slug === null) {
+          log.warn(
+            `Discarding slug candidate: response did not look like a slug (length=${text.length})`,
+          );
+        }
+        return slug;
       }
     }
 
