@@ -156,6 +156,8 @@ function createSendContext(params: {
    * correct tenant. Missing `tenantId` causes HTTP 403 on proactive sends.
    */
   tenantId?: string;
+  /** Target user's Teams user ID (e.g. `29:xxx`); included on the recipient field for routing. */
+  recipientId?: string;
   /** Target user's Azure AD object ID; included as the recipient on personal DMs. */
   recipientAadObjectId?: string;
 }): MSTeamsSendContext {
@@ -201,8 +203,15 @@ function createSendContext(params: {
           conversationType: params.conversationType ?? "personal",
           ...(params.tenantId ? { tenantId: params.tenantId } : {}),
         },
-        ...(params.recipientAadObjectId
-          ? { recipient: { aadObjectId: params.recipientAadObjectId } }
+        ...(params.recipientId || params.recipientAadObjectId
+          ? {
+              recipient: {
+                ...(params.recipientId ? { id: params.recipientId } : {}),
+                ...(params.recipientAadObjectId
+                  ? { aadObjectId: params.recipientAadObjectId }
+                  : {}),
+              },
+            }
           : {}),
         ...(params.replyToActivityId && !msg.replyToId
           ? { replyToId: params.replyToActivityId }
@@ -400,6 +409,8 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
       const tenantId = reference.tenantId ?? reference.conversation?.tenantId;
       const recipientAadObjectId = reference.aadObjectId ?? reference.user?.aadObjectId;
 
+      const recipientId = reference.user?.id;
+
       const sendContext = createSendContext({
         sdk,
         serviceUrl,
@@ -408,6 +419,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         bot: reference.agent ?? undefined,
         getToken: createBotTokenGetter(app),
         tenantId,
+        recipientId,
         recipientAadObjectId,
       });
 
