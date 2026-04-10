@@ -56,6 +56,28 @@ describe("qa agentic parity report", () => {
     );
   });
 
+  it("fails the parity gate when candidate and baseline cover different scenarios", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: {
+        scenarios: [{ name: "Scenario A", status: "pass" }],
+      },
+      baselineSummary: {
+        scenarios: [
+          { name: "Scenario A", status: "pass" },
+          { name: "Scenario B", status: "pass" },
+        ],
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "Scenario coverage mismatch for Scenario B: openai/gpt-5.4=missing, anthropic/claude-opus-4-6=pass.",
+    );
+  });
+
   it("renders a readable markdown parity report", () => {
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
