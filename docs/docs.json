@@ -979,7 +979,8 @@
                   "install/oracle",
                   "install/railway",
                   "install/raspberry-pi",
-                  "install/render"
+                  "install/render",
+                  "install/s390x"
                 ]
               },
               {
