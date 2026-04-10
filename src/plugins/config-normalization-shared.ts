@@ -13,6 +13,7 @@ export type NormalizedPluginsConfig = {
   loadPaths: string[];
   slots: {
     memory?: string | null;
+    contextEngine?: string | null;
   };
   entries: Record<
     string,
@@ -135,6 +136,7 @@ export function normalizePluginsConfigWithResolver(
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
+  const contextEngineSlot = normalizeSlotValue(config?.slots?.contextEngine);
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
@@ -142,6 +144,7 @@ export function normalizePluginsConfigWithResolver(
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      ...(contextEngineSlot !== undefined ? { contextEngine: contextEngineSlot } : {}),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),
   };
