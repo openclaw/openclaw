@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as pluginCliRegistryLoader from "../plugins/cli-registry-loader.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -72,18 +77,18 @@ describe("shouldUseRootHelpFastPath", () => {
 });
 
 describe("resolveMissingPluginCommandMessage", () => {
-  it("explains plugins.allow misses for a bundled plugin command", () => {
-    expect(
+  it("explains plugins.allow misses for a bundled plugin command", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["telegram"],
         },
       }),
-    ).toContain('`plugins.allow` excludes "browser"');
+    ).resolves.toContain('`plugins.allow` excludes plugin "browser"');
   });
 
-  it("explains explicit bundled plugin disablement", () => {
-    expect(
+  it("explains explicit bundled plugin disablement", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           entries: {
@@ -93,16 +98,61 @@ describe("resolveMissingPluginCommandMessage", () => {
           },
         },
       }),
-    ).toContain("plugins.entries.browser.enabled=false");
+    ).resolves.toContain("plugins.entries.browser.enabled=false");
   });
 
-  it("returns null when the bundled plugin command is already allowed", () => {
-    expect(
+  it("returns null when the bundled plugin command is already allowed", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["browser"],
         },
       }),
-    ).toBeNull();
+    ).resolves.toBeNull();
+  });
+
+  it("returns null for unknown commands under a restrictive plugins.allow", async () => {
+    await expect(
+      resolveMissingPluginCommandMessage("run", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("explains plugins.allow misses for bundled CLI roots whose command differs from plugin id", async () => {
+    await expect(
+      resolveMissingPluginCommandMessage("voicecall", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).resolves.toContain('`plugins.allow` excludes plugin "voice-call"');
+  });
+
+  it("ignores plugins.deny while probing bundled CLI roots", async () => {
+    await expect(
+      resolveMissingPluginCommandMessage("voicecall", {
+        plugins: {
+          allow: ["telegram"],
+          deny: ["voice-call"],
+        },
+      }),
+    ).resolves.toContain('`plugins.allow` excludes plugin "voice-call"');
+  });
+
+  it("returns null when bundled CLI root detection throws", async () => {
+    vi.spyOn(pluginCliRegistryLoader, "loadPluginCliMetadataRegistryWithContext").mockRejectedValue(
+      new Error("boom"),
+    );
+
+    await expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).resolves.toBeNull();
   });
 });
