@@ -5,6 +5,7 @@ import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
 import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-tools.js";
+import { registerChannelMcpResources } from "./channel-resources.js";
 
 export { OpenClawChannelBridge } from "./channel-bridge.js";
 
@@ -48,6 +49,7 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
     });
   });
   registerChannelMcpTools(server, bridge);
+  registerChannelMcpResources(server, bridge);
 
   return {
     server,
