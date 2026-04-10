@@ -63,6 +63,7 @@ import type {
   MissionInput,
   RegistryService,
 } from "../head/registry.ts";
+import type { SessionReconciler } from "../node-agent/session-reconciler.ts";
 import type { TmuxManager } from "../node-agent/tmux-manager.ts";
 import { OctoLeaseRenewPushSchema, type OctoLeaseRenewPush } from "./events.ts";
 import {
@@ -85,6 +86,11 @@ import {
   type OctoArmSpawnResponse,
   type OctoArmTerminateRequest,
   type OctoArmTerminateResponse,
+  OctoNodeCapabilitiesRequestSchema,
+  type OctoNodeCapabilitiesResponse,
+  OctoNodeReconcileRequestSchema,
+  type OctoNodeReconcileRequest,
+  type OctoNodeReconcileResponse,
   type SessionRef,
 } from "./methods.ts";
 import { validateArmSpec, validateMissionSpec, type ArmSpec, type MissionSpec } from "./schema.ts";
@@ -203,6 +209,12 @@ export interface OctoGatewayHandlerDeps {
   generateArmId?: () => string;
   /** Optional mission_id generator injection for deterministic tests. */
   generateMissionId?: () => string;
+  /** SessionReconciler for octo.node.reconcile handler. */
+  sessionReconciler?: SessionReconciler;
+  /** Agent ID for this node (used in node.capabilities response). */
+  agentId?: string;
+  /** Maximum concurrent arms for this node (used in node.capabilities). */
+  maxArms?: number;
 }
 
 /**
@@ -216,7 +228,10 @@ export class OctoGatewayHandlers {
   private readonly tmuxManager: TmuxManager;
   private readonly policyService: PolicyService | undefined;
   private readonly leaseService: LeaseService | undefined;
+  private readonly sessionReconciler: SessionReconciler | undefined;
   private readonly nodeId: string;
+  private readonly agentId: string;
+  private readonly maxArms: number;
   private readonly now: () => number;
   private readonly generateArmId: () => string;
   private readonly generateMissionId: () => string;
@@ -227,7 +242,10 @@ export class OctoGatewayHandlers {
     this.tmuxManager = deps.tmuxManager;
     this.policyService = deps.policyService;
     this.leaseService = deps.leaseService;
+    this.sessionReconciler = deps.sessionReconciler;
     this.nodeId = deps.nodeId;
+    this.agentId = deps.agentId ?? "default";
+    this.maxArms = deps.maxArms ?? 8;
     this.now = deps.now ?? (() => Date.now());
     this.generateArmId = deps.generateArmId ?? defaultGenerateArmId;
     this.generateMissionId = deps.generateMissionId ?? defaultGenerateMissionId;
@@ -1430,6 +1448,115 @@ export class OctoGatewayHandlers {
     }
 
     return { node_id: validPush.node_id, results };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // octo.node.capabilities
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Handle `octo.node.capabilities` — returns this node's capability manifest.
+   *
+   * Read-only, no idempotency_key required. The optional `node_id` parameter
+   * is accepted but currently ignored (future: cross-node queries).
+   */
+  async nodeCapabilities(request: unknown): Promise<OctoNodeCapabilitiesResponse> {
+    if (!Value.Check(OctoNodeCapabilitiesRequestSchema, request)) {
+      const errors = [...Value.Errors(OctoNodeCapabilitiesRequestSchema, request)].map(
+        (e) => `${e.path || "<root>"}: ${e.message}`,
+      );
+      throw new HandlerError(
+        "invalid_spec",
+        `octo.node.capabilities: invalid request envelope: ${errors.join("; ")}`,
+      );
+    }
+
+    // Count non-terminal arms to compute current capacity.
+    const arms = this.registry.listArms({ node_id: this.nodeId });
+    const terminalStates = new Set(["completed", "archived", "terminated"]);
+    const currentArms = arms.filter((arm) => !terminalStates.has(arm.state)).length;
+
+    // Capability detection. For now, report what we know is available:
+    // pty_tmux and cli_exec are wired in the factory. The OS/arch/tool
+    // capabilities will be auto-detected in a future milestone.
+    const capabilities: string[] = [
+      "runtime.pty_tmux",
+      "runtime.cli_exec",
+      `os.${process.platform}`,
+      `os.arch.${process.arch}`,
+      "tool.tmux",
+    ];
+
+    return {
+      node_id: this.nodeId,
+      agent_id: this.agentId,
+      capabilities,
+      capacity: {
+        max_arms: this.maxArms,
+        current_arms: currentArms,
+      },
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // octo.node.reconcile
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Handle `octo.node.reconcile` — forces a session reconciliation pass.
+   *
+   * Compares live tmux sessions against persisted ArmRecords, recovers
+   * orphaned arms, and reports anomalies. Side-effecting (requires
+   * idempotency_key). Optional `dry_run` suppresses state changes.
+   */
+  async nodeReconcile(request: unknown): Promise<OctoNodeReconcileResponse> {
+    if (!this.sessionReconciler) {
+      throw new HandlerError(
+        "not_supported",
+        "octo.node.reconcile: sessionReconciler not configured in handler deps",
+      );
+    }
+
+    if (!Value.Check(OctoNodeReconcileRequestSchema, request)) {
+      const errors = [...Value.Errors(OctoNodeReconcileRequestSchema, request)].map(
+        (e) => `${e.path || "<root>"}: ${e.message}`,
+      );
+      throw new HandlerError(
+        "invalid_spec",
+        `octo.node.reconcile: invalid request envelope: ${errors.join("; ")}`,
+      );
+    }
+    const validRequest: OctoNodeReconcileRequest = request;
+
+    const targetNodeId = validRequest.node_id ?? this.nodeId;
+    const report = await this.sessionReconciler.reconcile();
+    const ts = this.now();
+
+    if (!validRequest.dry_run) {
+      await this.eventLog.append({
+        schema_version: 1,
+        entity_type: "operator",
+        entity_id: targetNodeId,
+        event_type: "operator.intervened",
+        ts: new Date(ts).toISOString(),
+        actor: `node-agent:${this.nodeId}`,
+        payload: {
+          action: "node.reconcile",
+          recovered_count: report.recovered_count,
+          orphan_count: report.orphan_count,
+          missing_count: report.missing_count,
+          total_live_sessions: report.total_live_sessions,
+          total_persisted_arms: report.total_persisted_arms,
+        },
+      });
+    }
+
+    return {
+      node_id: targetNodeId,
+      reconciled_count: report.recovered_count,
+      anomaly_count: report.orphan_count + report.missing_count + report.other_anomaly_count,
+      ts,
+    };
   }
 
   // ────────────────────────────────────────────────────────────────────────

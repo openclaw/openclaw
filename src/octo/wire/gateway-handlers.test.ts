@@ -321,15 +321,12 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armSpawn (M1-14)", () => {
     });
   });
 
-  it("octo.arm.spawn rejects an unsupported adapter_type via factory (not_supported)", async () => {
+  it("octo.arm.spawn rejects adapter_type when bridge dep is missing (not_supported)", async () => {
     harness = makeHarness();
     const request = makeSpawnRequest({
-      adapter_type: "cli_exec",
+      adapter_type: "structured_subagent",
       idempotency_key: "idem-unsupported-adapter",
-      runtime_options: {
-        command: "echo",
-        args: ["hi"],
-      },
+      runtime_options: {},
     });
 
     let thrown: unknown;
@@ -340,7 +337,7 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armSpawn (M1-14)", () => {
     }
     expect(thrown).toBeInstanceOf(HandlerError);
     expect((thrown as HandlerError).code).toBe("invalid_spec");
-    expect((thrown as HandlerError).message).toMatch(/not yet implemented/);
+    expect((thrown as HandlerError).message).toMatch(/sessionsSpawnBridge/);
   });
 
   it("octo.arm.spawn is idempotent on the same idempotency_key (single arm + single tmux session)", async () => {
@@ -827,14 +824,13 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armSend (M2-13)", () => {
     };
     const response = await harness.handlers.armSend(req);
 
-    // The stub PtyTmuxAdapter throws not_supported on send, so the
-    // handler returns delivered: false as a structured response.
+    // The real PtyTmuxAdapter supports send via tmux send-keys.
     expect(response.arm_id).toBe(armId);
-    expect(response.delivered).toBe(false);
+    expect(response.delivered).toBe(true);
     expect(Value.Check(OctoArmSendResponseSchema, response)).toBe(true);
   });
 
-  it("send to an adapter that does not support it returns structured error (delivered false)", async () => {
+  it("send message to a pty_tmux arm delivers successfully", async () => {
     const armId = nextTestArmId("send-unsupported");
     harness = makeHarness({ generateArmId: () => armId });
     await harness.handlers.armSpawn(makeSpawnRequest({ idempotency_key: "idem-send-unsupported" }));
@@ -847,7 +843,7 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armSend (M2-13)", () => {
     };
     const response = await harness.handlers.armSend(req);
 
-    expect(response.delivered).toBe(false);
+    expect(response.delivered).toBe(true);
     expect(response.arm_id).toBe(armId);
   });
 
@@ -987,25 +983,19 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armCheckpoint (M2-14)", ()
     await sweepRunSessions();
   });
 
-  it("checkpoint on a live arm returns not_supported (stub adapter)", async () => {
-    // The PtyTmuxAdapterStub throws not_supported for checkpoint.
-    // Once M2-09 lands the full PtyTmuxAdapter, this test should be
-    // updated to verify success with real checkpoint metadata.
+  it("checkpoint on a live arm returns checkpoint metadata", async () => {
     const armId = nextTestArmId("chk-live");
     harness = makeHarness({ generateArmId: () => armId });
     await harness.handlers.armSpawn(makeSpawnRequest({ idempotency_key: "idem-chk-live" }));
 
-    let thrown: unknown;
-    try {
-      await harness.handlers.armCheckpoint({
-        idempotency_key: "idem-chk-live-call",
-        arm_id: armId,
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(HandlerError);
-    expect((thrown as HandlerError).code).toBe("not_supported");
+    const response = await harness.handlers.armCheckpoint({
+      idempotency_key: "idem-chk-live-call",
+      arm_id: armId,
+    });
+
+    expect(response.arm_id).toBe(armId);
+    expect(typeof response.ts).toBe("number");
+    expect(typeof response.checkpoint_ref).toBe("string");
   });
 
   it("checkpoint on unknown arm returns not_found", async () => {
