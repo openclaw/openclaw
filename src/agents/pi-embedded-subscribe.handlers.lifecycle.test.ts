@@ -58,6 +58,7 @@ describe("handleAgentEnd", () => {
       },
       { onAgentEvent },
     );
+    ctx.state.livenessState = "working";
 
     await handleAgentEnd(ctx);
 
