@@ -65,30 +65,37 @@ export async function resolveMSTeamsInboundMedia(params: {
     // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
     // "Invalid ThreadId". Fetch media via the Bot Framework v3 attachments
     // endpoint instead, which speaks the same identifier space.
-    if (hasHtmlAttachment && serviceUrl && isBotFrameworkPersonalChatId(conversationId)) {
-      const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
-      if (attachmentIds.length === 0) {
-        log.debug?.("bot framework attachment ids unavailable", {
+    if (hasHtmlAttachment && isBotFrameworkPersonalChatId(conversationId)) {
+      if (!serviceUrl) {
+        log.debug?.("bot framework attachment skipped (missing serviceUrl)", {
           conversationType,
           conversationId,
         });
       } else {
-        const bfMedia = await downloadMSTeamsBotFrameworkAttachments({
-          serviceUrl,
-          attachmentIds,
-          tokenProvider,
-          maxBytes,
-          allowHosts,
-          authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
-        });
-        if (bfMedia.media.length > 0) {
-          mediaList = bfMedia.media;
-        } else {
-          log.debug?.("bot framework attachments fetch empty", {
+        const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
+        if (attachmentIds.length === 0) {
+          log.debug?.("bot framework attachment ids unavailable", {
             conversationType,
-            attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
+            conversationId,
           });
+        } else {
+          const bfMedia = await downloadMSTeamsBotFrameworkAttachments({
+            serviceUrl,
+            attachmentIds,
+            tokenProvider,
+            maxBytes,
+            allowHosts,
+            authAllowHosts: params.authAllowHosts,
+            preserveFilenames,
+          });
+          if (bfMedia.media.length > 0) {
+            mediaList = bfMedia.media;
+          } else {
+            log.debug?.("bot framework attachments fetch empty", {
+              conversationType,
+              attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
+            });
+          }
         }
       }
     }

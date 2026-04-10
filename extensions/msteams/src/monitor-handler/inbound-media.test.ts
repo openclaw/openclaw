@@ -191,14 +191,16 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     );
   });
 
-  it("does nothing for BF DMs when serviceUrl is missing", async () => {
+  it("logs when serviceUrl is missing for a BF DM with HTML content", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockClear();
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
     vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+    const log = { debug: vi.fn() };
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      log,
       conversationType: "personal",
       conversationId: "a:bf-dm-id",
       attachments: [
@@ -212,5 +214,12 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(downloadMSTeamsBotFrameworkAttachments).not.toHaveBeenCalled();
     // Graph fallback is also skipped because the ID is 'a:'
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      "bot framework attachment skipped (missing serviceUrl)",
+      expect.objectContaining({
+        conversationType: "personal",
+        conversationId: "a:bf-dm-id",
+      }),
+    );
   });
 });
