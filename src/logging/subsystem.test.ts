@@ -1,8 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
+
+// Spy on getChildLogger so the date-roll regression suite can directly assert
+// that the closure inside createSubsystemLogger refreshes its cached child
+// logger by re-invoking getChildLogger after the parent logger is rebuilt.
+vi.mock("./logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./logger.js")>();
+  return {
+    ...actual,
+    getChildLogger: vi.fn(actual.getChildLogger),
+  };
+});
 
 function installConsoleMethodSpy(method: "warn" | "error") {
   const spy = vi.fn();
@@ -167,32 +178,35 @@ describe("createSubsystemLogger().isEnabled", () => {
 });
 
 describe("createSubsystemLogger file logger staleness (#62381)", () => {
+  const getChildLoggerMock = vi.mocked(getChildLogger);
+
+  beforeEach(() => {
+    getChildLoggerMock.mockClear();
+  });
+
   it("refreshes child logger when parent logger is rebuilt (date roll)", () => {
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
 
     const log = createSubsystemLogger("test/date-roll");
 
-    // First log call — creates and caches the child logger.
+    // First log call — populates the closure-cached file logger by invoking
+    // getChildLogger exactly once.
     log.info("day 1 message");
+    expect(getChildLoggerMock).toHaveBeenCalledTimes(1);
 
-    // Capture the child logger reference via getChildLogger (same parent).
-    const firstChild = getChildLogger({ subsystem: "test/date-roll" });
+    getChildLoggerMock.mockClear();
 
     // Simulate a date-roll rebuild: reset the parent logger so the next
-    // getLogger() call produces a new instance (different reference).
+    // getLogger() call produces a brand-new instance and the closure's
+    // cachedParentRef no longer matches loggingState.cachedLogger.
     resetLogger();
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
 
-    // Second log call — should detect the parent changed and refresh the child.
+    // Second log call — the closure must detect the parent change and
+    // refresh the cached child by calling getChildLogger again. This is
+    // the exact regression covered by the bug fix in #62381.
     log.info("day 2 message");
-
-    // After the rebuild, a new getChildLogger call should produce a
-    // different child instance (derived from the new parent).
-    const secondChild = getChildLogger({ subsystem: "test/date-roll" });
-
-    // The child logger instances must differ, proving the subsystem logger
-    // refreshed its cached child after the parent was rebuilt.
-    expect(firstChild).not.toBe(secondChild);
+    expect(getChildLoggerMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses cached child logger when parent has not changed", () => {
@@ -200,13 +214,12 @@ describe("createSubsystemLogger file logger staleness (#62381)", () => {
 
     const log = createSubsystemLogger("test/stable");
 
-    // Two log calls without resetting — should reuse the same child.
+    // Two log calls without resetting the parent — the closure should
+    // call getChildLogger exactly once and reuse the cached child for
+    // subsequent log calls (no unnecessary sublogger rebuilds).
     log.info("message 1");
-    const parentAfterFirst = loggingState.cachedLogger;
     log.info("message 2");
-    const parentAfterSecond = loggingState.cachedLogger;
 
-    // Parent reference unchanged — child was reused (no unnecessary rebuild).
-    expect(parentAfterFirst).toBe(parentAfterSecond);
+    expect(getChildLoggerMock).toHaveBeenCalledTimes(1);
   });
 });
