@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   hasDiscoveryLabels,
   reportsDiscoveryScopeLeak,
@@ -97,5 +97,35 @@ Final QA tally update: all mandatory scenarios resolved. QA run complete.
     expect(hasDiscoveryLabels(report)).toBe(true);
     expect(reportsMissingDiscoveryFiles(report)).toBe(false);
     expect(reportsDiscoveryScopeLeak(report)).toBe(true);
+  });
+
+  it("falls back to default discovery refs when the scenario pack is unavailable at import time", async () => {
+    vi.resetModules();
+    vi.doMock("./scenario-catalog.js", () => ({
+      readQaScenarioExecutionConfig: () => {
+        throw new Error("qa scenario pack not found: qa/scenarios/index.md");
+      },
+    }));
+
+    try {
+      const mod = await import("./discovery-eval.js");
+      const report = `
+Worked
+- Read all three requested files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.
+Failed
+- None.
+Blocked
+- Runtime execution not attempted here.
+Follow-up
+- Run the live suite next.
+`.trim();
+
+      expect(mod.hasDiscoveryLabels(report)).toBe(true);
+      expect(mod.reportsMissingDiscoveryFiles(report)).toBe(false);
+      expect(mod.reportsDiscoveryScopeLeak(report)).toBe(false);
+    } finally {
+      vi.doUnmock("./scenario-catalog.js");
+      vi.resetModules();
+    }
   });
 });

@@ -1,22 +1,49 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
+const DEFAULT_REQUIRED_DISCOVERY_REFS = [
+  "repo/qa/scenarios/index.md",
+  "repo/extensions/qa-lab/src/suite.ts",
+  "repo/docs/help/testing.md",
+] as const;
+
+let cachedRequiredDiscoveryRefs: readonly string[] | null = null;
+let cachedRequiredDiscoveryRefsLower: readonly string[] | null = null;
+
 function readRequiredDiscoveryRefs() {
   const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
-    | { requiredFiles?: string[] }
+    | { requiredFiles?: unknown }
     | undefined;
-  return (
-    config?.requiredFiles ?? [
-      "repo/qa/scenarios/index.md",
-      "repo/extensions/qa-lab/src/suite.ts",
-      "repo/docs/help/testing.md",
-    ]
-  );
+  const requiredFiles = Array.isArray(config?.requiredFiles)
+    ? config.requiredFiles.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+  return requiredFiles.length > 0 ? requiredFiles : DEFAULT_REQUIRED_DISCOVERY_REFS;
 }
 
-const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
+function getRequiredDiscoveryRefs() {
+  if (cachedRequiredDiscoveryRefs) {
+    return cachedRequiredDiscoveryRefs;
+  }
+  try {
+    cachedRequiredDiscoveryRefs = readRequiredDiscoveryRefs();
+  } catch {
+    // Global npm installs do not ship the qa/scenarios source pack.
+    cachedRequiredDiscoveryRefs = DEFAULT_REQUIRED_DISCOVERY_REFS;
+  }
+  return cachedRequiredDiscoveryRefs;
+}
 
-const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
+function getRequiredDiscoveryRefsLower() {
+  if (cachedRequiredDiscoveryRefsLower) {
+    return cachedRequiredDiscoveryRefsLower;
+  }
+  cachedRequiredDiscoveryRefsLower = getRequiredDiscoveryRefs().map(
+    normalizeLowercaseStringOrEmpty,
+  );
+  return cachedRequiredDiscoveryRefsLower;
+}
 
 const DISCOVERY_SCOPE_LEAK_PHRASES = [
   "all mandatory scenarios",
@@ -29,7 +56,7 @@ const DISCOVERY_SCOPE_LEAK_PHRASES = [
 
 function confirmsDiscoveryFileRead(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
+  const mentionsAllRefs = getRequiredDiscoveryRefsLower().every((ref) => lower.includes(ref));
   const mentionsReadVerb = /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower);
   const requiredCountPattern = "(?:three|3|four|4)";
   const confirmsRead =
