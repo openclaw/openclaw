@@ -87,7 +87,10 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 export function isExecCompletionEvent(evt: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(evt).trimStart();
   return (
-    /^exec finished(?::|\s*\()/.test(normalized) || /^exec (completed|failed)\s*\(/.test(normalized)
+    /^exec finished(?::|\s*\()/.test(normalized) ||
+    /^exec (completed|failed) \([a-z0-9_-]{1,64}, (code -?\d+|signal [^)]+)\)( :: .*)?$/.test(
+      normalized,
+    )
   );
 }
 

@@ -75,6 +75,7 @@ describe("heartbeat event classification", () => {
     { value: "Exec Finished (node=abc, code 1)", expected: true },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
     { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: true },
+    { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
     { value: "Reminder: if exec failed, notify me", expected: false },
     { value: "cron finished", expected: false },
@@ -95,6 +96,7 @@ describe("heartbeat event classification", () => {
     { value: "Exec finished (node=abc, code 0)", expected: false },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: false },
     { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: false },
+    { value: "Exec completed (rotate api keys)", expected: true },
     { value: "Reminder: if exec failed, notify me", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
     expect(isCronSystemEvent(value)).toBe(expected);
