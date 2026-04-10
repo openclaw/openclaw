@@ -5,13 +5,14 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
-  SpeechSynthesisResult,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
+
 const synthesizeMock = vi.hoisted(() =>
   vi.fn(
-    async (request: SpeechSynthesisRequest): Promise<SpeechSynthesisResult> => ({
+    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
       audioBuffer: Buffer.from("voice"),
       fileExtension: ".ogg",
       outputFormat: "ogg",
