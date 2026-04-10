@@ -42,6 +42,9 @@ export async function transcribeOpenAiCompatibleAudio(
   }
 
   const headers = new Headers(params.headers);
+  // Delete any Content-Type header so that fetch auto-generates the correct
+  // multipart/form-data header with the FormData boundary.
+  headers.delete("content-type");
   if (!headers.has("authorization")) {
     headers.set("authorization", `Bearer ${params.apiKey}`);
   }
