@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatBackupCreateSummary, type BackupCreateResult } from "./backup-create.js";
+import {
+  buildExtensionsNodeModulesFilter,
+  formatBackupCreateSummary,
+  type BackupCreateResult,
+} from "./backup-create.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -81,5 +85,41 @@ describe("formatBackupCreateSummary", () => {
     },
   ])("$name", ({ result, expected }) => {
     expect(formatBackupCreateSummary(result)).toEqual(expected);
+  });
+});
+
+describe("buildExtensionsNodeModulesFilter", () => {
+  const filter = buildExtensionsNodeModulesFilter("/home/user/.openclaw");
+
+  it("allows non-extension paths through", () => {
+    expect(filter("/home/user/.openclaw/openclaw.json")).toBe(true);
+    expect(filter("/home/user/.openclaw/sessions/abc.jsonl")).toBe(true);
+  });
+
+  it("allows extension files that are not inside node_modules", () => {
+    expect(filter("/home/user/.openclaw/extensions/my-plugin/package.json")).toBe(true);
+    expect(filter("/home/user/.openclaw/extensions/my-plugin/dist/index.js")).toBe(true);
+    expect(filter("/home/user/.openclaw/extensions/my-plugin/openclaw.plugin.json")).toBe(true);
+  });
+
+  it("excludes node_modules inside extensions", () => {
+    expect(filter("/home/user/.openclaw/extensions/my-plugin/node_modules/foo/index.js")).toBe(
+      false,
+    );
+    expect(
+      filter("/home/user/.openclaw/extensions/my-plugin/node_modules/.package-lock.json"),
+    ).toBe(false);
+  });
+
+  it("excludes nested node_modules inside extensions", () => {
+    expect(
+      filter(
+        "/home/user/.openclaw/extensions/my-plugin/node_modules/foo/node_modules/bar/index.js",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not exclude node_modules outside extensions", () => {
+    expect(filter("/home/user/.openclaw/node_modules/something")).toBe(true);
   });
 });
