@@ -1047,14 +1047,12 @@ OpenClaw can join Discord voice channels for realtime, continuous conversations.
 ### Setup checklist
 
 1. **Enable voice-required bot capabilities in Developer Portal**
-
    - Bot page → **Privileged Gateway Intents**
      - **Message Content Intent** (required for reading commands/messages)
      - **Server Members Intent** (required for role/user allowlist checks)
    - Optional: **Presence Intent** only if you use bot presence workflows.
 
 2. **Invite the bot with the right scopes and permissions**
-
    - Scopes: `bot`, `applications.commands`
    - Minimum channel permissions in target guild voice channels:
      - **Connect**
@@ -1064,18 +1062,15 @@ OpenClaw can join Discord voice channels for realtime, continuous conversations.
      - **Use Voice Activity** (some guilds require it depending on bot activity settings)
 
 3. **Turn on Discord native commands**
-
    - set `commands.native=true` (global) or `channels.discord.commands.native=true` (Discord only)
    - restart gateway after first-time role changes
 
 4. **Configure voice in OpenClaw**
-
    - `channels.discord.voice` must exist and be enabled.
    - optional `autoJoin` can start in a channel at startup.
    - optional `voice.model` lets you override LLM model for VC only.
 
 5. **Verify runtime controls**
-
    - `/vc status` should show no session first.
    - `/vc join` then `/vc leave` validates command plumbing.
    - if join works once but drops immediately, check bot role hierarchy + voice channel permission overrides.
@@ -1197,7 +1192,6 @@ Required credentials by component:
 - LLM model path (for example `openai-codex/*`, `openai/*`): normal provider auth for that route (`OPENAI_API_KEY` for `openai/*`, Codex auth for `openai-codex/*`).
 - STT model path (`tools.media.audio`): provider-specific auth (for OpenAI audio model, `OPENAI_API_KEY`/`openai` provider config or profile).
 - TTS model path (`messages.tts` / `voice.tts`): provider-specific auth (`ELEVENLABS_API_KEY` or `OPENAI_API_KEY`, depending on provider).
-
 
 ## Voice messages
 
