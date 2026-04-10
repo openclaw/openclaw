@@ -166,7 +166,13 @@ export function normalizeOpenAIToolSchemas(
     return ctx.tools;
   }
   return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
+    if (tool.parameters == null) {
+      return {
+        ...tool,
+        parameters: normalizeOpenAIStrictCompatSchema({}),
+      };
+    }
+    if (typeof tool.parameters !== "object") {
       return tool;
     }
     return {
@@ -292,13 +298,23 @@ function normalizeOpenAIStrictCompatSchemaRecursive(schema: unknown): unknown {
   return changed ? normalized : schema;
 }
 
-export function findOpenAIStrictSchemaViolations(schema: unknown, path: string): string[] {
+export function findOpenAIStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
   if (Array.isArray(schema)) {
+    if (options?.requireObjectRoot) {
+      return [`${path}.type`];
+    }
     return schema.flatMap((item, index) =>
       findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
   if (!schema || typeof schema !== "object") {
+    if (options?.requireObjectRoot) {
+      return [`${path}.type`];
+    }
     return [];
   }
 
@@ -363,8 +379,9 @@ export function inspectOpenAIToolSchemas(
   }
   return ctx.tools.flatMap((tool, toolIndex) => {
     const violations = findOpenAIStrictSchemaViolations(
-      normalizeOpenAIStrictCompatSchema(tool.parameters),
+      normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
       `${tool.name}.parameters`,
+      { requireObjectRoot: true },
     );
     if (violations.length === 0) {
       return [];

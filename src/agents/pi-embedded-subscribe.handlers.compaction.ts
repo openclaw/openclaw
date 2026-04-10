@@ -68,7 +68,9 @@ export function handleAutoCompactionEnd(
     ctx.resetForCompactionRetry();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
-    ctx.state.livenessState = "working";
+    if (!wasAborted) {
+      ctx.state.livenessState = "working";
+    }
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
   }
