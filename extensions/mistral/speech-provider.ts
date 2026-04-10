@@ -61,29 +61,36 @@ function findMistralModelProviderConfig(cfg?: OpenClawConfig): Record<string, un
   return undefined;
 }
 
-function hasConfiguredMistralAuthProfileMetadata(cfg?: OpenClawConfig): boolean {
+/**
+ * Classifies the cfg-level Mistral auth state for the `isConfigured` gate:
+ * - "empty-order": auth.order has an explicit Mistral entry with an empty array.
+ *   resolveAuthProfileOrder treats this as authoritative and returns [], so no
+ *   credentials will be tried regardless of what auth.profiles contains.
+ * - "configured": auth.order has a non-empty Mistral entry, or auth.profiles
+ *   contains at least one Mistral profile.
+ * - "none": no cfg-level Mistral metadata at all. resolveApiKeyForProvider will
+ *   fall through to the auth store (auth-profiles.json), so the provider should
+ *   be considered potentially configured.
+ */
+function resolveMistralCfgAuthKind(cfg?: OpenClawConfig): "empty-order" | "configured" | "none" {
+  const order = asObject(cfg?.auth?.order);
+  if (order) {
+    for (const [key, val] of Object.entries(order)) {
+      if (normalizeProviderId(key) === "mistral") {
+        return Array.isArray(val) && val.length > 0 ? "configured" : "empty-order";
+      }
+    }
+  }
   const profiles = asObject(cfg?.auth?.profiles);
-  return Boolean(
+  if (
     profiles &&
     Object.values(profiles).some(
       (profile) => normalizeProviderId(asObject(profile)?.provider) === "mistral",
-    ),
-  );
-}
-
-function hasConfiguredMistralAuthOrder(cfg?: OpenClawConfig): boolean {
-  const order = asObject(cfg?.auth?.order);
-  if (!order) {
-    return false;
+    )
+  ) {
+    return "configured";
   }
-  // auth.order keys are provider IDs; check if any key normalizes to "mistral"
-  // and has at least one profile ID entry, matching what resolveAuthProfileOrder does.
-  return Object.entries(order).some(([providerId, profileIds]) => {
-    if (normalizeProviderId(providerId) !== "mistral") {
-      return false;
-    }
-    return Array.isArray(profileIds) && profileIds.length > 0;
-  });
+  return "none";
 }
 
 function normalizeMistralProviderConfig(
@@ -418,8 +425,7 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
         Boolean(config.apiKey) ||
         Boolean(trimToUndefined(process.env.MISTRAL_API_KEY)) ||
         hasConfiguredSecret(findMistralModelProviderConfig(cfg)?.apiKey) ||
-        hasConfiguredMistralAuthProfileMetadata(cfg) ||
-        hasConfiguredMistralAuthOrder(cfg)
+        resolveMistralCfgAuthKind(cfg) !== "empty-order"
       );
     },
     synthesizeTelephony: async (req) => {

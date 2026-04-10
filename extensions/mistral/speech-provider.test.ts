@@ -164,6 +164,41 @@ describe("mistral speech provider", () => {
     ).toBe(false);
   });
 
+  it("gates profile metadata on an explicit empty auth.order Mistral entry", () => {
+    // auth.order.mistral=[] is authoritative: resolveAuthProfileOrder returns []
+    // even when profiles exist, so synthesis would fail. isConfigured must agree.
+    expect(
+      provider.isConfigured({
+        cfg: {
+          auth: {
+            profiles: {
+              "mistral:default": { provider: "mistral", mode: "api_key" },
+            },
+            order: {
+              mistral: [],
+            },
+          },
+        } as never,
+        providerConfig: {},
+        timeoutMs: 5000,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats no cfg-level Mistral metadata as TTS-ready for auth-store-only credentials", () => {
+    // When cfg has no Mistral profiles and no Mistral auth.order entry,
+    // resolveApiKeyForProvider falls through to the auth store. isConfigured
+    // must return true so the provider is not skipped for users whose only
+    // credentials live in auth-profiles.json.
+    expect(
+      provider.isConfigured({
+        cfg: {} as never,
+        providerConfig: {},
+        timeoutMs: 5000,
+      }),
+    ).toBe(true);
+  });
+
   it("reuses the Mistral model provider baseUrl when no TTS override is configured", () => {
     const providerConfig = provider.resolveConfig?.({
       cfg: {
