@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   installSkill,
+  loadClawHubDetail,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
@@ -112,6 +113,63 @@ describe("searchClawHub", () => {
     expect(state.clawhubSearchResults).toBeNull();
     expect(state.clawhubSearchError).toBeNull();
     expect(state.clawhubSearchLoading).toBe(false);
+  });
+
+  it("ignores stale search responses after query changes", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = searchClawHub(state, "github");
+    setClawHubSearchQuery(state, "gitlab");
+    resolvers.shift()?.({
+      results: [{ score: 1, slug: "github", displayName: "GitHub" }],
+    });
+    await pending;
+
+    expect(state.clawhubSearchQuery).toBe("gitlab");
+    expect(state.clawhubSearchResults).toBeNull();
+    expect(state.clawhubSearchError).toBeNull();
+    expect(state.clawhubSearchLoading).toBe(false);
+  });
+});
+
+describe("loadClawHubDetail", () => {
+  it("ignores stale detail responses after slug changes", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const firstPending = loadClawHubDetail(state, "github");
+    const secondPending = loadClawHubDetail(state, "gitlab");
+
+    resolvers.shift()?.({
+      skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
+    });
+    await firstPending;
+
+    expect(state.clawhubDetailSlug).toBe("gitlab");
+    expect(state.clawhubDetail).toBeNull();
+    expect(state.clawhubDetailError).toBeNull();
+    expect(state.clawhubDetailLoading).toBe(true);
+
+    resolvers.shift()?.({
+      skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
+    });
+    await secondPending;
+
+    expect(state.clawhubDetailLoading).toBe(false);
+    expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
   });
 });
 
