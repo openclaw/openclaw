@@ -174,6 +174,29 @@ function normalizeDockerServiceStatus(row?: { Health?: string; State?: string })
   return "unknown";
 }
 
+function parseDockerComposePsRows(stdout: string) {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return [] as Array<{ Health?: string; State?: string }>;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as
+      | Array<{ Health?: string; State?: string }>
+      | { Health?: string; State?: string };
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    return [parsed];
+  } catch {
+    return trimmed
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { Health?: string; State?: string });
+  }
+}
+
 export async function waitForDockerServiceHealth(
   service: string,
   composeFile: string,
@@ -194,12 +217,7 @@ export async function waitForDockerServiceHealth(
         ["compose", "-f", composeFile, "ps", "--format", "json", service],
         repoRoot,
       );
-      const rows = stdout
-        .trim()
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { Health?: string; State?: string });
+      const rows = parseDockerComposePsRows(stdout);
       const row = rows[0];
       lastStatus = normalizeDockerServiceStatus(row);
       if (lastStatus === "healthy" || lastStatus === "running") {

@@ -62,7 +62,7 @@ describe("matrix harness runtime", () => {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
             if (args.join(" ").includes("ps --format json")) {
-              return { stdout: '{"State":"running"}\n', stderr: "" };
+              return { stdout: '[{"State":"running"}]\n', stderr: "" };
             }
             return { stdout: "", stderr: "" };
           },
