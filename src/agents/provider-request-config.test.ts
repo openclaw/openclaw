@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SecretRef } from "../config/types.secrets.js";
 import {
   buildProviderRequestDispatcherPolicy,
   mergeModelProviderRequestOverrides,
@@ -296,19 +297,34 @@ describe("provider request config", () => {
   });
 
   it("fails fast when configured request overrides still contain unresolved SecretRefs", () => {
+    const tenantRef: SecretRef = {
+      source: "env",
+      provider: "default",
+      id: "MEDIA_AUDIO_TENANT",
+    };
+    const tokenRef: SecretRef = {
+      source: "env",
+      provider: "default",
+      id: "MEDIA_AUDIO_TOKEN",
+    };
+    const certRef: SecretRef = {
+      source: "env",
+      provider: "default",
+      id: "MEDIA_AUDIO_CERT",
+    };
     expect(() =>
       sanitizeConfiguredProviderRequest({
         headers: {
-          "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" } as any,
+          "X-Tenant": tenantRef,
         },
         auth: {
           mode: "authorization-bearer",
-          token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" } as any,
+          token: tokenRef,
         },
         tls: {
-          cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" } as any,
+          cert: certRef,
         },
-      }),
+      } as any),
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
   });
 

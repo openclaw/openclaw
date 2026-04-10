@@ -1,6 +1,9 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
-import type { ConfiguredModelProviderRequest } from "../config/types.provider-request.js";
+import type {
+  ConfiguredModelProviderRequest,
+  ConfiguredProviderRequest,
+} from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -176,7 +179,7 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
 }
 
 export function sanitizeConfiguredProviderRequest(
-  request: ProviderRequestTransportOverrides | undefined,
+  request: ConfiguredProviderRequest | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     return undefined;
@@ -338,9 +341,6 @@ export function mergeProviderRequestOverrides(
       ...(current.auth ? { auth: current.auth } : {}),
       ...(current.proxy ? { proxy: current.proxy } : {}),
       ...(current.tls ? { tls: current.tls } : {}),
-      ...(current.allowPrivateNetwork !== undefined
-        ? { allowPrivateNetwork: current.allowPrivateNetwork }
-        : {}),
     };
   }
   return merged;

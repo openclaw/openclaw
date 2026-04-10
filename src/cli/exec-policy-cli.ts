@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
@@ -230,7 +229,9 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
     approvals: approvalsSnapshot.file,
     hostPath: approvalsSnapshot.path,
   }).map(buildExecPolicyShowScope);
-  const hasNodeRuntimeScope = scopes.some((scope) => scope.runtimeApprovalsSource === "node-runtime");
+  const hasNodeRuntimeScope = scopes.some(
+    (scope) => scope.runtimeApprovalsSource === "node-runtime",
+  );
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
