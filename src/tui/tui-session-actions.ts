@@ -363,8 +363,6 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
-    // Chat finals for the previous session are ignored after the switch; clear any
-    // busy footer state (for example streaming) so it cannot stick indefinitely.
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
