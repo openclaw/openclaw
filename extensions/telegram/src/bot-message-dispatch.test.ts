@@ -619,6 +619,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("delivers media for final replies that also finalize visible text", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Generated audio reply.",
+          mediaUrl: "/tmp/reply.opus",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Generated audio reply.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: undefined,
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("emits only the internal message:sent hook when a final answer stays in preview", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
