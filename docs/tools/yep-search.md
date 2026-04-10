@@ -47,21 +47,21 @@ Provider-specific Yep settings live under `plugins.entries.yep.config.webSearch.
 
 ## Tool parameters
 
-| Parameter           | Description                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| `query`             | Search query (required)                                                                    |
-| `count`             | Number of results to return (1-100, default: 10)                                           |
-| `result_type`       | Result type: `basic` (default) or `highlights` (includes text highlights from pages)       |
+| Parameter           | Description                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `query`             | Search query (required)                                                                              |
+| `count`             | Number of results to return (1-100, default: 10)                                                     |
+| `result_type`       | Result type: `basic` (default) or `highlights` (includes text highlights from pages)                 |
 | `search_mode`       | `balanced` (default) or `advanced`. Balanced combines speed and relevance; advanced adds LLM ranking |
-| `language`          | ISO 639-1 language code for results (e.g., "en", "de", "fr")                               |
-| `content_type`      | Filter by content type (e.g., "Article", "Video", "Document", "Article/Tutorial_or_Guide") |
-| `safe_search`       | Exclude adult content (default: false)                                                     |
-| `include_domains`   | Comma-separated list of domains to include                                                 |
-| `exclude_domains`   | Comma-separated list of domains to exclude                                                 |
-| `date_after`        | Only results published after this date (YYYY-MM-DD)                                        |
-| `date_before`       | Only results published before this date (YYYY-MM-DD)                                       |
-| `crawl_date_after`  | Only results crawled after this date (YYYY-MM-DD)                                          |
-| `crawl_date_before` | Only results crawled before this date (YYYY-MM-DD)                                         |
+| `language`          | ISO 639-1 language code for results (e.g., "en", "de", "fr")                                         |
+| `content_type`      | Filter by content type (e.g., "Article", "Video", "Document", "Article/Tutorial_or_Guide")           |
+| `safe_search`       | Exclude adult content (default: false)                                                               |
+| `include_domains`   | Comma-separated list of domains to include                                                           |
+| `exclude_domains`   | Comma-separated list of domains to exclude                                                           |
+| `date_after`        | Only results published after this date (YYYY-MM-DD)                                                  |
+| `date_before`       | Only results published before this date (YYYY-MM-DD)                                                 |
+| `crawl_date_after`  | Only results crawled after this date (YYYY-MM-DD)                                                    |
+| `crawl_date_before` | Only results crawled before this date (YYYY-MM-DD)                                                   |
 
 **Examples:**
 
