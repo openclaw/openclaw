@@ -1015,6 +1015,7 @@ describe("createFollowupRunner compaction", () => {
 describe("createFollowupRunner CLI backend dispatch", () => {
   it("routes CLI-backed followups through runCliAgent", async () => {
     const onBlockReply = vi.fn(async () => {});
+    const abortController = new AbortController();
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "cli reply" }],
       meta: {
@@ -1028,7 +1029,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
     });
 
     const runner = createFollowupRunner({
-      opts: { onBlockReply },
+      opts: { onBlockReply, abortSignal: abortController.signal },
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
@@ -1058,6 +1059,13 @@ describe("createFollowupRunner CLI backend dispatch", () => {
         provider: "claude-cli",
         model: "opus",
         prompt: queued.prompt,
+        abortSignal: abortController.signal,
+        replyOperation: expect.objectContaining({
+          setPhase: expect.any(Function),
+          complete: expect.any(Function),
+          fail: expect.any(Function),
+        }),
+        skillsSnapshot: queued.run.skillsSnapshot,
         messageProvider: queued.run.messageProvider,
         agentAccountId: queued.run.agentAccountId,
       }),

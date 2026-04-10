@@ -288,11 +288,14 @@ export function createFollowupRunner(params: {
                   thinkLevel: queued.run.thinkLevel,
                   timeoutMs: queued.run.timeoutMs,
                   runId,
+                  abortSignal: opts?.abortSignal,
+                  replyOperation,
                   extraSystemPrompt: queued.run.extraSystemPrompt,
                   ownerNumbers: queued.run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding,
                   authProfileId: authProfile.authProfileId,
+                  skillsSnapshot: queued.run.skillsSnapshot,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[
