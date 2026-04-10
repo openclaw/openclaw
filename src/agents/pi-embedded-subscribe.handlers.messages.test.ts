@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+
+vi.mock("../infra/agent-events.js", () => ({
+  emitAgentEvent: vi.fn(),
+}));
 import {
   buildAssistantStreamData,
   consumePendingToolMediaIntoReply,
@@ -244,6 +249,10 @@ describe("consumePendingToolMediaReply", () => {
 });
 
 describe("handleMessageUpdate", () => {
+  beforeEach(() => {
+    vi.mocked(emitAgentEvent).mockClear();
+  });
+
   it("suppresses commentary-phase partial delivery and text_end flush", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -375,6 +384,55 @@ describe("handleMessageUpdate", () => {
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     });
+  });
+
+  it("prevents overlapping chunks from duplicating text when buffer is not empty", () => {
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        streamReasoning: false,
+        deltaBuffer: "I hear you",
+        blockBuffer: "",
+        partialBlockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistantCleaned: "I hear you",
+        emittedAssistantUpdate: false,
+        shouldEmitPartialReplies: true,
+        blockReplyBreak: "text_end",
+        assistantMessageIndex: 0,
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      consumePartialReplyDirectives: vi.fn(() => null),
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "I hear you - I'm ready to help.",
+      },
+    } as never);
+
+    expect(ctx.state.deltaBuffer).toBe("I hear you - I'm ready to help.");
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({
+          delta: " - I'm ready to help.",
+        }),
+      }),
+    );
   });
 });
 
