@@ -2954,6 +2954,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: {},
               },
+              embeddedHarness: {
+                type: "object",
+                properties: {
+                  runtime: {
+                    type: "string",
+                  },
+                  fallback: {
+                    type: "string",
+                    enum: ["pi", "none"],
+                  },
+                },
+                additionalProperties: false,
+              },
               model: {
                 anyOf: [
                   {
@@ -5414,6 +5427,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 systemPromptOverride: {
                   type: "string",
+                },
+                embeddedHarness: {
+                  type: "object",
+                  properties: {
+                    runtime: {
+                      type: "string",
+                    },
+                    fallback: {
+                      type: "string",
+                      enum: ["pi", "none"],
+                    },
+                  },
+                  additionalProperties: false,
                 },
                 model: {
                   anyOf: [

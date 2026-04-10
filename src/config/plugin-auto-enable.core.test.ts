@@ -202,6 +202,24 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
+  it("auto-enables an opt-in provider plugin when an explicit provider model is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            model: "codex/gpt-5.4",
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
+  });
+
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
     const result = applyPluginAutoEnable({
       config: {

@@ -186,6 +186,22 @@ describe("cdp", () => {
     }
   });
 
+  it("blocks hostname navigation targets when strict SSRF policy is configured", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: "http://127.0.0.1:9222",
+          url: "https://example.com",
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("blocks unsupported non-network navigation URLs", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
@@ -236,7 +252,7 @@ describe("cdp", () => {
     await expect(
       createTargetViaCdp({
         cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
+        url: "https://93.184.216.34",
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
@@ -249,7 +265,7 @@ describe("cdp", () => {
     await expect(
       createTargetViaCdp({
         cdpUrl: "http://169.254.169.254:9222",
-        url: "https://example.com",
+        url: "https://93.184.216.34",
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
@@ -262,7 +278,7 @@ describe("cdp", () => {
     await expect(
       createTargetViaCdp({
         cdpUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
-        url: "https://example.com",
+        url: "https://93.184.216.34",
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],

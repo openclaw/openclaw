@@ -50,6 +50,10 @@ For model selection rules, see [/concepts/models](/concepts/models).
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
+- The bundled `codex` provider is paired with the bundled Codex agent harness.
+  Use `codex/gpt-*` when you want Codex-owned login, model discovery, native
+  thread resume, and app-server execution. Plain `openai/gpt-*` refs continue
+  to use the OpenAI provider and the normal OpenClaw provider transport.
 
 ## Plugin-owned provider behavior
 

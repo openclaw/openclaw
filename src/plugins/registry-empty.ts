@@ -20,6 +20,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     webFetchProviders: [],
     webSearchProviders: [],
     memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
     httpRoutes: [],

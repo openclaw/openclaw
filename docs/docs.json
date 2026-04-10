@@ -1130,6 +1130,7 @@
                       "plugins/sdk-overview",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",

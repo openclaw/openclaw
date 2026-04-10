@@ -1181,7 +1181,7 @@ export async function spawnAcpDirect(
     });
   }
   try {
-    const response = await callGateway<{ runId?: string }>({
+    const response = await callGateway({
       method: "agent",
       params: {
         message: params.task,

@@ -390,6 +390,51 @@ Docker notes:
 - It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) if missing.
 - Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
 
+## Live: Codex app-server harness smoke
+
+- Goal: validate the plugin-owned Codex harness through the normal gateway
+  `agent` method:
+  - load the bundled `codex` plugin
+  - select `OPENCLAW_AGENT_RUNTIME=codex`
+  - send a first gateway agent turn to `codex/gpt-5.4`
+  - send a second turn to the same OpenClaw session and verify the app-server
+    thread can resume
+- Test: `src/gateway/gateway-codex-harness.live.test.ts`
+- Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
+- Default model: `codex/gpt-5.4`
+- Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
+- Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
+- Auth: `OPENAI_API_KEY` from the shell/profile, plus optional copied
+  `~/.codex/auth.json` and `~/.codex/config.toml`
+
+Local recipe:
+
+```bash
+source ~/.profile
+OPENCLAW_LIVE_CODEX_HARNESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=codex/gpt-5.4 \
+  pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+source ~/.profile
+pnpm test:docker:live-codex-harness
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
+- It sources the mounted `~/.profile`, passes `OPENAI_API_KEY`, copies Codex CLI
+  auth files when present, installs `@openai/codex` into a writable mounted npm
+  prefix, stages the source tree, then runs only the Codex-harness live test.
+- Docker enables the image and MCP/tool probes by default. Set
+  `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
+  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
@@ -618,6 +663,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
+- Codex app-server harness smoke: `pnpm test:docker:live-codex-harness` (script: `scripts/test-live-codex-harness-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
