@@ -23,7 +23,11 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
-  deliveryContextFromSession: vi.fn(() => undefined),
+  deliveryContextFromSession: vi.fn(
+    ():
+      | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
+      | undefined => undefined,
+  ),
   mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
     ...b,
     ...a,
@@ -54,7 +58,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
 }));
 
-vi.mock("../config/sessions/delivery-info.js", () => ({
+vi.mock("../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
@@ -310,5 +314,49 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueDelivery).not.toHaveBeenCalled();
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the base session when the thread entry only has partial route metadata", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      threadId: "$thread-event",
+    });
+    mocks.loadSessionEntry
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: { origin: { provider: "matrix", threadId: "$thread-event" } },
+      })
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: { lastChannel: "matrix", lastTo: "room:!MixedCase:example.org" },
+      });
+    mocks.deliveryContextFromSession
+      .mockReturnValueOnce({ channel: "matrix", threadId: "$thread-event" })
+      .mockReturnValueOnce({ channel: "matrix", to: "room:!MixedCase:example.org" });
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: true as const,
+      to: "room:!MixedCase:example.org",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        threadId: "$thread-event",
+      }),
+    );
   });
 });

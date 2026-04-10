@@ -22,6 +22,13 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const OUTBOUND_RETRY_DELAY_MS = 750;
 const OUTBOUND_MAX_ATTEMPTS = 2;
 
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+}): context is { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
+}
+
 function enqueueRestartSentinelWake(
   message: string,
   sessionKey: string,
@@ -148,7 +155,11 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+  if (
+    !hasRoutableDeliveryContext(sessionDeliveryContext) &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey
+  ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
     sessionDeliveryContext = deliveryContextFromSession(baseEntry);
   }

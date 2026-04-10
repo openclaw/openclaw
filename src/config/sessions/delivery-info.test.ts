@@ -185,4 +185,34 @@ describe("extractDeliveryInfo", () => {
       threadId: undefined,
     });
   });
+
+  it("falls back to the base session when a thread entry only has partial route metadata", () => {
+    const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const threadKey = `${baseKey}:thread:$thread-event`;
+    storeState.store[threadKey] = {
+      sessionId: "thread-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+        threadId: "$thread-event",
+      },
+    };
+    storeState.store[baseKey] = {
+      sessionId: "base-session",
+      updatedAt: Date.now(),
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:example.org",
+    };
+
+    const result = extractDeliveryInfo(threadKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
+      },
+      threadId: "$thread-event",
+    });
+  });
 });
