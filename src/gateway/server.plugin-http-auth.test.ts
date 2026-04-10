@@ -382,7 +382,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     expect(writeAllowedResults).toEqual([true]);
   });
 
-  test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth", async () => {
+  test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
     const observedRuntimeScopes: string[][] = [];
     const adminAllowedResults: boolean[] = [];
     const handlePluginRequest = createGatewayPluginRequestHandler({
@@ -428,9 +428,6 @@ describe("gateway plugin HTTP auth boundary", () => {
           createRequest({
             path: "/secure-admin-hook",
             authorization: "Bearer test-token",
-            headers: {
-              "x-openclaw-scopes": "operator.read",
-            },
           }),
           response.res,
         );

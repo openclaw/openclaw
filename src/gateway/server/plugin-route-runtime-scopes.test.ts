@@ -51,9 +51,25 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       resolvePluginRouteRuntimeOperatorScopes(
         createReq({
           authorization: "Bearer secret",
-          "x-openclaw-scopes": "operator.read",
         }),
         { authMethod: "token", trustDeclaredOperatorScopes: false },
+        "trusted-operator",
+      ),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
+  it("restores trusted default operator scopes for trusted-proxy routes opting into trusted-operator when scopes header is absent", () => {
+    expect(
+      resolvePluginRouteRuntimeOperatorScopes(
+        createReq(),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
         "trusted-operator",
       ),
     ).toEqual([
