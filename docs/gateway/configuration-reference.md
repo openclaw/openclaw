@@ -2424,6 +2424,7 @@ Scenario example:
   task boundaries, shorter output rules, and less global policy overhead.
 - This lets teams tune prompt shape for each model without rewriting their
   primary workspace prompt every time they switch providers.
+
 ---
 
 ## Custom providers and base URLs
