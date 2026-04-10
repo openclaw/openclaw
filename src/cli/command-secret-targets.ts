@@ -38,6 +38,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "plugins.entries.firecrawl.config.webFetch.apiKey",
   "plugins.entries.tavily.config.webSearch.apiKey",
   "plugins.entries.minimax.config.webSearch.apiKey",
+  "plugins.entries.yep.config.webSearch.apiKey",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
