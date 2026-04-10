@@ -108,7 +108,7 @@
               },
               {
                 "type": "object",
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "mode": {
                     "type": "string",
