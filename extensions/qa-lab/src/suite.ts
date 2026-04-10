@@ -1068,6 +1068,7 @@ type QaScenarioFlowApi = {
 function createScenarioFlowApi(
   env: QaSuiteEnvironment,
   scenario: QaSeedScenarioWithSource,
+): QaScenarioFlowApi {
   return {
     env,
     lab: env.lab,
