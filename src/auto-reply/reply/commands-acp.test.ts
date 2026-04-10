@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => {
   const readAcpSessionEntryMock = vi.fn();
   const upsertAcpSessionMetaMock = vi.fn();
   const resolveSessionStorePathForAcpMock = vi.fn();
+  const updateSessionStoreEntryMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
@@ -40,6 +41,7 @@ const hoisted = vi.hoisted(() => {
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     resolveSessionStorePathForAcpMock,
+    updateSessionStoreEntryMock,
     loadSessionStoreMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
@@ -99,6 +101,10 @@ vi.mock("../../config/sessions.js", async () => {
     loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
   };
 });
+
+vi.mock("../../config/sessions/store.js", () => ({
+  updateSessionStoreEntry: (args: unknown) => hoisted.updateSessionStoreEntryMock(args),
+}));
 
 vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   const actual = await vi.importActual<
@@ -748,6 +754,7 @@ describe("/acp command", () => {
       cfg: baseCfg,
       storePath: "/tmp/sessions-acp.json",
     });
+    hoisted.updateSessionStoreEntryMock.mockReset().mockResolvedValue(true);
     hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
@@ -1017,12 +1024,31 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
-  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+  it("persists ACP spawn labels in the spawned session store without a nested gateway self-call", async () => {
+    hoisted.resolveSessionStorePathForAcpMock.mockImplementation(
+      (input: { sessionKey: string; cfg: OpenClawConfig }) => ({
+        cfg: input.cfg,
+        storePath: "/tmp/sessions-codex.json",
+      }),
+    );
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
 
     const result = await handleAcpCommand(params, true);
 
     expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.resolveSessionStorePathForAcpMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: baseCfg,
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+      }),
+    );
+    expect(hoisted.updateSessionStoreEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/sessions-codex.json",
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        update: expect.any(Function),
+      }),
+    );
     expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
