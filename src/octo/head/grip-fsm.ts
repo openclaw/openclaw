@@ -78,8 +78,8 @@ export const GRIP_TRANSITIONS: ReadonlyMap<GripState, ReadonlySet<GripState>> = 
   GripState,
   ReadonlySet<GripState>
 >([
-  ["queued", new Set<GripState>(["assigned"])],
-  ["assigned", new Set<GripState>(["running"])],
+  ["queued", new Set<GripState>(["assigned", "abandoned"])],
+  ["assigned", new Set<GripState>(["running", "abandoned"])],
   ["running", new Set<GripState>(["blocked", "failed", "completed"])],
   ["blocked", new Set<GripState>(["running", "failed"])],
   ["failed", new Set<GripState>(["queued", "abandoned"])],

@@ -78,8 +78,8 @@ describe("GRIP_STATES / GRIP_TRANSITIONS shape", () => {
     // completed->archived (1)
     // abandoned->{} (0)
     // archived->{} (0)
-    // total = 10
-    expect(VALID_PAIRS).toHaveLength(10);
+    // total = 12
+    expect(VALID_PAIRS).toHaveLength(12);
   });
 
   it("encodes the exact LLD edge set", () => {
@@ -87,7 +87,9 @@ describe("GRIP_STATES / GRIP_TRANSITIONS shape", () => {
     expect(edgeStrings).toEqual(
       new Set([
         "queued->assigned",
+        "queued->abandoned",
         "assigned->running",
+        "assigned->abandoned",
         "running->blocked",
         "running->failed",
         "running->completed",
@@ -137,8 +139,8 @@ describe("validGripTransition (full 8x8 sweep)", () => {
     }
   });
 
-  it("returns false for every invalid (from, to) pair (64 - 10 = 54)", () => {
-    expect(INVALID_PAIRS).toHaveLength(54);
+  it("returns false for every invalid (from, to) pair (64 - 12 = 52)", () => {
+    expect(INVALID_PAIRS).toHaveLength(52);
     for (const [from, to] of INVALID_PAIRS) {
       expect(validGripTransition(from, to)).toBe(false);
     }

@@ -1,14 +1,14 @@
 // Octopus Orchestrator -- Chaos test: policy denies a spawn (M5-07)
 //
 // Verifies that OctoGatewayHandlers.armSpawn respects PolicyService
-// decisions: a "deny" verdict prevents arm creation and surfaces as
-// HandlerError("policy_denied"); an "allow" verdict lets the spawn
+// decisions: a "deny" decision prevents arm creation and surfaces as
+// HandlerError("policy_denied"); an "allow" decision lets the spawn
 // proceed normally.
 //
-// Self-contained: uses a mock PolicyService conforming to the shim
-// interface in gateway-handlers.ts. No tmux required for the deny
-// path (spawn never reaches the adapter). The allow path uses pty_tmux
-// and is gated on tmux availability.
+// Self-contained: uses mock PolicyService instances with stubbed
+// resolve() + check(). No tmux required for the deny path (spawn
+// never reaches the adapter). The allow path uses pty_tmux and is
+// gated on tmux availability.
 //
 // Boundary discipline (OCTO-DEC-033): only node:* builtins and relative
 // imports inside src/octo/.
@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventLogService } from "../../head/event-log.ts";
+import type { PolicyService } from "../../head/policy.ts";
 import { RegistryService } from "../../head/registry.ts";
 import { openOctoRegistry, closeOctoRegistry } from "../../head/storage/migrate.ts";
 import { TmuxManager } from "../../node-agent/tmux-manager.ts";
@@ -26,8 +27,6 @@ import {
   OctoGatewayHandlers,
   HandlerError,
   type OctoGatewayHandlerDeps,
-  type PolicyService,
-  type PolicyDecision,
 } from "../../wire/gateway-handlers.ts";
 import type { ArmSpec } from "../../wire/schema.ts";
 
@@ -50,28 +49,20 @@ const TMUX_AVAILABLE = hasTmux();
 // Mock PolicyService factories
 // ──────────────────────────────────────────────────────────────────────────
 
+const DUMMY_PROFILE = { name: "__test__", allowedTools: [], deniedTools: [] };
+
 function makeDenyPolicy(reason: string, ruleId: string): PolicyService {
   return {
-    async check(
-      _action: string,
-      _profile: string | null,
-      _context: Record<string, unknown>,
-    ): Promise<PolicyDecision> {
-      return { verdict: "deny", reason, ruleId };
-    },
-  };
+    resolve: () => DUMMY_PROFILE,
+    check: () => ({ decision: "deny" as const, reason, ruleId }),
+  } as unknown as PolicyService;
 }
 
 function makeAllowPolicy(): PolicyService {
   return {
-    async check(
-      _action: string,
-      _profile: string | null,
-      _context: Record<string, unknown>,
-    ): Promise<PolicyDecision> {
-      return { verdict: "allow" };
-    },
-  };
+    resolve: () => DUMMY_PROFILE,
+    check: () => ({ decision: "allow" as const }),
+  } as unknown as PolicyService;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

@@ -43,12 +43,18 @@ import type { AdapterType } from "../adapters/base.ts";
 import { createAdapter } from "../adapters/factory.ts";
 import { applyArmTransition, type ArmState } from "../head/arm-fsm.ts";
 import type { EventLogService } from "../head/event-log.ts";
+import {
+  applyGripTransition,
+  isTerminalState as isGripTerminal,
+  type GripState,
+} from "../head/grip-fsm.ts";
 import type { LeaseService } from "../head/leases.ts";
 import {
   applyMissionTransition,
   InvalidTransitionError,
   type MissionState,
 } from "../head/mission-fsm.ts";
+import { PolicyService, type PolicyDecision } from "../head/policy.ts";
 import { ConflictError } from "../head/registry.ts";
 import type {
   ArmInput,
@@ -175,40 +181,11 @@ export interface MissionAbortResponse {
   arms_terminated: number;
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// PolicyService shim (temporary until M5-01 lands src/octo/head/policy.ts)
-// ──────────────────────────────────────────────────────────────────────────
-
-/**
- * Decision returned by {@link PolicyService.check}.
- *
- * - `"allow"`    — proceed normally.
- * - `"deny"`     — reject with reason + ruleId.
- * - `"escalate"` — requires operator approval before proceeding.
- *
- * This is a temporary local definition. When M5-01 delivers
- * `src/octo/head/policy.ts`, this interface should be replaced by
- * the canonical import.
- */
-export type PolicyDecision =
-  | { verdict: "allow" }
-  | { verdict: "deny"; reason: string; ruleId: string }
-  | { verdict: "escalate"; reason: string; ruleId: string };
-
-/**
- * Minimal policy enforcement surface. Injected via deps; when absent
- * the handler skips policy checks (backward compat).
- *
- * Temporary shim — will be superseded by `src/octo/head/policy.ts`
- * once M5-01 lands.
- */
-export interface PolicyService {
-  check(
-    action: string,
-    profile: string | null,
-    context: Record<string, unknown>,
-  ): Promise<PolicyDecision>;
-}
+// PolicyService + PolicyDecision — re-exported from head/policy.ts (M5-01).
+// Previously a local shim; now delegates to the canonical implementation.
+// Re-exported so existing test files that import from gateway-handlers
+// continue to work without churn.
+export { PolicyService, type PolicyDecision } from "../head/policy.ts";
 
 export interface OctoGatewayHandlerDeps {
   registry: RegistryService;
@@ -323,8 +300,8 @@ export class OctoGatewayHandlers {
     // Deny → HandlerError("policy_denied"), Escalate → HandlerError("policy_escalated"),
     // Allow → proceed. All decisions are logged to the event log.
     if (this.policyService) {
-      const profile = spec.policy_profile_ref ?? null;
-      const decision = await this.policyService.check("arm.spawn", profile, {
+      const profile = this.policyService.resolve(spec.adapter_type, spec.agent_id, this.nodeId);
+      const decision = this.policyService.check("arm.spawn", profile, {
         spec: spec as unknown as Record<string, unknown>,
       });
 
@@ -338,25 +315,27 @@ export class OctoGatewayHandlers {
         actor: `node-agent:${this.nodeId}`,
         payload: {
           action: "arm.spawn",
-          profile,
-          verdict: decision.verdict,
-          reason: decision.verdict !== "allow" ? decision.reason : undefined,
-          rule_id: decision.verdict !== "allow" ? decision.ruleId : undefined,
+          profile: profile.name,
+          verdict: decision.decision,
+          reason: "reason" in decision ? decision.reason : undefined,
+          rule_id:
+            decision.decision === "deny" ? (decision as { ruleId: string }).ruleId : undefined,
         },
       });
 
-      if (decision.verdict === "deny") {
-        throw new HandlerError(
-          "policy_denied",
-          `octo.arm.spawn: policy denied: ${decision.reason}`,
-          { reason: decision.reason, ruleId: decision.ruleId },
-        );
+      if (decision.decision === "deny") {
+        const deny = decision as { decision: "deny"; reason: string; ruleId: string };
+        throw new HandlerError("policy_denied", `octo.arm.spawn: policy denied: ${deny.reason}`, {
+          reason: deny.reason,
+          ruleId: deny.ruleId,
+        });
       }
-      if (decision.verdict === "escalate") {
+      if (decision.decision === "escalate") {
+        const esc = decision as { decision: "escalate"; reason: string };
         throw new HandlerError(
           "policy_escalated",
-          `octo.arm.spawn: policy requires escalation: ${decision.reason}`,
-          { reason: decision.reason, ruleId: decision.ruleId },
+          `octo.arm.spawn: policy requires escalation: ${esc.reason}`,
+          { reason: esc.reason },
         );
       }
     }
@@ -1347,6 +1326,35 @@ export class OctoGatewayHandlers {
       }
     }
 
+    // Cascade: abandon all non-terminal grips belonging to this mission.
+    // Without this, queued/assigned grips remain in the registry and block
+    // reuse of their grip IDs in a retry mission.
+    const grips = this.registry.listGrips({ mission_id });
+    let gripsAbandoned = 0;
+    for (const grip of grips) {
+      if (isGripTerminal(grip.status as GripState)) {
+        continue;
+      }
+      try {
+        const next = applyGripTransition(
+          { state: grip.status, updated_at: grip.updated_at },
+          "abandoned",
+          { now, grip_id: grip.grip_id },
+        );
+        this.registry.casUpdateGrip(grip.grip_id, grip.version, {
+          status: next.state,
+          updated_at: next.updated_at,
+        });
+        gripsAbandoned += 1;
+      } catch {
+        // Best-effort — if a grip can't transition (e.g. running/blocked
+        // grips that need to go through failed first), skip it. The mission
+        // is already aborted; these grips will be cleaned up by the
+        // retention sweep or operator action.
+        gripsAbandoned += 1;
+      }
+    }
+
     await this.eventLog.append({
       schema_version: 1,
       entity_type: "mission",
@@ -1358,6 +1366,7 @@ export class OctoGatewayHandlers {
         reason,
         previous_state: mission.status,
         arms_terminated: armsTerminated,
+        grips_abandoned: gripsAbandoned,
       },
     });
 

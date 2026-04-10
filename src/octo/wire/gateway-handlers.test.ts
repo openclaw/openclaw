@@ -26,6 +26,7 @@ import { Value } from "@sinclair/typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventLogService } from "../head/event-log.ts";
 import { LeaseService } from "../head/leases.ts";
+import type { PolicyService } from "../head/policy.ts";
 import { RegistryService } from "../head/registry.ts";
 import type { ArmRecord } from "../head/registry.ts";
 import { closeOctoRegistry, openOctoRegistry } from "../head/storage/migrate.ts";
@@ -35,7 +36,6 @@ import {
   OctoGatewayHandlers,
   type LeaseRenewResult,
   type OctoGatewayHandlerDeps,
-  type PolicyService,
 } from "./gateway-handlers.ts";
 import {
   OctoArmAttachResponseSchema,
@@ -1876,13 +1876,14 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers — policy enforcement (M5
 
   it("rejects arm.spawn with policy_denied when policy returns deny", async () => {
     const armId = nextTestArmId("policy-deny");
-    const denyPolicy: PolicyService = {
-      check: async () => ({
-        verdict: "deny" as const,
+    const denyPolicy = {
+      resolve: () => ({ name: "__test__", allowedTools: [], deniedTools: [] }),
+      check: () => ({
+        decision: "deny" as const,
         reason: "too many arms",
         ruleId: "max-arms-per-mission",
       }),
-    };
+    } as unknown as PolicyService;
     harness = makeHarness({ generateArmId: () => armId, policyService: denyPolicy });
     const request = makeSpawnRequest({
       idempotency_key: "idem-policy-deny",
@@ -1910,13 +1911,13 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers — policy enforcement (M5
 
   it("rejects arm.spawn with policy_escalated when policy returns escalate", async () => {
     const armId = nextTestArmId("policy-escalate");
-    const escalatePolicy: PolicyService = {
-      check: async () => ({
-        verdict: "escalate" as const,
+    const escalatePolicy = {
+      resolve: () => ({ name: "__test__", allowedTools: [], deniedTools: [] }),
+      check: () => ({
+        decision: "escalate" as const,
         reason: "requires approval",
-        ruleId: "manual-approval",
       }),
-    };
+    } as unknown as PolicyService;
     harness = makeHarness({ generateArmId: () => armId, policyService: escalatePolicy });
     const request = makeSpawnRequest({ idempotency_key: "idem-policy-escalate" });
 
@@ -1931,14 +1932,15 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers — policy enforcement (M5
     const he = thrown as HandlerError;
     expect(he.code).toBe("policy_escalated");
     expect(he.message).toContain("requires escalation");
-    expect(he.details?.ruleId).toBe("manual-approval");
+    expect(he.details?.reason).toBe("requires approval");
   });
 
   it("allows arm.spawn to proceed when policy returns allow", async () => {
     const armId = nextTestArmId("policy-allow");
-    const allowPolicy: PolicyService = {
-      check: async () => ({ verdict: "allow" as const }),
-    };
+    const allowPolicy = {
+      resolve: () => ({ name: "__test__", allowedTools: [], deniedTools: [] }),
+      check: () => ({ decision: "allow" as const }),
+    } as unknown as PolicyService;
     harness = makeHarness({ generateArmId: () => armId, policyService: allowPolicy });
     const request = makeSpawnRequest({ idempotency_key: "idem-policy-allow" });
 
@@ -1951,13 +1953,14 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers — policy enforcement (M5
 
   it("logs every policy decision to the event log", async () => {
     const armId = nextTestArmId("policy-log");
-    const denyPolicy: PolicyService = {
-      check: async () => ({
-        verdict: "deny" as const,
+    const denyPolicy = {
+      resolve: () => ({ name: "__test__", allowedTools: [], deniedTools: [] }),
+      check: () => ({
+        decision: "deny" as const,
         reason: "blocked by rule",
         ruleId: "rule-42",
       }),
-    };
+    } as unknown as PolicyService;
     harness = makeHarness({ generateArmId: () => armId, policyService: denyPolicy });
     const request = makeSpawnRequest({
       idempotency_key: "idem-policy-log",
@@ -1981,7 +1984,7 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers — policy enforcement (M5
     expect(evt.payload.verdict).toBe("deny");
     expect(evt.payload.reason).toBe("blocked by rule");
     expect(evt.payload.rule_id).toBe("rule-42");
-    expect(evt.payload.profile).toBe("strict-refactor");
+    expect(evt.payload.profile).toBe("__test__");
   });
 
   it("skips policy check when policyService is not provided (backward compat)", async () => {

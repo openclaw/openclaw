@@ -29,7 +29,7 @@ async function withRegistry<T>(
   try {
     const registry = new RegistryService(db);
     const eventLog = new EventLogService();
-    return fn({ db, registry, eventLog });
+    return await fn({ db, registry, eventLog });
   } finally {
     closeOctoRegistry(db);
   }
@@ -79,7 +79,7 @@ async function withHandlers<T>(
       leaseService,
       policyService: policyService as never,
     });
-    return fn({ db, registry, eventLog, handlers });
+    return await fn({ db, registry, eventLog, handlers });
   } finally {
     closeOctoRegistry(db);
   }
@@ -298,6 +298,55 @@ export function registerOctoCli(program: Command) {
     .action(async (armId) => {
       const { runArmAttach } = await import("./arm-attach.js");
       const code = await withRegistry(({ registry }) => runArmAttach(registry, { arm_id: armId }));
+      process.exit(code);
+    });
+
+  arm
+    .command("spawn")
+    .description("Spawn a new arm from an ArmSpec")
+    .option("--spec-file <path>", "Path to a JSON file containing a complete ArmSpec")
+    .option("--mission <mission_id>", "Mission ID")
+    .option(
+      "--adapter <type>",
+      "Adapter type (structured_subagent, cli_exec, pty_tmux, structured_acp)",
+    )
+    .option("--runtime <name>", "Runtime name (e.g. claude-code, tmux:bash)")
+    .option("--agent-id <id>", "Agent ID")
+    .option("--cwd <path>", "Working directory (absolute path)")
+    .option("--initial-input <text>", "Initial input / prompt for the arm")
+    .option("--command <cmd>", "Command for cli_exec/pty_tmux adapters")
+    .option("--args <args...>", "Arguments for the command")
+    .option("--model <model>", "Model for structured_subagent/structured_acp")
+    .option("--habitat <habitat>", "Desired habitat for placement")
+    .option("--capability <caps...>", "Desired capabilities")
+    .option("--worktree-path <path>", "Worktree path")
+    .option("--policy-profile <ref>", "Policy profile reference")
+    .option("--label <labels...>", "Labels as key=value pairs")
+    .option("--idempotency-key <key>", "Idempotency key")
+    .option("--json", "Output as JSON")
+    .action(async (opts) => {
+      const { runArmSpawn } = await import("./arm-spawn.js");
+      const code = await withHandlers(({ handlers }) =>
+        runArmSpawn(handlers, {
+          specFile: opts.specFile,
+          mission: opts.mission,
+          adapter: opts.adapter,
+          runtime: opts.runtime,
+          agentId: opts.agentId,
+          cwd: opts.cwd,
+          initialInput: opts.initialInput,
+          command: opts.command,
+          args: opts.args,
+          model: opts.model,
+          habitat: opts.habitat,
+          capabilities: opts.capability,
+          worktreePath: opts.worktreePath,
+          policyProfile: opts.policyProfile,
+          labels: opts.label,
+          idempotencyKey: opts.idempotencyKey,
+          json: opts.json,
+        }),
+      );
       process.exit(code);
     });
 
