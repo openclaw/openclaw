@@ -108,33 +108,40 @@ function resolveStructuredAllowedToolName(
     }
   }
 
-  // Some models (e.g., certain local models or specific API versions) occasionally 
-  // emit malformed tool names by stripping underscores, prepending dots, or appending 
-  // random hex suffixes. We perform a reverse lookup against allowed names to recover 
-  // the correct tool without failing the entire turn.
+   // Some models occasionally emit malformed tool names by stripping underscores,
+  // prepending dots, appending random hex suffixes, or dropping leading characters.
+  // We perform a reverse lookup against allowed names to recover the correct tool
+  // without failing the entire turn.
   for (const allowedName of allowedToolNames) {
     const noUnderscore = allowedName.replace(/_/g, "");
-    const withDot = `.${allowedName}`;
-    const withDotNoUnderscore = `.${noUnderscore}`;
 
-    const isDirectMatch =
-      rawName === noUnderscore ||
-      rawName === withDot ||
-      rawName === withDotNoUnderscore;
+    // Build all known variants of this allowed tool name
+    const variants = [
+      allowedName,
+      noUnderscore,
+      `.${allowedName}`,
+      `.${noUnderscore}`,
+    ];
 
-    // Handle cases where a random hex string is appended (e.g., `Toolnodes132b3c233`)
-    const suffixMatch = rawName.match(/^(.+?)[a-f0-9]{4,}$/);
-    const strippedName = suffixMatch ? suffixMatch[1] : null;
+    // Also try dropping the first character (e.g., `session_status` -> `ession_status`)
+    if (allowedName.length > 2) {
+      variants.push(allowedName.substring(1), noUnderscore.substring(1));
+    }
 
-    const isStrippedMatch =
-      strippedName !== null &&
-      (strippedName === allowedName ||
-        strippedName === noUnderscore ||
-        strippedName === withDot ||
-        strippedName === withDotNoUnderscore);
+    for (const variant of variants) {
+      // Exact match
+      if (rawName === variant) {
+        return allowedName;
+      }
 
-    if (isDirectMatch || isStrippedMatch) {
-      return allowedName;
+      // Prefix match: rawName starts with a known variant, remainder is all hex
+      // (e.g., `read5f3789abcd` -> `read`, `agentslist1f3789abcd` -> `agents_list`)
+      if (rawName.length > variant.length && rawName.startsWith(variant)) {
+        const suffix = rawName.substring(variant.length);
+        if (/^[a-f0-9]{4,}$/.test(suffix)) {
+          return allowedName;
+        }
+      }
     }
   }
   
