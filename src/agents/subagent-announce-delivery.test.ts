@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { __testing } from "./subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 describe("resolveAnnounceOrigin telegram forum topics", () => {
@@ -58,6 +59,55 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
     ).toEqual({
       channel: "telegram",
       to: "telegram:-1001234567890",
+    });
+  });
+});
+
+describe("resolveDirectAnnounceDeliveryTarget", () => {
+  it("keeps non-completion direct announces session-local when no external target is resolved", () => {
+    expect(
+      __testing.resolveDirectAnnounceDeliveryTarget({
+        requesterIsSubagent: false,
+        origin: {
+          channel: "telegram",
+        },
+      }),
+    ).toEqual({
+      shouldDeliverExternally: false,
+    });
+  });
+
+  it("enables external delivery only when channel and target are both resolved", () => {
+    expect(
+      __testing.resolveDirectAnnounceDeliveryTarget({
+        requesterIsSubagent: false,
+        origin: {
+          channel: "telegram",
+          to: "telegram:-1001234567890",
+          accountId: "acct-1",
+          threadId: 99,
+        },
+      }),
+    ).toEqual({
+      shouldDeliverExternally: true,
+      channel: "telegram",
+      to: "telegram:-1001234567890",
+      accountId: "acct-1",
+      threadId: "99",
+    });
+  });
+
+  it("never enables external delivery for subagent requesters", () => {
+    expect(
+      __testing.resolveDirectAnnounceDeliveryTarget({
+        requesterIsSubagent: true,
+        origin: {
+          channel: "telegram",
+          to: "telegram:-1001234567890",
+        },
+      }),
+    ).toEqual({
+      shouldDeliverExternally: false,
     });
   });
 });
