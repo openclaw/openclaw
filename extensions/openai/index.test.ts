@@ -80,6 +80,7 @@ describe("openai plugin", () => {
       mode: "api-key",
     });
     const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      finalUrl: "https://api.openai.com/v1/images/generations",
       response: {
         ok: true,
         json: async () => ({
@@ -147,6 +148,7 @@ describe("openai plugin", () => {
       mode: "api-key",
     });
     const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      finalUrl: "https://api.openai.com/v1/images/edits",
       response: {
         ok: true,
         json: async () => ({
