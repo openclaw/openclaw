@@ -719,6 +719,18 @@ export async function onTimer(state: CronServiceState) {
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
       const startedAt = state.deps.nowMs();
+
+      // Pre-execution check: if the job was removed between the due-job
+      // collection and now (e.g. by a concurrent `remove()` call), skip
+      // execution entirely so no delivery occurs.
+      if (!(await jobExists(state, id))) {
+        state.deps.log.info(
+          { jobId: id, jobName: job.name },
+          "cron: skipping execution for job removed before start",
+        );
+        return { jobId: id, status: "skipped", startedAt, endedAt: state.deps.nowMs() };
+      }
+
       job.state.runningAtMs = startedAt;
       markCronJobActive(job.id);
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
@@ -727,20 +739,6 @@ export async function onTimer(state: CronServiceState) {
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        // return {
-        //   jobId: id,
-        //   taskRunId,
-        //   ...result,
-        //   startedAt,
-        //   endedAt: state.deps.nowMs(),
-        // };
-        if (!(await jobExists(state, id))) {
-          state.deps.log.info(
-            { jobId: id, jobName: job.name },
-            "cron: dropping completed run for job removed during execution",
-          );
-          return { jobId: id, taskRunId, status: "skipped", startedAt, endedAt: state.deps.nowMs() };
-        }
         return { jobId: id, taskRunId, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = normalizeCronRunErrorText(err);

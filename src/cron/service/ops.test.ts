@@ -1,3 +1,4 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -5,7 +6,7 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import type { CronJob } from "../types.js";
-import { run, start, stop, update } from "./ops.js";
+import { remove, run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -365,5 +366,204 @@ describe("cron service ops seam coverage", () => {
     }
     resetTaskRegistryForTests();
     stop(state);
+  });
+
+  it("rejects manual run when job was already removed", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          ...createDueIsolatedJob(now),
+          id: "removed-before-manual",
+          name: "removed before manual",
+        },
+      ],
+    });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "should not be called",
+    }));
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    // Remove the job first
+    await remove(state, "removed-before-manual");
+
+    // run() should throw because the job no longer exists
+    await expect(run(state, "removed-before-manual")).rejects.toThrow(
+      "unknown cron job id: removed-before-manual",
+    );
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+  });
+
+  it("skips manual run when job removed during prepare-to-execute gap", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          ...createDueIsolatedJob(now),
+          id: "removed-in-gap",
+          name: "removed in gap",
+        },
+      ],
+    });
+
+    // Use a runner that signals when called, but before we get here
+    // the pre-execution check should have already prevented the call.
+    const runIsolatedAgentJob = vi.fn(async () => {
+      return { status: "ok" as const, summary: "done" };
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    // Start the run (which goes through prepareManualRun -> finishPreparedManualRun)
+    // Use a task run spy to remove the job in the gap between prepare and execute
+    const createTaskSpy = vi
+      .spyOn(taskExecutor, "createRunningTaskRun")
+      .mockImplementation((...args) => {
+        // At this point, prepareManualRun has completed and we're about
+        // to enter finishPreparedManualRun. Simulate an external writer that
+        // removes the job directly from the persisted store.
+        nodeFs.writeFileSync(
+          storePath,
+          `${JSON.stringify({ version: 1, jobs: [] }, null, 2)}\n`,
+          "utf8",
+        );
+        return undefined as never;
+      });
+
+    const result = await run(state, "removed-in-gap");
+
+    // The run should complete but skip execution
+    expect(result).toEqual({ ok: true, ran: true });
+    // The runner should NOT have been called because the pre-execution check
+    // detected the removal
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "removed-in-gap", jobName: "removed in gap" }),
+      "cron: skipping manual run for job removed before execution",
+    );
+
+    createTaskSpy.mockRestore();
+  });
+
+  it("preserves normal result when manual-run job still exists", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          ...createDueIsolatedJob(now),
+          id: "still-exists-manual",
+          name: "still exists manual",
+        },
+      ],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "completed normally",
+      })),
+    });
+
+    const result = await run(state, "still-exists-manual");
+    expect(result).toEqual({ ok: true, ran: true });
+
+    const job = state.store?.jobs.find((j) => j.id === "still-exists-manual");
+    expect(job).toBeDefined();
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.runningAtMs).toBeUndefined();
+
+    // The skip log message should NOT have been emitted
+    expect(logger.info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "still-exists-manual" }),
+      "cron: skipping manual run for job removed before execution",
+    );
+  });
+
+  it("removal during concurrent manual run clears the job from store", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          ...createDueIsolatedJob(now),
+          id: "remove-during-run",
+          name: "remove during run",
+        },
+      ],
+    });
+
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        markStarted?.();
+        return await new Promise<{ status: "ok"; summary: string }>((resolve) => {
+          resolveRun = resolve;
+        });
+      }),
+    });
+
+    const runPromise = run(state, "remove-during-run");
+    await started;
+
+    // Remove the job while execution is in progress (after pre-check passed)
+    await remove(state, "remove-during-run");
+
+    // Complete the execution
+    resolveRun?.({ status: "ok", summary: "done" });
+    await runPromise;
+
+    // The existing locked block in finishPreparedManualRun handles this:
+    // jobs.find returns undefined, so no state update is persisted.
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    expect(persisted.jobs).toEqual([]);
   });
 });
