@@ -87,7 +87,7 @@ export async function prepareCliRunContext(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
-    modelProviderId: params.provider,
+    modelProviderId: backendResolved.id,
     modelId: normalizedModel,
     warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,

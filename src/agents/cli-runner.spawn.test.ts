@@ -996,7 +996,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("uses the normalized CLI model for bootstrap resolution", async () => {
+  it("uses the resolved CLI backend id and normalized model for bootstrap resolution", async () => {
     const resolveBootstrapContextForRun = vi.fn(async () => ({
       bootstrapFiles: [],
       contextFiles: [],
@@ -1021,7 +1021,10 @@ describe("runCliAgent spawn path", () => {
     });
 
     expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
-      expect.objectContaining({ modelId: "sonnet" }),
+      expect.objectContaining({
+        modelProviderId: "claude-cli",
+        modelId: "sonnet",
+      }),
     );
   });
 });
