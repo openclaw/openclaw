@@ -34,12 +34,19 @@ export async function listCodexAppServerModels(
   const timeoutMs = options.timeoutMs ?? 2500;
   return await withTimeout(
     (async () => {
-      const client = await getSharedCodexAppServerClient({ startOptions: options.startOptions });
-      const response = await client.request<JsonObject>("model/list", {
-        limit: options.limit ?? null,
-        cursor: options.cursor ?? null,
-        includeHidden: options.includeHidden ?? null,
+      const client = await getSharedCodexAppServerClient({
+        startOptions: options.startOptions,
+        timeoutMs,
       });
+      const response = await client.request<JsonObject>(
+        "model/list",
+        {
+          limit: options.limit ?? null,
+          cursor: options.cursor ?? null,
+          includeHidden: options.includeHidden ?? null,
+        },
+        { timeoutMs },
+      );
       return readModelListResult(response);
     })(),
     timeoutMs,

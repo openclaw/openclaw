@@ -438,6 +438,10 @@ normal turns. On the next message, OpenClaw resumes that Codex thread, passes th
 currently selected OpenClaw `codex/*` model into app-server, and keeps extended
 history enabled.
 
+The command surface requires Codex app-server `0.118.0` or newer. Individual
+control methods are reported as `unsupported by this Codex app-server` if a
+future or custom app-server does not expose that JSON-RPC method.
+
 ## Tools, media, and compaction
 
 The Codex harness changes the low-level embedded agent executor only.
@@ -448,7 +452,9 @@ continue through the normal OpenClaw delivery path.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+history, search, `/new`, `/reset`, and future model or harness switching. The
+mirror includes the user prompt, final assistant text, and lightweight Codex
+reasoning or plan records when the app-server emits them.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as

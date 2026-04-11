@@ -159,7 +159,7 @@ function createStartupConfig(params: {
                 },
               },
             }
-        : {}),
+          : {}),
     ...(params.providerIds?.length
       ? {
           models: {

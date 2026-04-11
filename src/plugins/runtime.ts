@@ -1,5 +1,5 @@
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 import {
   PLUGIN_REGISTRY_STATE,
   type RegistryState,

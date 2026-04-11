@@ -26,6 +26,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import { mergeEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -763,6 +764,7 @@ export async function handleToolExecutionEnd(
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
+  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
@@ -792,6 +794,12 @@ export async function handleToolExecutionEnd(
     } else {
       ctx.state.lastToolError = undefined;
     }
+  }
+  if (completedMutatingAction) {
+    ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   }
 
   // Commit messaging tool text on success, discard on error.

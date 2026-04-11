@@ -8,8 +8,9 @@ import type {
 } from "./src/app-server/models.js";
 import { runCodexAppServerAttempt } from "./src/app-server/run-attempt.js";
 import { clearCodexAppServerBinding } from "./src/app-server/session-binding.js";
+import { clearSharedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
 
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 export { listCodexAppServerModels };
@@ -46,6 +47,9 @@ export function createCodexAppServerAgentHarness(options?: {
       if (params.sessionFile) {
         await clearCodexAppServerBinding(params.sessionFile);
       }
+    },
+    dispose: () => {
+      clearSharedCodexAppServerClient();
     },
   };
 }

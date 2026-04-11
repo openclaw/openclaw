@@ -65,10 +65,6 @@ export async function safeValue<T>(read: () => Promise<T>): Promise<SafeValue<T>
   try {
     return { ok: true, value: await read() };
   } catch (error) {
-    return { ok: false, error: describeControlFailure(formatError(error)) };
+    return { ok: false, error: describeControlFailure(error) };
   }
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

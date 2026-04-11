@@ -2,10 +2,11 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { handleCodexSubcommand } from "./command-handlers.js";
+import { handleCodexSubcommand, type CodexCommandDeps } from "./command-handlers.js";
 
 export function createCodexCommand(options: {
   pluginConfig?: unknown;
+  deps?: Partial<CodexCommandDeps>;
 }): OpenClawPluginCommandDefinition {
   return {
     name: "codex",
@@ -18,7 +19,7 @@ export function createCodexCommand(options: {
 
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
-  options: { pluginConfig?: unknown } = {},
+  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
 ): Promise<{ text: string }> {
   return await handleCodexSubcommand(ctx, options);
 }

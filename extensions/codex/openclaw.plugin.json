@@ -124,6 +124,11 @@
       "sensitive": true,
       "advanced": true
     },
+    "appServer.headers": {
+      "label": "Headers",
+      "help": "Additional headers sent to the WebSocket app-server.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",

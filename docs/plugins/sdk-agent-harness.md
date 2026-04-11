@@ -99,9 +99,9 @@ OpenClaw may fall back to PI when the selected plugin harness fails before a
 turn has produced side effects. Set `OPENCLAW_AGENT_HARNESS_FALLBACK=none` or
 `embeddedHarness.fallback: "none"` to make that fallback a hard failure instead.
 
-The bundled Codex plugin registers `codex` as its harness id. For compatibility,
-`codex-app-server` and `app-server` also resolve to that same harness when you
-set `OPENCLAW_AGENT_RUNTIME` manually.
+The bundled Codex plugin registers `codex` as its harness id. Core treats that
+as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
+or operator config, not in the shared runtime selector.
 
 ## Provider plus harness pairing
 

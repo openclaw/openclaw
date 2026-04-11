@@ -1,5 +1,5 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
@@ -49,9 +49,7 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
 }
 
-function resolveExplicitMemorySlotStartupPluginId(
-  config: OpenClawConfig,
-): string | undefined {
+function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {
   const configuredSlot = config.plugins?.slots?.memory?.trim();
   if (!configuredSlot || configuredSlot.toLowerCase() === "none") {
     return undefined;
