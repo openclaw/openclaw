@@ -160,6 +160,10 @@ export function resolveDefaultVitestPool(
 }
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
+export function resolveRepoRootPath(value: string): string {
+  return path.isAbsolute(value) ? value : path.join(repoRoot, value);
+}
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const defaultPool = resolveDefaultVitestPool();
@@ -208,7 +212,7 @@ export const sharedVitestConfig = {
     unstubGlobals: true,
     isolate: false,
     pool: defaultPool,
-    runner: "./test/non-isolated-runner.ts",
+    runner: nonIsolatedRunnerPath,
     maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
     fileParallelism: isCI ? true : localScheduling.fileParallelism,
     forceRerunTriggers: [
@@ -315,7 +319,7 @@ export const sharedVitestConfig = {
       "ui/src/ui/app-gateway.sessions.node.test.ts",
       "ui/src/ui/chat/slash-command-executor.node.test.ts",
     ],
-    setupFiles: ["test/setup.ts"],
+    setupFiles: [resolveRepoRootPath("test/setup.ts")],
     exclude: [
       "dist/**",
       "test/fixtures/**",

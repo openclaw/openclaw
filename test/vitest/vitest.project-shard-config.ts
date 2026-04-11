@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 export function createProjectShardVitestConfig(projects: readonly string[]) {
   const maxWorkers = sharedVitestConfig.test.maxWorkers;
@@ -10,7 +10,7 @@ export function createProjectShardVitestConfig(projects: readonly string[]) {
     ...sharedVitestConfig,
     test: {
       ...sharedVitestConfig.test,
-      runner: "./test/non-isolated-runner.ts",
+      runner: nonIsolatedRunnerPath,
       projects: [...projects],
     },
   });

@@ -60,6 +60,7 @@ function execSecurityRank(value: ExecSecurity): number {
     case "full":
       return 2;
   }
+  throw new Error("Unsupported exec security value");
 }
 
 function execAskRank(value: ExecAsk): number {
@@ -71,6 +72,7 @@ function execAskRank(value: ExecAsk): number {
     case "always":
       return 2;
   }
+  throw new Error("Unsupported exec ask value");
 }
 
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
