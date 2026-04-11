@@ -206,6 +206,10 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureRuntimePluginsLoaded,
   }));
 
+  vi.doMock("../harness/selection.js", () => ({
+    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+  }));
+
   vi.doMock("../provider-stream.js", () => ({
     registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));
