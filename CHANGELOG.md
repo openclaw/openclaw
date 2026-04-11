@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown by routing QA command registration through a narrow facade. (#64648) Thanks @obviyus.
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history before finalization so tool-generated audio reaches webchat clients again. (#63514) thanks @bittoby
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
+- OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 
 ## 2026.4.10
 
