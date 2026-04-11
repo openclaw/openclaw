@@ -2,14 +2,23 @@
 name: king_skill_parallel_search
 description: Parallelized search, optimization, and exhaustive computation using multiprocessing. For parameter sweeps and embarrassingly parallel workloads.
 metadata:
-  openclaw:
-    emoji: ⚡
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["joblib", "ray"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "⚡",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["joblib", "ray"],
+              "label": "Install parallel processing libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Parallel Search

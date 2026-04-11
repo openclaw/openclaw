@@ -2,14 +2,23 @@
 name: king_skill_networkx
 description: Graph analysis, network topology, path finding, centrality, community detection using NetworkX. Critical for P2P network analysis.
 metadata:
-  openclaw:
-    emoji: 🕸️
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["networkx", "matplotlib", "scipy", "numpy"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🕸️",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["networkx", "matplotlib", "scipy", "numpy"],
+              "label": "Install NetworkX and scientific libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # NetworkX Graph Analysis

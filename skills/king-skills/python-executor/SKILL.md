@@ -2,16 +2,29 @@
 name: king_skill_python_executor
 description: Execute deterministic numerical, statistical, algebraic, or signal-processing computations via Python. Use instead of reasoning through math manually.
 metadata:
-  openclaw:
-    emoji: 🧮
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: apt
-        packages: ["python3", "python3-pip"]
-      - type: pip
-        packages: ["numpy", "scipy", "sympy", "matplotlib"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🧮",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "apt",
+              "kind": "apt",
+              "packages": ["python3", "python3-pip"],
+              "label": "Install Python 3 and Pip (apt)",
+            },
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["numpy", "scipy", "sympy", "matplotlib"],
+              "label": "Install numerical scientific libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Python Executor

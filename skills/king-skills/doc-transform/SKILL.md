@@ -2,16 +2,29 @@
 name: king_skill_doc_transform
 description: Convert documents between formats (PDF, DOCX, MD, LaTeX, HTML) using pandoc. Parse PDFs and extract text.
 metadata:
-  openclaw:
-    emoji: 📄
-    requires:
-      bins: ["pandoc", "python3"]
-    install:
-      - type: apt
-        packages: ["pandoc"]
-      - type: pip
-        packages: ["pdfminer.six", "python-docx"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "📄",
+        "requires": { "bins": ["pandoc", "python3"] },
+        "install":
+          [
+            {
+              "id": "apt",
+              "kind": "apt",
+              "packages": ["pandoc"],
+              "label": "Install Pandoc (apt)",
+            },
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["pdfminer.six", "python-docx"],
+              "label": "Install document parsing libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Document Transform

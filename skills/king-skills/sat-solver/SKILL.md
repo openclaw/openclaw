@@ -2,14 +2,23 @@
 name: king_skill_sat_solver
 description: Solve Boolean satisfiability, constraint satisfaction, graph coloring, scheduling, and combinatorial optimization problems via SAT/SMT solvers.
 metadata:
-  openclaw:
-    emoji: 🎯
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["python-sat", "z3-solver", "ortools"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🎯",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["python-sat", "z3-solver", "ortools"],
+              "label": "Install SAT/SMT solvers (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # SAT Solver

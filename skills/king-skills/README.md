@@ -111,41 +111,59 @@ Priority  Skill              Trigger Keywords
 
 ---
 
-## Installation
-
-### Quick Install
+### Installation
 
 ```bash
-# Clone the OpenClaw repository
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+# 1. Access the King-Skill suite
+git clone https://github.com/Agnuxo1/King-Skill-Extended-Cognition-Architecture.git
+cd King-Skill-Extended-Cognition-Architecture
 
-# Copy King-Skill skills to OpenClaw skills directory
-cp -r king-skills/* skills/
+# 2. Copy the suite to OpenClaw's skills directory
+# This maintains king-skills/ as a cohesive subfolder
+cp -r skills/king-skills [path-to-openclaw]/skills/
 
-# Install Python dependencies
+# 3. Install Python dependencies
 pip install numpy scipy sympy pandas networkx python-sat z3-solver ortools
 pip install feedparser requests joblib matplotlib seaborn scikit-learn
 pip install pdfminer.six python-docx weasyprint
 
-# Optional: Lean 4 for formal verification
-curl https://elan.lean-lang.org/elan-init.sh | sh
+# 4. Optional: Lean 4 for formal verification
+# Safe download-first approach
+curl -fsSL https://elan.lean-lang.org/elan-init.sh -o /tmp/elan-init.sh
+echo "Review /tmp/elan-init.sh before running"
+sh /tmp/elan-init.sh -y
 source ~/.elan/env
 elan install leanprover/lean4:stable
 ```
 
 ### Individual Skill Installation
 
-Each skill includes automatic installation via OpenClaw's metadata:
+Each skill includes automatic installation via OpenClaw's JSON-based metadata:
 
 ```yaml
 metadata:
-  openclaw:
-    install:
-      - type: pip
-        packages: ["numpy", "scipy"]
-      - type: apt
-        packages: ["pandoc"]
+  {
+    "openclaw":
+      {
+        "emoji": "🧮",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["numpy", "scipy"],
+              "label": "Install dependencies (pip)",
+            },
+            {
+              "id": "apt",
+              "kind": "apt",
+              "packages": ["pandoc"],
+              "label": "Install pandoc (apt)",
+            },
+          ],
+      },
+  }
 ```
 
 ---
@@ -230,36 +248,45 @@ These skills are designed for contribution to the OpenClaw project.
 
 ```
 skills/
-├── python-executor/
-│   └── SKILL.md
-├── sat-solver/
-│   └── SKILL.md
-├── sympy/
-│   └── SKILL.md
-├── ... (20 skills total)
-└── README.md
+└── king-skills/
+    ├── python-executor/
+    │   └── SKILL.md
+    ├── sat-solver/
+    │   └── SKILL.md
+    ├── sympy/
+    │   └── SKILL.md
+    ├── ... (20 skills total)
+    └── README.md
 ```
 
 ### Skill Format
 
-Each skill follows OpenClaw's SKILL.md format:
+Each skill follows OpenClaw's modern JSON-style metadata format:
 
 ```yaml
 ---
 name: king_skill_<name>
 description: One-line description
 metadata:
-  openclaw:
-    emoji: 🧮
-    requires:
-      bins: ["python3"]
-      env: ["OPTIONAL_API_KEY"]
-    install:
-      - type: pip
-        packages: ["numpy"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🧮",
+        "requires": { "bins": ["python3"], "env": ["OPTIONAL_API_KEY"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["numpy"],
+              "label": "Install dependencies (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
-
+```
 # Skill Name
 
 ## When to Use

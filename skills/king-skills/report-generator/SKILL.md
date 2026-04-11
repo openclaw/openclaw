@@ -2,16 +2,29 @@
 name: king_skill_report_generator
 description: Generate structured scientific papers, reports, and OpenClaw submissions from verified results. Outputs arXiv-ready Markdown + LaTeX.
 metadata:
-  openclaw:
-    emoji: 📝
-    requires:
-      bins: ["python3", "pandoc"]
-    install:
-      - type: pip
-        packages: ["jinja2"]
-      - type: apt
-        packages: ["pandoc"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "📝",
+        "requires": { "bins": ["python3", "pandoc"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["jinja2"],
+              "label": "Install Jinja2 (pip)",
+            },
+            {
+              "id": "apt",
+              "kind": "apt",
+              "packages": ["pandoc"],
+              "label": "Install Pandoc (apt)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Report Generator
@@ -89,10 +102,12 @@ def generate_openclaw_paper(results: dict, config: dict) -> str:
 import subprocess
 
 def compile_paper(md_content: str, output_pdf: str):
-    with open("/tmp/paper.md", "w") as f:
+    import os
+    tmp_path = os.path.join(os.environ.get('TMPDIR', '/tmp'), 'paper.md')
+    with open(tmp_path, "w") as f:
         f.write(md_content)
     subprocess.run([
-        "pandoc", "/tmp/paper.md",
+        "pandoc", tmp_path,
         "-o", output_pdf,
         "--pdf-engine=xelatex",
     ], check=True)

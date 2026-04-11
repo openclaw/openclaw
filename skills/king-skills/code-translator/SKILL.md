@@ -2,16 +2,29 @@
 name: king_skill_code_translator
 description: Translate code between languages (Python, GLSL, CUDA, OpenCL, Lean4, C, Rust, Julia) using automated tools and structured prompting.
 metadata:
-  openclaw:
-    emoji: 🔄
-    requires:
-      bins: ["python3", "cargo"]
-    install:
-      - type: pip
-        packages: ["cython"]
-      - type: cargo
-        crates: ["c2rust"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🔄",
+        "requires": { "bins": ["python3", "cargo"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["cython"],
+              "label": "Install Cython (pip)",
+            },
+            {
+              "id": "cargo",
+              "kind": "cargo",
+              "crates": ["c2rust"],
+              "label": "Install c2rust (cargo)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Code Translator

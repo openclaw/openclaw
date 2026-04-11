@@ -2,14 +2,23 @@
 name: king_skill_sympy
 description: Symbolic algebra including differentiation, integration, series expansion, equation solving, matrix algebra, and polynomial manipulation.
 metadata:
-  openclaw:
-    emoji: ∑
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["sympy"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "∑",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["sympy"],
+              "label": "Install SymPy (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # SymPy Symbolic Math

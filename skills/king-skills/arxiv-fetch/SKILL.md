@@ -2,14 +2,23 @@
 name: king_skill_arxiv_fetch
 description: Fetch and search arXiv papers via API. Use instead of recalling paper contents from memory.
 metadata:
-  openclaw:
-    emoji: 📚
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["feedparser", "requests"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "📚",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["feedparser", "requests"],
+              "label": "Install feedparser and requests (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # arXiv Fetch

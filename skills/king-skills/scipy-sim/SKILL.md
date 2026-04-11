@@ -2,14 +2,23 @@
 name: king_skill_scipy_sim
 description: Scientific simulation using scipy, numpy, and open-source simulators. Covers ODEs, PDEs, thermodynamics, signal processing.
 metadata:
-  openclaw:
-    emoji: 🌊
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["scipy", "numpy", "matplotlib", "qutip"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🌊",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["scipy", "numpy", "matplotlib", "qutip"],
+              "label": "Install scientific simulation libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # SciPy Simulation

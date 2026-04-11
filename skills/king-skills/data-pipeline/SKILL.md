@@ -2,14 +2,23 @@
 name: king_skill_data_pipeline
 description: ETL, data cleaning, analysis, and visualization pipelines using pandas/polars. For experiment logs, benchmark results, and peer-review score analysis.
 metadata:
-  openclaw:
-    emoji: 📊
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["pandas", "polars", "matplotlib", "seaborn", "scikit-learn", "scipy", "numpy"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "📊",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["pandas", "polars", "matplotlib", "seaborn", "scikit-learn", "scipy", "numpy"],
+              "label": "Install data analysis libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Data Pipeline

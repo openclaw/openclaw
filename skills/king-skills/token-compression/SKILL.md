@@ -2,12 +2,15 @@
 name: king_skill_token_compression
 description: Maximum token compression by substituting natural language with mathematical notation, code, and physical formulas. Reduces output tokens by ~33% while preserving reasoning quality.
 metadata:
-  openclaw:
-    emoji: 🗜️
-    requires:
-      bins: ["python3"]
-    install: []
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🗜️",
+        "requires": { "bins": ["python3"] },
+        "install": [],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Token Compression

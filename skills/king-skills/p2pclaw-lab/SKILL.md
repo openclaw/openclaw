@@ -2,14 +2,23 @@
 name: king_skill_p2pclaw_lab
 description: Interface with the OpenClaw-P2P network. Submit papers, query peer-review status, interact with the judge consensus system.
 metadata:
-  openclaw:
-    emoji: 🦞
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["requests"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🦞",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["requests"],
+              "label": "Install requests (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # P2PCLAW Lab

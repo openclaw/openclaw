@@ -2,16 +2,24 @@
 name: king_skill_wolfram_query
 description: Query WolframAlpha for advanced mathematics, physics, chemistry, and scientific computations. Use when sympy/scipy are insufficient.
 metadata:
-  openclaw:
-    emoji: 🔮
-    requires:
-      bins: ["python3", "pip"]
-      env: ["WOLFRAM_APP_ID"]
-    install:
-      - type: pip
-        packages: ["wolframalpha", "requests"]
-    os: ["darwin", "linux", "win32"]
-    primaryEnv: "WOLFRAM_APP_ID"
+  {
+    "openclaw":
+      {
+        "emoji": "🔮",
+        "requires": { "bins": ["python3", "pip"], "env": ["WOLFRAM_APP_ID"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["wolframalpha", "requests"],
+              "label": "Install WolframAlpha dependencies (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+        "primaryEnv": "WOLFRAM_APP_ID",
+      },
+  }
 ---
 
 # Wolfram Query
@@ -72,9 +80,9 @@ wolfram_query("Riemann zeta(3) closed form")
 ```python
 def compute(query_sympy, query_wolfram_fallback):
     try:
-        from sympy import *
-        return eval(query_sympy)
-    except:
+        from sympy import sympify
+        return sympify(query_sympy)
+    except Exception:
         return wolfram_query(query_wolfram_fallback)
 ```
 

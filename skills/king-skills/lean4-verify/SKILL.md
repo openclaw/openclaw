@@ -2,14 +2,23 @@
 name: king_skill_lean4_verify
 description: Verify formal proofs and check mathematical claims using Lean 4. Critical for Claims-Boundary Matrix (CBM) verification.
 metadata:
-  openclaw:
-    emoji: ✅
-    requires:
-      bins: ["lean", "elan"]
-    install:
-      - type: shell
-        command: "curl https://elan.lean-lang.org/elan-init.sh -sSf | sh && source ~/.elan/env && elan install leanprover/lean4:stable"
-    os: ["darwin", "linux"]
+  {
+    "openclaw":
+      {
+        "emoji": "✅",
+        "requires": { "bins": ["lean", "elan"] },
+        "install":
+          [
+            {
+              "id": "elan",
+              "kind": "shell",
+              "command": "curl -fsSL https://elan.lean-lang.org/elan-init.sh -o /tmp/elan-init.sh && sh /tmp/elan-init.sh -y",
+              "label": "Install Lean 4 via elan (safe manual review recommended)",
+            },
+          ],
+        "os": ["darwin", "linux"],
+      },
+  }
 ---
 
 # Lean 4 Verification
@@ -34,7 +43,10 @@ Verify formal proofs and check mathematical claims using Lean 4.
 ### Install
 
 ```bash
-curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
+# Safe download-first approach
+curl -fsSL https://elan.lean-lang.org/elan-init.sh -o /tmp/elan-init.sh
+echo "Review /tmp/elan-init.sh before running"
+sh /tmp/elan-init.sh
 source ~/.elan/env
 elan install leanprover/lean4:stable
 ```
@@ -42,7 +54,7 @@ elan install leanprover/lean4:stable
 ### Inline Verification
 
 ```lean4
--- Save to /tmp/verify.lean then: lean /tmp/verify.lean
+-- Save to $TMPDIR/verify.lean then: lean $TMPDIR/verify.lean
 import Mathlib.Tactic
 
 -- CBM status markers:
@@ -72,8 +84,10 @@ CBM = {
 ### Quick Check
 
 ```bash
-echo 'theorem t : 2 + 2 = 4 := by norm_num' > /tmp/t.lean
-lean /tmp/t.lean && echo "VERIFIED" || echo "FAILED"
+# Use environment-aware temp directory
+TMP_LEAN=$(mktemp -t verify.XXXXXXXXXX.lean)
+echo 'theorem t : 2 + 2 = 4 := by norm_num' > "$TMP_LEAN"
+lean "$TMP_LEAN" && echo "VERIFIED" || echo "FAILED"
 ```
 
 ## Notes

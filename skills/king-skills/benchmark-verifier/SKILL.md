@@ -2,14 +2,23 @@
 name: king_skill_benchmark_verifier
 description: Automatically verify computational results against known benchmarks, cross-validate between tools, and check CBM claim status.
 metadata:
-  openclaw:
-    emoji: ✓
-    requires:
-      bins: ["python3", "pip"]
-    install:
-      - type: pip
-        packages: ["numpy", "scipy", "sympy"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "✓",
+        "requires": { "bins": ["python3", "pip"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["numpy", "scipy", "sympy"],
+              "label": "Install numerical scientific libraries (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Benchmark Verifier

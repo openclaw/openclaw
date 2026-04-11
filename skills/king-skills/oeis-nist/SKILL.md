@@ -2,15 +2,23 @@
 name: king_skill_oeis_nist
 description: Look up integer sequences (OEIS) and physical constants (NIST CODATA). Never recall constants from memory—always use exact values.
 metadata:
-  openclaw:
-    emoji: 🔬
-    requires:
-      bins: ["python3"]
-      env: ["REQUESTS_AVAILABLE"]
-    install:
-      - type: pip
-        packages: ["requests"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "🔬",
+        "requires": { "bins": ["python3"] },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["requests"],
+              "label": "Install requests (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # OEIS & NIST Constants

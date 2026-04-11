@@ -2,12 +2,15 @@
 name: king_skill_knowledge_cache
 description: Cache verified results to avoid recomputation. Check BEFORE any computation.
 metadata:
-  openclaw:
-    emoji: 💾
-    requires:
-      bins: ["python3"]
-    install: []
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "💾",
+        "requires": { "bins": ["python3"] },
+        "install": [],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # Knowledge Cache
@@ -35,7 +38,7 @@ import hashlib
 import os
 from datetime import datetime, timezone
 
-CACHE_DIR = '/tmp/openclaw_cache'
+CACHE_DIR = os.path.join(os.environ.get('TMPDIR', '/tmp'), 'openclaw_cache')
 
 def _key(query: str) -> str:
     return hashlib.sha256(query.encode()).hexdigest()[:16]

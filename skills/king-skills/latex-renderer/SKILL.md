@@ -2,16 +2,29 @@
 name: king_skill_latex_renderer
 description: Generate and compile scientific documents to PDF, HTML, LaTeX, DOCX using pandoc. Verified PDF engine for arXiv submissions.
 metadata:
-  openclaw:
-    emoji: 📜
-    requires:
-      bins: ["pandoc", "python3"]
-    install:
-      - type: apt
-        packages: ["pandoc", "texlive-latex-base", "texlive-science"]
-      - type: pip
-        packages: ["weasyprint"]
-    os: ["darwin", "linux", "win32"]
+  {
+    "openclaw":
+      {
+        "emoji": "📜",
+        "requires": { "bins": ["pandoc", "python3"] },
+        "install":
+          [
+            {
+              "id": "apt",
+              "kind": "apt",
+              "packages": ["pandoc", "texlive-latex-base", "texlive-science"],
+              "label": "Install Pandoc and LaTeX (apt)",
+            },
+            {
+              "id": "pip",
+              "kind": "pip",
+              "packages": ["weasyprint"],
+              "label": "Install weasyprint (pip)",
+            },
+          ],
+        "os": ["darwin", "linux", "win32"],
+      },
+  }
 ---
 
 # LaTeX Renderer
