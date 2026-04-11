@@ -338,7 +338,7 @@ describe("buildLineMessageContext", () => {
       });
     });
 
-    it("still generates text description for BodyForAgent", async () => {
+    it("includes explicit StickerInfo details in BodyForAgent", async () => {
       const event = createStickerEvent({ packageId: "446", stickerId: "1988" });
       const context = await buildLineMessageContext({
         event,
@@ -348,7 +348,10 @@ describe("buildLineMessageContext", () => {
         commandAuthorized: true,
       });
       expect(context).not.toBeNull();
-      expect(context!.ctxPayload.BodyForAgent).toContain("[Sent a");
+      expect(context!.ctxPayload.BodyForAgent).toContain("[User sent a");
+      expect(context!.ctxPayload.BodyForAgent).toContain("[StickerInfo");
+      expect(context!.ctxPayload.BodyForAgent).toContain("package_id=446");
+      expect(context!.ctxPayload.BodyForAgent).toContain("sticker_id=1988");
     });
 
     it("sets empty keywords array when no keywords provided", async () => {

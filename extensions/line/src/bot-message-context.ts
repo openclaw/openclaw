@@ -203,6 +203,33 @@ function describeStickerKeywords(sticker: StickerEventMessage): string {
   return "";
 }
 
+function formatStickerInboundContext(sticker: StickerEventMessage): string {
+  const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
+  const keywords = describeStickerKeywords(sticker);
+  const keywordList = (sticker as StickerEventMessage & { keywords?: string[] }).keywords ?? [];
+  const resourceType = normalizeOptionalString(
+    (sticker as StickerEventMessage & { stickerResourceType?: string }).stickerResourceType,
+  );
+
+  const segments = [
+    `channel=line`,
+    `package_id=${sticker.packageId}`,
+    `sticker_id=${sticker.stickerId}`,
+    `set=${packageName}`,
+    ...(resourceType ? [`resource_type=${resourceType}`] : []),
+    ...(keywordList.length > 0 ? [`keywords=${keywordList.slice(0, 5).join("|")}`] : []),
+  ];
+
+  if (keywords) {
+    return [
+      `[User sent a ${packageName} sticker: ${keywords}]`,
+      `[StickerInfo ${segments.join(" ")}]`,
+    ].join("\n");
+  }
+
+  return [`[User sent a ${packageName} sticker]`, `[StickerInfo ${segments.join(" ")}]`].join("\n");
+}
+
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
     return message.text;
@@ -219,14 +246,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
     );
   }
   if (message.type === "sticker") {
-    const sticker = message;
-    const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
-    const keywords = describeStickerKeywords(sticker);
-
-    if (keywords) {
-      return `[Sent a ${packageName} sticker: ${keywords}]`;
-    }
-    return `[Sent a ${packageName} sticker]`;
+    return formatStickerInboundContext(message);
   }
   return "";
 }
