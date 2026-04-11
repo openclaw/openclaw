@@ -1221,4 +1221,82 @@ describe("qa mock openai server", () => {
     // original delegate prompt from the first user turn.
     expect(debug.allInputText).toContain("Delegate one bounded QA task");
   });
+
+  it("rejects Anthropic /v1/messages streaming requests with a 400", async () => {
+    // Regression for the loop-7 Copilot finding: the /v1/messages handler
+    // used to ignore `body.stream: true` and silently return a
+    // non-streaming JSON response. That masks a real caller bug because
+    // the runner expects either an SSE stream or an explicit error.
+    // The mock should now return an Anthropic-shaped 400 so the failure
+    // mode is visible.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        messages: [
+          {
+            role: "user",
+            content: "Read the plan",
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      type: string;
+      error: { type: string; message: string };
+    };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(body.error.message).toContain("streaming is not supported");
+  });
+
+  it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-6", async () => {
+    // Regression for the loop-7 Copilot finding: a bare `typeof
+    // body.model === "string"` check lets an empty-string model leak
+    // through to `lastRequest.model` and `responseBody.model`. Empty
+    // strings must be treated the same as absent and default to
+    // `"claude-opus-4-6"` so parity consumers can trust the echoed label.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: "Read the plan",
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { model: string };
+    expect(body.model).toBe("claude-opus-4-6");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = (await debugResponse.json()) as { model: string };
+    expect(debug.model).toBe("claude-opus-4-6");
+  });
 });

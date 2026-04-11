@@ -1091,27 +1091,34 @@ async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
   input: ResponsesInputItem[];
   extracted: ExtractedAssistantOutput;
   responseBody: Record<string, unknown>;
+  model: string;
 }> {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const input = convertAnthropicMessagesToResponsesInput({
     system: body.system,
     messages,
   });
+  // Treat empty-string model the same as absent. A bare typeof check lets
+  // `""` leak through to `responseBody.model` and `lastRequest.model`,
+  // which then confuses parity consumers that assume the mock always
+  // echoes the real provider label. Normalize once and reuse everywhere.
+  const normalizedModel =
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-6";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // The mock dispatcher only reads `body.input`, `body.model`, and
   // `body.stream`, so a synthetic shim body is sufficient.
   const dispatchBody: Record<string, unknown> = {
     input,
-    model: typeof body.model === "string" ? body.model : "claude-opus-4-6",
+    model: normalizedModel,
     stream: false,
   };
   const events = await buildResponsesPayload(dispatchBody);
   const extracted = extractFinalAssistantOutputFromEvents(events);
   const responseBody = buildAnthropicMessageResponse({
-    model: typeof body.model === "string" ? body.model : "claude-opus-4-6",
+    model: normalizedModel,
     extracted,
   });
-  return { events, input, extracted, responseBody };
+  return { events, input, extracted, responseBody, model: normalizedModel };
 }
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
@@ -1225,18 +1232,40 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     if (req.method === "POST" && url.pathname === "/v1/messages") {
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
-      const { events, input, responseBody } = await buildMessagesPayload(body);
+      // Anthropic Messages supports SSE streaming in the real API, but the
+      // QA suite runner always runs mock provider mode with streaming off.
+      // Reject explicit streaming requests with an Anthropic-shaped 400 so
+      // the failure mode is obvious instead of silently returning a
+      // non-streaming JSON response that the caller never asked for.
+      if (body.stream === true) {
+        writeJson(res, 400, {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "Anthropic Messages streaming is not supported by the qa-lab mock server.",
+          },
+        });
+        return;
+      }
+      const {
+        events,
+        input,
+        responseBody,
+        model: normalizedModel,
+      } = await buildMessagesPayload(body);
       // Record the adapted request snapshot so /debug/requests gives the QA
       // suite the same plannedToolName / allInputText / toolOutput signals
       // on the Anthropic route that the OpenAI route already exposes. This
       // is what lets a single parity run diff assertions across both lanes.
+      // Reuse the normalized model so an empty-string body.model no longer
+      // leaks through to `lastRequest.model`.
       lastRequest = {
         raw,
         body: body as Record<string, unknown>,
         prompt: extractLastUserText(input),
         allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
-        model: typeof body.model === "string" ? body.model : "",
+        model: normalizedModel,
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };
@@ -1244,9 +1273,6 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       if (requests.length > 50) {
         requests.splice(0, requests.length - 50);
       }
-      // Anthropic Messages API supports streaming via SSE, but the QA suite
-      // runner always falls back to non-streaming for mock provider mode so
-      // this route only needs the JSON completion path.
       writeJson(res, 200, responseBody);
       return;
     }
