@@ -42,6 +42,8 @@ import { isAdapterError, type SessionRef as AdapterSessionRef } from "../adapter
 import type { AdapterType } from "../adapters/base.ts";
 import { CliExecAdapter } from "../adapters/cli-exec.ts";
 import { createAdapter } from "../adapters/factory.ts";
+import type { AcpxBridge } from "../adapters/openclaw/acpx-bridge.ts";
+import type { SessionsSpawnBridge } from "../adapters/openclaw/sessions-spawn.ts";
 import { applyArmTransition, type ArmState } from "../head/arm-fsm.ts";
 import type { ArtifactService } from "../head/artifacts.ts";
 import type { EventLogService } from "../head/event-log.ts";
@@ -220,6 +222,10 @@ export interface OctoGatewayHandlerDeps {
   maxArms?: number;
   /** ArtifactService for persisting arm output. */
   artifactService?: ArtifactService;
+  /** Bridge to OpenClaw's sessions_spawn API. Required for structured_subagent adapter. */
+  sessionsSpawnBridge?: SessionsSpawnBridge;
+  /** Bridge to acpx harness. Required for structured_acp adapter. */
+  acpxBridge?: AcpxBridge;
 }
 
 /**
@@ -235,6 +241,8 @@ export class OctoGatewayHandlers {
   private readonly leaseService: LeaseService | undefined;
   private readonly sessionReconciler: SessionReconciler | undefined;
   private readonly artifactService: ArtifactService | undefined;
+  private readonly sessionsSpawnBridge: SessionsSpawnBridge | undefined;
+  private readonly acpxBridge: AcpxBridge | undefined;
   private readonly nodeId: string;
   private readonly agentId: string;
   private readonly maxArms: number;
@@ -250,6 +258,8 @@ export class OctoGatewayHandlers {
     this.leaseService = deps.leaseService;
     this.sessionReconciler = deps.sessionReconciler;
     this.artifactService = deps.artifactService;
+    this.sessionsSpawnBridge = deps.sessionsSpawnBridge;
+    this.acpxBridge = deps.acpxBridge;
     this.nodeId = deps.nodeId;
     this.agentId = deps.agentId ?? "default";
     this.maxArms = deps.maxArms ?? 8;
@@ -370,7 +380,11 @@ export class OctoGatewayHandlers {
     // HandlerError("invalid_spec").
     let adapter;
     try {
-      adapter = createAdapter(spec.adapter_type, { tmuxManager: this.tmuxManager });
+      adapter = createAdapter(spec.adapter_type, {
+        tmuxManager: this.tmuxManager,
+        sessionsSpawnBridge: this.sessionsSpawnBridge,
+        acpxBridge: this.acpxBridge,
+      });
     } catch (err) {
       if (isAdapterError(err) && err.code === "not_supported") {
         throw new HandlerError("invalid_spec", `octo.arm.spawn: ${err.message}`);
@@ -485,14 +499,36 @@ export class OctoGatewayHandlers {
     }
 
     // Step 10 — map adapter SessionRef to wire SessionRef and persist.
+    // Include session_id from the adapter so downstream consumers
+    // (armTerminate, armSend, etc.) can use the adapter's own handle
+    // rather than reconstructing it from convention.
     const session_ref: SessionRef = {
       tmux_session_name: adapterRef.metadata?.tmux_session_name as string | undefined,
       cwd: adapterRef.cwd,
+      session_id: adapterRef.session_id,
     };
-    this.registry.casUpdateArm(arm_id, startingArm.version, {
-      session_ref: session_ref as unknown as Record<string, unknown>,
-      updated_at: this.now(),
-    });
+    // Wrap in try/catch to handle CAS races on the session_ref write.
+    // If another writer updated the arm between startingArm and now,
+    // re-read and retry once.
+    try {
+      this.registry.casUpdateArm(arm_id, startingArm.version, {
+        session_ref: session_ref as unknown as Record<string, unknown>,
+        updated_at: this.now(),
+      });
+    } catch (err) {
+      if (err instanceof ConflictError) {
+        // CAS race — re-read arm and retry once.
+        const freshArm = this.registry.getArm(arm_id);
+        if (freshArm) {
+          this.registry.casUpdateArm(arm_id, freshArm.version, {
+            session_ref: session_ref as unknown as Record<string, unknown>,
+            updated_at: this.now(),
+          });
+        }
+      } else {
+        throw err;
+      }
+    }
 
     // Step 11 — grip assignment. If the ArmSpec carries a `labels.grip`
     // matching a mission grip, assign that grip to this arm. This bridges
@@ -808,19 +844,39 @@ export class OctoGatewayHandlers {
     }
 
     const previousState = arm.state;
-    const sessionName = sessionNameForArm(arm.arm_id);
+    // Prefer the persisted session_ref.tmux_session_name over the
+    // convention-derived name, so custom session names are honored.
+    const sessionName =
+      (arm.session_ref?.tmux_session_name as string | undefined) ?? sessionNameForArm(arm.arm_id);
 
-    // Step 5 — kill tmux first. killSession returns false for
-    // already-gone sessions (idempotent); treat that as success.
+    // Step 5 — terminate the session. For cli_exec arms, use the
+    // adapter's own terminate() method instead of tmux kill. For
+    // pty_tmux (and any other adapter type with a tmux session), kill
+    // the tmux session directly.
     let killed: boolean;
-    try {
-      killed = await this.tmuxManager.killSession(sessionName);
-    } catch (err) {
-      throw new HandlerError(
-        "tmux_failed",
-        `octo.arm.terminate: tmux killSession failed for ${sessionName}: ${describeError(err)}`,
-        { arm_id: arm.arm_id, sessionName },
-      );
+    if (arm.adapter_type === "cli_exec") {
+      // cli_exec arms don't have tmux sessions — use adapter terminate.
+      try {
+        const cliAdapter = createAdapter("cli_exec" as AdapterType, {
+          tmuxManager: this.tmuxManager,
+        }) as CliExecAdapter;
+        const adapterRef = this.buildAdapterSessionRef(arm);
+        await cliAdapter.terminate(adapterRef);
+        killed = true;
+      } catch {
+        // Best-effort — the process may already be dead.
+        killed = false;
+      }
+    } else {
+      try {
+        killed = await this.tmuxManager.killSession(sessionName);
+      } catch (err) {
+        throw new HandlerError(
+          "tmux_failed",
+          `octo.arm.terminate: tmux killSession failed for ${sessionName}: ${describeError(err)}`,
+          { arm_id: arm.arm_id, sessionName },
+        );
+      }
     }
 
     // Step 6 — FSM transition + persist.
@@ -909,6 +965,18 @@ export class OctoGatewayHandlers {
       throw new HandlerError("not_found", `octo.arm.send: arm not found: ${validRequest.arm_id}`, {
         arm_id: validRequest.arm_id,
       });
+    }
+
+    // LIMITATION: For cli_exec arms, createAdapter returns a fresh
+    // CliExecAdapter instance each call, which loses the session map
+    // from the adapter that originally spawned the process. Until an
+    // adapter persistence/registry layer is implemented, cli_exec
+    // sends cannot be delivered reliably. Return delivered:false.
+    if (arm.adapter_type === "cli_exec") {
+      return {
+        arm_id: validRequest.arm_id,
+        delivered: false,
+      };
     }
 
     let adapter;
@@ -1193,10 +1261,13 @@ export class OctoGatewayHandlers {
     };
     this.registry.putMission(missionInput);
 
-    // Step 7 -- insert GripRecords.
+    // Step 7 -- insert GripRecords. Prefix grip_ids with mission_id to
+    // avoid global PK collisions when the same grip_id appears in
+    // different missions.
     for (const node of spec.graph) {
+      const namespacedGripId = `${mission_id}/${node.grip_id}`;
       const gripInput: GripInput = {
-        grip_id: node.grip_id,
+        grip_id: namespacedGripId,
         mission_id,
         type: "mission_grip",
         input_ref: null,
@@ -1522,6 +1593,12 @@ export class OctoGatewayHandlers {
     for (const arm of arms) {
       if (cascadeStates.has(arm.state)) {
         try {
+          // The arm FSM does not allow starting→terminated directly.
+          // Transition starting→failed first so armTerminate can then
+          // drive failed→terminated.
+          if (arm.state === "starting") {
+            await this.markArmFailed(arm, `mission aborted: ${reason}`);
+          }
           await this.armTerminate({
             idempotency_key: `abort-cascade-${mission_id}-${arm.arm_id}`,
             arm_id: arm.arm_id,
@@ -1533,7 +1610,7 @@ export class OctoGatewayHandlers {
           // Best-effort cascade — if an individual arm terminate fails
           // (e.g. already terminated by a concurrent writer), continue
           // with the remaining arms. The mission is already aborted.
-          armsTerminated += 1;
+          // Do NOT increment armsTerminated — the terminate did not succeed.
         }
       }
     }
@@ -1563,7 +1640,7 @@ export class OctoGatewayHandlers {
         // grips that need to go through failed first), skip it. The mission
         // is already aborted; these grips will be cleaned up by the
         // retention sweep or operator action.
-        gripsAbandoned += 1;
+        // Do NOT increment gripsAbandoned — the abandon did not succeed.
       }
     }
 
@@ -1625,6 +1702,17 @@ export class OctoGatewayHandlers {
           arm_id: entry.arm_id,
           renewed: false,
           error: `unknown arm: ${entry.arm_id}`,
+        });
+        continue;
+      }
+
+      // Verify the arm belongs to the reporting node to prevent
+      // cross-node lease hijacking.
+      if (arm.node_id !== validPush.node_id) {
+        results.push({
+          arm_id: entry.arm_id,
+          renewed: false,
+          error: `arm ${entry.arm_id} belongs to node ${arm.node_id}, not ${validPush.node_id}`,
         });
         continue;
       }
@@ -1723,27 +1811,37 @@ export class OctoGatewayHandlers {
     const validRequest: OctoNodeReconcileRequest = request;
 
     const targetNodeId = validRequest.node_id ?? this.nodeId;
-    const report = await this.sessionReconciler.reconcile();
     const ts = this.now();
 
-    if (!validRequest.dry_run) {
-      await this.eventLog.append({
-        schema_version: 1,
-        entity_type: "operator",
-        entity_id: targetNodeId,
-        event_type: "operator.intervened",
-        ts: new Date(ts).toISOString(),
-        actor: `node-agent:${this.nodeId}`,
-        payload: {
-          action: "node.reconcile",
-          recovered_count: report.recovered_count,
-          orphan_count: report.orphan_count,
-          missing_count: report.missing_count,
-          total_live_sessions: report.total_live_sessions,
-          total_persisted_arms: report.total_persisted_arms,
-        },
-      });
+    // Check dry_run BEFORE calling reconcile to avoid mutating state
+    // when the caller only wanted a read-only preview.
+    if (validRequest.dry_run) {
+      return {
+        node_id: targetNodeId,
+        reconciled_count: 0,
+        anomaly_count: 0,
+        ts,
+      };
     }
+
+    const report = await this.sessionReconciler.reconcile();
+
+    await this.eventLog.append({
+      schema_version: 1,
+      entity_type: "operator",
+      entity_id: targetNodeId,
+      event_type: "operator.intervened",
+      ts: new Date(ts).toISOString(),
+      actor: `node-agent:${this.nodeId}`,
+      payload: {
+        action: "node.reconcile",
+        recovered_count: report.recovered_count,
+        orphan_count: report.orphan_count,
+        missing_count: report.missing_count,
+        total_live_sessions: report.total_live_sessions,
+        total_persisted_arms: report.total_persisted_arms,
+      },
+    });
 
     return {
       node_id: targetNodeId,

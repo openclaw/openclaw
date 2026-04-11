@@ -55,7 +55,7 @@ async function withHandlers<T>(
   const { ArtifactService } = await import("../head/artifacts.js");
   const { PolicyService } = await import("../head/policy.js");
   const { OctoLogger, consoleLoggerProvider } = await import("../head/logging.js");
-  const { DEFAULT_OCTO_CONFIG } = await import("../config/schema.js");
+  const { loadOctoConfig } = await import("../config/loader.js");
   const os = await import("node:os");
   let db;
   try {
@@ -66,12 +66,19 @@ async function withHandlers<T>(
     process.exit(1);
   }
   try {
+    // Load the actual octo config from disk (via loadOctoConfig) instead of
+    // hard-coding DEFAULT_OCTO_CONFIG. This respects user-configured policy,
+    // lease, and other settings from the openclaw.json `octo:` block.
+    // Pass empty rawConfig for now; once upstream PR-11 lands, the caller
+    // should pass the already-loaded OpenClawConfig here.
+    const octoConfig = loadOctoConfig({}, { logger: () => {} });
+
     const registry = new RegistryService(db);
     const eventLog = new EventLogService();
     const tmuxManager = new TmuxManager();
-    const leaseService = new LeaseService(db, eventLog, DEFAULT_OCTO_CONFIG.lease);
+    const leaseService = new LeaseService(db, eventLog, octoConfig.lease);
     const policyLogger = new OctoLogger("octo:policy:cli", consoleLoggerProvider);
-    const policyService = new PolicyService(DEFAULT_OCTO_CONFIG.policy, new Map(), policyLogger);
+    const policyService = new PolicyService(octoConfig.policy, new Map(), policyLogger);
     const artifactService = new ArtifactService(db, eventLog);
     const handlers = new OctoGatewayHandlers({
       registry,

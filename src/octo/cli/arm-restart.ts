@@ -233,10 +233,21 @@ export async function restartArm(deps: ArmRestartDeps, arm_id: string): Promise<
     tmux_session_name: sessionName,
     cwd: spec.cwd,
   };
-  registry.casUpdateArm(arm_id, currentArm.version, {
-    session_ref: session_ref as unknown as Record<string, unknown>,
-    updated_at: now(),
-  });
+  try {
+    registry.casUpdateArm(arm_id, currentArm.version, {
+      session_ref: session_ref as unknown as Record<string, unknown>,
+      updated_at: now(),
+    });
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      throw new ArmRestartError(
+        "conflict",
+        `octo arm restart: concurrent update writing session_ref for arm ${arm_id}: ${err.message}`,
+        { arm_id, expected_version: currentArm.version },
+      );
+    }
+    throw err;
+  }
 
   return {
     arm_id,

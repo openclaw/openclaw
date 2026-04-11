@@ -828,7 +828,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       key: "octo",
       nativeName: "octo",
       description: "Octopus Orchestrator — manage multi-agent missions.",
-      textAlias: "/octo",
+      scope: "native",
       category: "management",
       acceptsArgs: true,
       args: [

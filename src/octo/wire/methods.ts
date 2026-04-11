@@ -56,6 +56,8 @@ export const SessionRefSchema = Type.Object(
     worktree_path: Type.Optional(NonEmptyString),
     attach_command: Type.Optional(NonEmptyString),
     recovery_metadata: Type.Optional(Type.Record(Type.String(), Type.String())),
+    /** Adapter-assigned session identity (pid, session key, etc.). */
+    session_id: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

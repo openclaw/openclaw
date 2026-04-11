@@ -300,20 +300,23 @@ export async function startGatewayServer(
 
   // Octopus Orchestrator subsystem
   let octoInstance: import("../octo/index.js").OctopusInstance | null = null;
-  try {
+  {
     const { loadOctoConfig, initOctopus } = await import("../octo/index.js");
     const octoConfig = loadOctoConfig(cfgAtStart as Record<string, unknown>);
     if (octoConfig.enabled) {
-      const os = await import("node:os");
-      octoInstance = await initOctopus({
-        rawConfig: cfgAtStart as Record<string, unknown>,
-        nodeId: os.hostname(),
-      });
-      baseMethods.push(...octoInstance.methodNames);
-      log.info("octopus: initialized successfully");
+      try {
+        const os = await import("node:os");
+        octoInstance = await initOctopus({
+          rawConfig: cfgAtStart as Record<string, unknown>,
+          nodeId: os.hostname(),
+        });
+        baseMethods.push(...octoInstance.methodNames);
+        log.info("octopus: initialized successfully");
+      } catch (err) {
+        log.error(`octopus: failed to initialize: ${String(err)}`);
+        throw err;
+      }
     }
-  } catch (err) {
-    log.warn(`octopus: failed to initialize: ${String(err)}`);
   }
 
   const channelLogs = Object.fromEntries(
@@ -524,6 +527,13 @@ export async function startGatewayServer(
       closeMcpServer: async () => await runtimeState?.mcpServer?.close(),
     });
   const closeOnStartupFailure = async () => {
+    if (octoInstance) {
+      try {
+        await octoInstance.shutdown();
+      } catch (err) {
+        log.warn(`octopus: shutdown on startup failure failed: ${String(err)}`);
+      }
+    }
     await runClosePrelude();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
@@ -748,8 +758,24 @@ export async function startGatewayServer(
           ? Object.fromEntries(
               Object.entries(octoInstance.handlers).map(([k, fn]) => [
                 k,
-                async (params: unknown) => {
-                  await fn(params);
+                async (opts: {
+                  params: Record<string, unknown>;
+                  respond: (
+                    ok: boolean,
+                    payload?: unknown,
+                    error?: { code: string; message: string },
+                    meta?: Record<string, unknown>,
+                  ) => void;
+                }) => {
+                  try {
+                    const result = await fn(opts.params);
+                    opts.respond(true, result);
+                  } catch (err) {
+                    opts.respond(false, undefined, {
+                      code: "octo_error",
+                      message: String(err),
+                    });
+                  }
                 },
               ]),
             )

@@ -217,6 +217,13 @@ export class NodeAgent {
 
       // 3. For each starting arm, check liveness.
       for (const arm of startingArms) {
+        // Only poll tmux sessions for pty_tmux arms. Other adapter types
+        // (e.g. cli_exec, structured_subagent) don't have tmux sessions,
+        // so checking tmux liveness would incorrectly drive them to failed.
+        if (arm.adapter_type !== "pty_tmux") {
+          continue;
+        }
+
         const sessionName = `${this.sessionNamePrefix}${arm.arm_id}`;
 
         if (liveNames.has(sessionName)) {
@@ -261,21 +268,27 @@ export class NodeAgent {
       return;
     }
 
+    let succeeded: boolean;
     if (event.type === "completed") {
       // completed means exit code 0. For arms that are active, this
       // maps to the completed state.
-      await this.transitionArm(arm, "completed", "arm.completed", {
+      succeeded = await this.transitionArm(arm, "completed", "arm.completed", {
         exit_code: event.exit_code,
       });
     } else {
       // failed -- non-zero exit, sentinel missing, etc.
-      await this.transitionArm(arm, "failed", "arm.failed", {
+      succeeded = await this.transitionArm(arm, "failed", "arm.failed", {
         exit_code: event.exit_code,
         reason: event.reason,
       });
     }
 
-    this.processWatcher.unwatch(event.arm_id);
+    // Only unwatch when the transition actually succeeded. If it was
+    // rejected (InvalidTransitionError) or lost a CAS race, keep the
+    // watcher attached so a future event can retry.
+    if (succeeded) {
+      this.processWatcher.unwatch(event.arm_id);
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -287,7 +300,7 @@ export class NodeAgent {
     toState: "active" | "failed" | "completed",
     eventType: AppendInput["event_type"],
     extraPayload: Record<string, unknown> = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     const now = this.nowFn();
 
     // FSM validate + produce new state.
@@ -304,7 +317,7 @@ export class NodeAgent {
           from: arm.state,
           to: toState,
         });
-        return;
+        return false;
       }
       throw err;
     }
@@ -322,7 +335,7 @@ export class NodeAgent {
           expected_version: arm.version,
           actual_version: err.actualVersion,
         });
-        return;
+        return false;
       }
       throw err;
     }
@@ -467,6 +480,8 @@ export class NodeAgent {
         });
       }
     }
+
+    return true;
   }
 
   // ────────────────────────────────────────────────────────────────────────

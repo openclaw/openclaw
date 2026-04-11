@@ -268,6 +268,7 @@ describe.skipIf(!TMUX_AVAILABLE)("OctoGatewayHandlers.armSpawn (M1-14)", () => {
     expect(row?.state).toBe("starting");
     expect(row?.node_id).toBe("test-node-m1-14");
     expect(row?.session_ref).toEqual({
+      session_id: `octo-arm-${armId}`,
       tmux_session_name: `octo-arm-${armId}`,
       cwd: "/tmp",
     });
@@ -1125,7 +1126,7 @@ describe("OctoGatewayHandlers.missionCreate (M3-01)", () => {
     const grips = missionHarness.registry.listGrips({ mission_id: missionId });
     expect(grips.length).toBe(3);
     const gripIds = grips.map((g) => g.grip_id).toSorted();
-    expect(gripIds).toEqual(["grip-A", "grip-B", "grip-C"]);
+    expect(gripIds).toEqual([`${missionId}/grip-A`, `${missionId}/grip-B`, `${missionId}/grip-C`]);
     for (const grip of grips) {
       expect(grip.status).toBe("queued");
     }

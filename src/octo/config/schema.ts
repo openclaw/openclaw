@@ -351,7 +351,7 @@ export type OctoConfig = Static<typeof OctoConfigSchema>;
 // ══════════════════════════════════════════════════════════════════════════
 
 export const DEFAULT_OCTO_CONFIG: OctoConfig = {
-  enabled: true,
+  enabled: false,
   storage: {
     registryPath: "octo/registry.sqlite",
     eventsPath: "octo/events.jsonl",

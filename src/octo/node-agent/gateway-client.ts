@@ -140,6 +140,13 @@ export class NodeAgentGatewayClient {
   /**
    * Send a lease renew push to the Head. Formats the payload to match
    * OctoLeaseRenewPushSchema from wire/events.ts.
+   *
+   * NOTE: connect() hard-codes `role: "node"`. In multi-node deployments
+   * the gateway may restrict allowed methods per role. If `octo.lease.renew`
+   * is not in the node-role allowed-methods list, this call will be rejected
+   * by the gateway. Ensure the gateway's role scope includes
+   * `octo.lease.renew` for node-role connections, or promote this method
+   * to the node-role allowlist before enabling multi-node.
    */
   async sendLeaseRenew(leases: LeaseEntry[]): Promise<void> {
     if (!this.connected) {

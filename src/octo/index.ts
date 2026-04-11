@@ -177,10 +177,10 @@ export async function initOctopus(deps: OctopusDeps): Promise<OctopusInstance> {
 
   logger.info("initializing Octopus Orchestrator subsystem");
 
-  // 2. Open storage
-  const db = openOctoRegistry();
+  // 2. Open storage — respect configured paths
+  const db = openOctoRegistry({ path: config.storage.registryPath });
   const registry = new RegistryService(db);
-  const eventLog = new EventLogService();
+  const eventLog = new EventLogService({ path: config.storage.eventsPath });
 
   // 3. Initialize metrics
   const metricsProvider = deps.metricsProvider ?? noopMetricsProvider;
@@ -211,7 +211,7 @@ export async function initOctopus(deps: OctopusDeps): Promise<OctopusInstance> {
     tmuxManager,
     nodeId: deps.nodeId,
     leaseService: leases,
-    policyService: policy as never,
+    policyService: policy,
   };
   const handlers = new OctoGatewayHandlers(handlerDeps);
 
@@ -223,7 +223,13 @@ export async function initOctopus(deps: OctopusDeps): Promise<OctopusInstance> {
     tmuxManager,
     pollIntervalMs: 1000,
   });
-  const reconciliationReport = await nodeAgent.start();
+  let reconciliationReport;
+  try {
+    reconciliationReport = await nodeAgent.start();
+  } catch (err) {
+    closeOctoRegistry(db);
+    throw err;
+  }
   logger.info(
     `node agent started: ${reconciliationReport.recovered_count} arms recovered, ` +
       `${reconciliationReport.orphan_count} orphans, ${reconciliationReport.missing_count} missing`,
@@ -249,9 +255,11 @@ export async function initOctopus(deps: OctopusDeps): Promise<OctopusInstance> {
     "octo.mission.resume": (p) => handlers.missionResume(p as never),
     "octo.mission.abort": (p) => handlers.missionAbort(p as never),
     "octo.lease.renew": (p) => handlers.leaseRenew(p as never),
+    "octo.node.capabilities": (p) => handlers.nodeCapabilities(p as never),
+    "octo.node.reconcile": (p) => handlers.nodeReconcile(p as never),
   };
 
-  // 9. Shutdown function
+  // 9. Shutdown function — drain node-agent work before closing registry
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down Octopus Orchestrator");
     nodeAgent.stop();
