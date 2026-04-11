@@ -7,6 +7,7 @@ import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveTelegramMediaRuntimeOptions,
+  resolveTelegramAccountConfig,
   resetMissingDefaultWarnFlag,
   resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
@@ -502,6 +503,27 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     });
 
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("normalizes account ids before reading account-scoped groups", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: { "-100123": { requireMention: true } },
+          accounts: {
+            "Router D": {
+              botToken: "123:router-d",
+              groups: { "-100123": { requireMention: false } },
+            },
+            secondary: { botToken: "456:secondary" },
+          },
+        },
+      },
+    };
+
+    expect(resolveTelegramAccountConfig(cfg, "router-d")?.groups).toEqual({
+      "-100123": { requireMention: false },
+    });
   });
 });
 

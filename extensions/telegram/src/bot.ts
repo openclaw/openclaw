@@ -23,7 +23,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramAccountConfig } from "./accounts.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -444,28 +444,34 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       overrideOrder: "after-config",
     });
   const loadFreshTelegramAccountConfig = () => {
-    const freshCfg = telegramDeps.loadConfig();
     try {
+      const freshCfg = telegramDeps.loadConfig();
       return {
         cfg: freshCfg,
         accountConfig: resolveTelegramAccount({
           cfg: freshCfg,
           accountId: account.accountId,
         }).config,
+        accountGroups: resolveTelegramAccountConfig(freshCfg, account.accountId)?.groups,
       };
     } catch (error) {
       logVerbose(
         `telegram: failed to load fresh config for account ${account.accountId}; using startup snapshot: ${String(error)}`,
       );
-      return { cfg, accountConfig: telegramCfg };
+      return {
+        cfg,
+        accountConfig: telegramCfg,
+        accountGroups: resolveTelegramAccountConfig(cfg, account.accountId)?.groups,
+      };
     }
   };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const { cfg: freshCfg, accountConfig: freshTelegramCfg } = loadFreshTelegramAccountConfig();
+    const { cfg: freshCfg, accountConfig: freshTelegramCfg, accountGroups } =
+      loadFreshTelegramAccountConfig();
     // Multi-account routing should still honor channel-level group prompt/skill/topic
     // config, matching the requireMention fallback behavior.
     const groups =
-      freshCfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+      accountGroups ??
       freshCfg.channels?.telegram?.groups ??
       freshTelegramCfg.groups;
     const direct = freshTelegramCfg.direct;

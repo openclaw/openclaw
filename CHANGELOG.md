@@ -8,8 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Telegram: let multi-account bots still inherit channel-level group and topic prompt config for `systemPrompt` and skills resolution, matching the existing `requireMention` fallback behavior. (#64609)
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
+- Telegram: let multi-account bots still inherit channel-level group and topic prompt config for `systemPrompt` and skills resolution, matching the existing `requireMention` fallback behavior. (#64609)
 
 ## 2026.4.10
 
