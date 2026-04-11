@@ -13,6 +13,38 @@ type DebugProxyServerHandle = {
   stop: () => Promise<void>;
 };
 
+export function parseConnectTarget(rawTarget: string | undefined): {
+  hostname: string;
+  port: number;
+} {
+  const trimmed = rawTarget?.trim() ?? "";
+  if (!trimmed) {
+    return { hostname: "127.0.0.1", port: 443 };
+  }
+
+  const bracketedMatch = trimmed.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketedMatch) {
+    const hostname = bracketedMatch[1]?.trim() || "127.0.0.1";
+    const port = Number(bracketedMatch[2] || 443);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("Invalid CONNECT target port");
+    }
+    return { hostname, port };
+  }
+
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon <= 0 || lastColon === trimmed.length - 1) {
+    return { hostname: trimmed, port: 443 };
+  }
+  const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
+  const portText = trimmed.slice(lastColon + 1).trim();
+  const port = Number(portText);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Invalid CONNECT target port");
+  }
+  return { hostname, port };
+}
+
 function normalizeTargetUrl(req: IncomingMessage): URL {
   if (req.url?.startsWith("http://") || req.url?.startsWith("https://")) {
     return new URL(req.url);
@@ -119,9 +151,29 @@ export async function startDebugProxyServer(params: {
 
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
-    const [hostnameRaw, portRaw] = (req.url ?? "").split(":");
-    const hostname = hostnameRaw || "127.0.0.1";
-    const port = Number(portRaw || 443);
+    let hostname = "127.0.0.1";
+    let port = 443;
+    try {
+      const parsed = parseConnectTarget(req.url);
+      hostname = parsed.hostname;
+      port = parsed.port;
+    } catch (error) {
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error instanceof Error ? error.message : String(error),
+      });
+      clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      return;
+    }
     store.recordEvent({
       sessionId: params.settings.sessionId,
       ts: Date.now(),
