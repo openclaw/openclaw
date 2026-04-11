@@ -11,6 +11,7 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveOllamaApiBase } from "./provider-models.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
 
 export type OllamaEmbeddingProvider = {
   id: string;
@@ -134,7 +135,8 @@ function resolveOllamaEmbeddingClient(
   options: OllamaEmbeddingOptions,
 ): OllamaEmbeddingClientConfig {
   const providerConfig = options.config.models?.providers?.ollama;
-  const rawBaseUrl = options.remote?.baseUrl?.trim() || providerConfig?.baseUrl?.trim();
+  const rawBaseUrl =
+    options.remote?.baseUrl?.trim() || readProviderBaseUrl(providerConfig);
   const baseUrl = resolveOllamaApiBase(rawBaseUrl);
   const model = normalizeEmbeddingModel(options.model);
   const headerOverrides = Object.assign({}, providerConfig?.headers, options.remote?.headers);

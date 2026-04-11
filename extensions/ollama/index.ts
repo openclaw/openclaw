@@ -24,6 +24,7 @@ import {
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
+import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
@@ -65,8 +66,9 @@ function hasMeaningfulExplicitOllamaConfig(providerConfig?: OllamaProviderLikeCo
   if (Array.isArray(providerConfig.models) && providerConfig.models.length > 0) {
     return true;
   }
-  if (typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()) {
-    return resolveOllamaApiBase(providerConfig.baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
+  const baseUrl = readProviderBaseUrl(providerConfig);
+  if (baseUrl) {
+    return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
   if (readStringValue(providerConfig.apiKey)) {
     return true;
@@ -175,10 +177,9 @@ export default definePluginEntry({
             return {
               provider: {
                 ...explicit,
-                baseUrl:
-                  typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-                    ? resolveOllamaApiBase(explicit.baseUrl)
-                    : OLLAMA_DEFAULT_BASE_URL,
+                baseUrl: resolveOllamaApiBase(
+                  readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL,
+                ),
                 api: explicit.api ?? "ollama",
                 apiKey: resolveOllamaDiscoveryApiKey({
                   env: ctx.env,
@@ -196,7 +197,7 @@ export default definePluginEntry({
             return null;
           }
 
-          const provider = await buildOllamaProvider(explicit?.baseUrl, {
+          const provider = await buildOllamaProvider(readProviderBaseUrl(explicit), {
             quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
           });
           if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
@@ -243,8 +244,9 @@ export default definePluginEntry({
       createStreamFn: ({ config, model, provider }) => {
         return createConfiguredOllamaStreamFn({
           model,
-          providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
-            ?.baseUrl,
+          providerBaseUrl: readProviderBaseUrl(
+            resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+          ),
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
