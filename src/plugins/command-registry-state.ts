@@ -76,9 +76,9 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   if (providerName) {
     const channelPlugin = getChannelPlugin(providerName);
     if (
-      channelPlugin &&
-      !channelPlugin.capabilities?.nativeCommands &&
-      !channelPlugin.commands?.nativeCommandsAutoEnabled
+      !channelPlugin ||
+      (!channelPlugin.capabilities?.nativeCommands &&
+        !channelPlugin.commands?.nativeCommandsAutoEnabled)
     ) {
       return [];
     }

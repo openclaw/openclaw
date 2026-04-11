@@ -202,6 +202,17 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "slack",
+            label: "Slack",
+            capabilities: { nativeCommands: true, chatTypes: ["direct", "group"] },
+          }),
+        },
+      },
     ]),
   );
 });
