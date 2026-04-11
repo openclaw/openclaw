@@ -81,6 +81,43 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("sends sticker-only block replies immediately when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ sticker: { raw: "446:1988" } });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      sticker: { raw: "446:1988" },
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    });
+    expect(directlySentBlockKeys).toEqual(
+      new Set([
+        createBlockReplyContentKey({
+          sticker: { raw: "446:1988" },
+        }),
+      ]),
+    );
+  });
+
   it("trims leading whitespace in block-streamed replies", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

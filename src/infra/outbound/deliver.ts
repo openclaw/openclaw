@@ -74,6 +74,7 @@ type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   supportsMedia: boolean;
+  supportsStickerPayload: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
@@ -166,6 +167,11 @@ function createPluginHandler(
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
   const sendMedia = outbound.sendMedia;
+  const outboundPayloadTypes = Array.isArray(outbound.supportedPayloadTypes)
+    ? outbound.supportedPayloadTypes
+    : [];
+  const supportsStickerPayload =
+    outbound.supportsStickerPayload === true || outboundPayloadTypes.includes("sticker");
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
@@ -183,6 +189,7 @@ function createPluginHandler(
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     supportsMedia: Boolean(sendMedia),
+    supportsStickerPayload,
     sanitizeText: outbound.sanitizeText
       ? (payload) => outbound.sanitizeText!({ text: payload.text ?? "", payload })
       : undefined,
@@ -696,7 +703,7 @@ async function deliverOutboundPayloadsCore(
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
         }) ||
-          effectivePayload.sticker)
+          (effectivePayload.sticker && handler.supportsStickerPayload))
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
@@ -708,6 +715,25 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
+        if (
+          effectivePayload.sticker &&
+          !handler.supportsStickerPayload &&
+          !payloadSummary.text.trim()
+        ) {
+          log.warn(
+            "Sticker payload is not supported by channel outbound adapter; skipping delivery",
+            {
+              channel,
+              to,
+            },
+          );
+          emitMessageSent({
+            success: false,
+            content: payloadSummary.text,
+            error: "Sticker payload is not supported by channel outbound adapter",
+          });
+          continue;
+        }
         const beforeCount = results.length;
         if (handler.sendFormattedText) {
           results.push(...(await handler.sendFormattedText(payloadSummary.text, sendOverrides)));

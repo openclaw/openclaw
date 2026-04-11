@@ -130,6 +130,7 @@ export function createBlockReplyDeliveryHandler(params: {
       params.applyReplyToMode(mediaNormalizedPayload),
     );
     const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
+    const blockHasSticker = Boolean(blockPayload.sticker);
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     // Also keep sticker-only payloads (sticker is not counted in blockHasMedia).
@@ -163,17 +164,16 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasMedia) {
+    } else if (blockHasMedia || blockHasSticker) {
       // When block streaming is disabled, text-only block replies are accumulated into the
-      // final response. Media cannot be reconstructed later, so send it immediately and let
-      // the assistant's final text arrive through the normal final-reply path.
+      // final response. Media/sticker content cannot be reconstructed later, so send it
+      // immediately and let the assistant's final text arrive through the normal final-reply path.
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
         trackingPayload: blockPayload,
         payload: { ...blockPayload, text: undefined },
       });
-    }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
 }

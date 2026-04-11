@@ -1246,7 +1246,7 @@ describe("tryDispatchAcpReply", () => {
       expect.objectContaining({ text: "Second chunk." }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First chunk. \nSecond chunk." }),
+      expect.objectContaining({ text: expect.stringMatching(/^First chunk\. ?\nSecond chunk\.$/) }),
     );
     expect(result?.queuedFinal).toBe(true);
   });

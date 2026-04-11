@@ -1076,6 +1076,51 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
   });
 
+  it("does not use sendPayload for sticker-only payloads when sticker payloads are unsupported", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-skip" });
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ sticker: { raw: "446:1988" } }],
+    });
+
+    expect(sendPayload).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "Sticker payload is not supported by channel outbound adapter; skipping delivery",
+      expect.objectContaining({
+        channel: "matrix",
+        to: "!room:1",
+      }),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "!room:1",
+        success: false,
+        error: "Sticker payload is not supported by channel outbound adapter",
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(results).toEqual([]);
+  });
+
   it("falls back to sendText when plugin outbound omits sendMedia", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     setActivePluginRegistry(
