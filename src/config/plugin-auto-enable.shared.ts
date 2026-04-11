@@ -3,7 +3,7 @@ import {
   hasPotentialConfiguredChannels,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,
@@ -608,8 +608,17 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   return next;
 }
 
+function resolveAutoEnableChangeReason(entry: PluginAutoEnableCandidate): string {
+  if (entry.kind !== "channel-configured") {
+    return resolvePluginAutoEnableCandidateReason(entry);
+  }
+  const channelId = normalizeChatChannelId(entry.channelId);
+  const label = channelId ? getChatChannelMeta(channelId)?.label : undefined;
+  return `${label ?? entry.channelId} configured`;
+}
+
 function formatAutoEnableChange(entry: PluginAutoEnableCandidate): string {
-  return `${resolvePluginAutoEnableCandidateReason(entry).trim()}, enabled automatically.`;
+  return `${resolveAutoEnableChangeReason(entry).trim()}, enabled automatically.`;
 }
 
 export function resolvePluginAutoEnableManifestRegistry(params: {

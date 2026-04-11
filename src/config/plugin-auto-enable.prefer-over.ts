@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -105,6 +105,10 @@ function resolvePreferredOverIds(
   const installedChannelMeta = installedPlugin?.channelCatalogMeta;
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
+  }
+  const bundledChannelMeta = getChatChannelMeta(normalized);
+  if (bundledChannelMeta?.preferOver?.length) {
+    return [...bundledChannelMeta.preferOver];
   }
   return resolveExternalCatalogPreferOver(pluginId, env);
 }
