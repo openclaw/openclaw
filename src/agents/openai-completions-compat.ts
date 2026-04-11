@@ -65,6 +65,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "chutes"));
+  // Ollama's OpenAI-compat endpoint supports streaming usage when stream_options.include_usage is sent.
+  const isOllama = input.provider === "ollama" || knownProviderFamily === "ollama";
 
   return {
     supportsStore:
@@ -76,7 +78,8 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      !isNonStandard &&
+      (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat || isOllama),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
