@@ -324,7 +324,12 @@ jobs:
         run: |
           set -euo pipefail
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          if git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
+            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          else
+            echo "Base commit ${BASE_SHA} does not contain .pre-commit-config.yaml; using checked-out config instead."
+            cp .pre-commit-config.yaml "$trusted_config"
+          fi
           echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
