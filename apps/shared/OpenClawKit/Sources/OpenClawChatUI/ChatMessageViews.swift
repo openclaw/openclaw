@@ -183,6 +183,15 @@ private struct ChatMessageBody: View {
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
+            if ChatPlatformFeatures.showsExplicitCopyButton,
+               let copyableText = self.copyableText
+            {
+                HStack {
+                    Spacer(minLength: 0)
+                    ChatCopyButton(text: copyableText)
+                }
+            }
+
             if self.isToolResultMessage {
                 ToolResultDisclosureCard(
                     title: self.toolResultTitle,
@@ -376,9 +385,13 @@ private struct SlashCommandEchoCard: View {
                 .font(.system(.footnote, design: .monospaced).weight(.semibold))
                 .foregroundStyle(OpenClawChatTheme.userText)
             Spacer(minLength: 0)
+            if ChatPlatformFeatures.showsExplicitCopyButton {
+                ChatCopyButton(text: self.text)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .chatMessageTextSelection()
         .background(Color.white.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .copyContextMenu(text: self.text)
@@ -411,6 +424,12 @@ private struct ToolResultDisclosureCard: View {
                     Text("Tool output")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    if ChatPlatformFeatures.showsExplicitCopyButton,
+                       let detailText = self.detailText,
+                       !detailText.isEmpty
+                    {
+                        ChatCopyButton(text: detailText)
+                    }
                     Image(systemName: self.expanded ? "chevron.down" : "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -432,6 +451,7 @@ private struct ToolResultDisclosureCard: View {
                         .font(.footnote.monospaced())
                         .foregroundStyle(OpenClawChatTheme.assistantText)
                         .lineLimit(12)
+                        .chatMessageTextSelection()
                 } else {
                     Text("Tool output unavailable.")
                         .font(.caption)
@@ -706,6 +726,10 @@ private struct ChatAssistantTextBody: View {
 }
 
 private extension View {
+    func chatMessageTextSelection() -> some View {
+        self.textSelection(.enabled)
+    }
+
     @ViewBuilder
     func copyContextMenu(text: String?) -> some View {
         if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -720,6 +744,22 @@ private extension View {
     }
 }
 
+private struct ChatCopyButton: View {
+    let text: String
+
+    var body: some View {
+        Button {
+            ChatCopyboard.copy(self.text)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Copy")
+    }
+}
+
 private enum ChatCopyboard {
     static func copy(_ text: String) {
 #if canImport(UIKit)
@@ -727,6 +767,16 @@ private enum ChatCopyboard {
 #elseif canImport(AppKit)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+#endif
+    }
+}
+
+private enum ChatPlatformFeatures {
+    static var showsExplicitCopyButton: Bool {
+#if canImport(UIKit)
+        ProcessInfo.processInfo.isiOSAppOnMac
+#else
+        false
 #endif
     }
 }

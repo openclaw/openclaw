@@ -34,6 +34,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }
 
+    func listModels() async throws -> [OpenClawChatModelChoice] {
+        let res = try await self.gateway.request(method: "models.list", paramsJSON: "{}", timeoutSeconds: 15)
+        let decoded = try JSONDecoder().decode(ModelsListResult.self, from: res)
+        return decoded.models.map(Self.mapModelChoice)
+    }
+
     func setActiveSessionKey(_ sessionKey: String) async throws {
         // Operator clients receive chat events without node-style subscriptions.
         // (chat.subscribe is a node event, not an operator RPC method.)
@@ -51,6 +57,26 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         let data = try JSONEncoder().encode(Params(key: sessionKey))
         let json = String(data: data, encoding: .utf8)
         _ = try await self.gateway.request(method: "sessions.compact", paramsJSON: json, timeoutSeconds: 10)
+    }
+
+    func setSessionModel(sessionKey: String, model: String?) async throws {
+        let payload: [String: Any] = [
+            "key": sessionKey,
+            "model": model ?? NSNull(),
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+    }
+
+    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
+        struct Params: Codable {
+            var key: String
+            var thinkingLevel: String
+        }
+        let data = try JSONEncoder().encode(Params(key: sessionKey, thinkingLevel: thinkingLevel))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -152,5 +178,18 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
                 task.cancel()
             }
         }
+    }
+
+    private struct ModelsListResult: Decodable {
+        let models: [OpenClawProtocol.ModelChoice]
+    }
+
+    private static func mapModelChoice(_ model: OpenClawProtocol.ModelChoice) -> OpenClawChatModelChoice {
+        OpenClawChatModelChoice(
+            modelID: model.id,
+            name: model.name,
+            provider: model.provider,
+            alias: model.alias,
+            contextWindow: model.contextwindow)
     }
 }

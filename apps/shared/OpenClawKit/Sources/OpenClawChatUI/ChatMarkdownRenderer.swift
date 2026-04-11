@@ -33,6 +33,7 @@ struct ChatMarkdownRenderer: View {
                 InlineImageList(images: processed.images)
             }
         }
+        .chatMessageTextSelection()
     }
 }
 
@@ -63,6 +64,12 @@ private struct ChatMarkdownStyle: ViewModifier {
         return InlineStyle()
             .code(.monospaced, .fontScale(codeScale))
             .link(.foregroundColor(linkColor))
+    }
+}
+
+private extension View {
+    func chatMessageTextSelection() -> some View {
+        self.textSelection(.enabled)
     }
 }
 

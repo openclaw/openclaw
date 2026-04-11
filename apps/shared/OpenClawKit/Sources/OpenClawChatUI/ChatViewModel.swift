@@ -307,10 +307,31 @@ public final class OpenClawChatViewModel {
     }
 
     public var defaultModelLabel: String {
-        guard let defaultModelID = self.normalizedModelSelectionID(self.sessionDefaults?.model) else {
-            return "Default"
+        guard let defaultModelID = self.resolvedDefaultModelSelectionID
+        else {
+            return "Default model"
         }
-        return "Default: \(self.modelLabel(for: defaultModelID))"
+        return "Default (\(self.modelLabel(for: defaultModelID)))"
+    }
+
+    public var resolvedDefaultModelSelectionID: String? {
+        self.normalizedModelSelectionID(
+            self.sessionDefaults?.model,
+            provider: self.sessionDefaults?.modelProvider)
+    }
+
+    public var resolvedCurrentModelSelectionID: String? {
+        let currentSession = self.activeSessionEntry
+        return self.normalizedModelSelectionID(
+            currentSession?.model,
+            provider: currentSession?.modelProvider)
+    }
+
+    public var resolvedDisplayedModelSelectionID: String? {
+        if let overrideSelectionID = self.cachedModelOverrideSelectionID(for: self.sessionKey) {
+            return overrideSelectionID
+        }
+        return self.resolvedCurrentModelSelectionID
     }
 
     public func addAttachments(urls: [URL]) {
@@ -943,7 +964,12 @@ public final class OpenClawChatViewModel {
     }
 
     private func syncSelectedModel() {
-        let currentSession = self.sessions.first(where: { $0.key == self.sessionKey })
+        if let overrideSelectionID = self.cachedModelOverrideSelectionID(for: self.sessionKey) {
+            self.modelSelectionID = overrideSelectionID
+            return
+        }
+
+        let currentSession = self.activeSessionEntry
         let explicitModelID = self.normalizedModelSelectionID(
             currentSession?.model,
             provider: currentSession?.modelProvider)
@@ -966,20 +992,29 @@ public final class OpenClawChatViewModel {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if let provider = Self.normalizedProvider(provider) {
-            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
-            if let match = self.modelChoices.first(where: {
-                $0.selectionID == providerQualified ||
-                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
-            }) {
-                return match.selectionID
-            }
-            return providerQualified
-        }
         if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
             return trimmed
         }
-        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
+
+        let directModelMatches = self.modelChoices.filter { $0.modelID == trimmed }
+        if directModelMatches.count == 1 {
+            return directModelMatches[0].selectionID
+        }
+
+        if let provider = Self.normalizedProvider(provider) {
+            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
+            if self.modelChoices.contains(where: { $0.selectionID == providerQualified }) {
+                return providerQualified
+            }
+            if let exactProviderMatch = self.modelChoices.first(where: {
+                $0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider
+            }) {
+                return exactProviderMatch.selectionID
+            }
+            return trimmed.contains("/") ? trimmed : providerQualified
+        }
+
+        let matches = self.modelChoices.filter { $0.selectionID == trimmed || $0.modelID == trimmed }
         if matches.count == 1 {
             return matches[0].selectionID
         }
@@ -995,8 +1030,80 @@ public final class OpenClawChatViewModel {
     }
 
     private func modelLabel(for modelID: String) -> String {
-        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
-            modelID
+        let normalized = self.normalizedSelectionID(modelID)
+        if normalized == Self.defaultModelSelectionID {
+            return self.defaultModelLabel
+        }
+        if let match = self.modelChoices.first(where: { $0.selectionID == normalized || $0.modelID == normalized }) {
+            return self.modelDisplayLabel(for: match)
+        }
+        return normalized
+    }
+
+    public func modelOptionLabel(_ choice: OpenClawChatModelChoice) -> String {
+        self.modelDisplayLabel(for: choice)
+    }
+
+    private func modelDisplayLabel(for choice: OpenClawChatModelChoice) -> String {
+        self.modelDisplayLookup()[choice.selectionID.lowercased()] ?? self.rawModelDisplayLabel(for: choice)
+    }
+
+    private func rawModelDisplayLabel(for choice: OpenClawChatModelChoice) -> String {
+        let provider = choice.provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider.isEmpty ? choice.modelID : "\(choice.modelID) · \(provider)"
+    }
+
+    private func resolvedModelCatalogName(for choice: OpenClawChatModelChoice) -> String {
+        let alias = choice.alias?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !alias.isEmpty {
+            return alias
+        }
+        let name = choice.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name
+    }
+
+    private func modelDisplayLookup() -> [String: String] {
+        var nameToValues: [String: Set<String>] = [:]
+        var nameProviderToValues: [String: Set<String>] = [:]
+
+        for choice in self.modelChoices {
+            let name = self.resolvedModelCatalogName(for: choice)
+            guard !name.isEmpty else { continue }
+
+            let qualifiedKey = choice.selectionID.lowercased()
+            let normalizedName = name.lowercased()
+            let providerKey = "\(normalizedName)\u{0}\(Self.normalizedProvider(choice.provider) ?? "")"
+
+            nameToValues[normalizedName, default: []].insert(qualifiedKey)
+            nameProviderToValues[providerKey, default: []].insert(qualifiedKey)
+        }
+
+        var lookup: [String: String] = [:]
+        for choice in self.modelChoices {
+            let qualifiedKey = choice.selectionID.lowercased()
+            let name = self.resolvedModelCatalogName(for: choice)
+            guard !name.isEmpty else {
+                lookup[qualifiedKey] = self.rawModelDisplayLabel(for: choice)
+                continue
+            }
+
+            let normalizedName = name.lowercased()
+            if (nameToValues[normalizedName]?.count ?? 0) <= 1 {
+                lookup[qualifiedKey] = name
+                continue
+            }
+
+            let normalizedProvider = Self.normalizedProvider(choice.provider)
+            let providerKey = "\(normalizedName)\u{0}\(normalizedProvider ?? "")"
+            if (nameProviderToValues[providerKey]?.count ?? 0) <= 1 {
+                lookup[qualifiedKey] = normalizedProvider.map { "\(name) · \($0)" } ?? "\(name) · \(choice.modelID)"
+                continue
+            }
+
+            lookup[qualifiedKey] = "\(name) · \(self.rawModelDisplayLabel(for: choice))"
+        }
+
+        return lookup
     }
 
     private func applySuccessfulModelSelection(_ selectionID: String, sessionKey: String, syncSelection: Bool) {
@@ -1031,6 +1138,22 @@ public final class OpenClawChatViewModel {
             return modelID
         }
         return "\(provider)/\(modelID)"
+    }
+
+    private var activeSessionEntry: OpenClawChatSessionEntry? {
+        self.sessions.first { Self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey) }
+    }
+
+    private func cachedModelOverrideSelectionID(for sessionKey: String) -> String? {
+        let latest = self.latestModelSelectionIDsBySession[sessionKey]
+        let successful = self.lastSuccessfulModelSelectionIDsBySession[sessionKey]
+        let cached = latest ?? successful
+        let normalized = cached.map(self.normalizedSelectionID)
+        guard let normalized else { return nil }
+        if normalized == Self.defaultModelSelectionID {
+            return nil
+        }
+        return normalized
     }
 
     private func updateCurrentSessionModel(

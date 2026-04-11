@@ -64,10 +64,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
                 model: $0.model,
+                modelProvider: $0.modelProvider,
                 contextTokens: $0.contextTokens,
                 mainSessionKey: mainSessionKey)
         } ?? OpenClawChatSessionsDefaults(
             model: nil,
+            modelProvider: nil,
             contextTokens: nil,
             mainSessionKey: mainSessionKey)
         return OpenClawChatSessionsListResponse(
@@ -207,6 +209,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             modelID: model.id,
             name: model.name,
             provider: model.provider,
+            alias: model.alias,
             contextWindow: model.contextwindow)
     }
 }

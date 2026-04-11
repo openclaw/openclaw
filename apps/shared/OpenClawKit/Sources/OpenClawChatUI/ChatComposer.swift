@@ -77,12 +77,10 @@ struct OpenClawChatComposer: View {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                     }
-                    if self.viewModel.showsModelPicker {
-                        self.modelPicker
-                    }
+                    self.modelPicker
                     self.thinkingPicker
-                    Spacer()
                     self.refreshButton
+                    Spacer(minLength: 0)
                     self.attachmentPicker
                 }
                 .padding(.horizontal, 10)
@@ -158,21 +156,35 @@ struct OpenClawChatComposer: View {
     }
 
     private var modelPicker: some View {
-        Picker(
-            "Model",
-            selection: Binding(
-                get: { self.viewModel.modelSelectionID },
-                set: { next in self.viewModel.selectModel(next) }))
-        {
-            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+        Menu {
+            Button {
+                self.viewModel.selectModel(OpenClawChatViewModel.defaultModelSelectionID)
+            } label: {
+                self.modelMenuItem(
+                    title: self.viewModel.defaultModelLabel,
+                    isSelected: self.viewModel.resolvedDisplayedModelSelectionID == nil)
             }
+            ForEach(self.viewModel.modelChoices) { model in
+                Button {
+                    self.viewModel.selectModel(model.selectionID)
+                } label: {
+                    self.modelMenuItem(
+                        title: self.viewModel.modelOptionLabel(model),
+                        isSelected: self.viewModel.resolvedDisplayedModelSelectionID == model.selectionID)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(self.compactModelDisplayLabel)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .frame(maxWidth: 74, alignment: .leading)
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .frame(maxWidth: 240, alignment: .leading)
         .help("Model")
     }
 
@@ -302,6 +314,57 @@ struct OpenClawChatComposer: View {
         let match = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
         let trimmed = match?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
+    }
+
+    private var compactModelDisplayLabel: String {
+        if self.viewModel.resolvedDisplayedModelSelectionID == nil {
+            let defaultLabel = self.viewModel.defaultModelLabel
+            let trimmedDefault: String
+            if let open = defaultLabel.firstIndex(of: "("),
+               let close = defaultLabel.lastIndex(of: ")"),
+               open < close
+            {
+                trimmedDefault = String(defaultLabel[defaultLabel.index(after: open)..<close])
+            } else {
+                trimmedDefault = defaultLabel
+                    .replacingOccurrences(of: "Default:", with: "")
+                    .replacingOccurrences(of: "Default", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return Self.compactModelLabel(trimmedDefault)
+        }
+        let selected =
+            self.viewModel.modelChoices.first(where: { $0.selectionID == self.viewModel.resolvedDisplayedModelSelectionID })
+                .map { self.viewModel.modelOptionLabel($0) } ??
+            self.viewModel.resolvedDisplayedModelSelectionID ??
+            self.viewModel.modelSelectionID
+        return Self.compactModelLabel(selected)
+    }
+
+    private static func compactModelLabel(_ label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Model" }
+
+        let base = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
+        if base.count <= 6 {
+            return base
+        }
+        return String(base.prefix(6))
+    }
+
+    @ViewBuilder
+    private func modelMenuItem(title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label {
+                Text(title)
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: "checkmark")
+            }
+        } else {
+            Text(title)
+                .lineLimit(1)
+        }
     }
 
     private var editorOverlay: some View {
