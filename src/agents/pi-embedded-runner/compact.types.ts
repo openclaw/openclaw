@@ -62,6 +62,6 @@ export type CompactionMessageMetrics = {
   messages: number;
   historyTextChars: number;
   toolResultChars: number;
-  estTokens?: number;
+  estTokens: number;
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };

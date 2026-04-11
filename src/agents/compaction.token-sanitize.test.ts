@@ -17,9 +17,68 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   };
 });
 
-import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
+import {
+  chunkMessagesByMaxTokens,
+  estimateMessageTokens,
+  splitMessagesByTokenShare,
+} from "./compaction.js";
 
 describe("compaction token accounting sanitization", () => {
+  it("counts legacy tool-role messages when fallback estimation is used", () => {
+    piCodingAgentMocks.estimateTokens.mockImplementation(() => {
+      throw new TypeError("boom");
+    });
+
+    const message = {
+      role: "tool",
+      content: "legacy tool output",
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(Math.ceil("legacy tool output".length / 4));
+  });
+
+  it("counts legacy assistant string content when fallback estimation is used", () => {
+    piCodingAgentMocks.estimateTokens.mockImplementation(() => {
+      throw new TypeError("boom");
+    });
+
+    const message = {
+      role: "assistant",
+      content: "legacy assistant text",
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(Math.ceil("legacy assistant text".length / 4));
+  });
+
+  it("counts inline tool-result blocks when fallback estimation is used", () => {
+    piCodingAgentMocks.estimateTokens.mockImplementation(() => {
+      throw new TypeError("boom");
+    });
+
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          content: [{ type: "text", text: "inline tool output" }],
+        },
+        {
+          type: "tool",
+          toolCallId: "call_2",
+          content: "legacy inline tool output",
+        },
+      ],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(
+      Math.ceil(("inline tool output".length + "legacy inline tool output".length) / 4),
+    );
+  });
+
   it("does not pass toolResult.details into per-message token estimates", () => {
     const messages: AgentMessage[] = [
       {

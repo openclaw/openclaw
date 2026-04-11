@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
-import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import { SAFETY_MARGIN, estimateMessagesTokens, estimateMessageTokens } from "../../compaction.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
@@ -33,7 +32,7 @@ export function estimatePrePromptTokens(params: {
 
   const estimated =
     estimateMessagesTokens(messages) +
-    syntheticMessages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    syntheticMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
   return Math.max(0, Math.ceil(estimated * SAFETY_MARGIN));
 }
 

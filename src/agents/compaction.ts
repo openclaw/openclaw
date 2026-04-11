@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
-  estimateTokens,
+  estimateTokens as piEstimateTokens,
   generateSummary as piGenerateSummary,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
@@ -100,10 +100,195 @@ export function buildCompactionSummarizationInstructions(
   return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
 }
 
+function estimateSafeToolCallChars(block: unknown): number {
+  if (!block || typeof block !== "object") {
+    return 0;
+  }
+  const record = block as {
+    name?: unknown;
+    input?: unknown;
+    arguments?: unknown;
+    partialJson?: unknown;
+    partialArgs?: unknown;
+  };
+  let chars = typeof record.name === "string" ? record.name.length : 0;
+  try {
+    chars += JSON.stringify(
+      record.input ?? record.partialJson ?? record.partialArgs ?? record.arguments ?? {},
+    ).length;
+  } catch {
+    chars += 0;
+  }
+  return chars;
+}
+
+function isFallbackToolCallType(type: unknown): boolean {
+  return (
+    type === "toolCall" ||
+    type === "toolUse" ||
+    type === "functionCall" ||
+    type === "tool_call" ||
+    type === "tool_use" ||
+    type === "function_call"
+  );
+}
+
+function isFallbackTextType(type: unknown): boolean {
+  return type === "text" || type === "input_text" || type === "output_text";
+}
+
+function isFallbackImageType(type: unknown): boolean {
+  return type === "image" || type === "input_image";
+}
+
+function isFallbackToolResultType(type: unknown): boolean {
+  return type === "toolResult" || type === "tool";
+}
+
+function estimateSafeUnknownChars(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  if (value === undefined) {
+    return 0;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized.length : 0;
+  } catch {
+    return 256;
+  }
+}
+
+function estimateSafeToolResultChars(block: unknown): number {
+  if (!block || typeof block !== "object") {
+    return 0;
+  }
+  const record = block as {
+    content?: unknown;
+    text?: unknown;
+  };
+  if (typeof record.content === "string") {
+    return record.content.length;
+  }
+  if (Array.isArray(record.content)) {
+    return estimateSafeArrayContentChars(record.content);
+  }
+  if (record.content !== undefined) {
+    return estimateSafeUnknownChars(record.content);
+  }
+  if (typeof record.text === "string") {
+    return record.text.length;
+  }
+  return estimateSafeUnknownChars(block);
+}
+
+function estimateSafeArrayContentChars(content: unknown): number {
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+
+  let chars = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as {
+      type?: unknown;
+      text?: unknown;
+      thinking?: unknown;
+    };
+    if (isFallbackTextType(record.type) && typeof record.text === "string") {
+      chars += record.text.length;
+      continue;
+    }
+    if (record.type === "thinking" && typeof record.thinking === "string") {
+      chars += record.thinking.length;
+      continue;
+    }
+    if (isFallbackToolCallType(record.type)) {
+      chars += estimateSafeToolCallChars(block);
+      continue;
+    }
+    if (isFallbackToolResultType(record.type)) {
+      chars += estimateSafeToolResultChars(block);
+      continue;
+    }
+    if (isFallbackImageType(record.type)) {
+      chars += 4800;
+    }
+  }
+  return chars;
+}
+
+function stripToolResultDetailsFromMessage(message: AgentMessage): AgentMessage {
+  if ((message.role !== "toolResult" && message.role !== "tool") || !("details" in message)) {
+    return message;
+  }
+  const sanitized = { ...(message as object) } as { details?: unknown };
+  delete sanitized.details;
+  return sanitized as AgentMessage;
+}
+
+function estimateMalformedMessageTokens(message: AgentMessage): number {
+  if ((message as { role?: unknown }).role === "system") {
+    const content = (message as { content?: unknown }).content;
+    return Math.ceil(
+      (typeof content === "string" ? content.length : estimateSafeArrayContentChars(content)) / 4,
+    );
+  }
+
+  switch (message.role) {
+    case "user": {
+      return Math.ceil(
+        (typeof message.content === "string"
+          ? message.content.length
+          : estimateSafeArrayContentChars(message.content)) / 4,
+      );
+    }
+    case "assistant": {
+      return Math.ceil(
+        (typeof message.content === "string"
+          ? message.content.length
+          : estimateSafeArrayContentChars(message.content)) / 4,
+      );
+    }
+    case "custom":
+    case "tool":
+    case "toolResult": {
+      return Math.ceil(
+        (typeof message.content === "string"
+          ? message.content.length
+          : estimateSafeArrayContentChars(message.content)) / 4,
+      );
+    }
+    case "bashExecution": {
+      const command = typeof message.command === "string" ? message.command.length : 0;
+      const output = typeof message.output === "string" ? message.output.length : 0;
+      return Math.ceil((command + output) / 4);
+    }
+    case "branchSummary":
+    case "compactionSummary": {
+      const summary = typeof message.summary === "string" ? message.summary.length : 0;
+      return Math.ceil(summary / 4);
+    }
+  }
+  return 0;
+}
+
+export function estimateMessageTokens(message: AgentMessage): number {
+  const sanitized = stripToolResultDetailsFromMessage(message);
+  try {
+    return piEstimateTokens(sanitized);
+  } catch {
+    return estimateMalformedMessageTokens(sanitized);
+  }
+}
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 }
 
 function estimateCompactionMessageTokens(message: AgentMessage): number {
