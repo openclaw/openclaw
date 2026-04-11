@@ -157,7 +157,10 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   // Don't claim ownership of directive tokens when this provider is disabled —
   // otherwise a disabled OpenAI provider would silently consume voice= tokens
   // before providers like Mistral get a chance to handle them.
-  if (!readOpenAIProviderConfig(ctx.providerConfig ?? {}).enabled) {
+  // Read `enabled` directly rather than through readOpenAIProviderConfig so
+  // stale/invalid OpenAI-specific fields on a disabled config cannot throw
+  // and turn this guard into a hard failure.
+  if (asObjectRecord(ctx.providerConfig)?.enabled === false) {
     return { handled: false };
   }
   const baseUrl = trimToUndefined(asObjectRecord(ctx.providerConfig)?.baseUrl);
