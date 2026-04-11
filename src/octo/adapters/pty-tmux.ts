@@ -215,7 +215,10 @@ export class PtyTmuxAdapter implements Adapter {
   async *stream(ref: SessionRef, signal?: AbortSignal): AsyncGenerator<AdapterEvent> {
     let lastCapture = "";
 
-    while (!signal?.aborted) {
+    for (;;) {
+      if (signal?.aborted) {
+        break;
+      }
       let capture: string;
       try {
         const result = await execFileAsync(this.tmuxBin, [

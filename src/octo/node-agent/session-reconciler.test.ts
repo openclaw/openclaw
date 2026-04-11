@@ -294,11 +294,9 @@ describe.skipIf(!TMUX_AVAILABLE)("SessionReconciler (M1-13)", () => {
     // node_id filter in listArms.
     expect(report.missing_count).toBe(1);
     expect(report.total_persisted_arms).toBe(1);
-    const anomalies = report.outcomes.filter((o) => o.kind === "anomaly");
-    if (anomalies[0].kind !== "anomaly") {
-      throw new Error("expected anomaly");
-    }
-    expect(anomalies[0].anomaly_kind).toBe("missing_expected_session");
+    const anomaly = report.outcomes.find((o) => o.kind === "anomaly");
+    expect(anomaly).toBeDefined();
+    expect(anomaly!.kind === "anomaly" && anomaly!.anomaly_kind).toBe("missing_expected_session");
   });
 
   it("reconcile() handles an FSM-invalid transition gracefully", async () => {

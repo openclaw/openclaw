@@ -177,10 +177,19 @@ export async function initOctopus(deps: OctopusDeps): Promise<OctopusInstance> {
 
   logger.info("initializing Octopus Orchestrator subsystem");
 
-  // 2. Open storage — respect configured paths
-  const db = openOctoRegistry({ path: config.storage.registryPath });
+  // 2. Open storage — use configured paths only when absolute (user overrides).
+  // Relative paths in DEFAULT_OCTO_CONFIG are subpaths meant to be resolved
+  // by the storage layer's default resolver (which prepends ~/.openclaw/).
+  const isAbsPath = (p: string): boolean => p.startsWith("/");
+  const registryOpts = isAbsPath(config.storage.registryPath)
+    ? { path: config.storage.registryPath }
+    : {};
+  const db = openOctoRegistry(registryOpts);
   const registry = new RegistryService(db);
-  const eventLog = new EventLogService({ path: config.storage.eventsPath });
+  const eventLogOpts = isAbsPath(config.storage.eventsPath)
+    ? { path: config.storage.eventsPath }
+    : {};
+  const eventLog = new EventLogService(eventLogOpts);
 
   // 3. Initialize metrics
   const metricsProvider = deps.metricsProvider ?? noopMetricsProvider;
