@@ -1369,12 +1369,41 @@ export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
   finishedAt: Date;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
   scenarioIds?: readonly string[];
+};
+
+/**
+ * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.4 parity gate
+ * (agentic-parity-report.ts, #64441) and any future parity wrapper can
+ * import this type instead of re-declaring the shape, so changes to the
+ * summary schema propagate through to every consumer at type-check time.
+ */
+export type QaSuiteSummaryJson = {
+  scenarios: QaSuiteScenarioResult[];
+  counts: {
+    total: number;
+    passed: number;
+    failed: number;
+  };
+  run: {
+    startedAt: string;
+    finishedAt: string;
+    providerMode: QaProviderMode;
+    primaryModel: string;
+    primaryProvider: string | null;
+    primaryModelName: string | null;
+    alternateModel: string;
+    alternateProvider: string | null;
+    alternateModelName: string | null;
+    fastMode: boolean;
+    concurrency: number;
+    scenarioIds: string[] | null;
+  };
 };
 
 /**
@@ -1384,8 +1413,14 @@ export type QaSuiteSummaryJsonParams = {
  * summary instead of blindly accepting the caller's candidateLabel /
  * baselineLabel. Without the `run` block, a maintainer who swaps candidate
  * and baseline summary paths could silently produce a mislabeled verdict.
+ *
+ * `scenarioIds` is only recorded when the caller passed a non-empty array
+ * (an explicit scenario selection). A missing or empty array means "no
+ * filter, full lane-selected catalog", which the summary encodes as `null`
+ * so parity/report tooling doesn't mistake a full run for an explicit
+ * empty selection.
  */
-export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): Record<string, unknown> {
+export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   const primarySplit = splitModelRef(params.primaryModel);
   const alternateSplit = splitModelRef(params.alternateModel);
   return {
@@ -1407,7 +1442,8 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): Recor
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
-      scenarioIds: params.scenarioIds ? [...params.scenarioIds] : null,
+      scenarioIds:
+        params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
     },
   };
 }
