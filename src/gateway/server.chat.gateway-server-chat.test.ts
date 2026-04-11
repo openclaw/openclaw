@@ -748,11 +748,11 @@ describe("gateway server chat", () => {
             };
           },
         ];
-        params.dispatcher.sendBlockReply({
+        void params.dispatcher.sendBlockReply({
           text: "first chunk",
           btw: { question: "what changed?" },
         });
-        params.dispatcher.sendBlockReply({
+        void params.dispatcher.sendBlockReply({
           text: "second chunk",
           btw: { question: "what changed?" },
         });

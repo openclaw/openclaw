@@ -83,7 +83,7 @@ describe("createReplyDispatcher", () => {
     const dispatcher = createReplyDispatcher({ deliver });
 
     dispatcher.sendToolResult({ text: "tool" });
-    dispatcher.sendBlockReply({ text: "block" });
+    void dispatcher.sendBlockReply({ text: "block" });
     dispatcher.sendFinalReply({ text: "final" });
 
     await dispatcher.waitForIdle();
@@ -146,11 +146,11 @@ describe("createReplyDispatcher", () => {
       humanDelay: { mode: "natural" },
     });
 
-    dispatcher.sendBlockReply({ text: "first" });
+    void dispatcher.sendBlockReply({ text: "first" });
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    dispatcher.sendBlockReply({ text: "second" });
+    void dispatcher.sendBlockReply({ text: "second" });
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
@@ -171,11 +171,11 @@ describe("createReplyDispatcher", () => {
       humanDelay: { mode: "custom", minMs: 1200, maxMs: 400 },
     });
 
-    dispatcher.sendBlockReply({ text: "first" });
+    void dispatcher.sendBlockReply({ text: "first" });
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    dispatcher.sendBlockReply({ text: "second" });
+    void dispatcher.sendBlockReply({ text: "second" });
     await vi.advanceTimersByTimeAsync(1199);
     expect(deliver).toHaveBeenCalledTimes(1);
 
