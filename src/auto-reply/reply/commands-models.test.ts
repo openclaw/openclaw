@@ -9,14 +9,12 @@ import {
 import { handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(),
+}));
+
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
-  ]),
+  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
@@ -53,6 +51,14 @@ const telegramModelsTestPlugin: ChannelPlugin = {
 };
 
 beforeEach(() => {
+  modelCatalogMocks.loadModelCatalog.mockReset();
+  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+  ]);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -196,7 +202,7 @@ describe("handleModelsCommand", () => {
           imageModel: "visionpro/studio-v1",
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const providerList = await handleModelsCommand(
       buildModelsParams("/models", customCfg, "discord"),
@@ -213,6 +219,67 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Models (localai");
     expect(result?.reply?.text).toContain("localai/ultra-chat");
     expect(result?.reply?.text).not.toContain("Unknown provider");
+  });
+
+  it("honors model allowlists and config-only providers", async () => {
+    const allowlistedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4.1-mini": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const providerList = await handleModelsCommand(
+      buildModelsParams("/models", allowlistedCfg, "discord"),
+      true,
+    );
+    expect(providerList?.reply?.text).toContain("- anthropic");
+    expect(providerList?.reply?.text).toContain("- openai");
+    expect(providerList?.reply?.text).not.toContain("- google");
+
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    ]);
+    const minimaxCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4.1-mini": {},
+            "minimax/MiniMax-M2.7": { alias: "minimax" },
+          },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [
+              { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
+              { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models minimax", minimaxCfg, "discord"),
+      true,
+    );
+    expect(result?.reply?.text).toContain("Models (minimax");
+    expect(result?.reply?.text).toContain("minimax/MiniMax-M2.7");
   });
 
   it("threads the routed agent through /models replies", async () => {

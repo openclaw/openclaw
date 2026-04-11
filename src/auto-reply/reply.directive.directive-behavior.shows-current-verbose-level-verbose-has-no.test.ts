@@ -1,5 +1,5 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -13,9 +13,8 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { getReplyFromConfig } from "./reply.js";
 import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
-
-let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
 const COMMAND_MESSAGE_BASE = {
   From: "+1222",
@@ -124,10 +123,6 @@ function makeCommandMessage(body: string, from = "+1222") {
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
-
-  beforeAll(async () => {
-    ({ getReplyFromConfig } = await import("./reply.js"));
-  });
 
   it("reports current directive defaults when no arguments are provided", async () => {
     await withTempHome(async (home) => {

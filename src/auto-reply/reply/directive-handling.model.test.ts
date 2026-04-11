@@ -11,6 +11,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
   }),
+  isProfileInCooldown: () => false,
   replaceRuntimeAuthProfileStoreSnapshots: (
     snapshots: Array<{
       store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
@@ -18,6 +19,8 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ) => {
     authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
   },
+  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+  resolveAuthProfileOrder: () => [],
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
@@ -305,6 +308,33 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("Providers:");
     expect(reply?.text).toContain("localai");
+  });
+
+  it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-4.1-mini": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
+        { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
+      ],
+    });
+
+    expect(reply?.text).toContain("anthropic/claude-opus-4-6");
+    expect(reply?.text).toContain("openai/gpt-4.1-mini");
+    expect(reply?.text).not.toContain("claude-sonnet-4-1");
+    expect(reply?.text).toContain("auth:");
+    expect(reply?.text).not.toContain("missing (missing)");
   });
 
   it("auto-applies closest match for typos", () => {

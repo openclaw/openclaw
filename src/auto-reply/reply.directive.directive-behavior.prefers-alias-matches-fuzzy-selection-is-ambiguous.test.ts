@@ -32,13 +32,15 @@ function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
 }
 
 function makeModelSwitchConfig(home: string) {
-  return makeWhatsAppDirectiveConfig(home, {
-    model: { primary: "openai/gpt-4.1-mini" },
-    models: {
-      "openai/gpt-4.1-mini": {},
-      "anthropic/claude-opus-4-6": { alias: "Opus" },
-    },
-  });
+  return withFullRuntimeReplyConfig(
+    makeWhatsAppDirectiveConfig(home, {
+      model: { primary: "openai/gpt-4.1-mini" },
+      models: {
+        "openai/gpt-4.1-mini": {},
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+      },
+    }),
+  );
 }
 
 function makeMoonshotConfig(home: string, storePath: string) {
@@ -309,10 +311,12 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: { primary: "openai/gpt-4.1-mini" } },
-          { tools: { elevated: { allowFrom: { whatsapp: ["*"] } } } },
+        withFullRuntimeReplyConfig(
+          makeWhatsAppDirectiveConfig(
+            home,
+            { model: { primary: "openai/gpt-4.1-mini" } },
+            { tools: { elevated: { allowFrom: { whatsapp: ["*"] } } } },
+          ),
         ),
       );
 
@@ -330,7 +334,9 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "openai/gpt-4.1-mini" } }),
+        withFullRuntimeReplyConfig(
+          makeWhatsAppDirectiveConfig(home, { model: { primary: "openai/gpt-4.1-mini" } }),
+        ),
       );
 
       events = drainSystemEvents(MAIN_SESSION_KEY);
