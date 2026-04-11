@@ -13,6 +13,19 @@ export type QaParityReportScenario = {
   steps?: QaParityReportStep[];
 };
 
+/**
+ * Optional self-describing run metadata written by PR L (#64789). Before
+ * that PR merges, older summaries only have `scenarios` + `counts`; the
+ * parity report treats a missing `run` block as "unknown provenance" and
+ * skips the label-match verification rather than failing open.
+ */
+export type QaParityRunBlock = {
+  primaryProvider?: string;
+  primaryModel?: string;
+  providerMode?: string;
+  scenarioIds?: readonly string[] | null;
+};
+
 export type QaParitySuiteSummary = {
   scenarios: QaParityReportScenario[];
   counts?: {
@@ -20,6 +33,8 @@ export type QaParitySuiteSummary = {
     passed?: number;
     failed?: number;
   };
+  /** Self-describing run metadata — see PR L #64789 for the writer side. */
+  run?: QaParityRunBlock;
 };
 
 export type QaAgenticParityMetrics = {
@@ -64,7 +79,11 @@ const UNINTENDED_STOP_PATTERNS = [
   /did not continue/i,
 ] as const;
 
-const SUSPICIOUS_PASS_PATTERNS = [
+// Failure-tone patterns: a passing scenario whose details text matches any
+// of these is treated as a "fake success" — the scenario is marked pass but
+// the supporting text reveals something went wrong. Adding new patterns here
+// widens the net for bad prose that correlates with runtime failure modes.
+const SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS = [
   /incomplete turn/i,
   /\btimed out\b/i,
   /\btimeout\b/i,
@@ -75,6 +94,49 @@ const SUSPICIOUS_PASS_PATTERNS = [
   /error occurred/i,
   /an error was/i,
 ] as const;
+
+// Positive-tone patterns: a passing scenario whose details read as plausible
+// self-congratulatory prose ("Successfully completed", "Done.", "Task
+// executed successfully") is ALSO suspicious — it's the shape of a fake
+// success that evades the failure-tone net above. Criterion 2 of the
+// GPT-5.4 parity completion gate (#64227) specifically targets this: a
+// model that says "I did the thing" without actually doing it should not
+// count as a pass. A positive-tone pattern only fires as a suspicious pass
+// when the scenario is ALSO missing a recorded tool-call assertion in its
+// prose — see `scenarioLacksToolCallEvidence` below. That keeps the check
+// from false-positiving on legitimate tool-mediated scenarios that happen
+// to include "successfully" in their details.
+const SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS = [
+  /successfully (?:completed|executed|finished|handled|delegated|ran)/i,
+  /\bdone\.?\s*$/im,
+  /task (?:done|executed|completed|handled|finished) successfully/i,
+  /everything (?:worked|ran) (?:as expected|successfully)/i,
+  /finished the operation/i,
+  /all (?:steps|tasks) (?:completed|finished) successfully/i,
+] as const;
+
+// Evidence a scenario actually did its tool-mediated work. A scenario
+// whose details contain any of these is considered tool-backed and is
+// exempt from the positive-tone fake-success check. The patterns match
+// the `plannedToolName=...` / `tool call succeeded` / `executed tool`
+// phrases scenarios emit when their `/debug/requests` assertions fire
+// (PR J #64681), so a scenario with real tool evidence is never flagged
+// even if its prose also includes "successfully".
+const TOOL_CALL_EVIDENCE_PATTERNS = [
+  /plannedToolName/i,
+  /tool call (?:succeeded|completed|returned)/i,
+  /executed tool/i,
+  /function_call_output/i,
+  /tool_use/i,
+] as const;
+
+function scenarioLacksToolCallEvidence(scenario: QaParityReportScenario): boolean {
+  const text = scenarioText(scenario);
+  if (text.length === 0) {
+    return true;
+  }
+  return !TOOL_CALL_EVIDENCE_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {
   return status === "pass" || status === "fail" || status === "skip" ? status : "fail";
@@ -112,10 +174,28 @@ export function computeQaAgenticParityMetrics(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),
   ).length;
-  const fakeSuccessCount = scenarios.filter(
-    (scenario) =>
-      scenario.status === "pass" && scenarioHasPattern(scenario, SUSPICIOUS_PASS_PATTERNS),
-  ).length;
+  const fakeSuccessCount = scenarios.filter((scenario) => {
+    if (scenario.status !== "pass") {
+      return false;
+    }
+    // Failure-tone patterns catch obviously-broken passes regardless of
+    // whether the scenario shows tool-call evidence — "timed out" under a
+    // pass is always fake.
+    if (scenarioHasPattern(scenario, SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS)) {
+      return true;
+    }
+    // Positive-tone patterns only fire when the scenario doesn't also show
+    // real tool-call evidence. A legitimate tool-mediated pass with
+    // self-congratulatory prose stays clean; a prose-only pass with
+    // "Successfully completed the delegation" gets flagged.
+    if (
+      scenarioHasPattern(scenario, SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS) &&
+      scenarioLacksToolCallEvidence(scenario)
+    ) {
+      return true;
+    }
+    return false;
+  }).length;
 
   // First-wave parity scenarios are all tool-mediated tasks, so a passing scenario is our
   // verified unit of valid tool-backed execution in this harness.
@@ -155,7 +235,78 @@ function scopeSummaryToParityPack(
   // scenario list instead of inheriting the caller's full-suite counters.
   return {
     scenarios: summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name)),
+    ...(summary.run ? { run: summary.run } : {}),
   };
+}
+
+/**
+ * Normalize a provider label into the `provider` half of a `provider/model`
+ * string. Accepts bare provider names (`"openai"`), provider/model tuples
+ * (`"openai/gpt-5.4"`), and colon-separated forms (`"openai:gpt-5.4"`).
+ * Returns the provider portion lowercased so comparisons against the
+ * `run.primaryProvider` field don't get confused by case drift.
+ */
+function extractProviderFromLabel(label: string): string | null {
+  const trimmed = label.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
+  if (separatorMatch) {
+    return separatorMatch[1]?.toLowerCase() ?? null;
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Verify the `run.primaryProvider` field on a summary matches the caller-
+ * supplied label. PR L #64789 ships the `run` block; before it lands, older
+ * summaries don't have the field and this check is a no-op.
+ *
+ * Throws `QaParityLabelMismatchError` when the summary reports a different
+ * provider than the caller claimed — this catches the "swapped candidate
+ * and baseline summary paths" footgun the earlier adversarial review
+ * flagged. Returns silently when the field is absent (legacy summaries) or
+ * when the fields match.
+ */
+function verifySummaryLabelMatch(params: {
+  summary: QaParitySuiteSummary;
+  label: string;
+  role: "candidate" | "baseline";
+}): void {
+  const runProvider = params.summary.run?.primaryProvider?.trim();
+  if (!runProvider) {
+    return;
+  }
+  const labelProvider = extractProviderFromLabel(params.label);
+  if (!labelProvider) {
+    return;
+  }
+  if (runProvider.toLowerCase() === labelProvider) {
+    return;
+  }
+  throw new QaParityLabelMismatchError({
+    role: params.role,
+    label: params.label,
+    runProvider,
+  });
+}
+
+export class QaParityLabelMismatchError extends Error {
+  readonly role: "candidate" | "baseline";
+  readonly label: string;
+  readonly runProvider: string;
+
+  constructor(params: { role: "candidate" | "baseline"; label: string; runProvider: string }) {
+    super(
+      `${params.role} summary run.primaryProvider=${params.runProvider} does not match --${params.role}-label=${params.label}. ` +
+        `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
+    );
+    this.name = "QaParityLabelMismatchError";
+    this.role = params.role;
+    this.label = params.label;
+    this.runProvider = params.runProvider;
+  }
 }
 
 export function buildQaAgenticParityComparison(params: {
@@ -165,6 +316,22 @@ export function buildQaAgenticParityComparison(params: {
   baselineSummary: QaParitySuiteSummary;
   comparedAt?: string;
 }): QaAgenticParityComparison {
+  // Precondition: verify the `run.primaryProvider` field on each summary
+  // matches the caller-supplied label (when the `run` block is present).
+  // Throws `QaParityLabelMismatchError` on mismatch so the release gate
+  // fails loudly instead of silently producing a reversed verdict when an
+  // operator swaps the --candidate-summary and --baseline-summary paths.
+  // Legacy summaries without a `run` block are accepted as-is.
+  verifySummaryLabelMatch({
+    summary: params.candidateSummary,
+    label: params.candidateLabel,
+    role: "candidate",
+  });
+  verifySummaryLabelMatch({
+    summary: params.baselineSummary,
+    label: params.baselineLabel,
+    role: "baseline",
+  });
   const parityTitleSet: ReadonlySet<string> = new Set<string>(QA_AGENTIC_PARITY_SCENARIO_TITLES);
   // Rates and fake-success counts are computed from the parity-scoped summaries only,
   // so extra non-parity scenarios in the input (for example when a caller feeds a full
