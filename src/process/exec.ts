@@ -5,6 +5,10 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import {
+  decodeCapturedOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -135,19 +139,28 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
         };
+  const windowsEncoding = resolveWindowsConsoleEncoding();
   try {
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
-    const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+    const result = await execFileAsync(invocation.command, invocation.args, {
       ...options,
+      encoding: "buffer",
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    const stdout = decodeCapturedOutputBuffer({
+      buffer: result.stdout instanceof Buffer ? result.stdout : Buffer.from(result.stdout ?? ""),
+      windowsEncoding,
+    });
+    const stderr = decodeCapturedOutputBuffer({
+      buffer: result.stderr instanceof Buffer ? result.stderr : Buffer.from(result.stderr ?? ""),
+      windowsEncoding,
     });
     if (shouldLogVerbose()) {
       if (stdout.trim()) {

@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
+import {
+  decodeCapturedOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -106,6 +110,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     };
 
     await new Promise<void>((resolve) => {
+      const windowsEncoding = resolveWindowsConsoleEncoding();
       const child = spawnCommand(cmd, {
         // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
         // and is gated behind an explicit in-session approval prompt.
@@ -116,11 +121,17 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, buf.toString("utf8"));
+      child.stdout.on("data", (buf: Buffer) => {
+        stdout = appendWithCap(
+          stdout,
+          decodeCapturedOutputBuffer({ buffer: buf, windowsEncoding }),
+        );
       });
-      child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, buf.toString("utf8"));
+      child.stderr.on("data", (buf: Buffer) => {
+        stderr = appendWithCap(
+          stderr,
+          decodeCapturedOutputBuffer({ buffer: buf, windowsEncoding }),
+        );
       });
 
       child.on("close", (code, signal) => {
