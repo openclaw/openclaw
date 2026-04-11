@@ -66,6 +66,7 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayInvalid?: boolean;
+  hadPotentialSideEffects?: boolean;
   livenessState?: EmbeddedRunLivenessState;
 
   messagingToolSentTexts: string[];
@@ -163,6 +164,7 @@ export type ToolHandlerState = Pick<
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "replayInvalid"
+  | "hadPotentialSideEffects"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"

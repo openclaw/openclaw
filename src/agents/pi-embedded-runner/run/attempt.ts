@@ -1409,6 +1409,7 @@ export async function runEmbeddedAttempt(
           session: activeSession,
           runId: params.runId,
           initialReplayInvalid: params.initialReplayInvalid,
+          initialHadPotentialSideEffects: params.initialHadPotentialSideEffects,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
@@ -1446,6 +1447,8 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
+        getReplayInvalid,
+        getHadPotentialSideEffects,
         didSendViaMessagingTool,
         getLastToolError,
         setTerminalLifecycleMeta,
@@ -2272,12 +2275,19 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const observedReplayMetadata = buildAttemptReplayMetadata({
+        toolMetas: toolMetasNormalized,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        successfulCronAdds: getSuccessfulCronAdds(),
+      });
+      const replayMetadata = {
+        hadPotentialSideEffects:
+          observedReplayMetadata.hadPotentialSideEffects || getHadPotentialSideEffects(),
+        replaySafe: observedReplayMetadata.replaySafe && !getReplayInvalid(),
+      };
+
       return {
-        replayMetadata: buildAttemptReplayMetadata({
-          toolMetas: toolMetasNormalized,
-          didSendViaMessagingTool: didSendViaMessagingTool(),
-          successfulCronAdds: getSuccessfulCronAdds(),
-        }),
+        replayMetadata,
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,

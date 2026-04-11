@@ -796,6 +796,7 @@ export async function handleToolExecutionEnd(
   }
   if (completedMutatingAction) {
     ctx.state.replayInvalid = true;
+    ctx.state.hadPotentialSideEffects = true;
   }
 
   // Commit messaging tool text on success, discard on error.

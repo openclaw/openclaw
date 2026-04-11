@@ -49,6 +49,7 @@ function createTestContext(): {
       pendingToolAudioAsVoice: false,
       deterministicApprovalPromptPending: false,
       replayInvalid: false,
+      hadPotentialSideEffects: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -278,6 +279,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     );
 
     expect(ctx.state.replayInvalid).toBe(true);
+    expect(ctx.state.hadPotentialSideEffects).toBe(true);
   });
 
   it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
@@ -335,6 +337,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
     expect(ctx.state.lastToolError).toBeUndefined();
     expect(ctx.state.replayInvalid).toBe(true);
+    expect(ctx.state.hadPotentialSideEffects).toBe(true);
   });
 });
 
