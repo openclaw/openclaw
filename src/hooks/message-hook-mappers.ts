@@ -162,11 +162,17 @@ export function buildCanonicalSentMessageHookContext(params: {
 
 export function toPluginMessageContext(
   canonical: CanonicalInboundMessageHookContext | CanonicalSentMessageHookContext,
+  overrides?: {
+    agentId?: string;
+    sessionKey?: string;
+  },
 ): PluginHookMessageContext {
   return {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+    agentId: overrides?.agentId,
+    sessionKey: overrides?.sessionKey,
   };
 }
 

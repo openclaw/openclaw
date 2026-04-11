@@ -982,6 +982,70 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
   });
 
+  it("passes outbound session identity to message_sending hook context", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        agentId: "main",
+        key: "agent:main:whatsapp:+1555",
+      },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "hello",
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:+1555",
+      }),
+    );
+  });
+
+  it("reports message_sending cancellations through the delivery callback", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+    hookMocks.runner.runMessageSending.mockResolvedValue({
+      cancel: true,
+      content: "blocked by guard",
+    });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const onMessageSendingCancelled = vi.fn();
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        agentId: "main",
+        key: "agent:main:whatsapp:+1555",
+      },
+      onMessageSendingCancelled,
+    });
+
+    expect(results).toEqual([]);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(onMessageSendingCancelled).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: undefined,
+      agentId: "main",
+      sessionKey: "agent:main:whatsapp:+1555",
+      reason: "blocked by guard",
+    });
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

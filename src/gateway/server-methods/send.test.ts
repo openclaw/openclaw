@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { ErrorCodes } from "../protocol/index.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -536,6 +537,49 @@ describe("gateway send mirroring", () => {
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
         }),
+      }),
+    );
+  });
+
+  it("surfaces explicit guarded denial when message_sending cancels delivery", async () => {
+    mocks.deliverOutboundPayloads.mockImplementation(async (params) => {
+      params.onMessageSendingCancelled?.({
+        channel: "slack",
+        to: "resolved",
+        accountId: undefined,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        reason: "guard blocked outbound send",
+      });
+      return [];
+    });
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-guarded-cancel",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "guard blocked outbound send",
+        details: expect.objectContaining({
+          reason: "MESSAGE_SENDING_CANCELLED",
+          hook: "message_sending",
+          channel: "slack",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      }),
+      expect.objectContaining({
+        channel: "slack",
+        guarded: true,
+        hook: "message_sending",
       }),
     );
   });

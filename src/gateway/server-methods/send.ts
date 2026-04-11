@@ -334,6 +334,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
         });
+        let guardedCancellation:
+          | {
+              reason?: string;
+              agentId?: string;
+              sessionKey?: string;
+            }
+          | undefined;
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
@@ -345,6 +352,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId: threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
+          onMessageSendingCancelled: (info) => {
+            guardedCancellation = {
+              reason: info.reason,
+              agentId: info.agentId,
+              sessionKey: info.sessionKey,
+            };
+          },
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,
@@ -358,6 +372,32 @@ export const sendHandlers: GatewayRequestHandlers = {
 
         const result = results.at(-1);
         if (!result) {
+          if (guardedCancellation) {
+            const error = errorShape(
+              ErrorCodes.UNAVAILABLE,
+              guardedCancellation.reason ??
+                "delivery cancelled by message_sending hook before outbound send",
+              {
+                details: {
+                  reason: "MESSAGE_SENDING_CANCELLED",
+                  hook: "message_sending",
+                  channel,
+                  agentId: guardedCancellation.agentId,
+                  sessionKey: guardedCancellation.sessionKey,
+                },
+              },
+            );
+            cacheGatewayDedupeFailure({ context, dedupeKey, error });
+            return {
+              ok: false,
+              error,
+              meta: {
+                channel,
+                guarded: true,
+                hook: "message_sending",
+              },
+            };
+          }
           throw new Error("No delivery result");
         }
         const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });

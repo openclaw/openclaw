@@ -282,6 +282,14 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  onMessageSendingCancelled?: (params: {
+    channel: Exclude<OutboundChannel, "none">;
+    to: string;
+    accountId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    reason?: string;
+  }) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
@@ -432,10 +440,12 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  session?: OutboundSessionContext;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
+  cancelReason?: string;
 }> {
   if (!params.enabled) {
     return {
@@ -455,16 +465,30 @@ async function applyMessageSendingHook(params: {
           mediaUrls: params.payloadSummary.mediaUrls,
         },
       },
-      {
-        channelId: params.channel,
-        accountId: params.accountId ?? undefined,
-      },
+      toPluginMessageContext(
+        buildCanonicalSentMessageHookContext({
+          to: params.to,
+          content: params.payloadSummary.text,
+          success: false,
+          channelId: params.channel,
+          accountId: params.accountId,
+          conversationId: params.to,
+        }),
+        {
+          agentId: params.session?.agentId,
+          sessionKey: params.session?.key,
+        },
+      ),
     );
     if (sendingResult?.cancel) {
       return {
         cancelled: true,
         payload: params.payload,
         payloadSummary: params.payloadSummary,
+        cancelReason:
+          typeof sendingResult.content === "string" && sendingResult.content.trim().length > 0
+            ? sendingResult.content
+            : undefined,
       };
     }
     if (sendingResult?.content == null) {
@@ -682,8 +706,17 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        session: params.session,
       });
       if (hookResult.cancelled) {
+        params.onMessageSendingCancelled?.({
+          channel,
+          to,
+          accountId,
+          agentId: params.session?.agentId,
+          sessionKey: params.session?.key,
+          reason: hookResult.cancelReason,
+        });
         continue;
       }
       const effectivePayload = hookResult.payload;
