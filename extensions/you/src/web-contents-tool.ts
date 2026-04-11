@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { jsonResult, readNumberParam } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { runYouContents } from "./you-client.js";
+import { CONTENTS_FORMATS, runYouContents } from "./you-client.js";
 
 const WebContentsSchema = Type.Object(
   {
@@ -12,7 +12,9 @@ const WebContentsSchema = Type.Object(
     }),
     formats: Type.Optional(
       Type.Array(
-        Type.String({
+        Type.Unsafe<(typeof CONTENTS_FORMATS)[number]>({
+          type: "string",
+          enum: [...CONTENTS_FORMATS],
           description: 'Content format: "html", "markdown", or "metadata".',
         }),
         {
