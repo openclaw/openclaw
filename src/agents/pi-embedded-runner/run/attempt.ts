@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -113,7 +112,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
-import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../../usage.js";
+import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -1513,7 +1512,7 @@ export async function runEmbeddedAttempt(
         abort: abortRun,
       };
       let lastAssistant: AgentMessage | undefined;
-      let currentAttemptAssistant: AgentMessage | undefined;
+      let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
@@ -2089,9 +2088,7 @@ export async function runEmbeddedAttempt(
               usage: attemptUsage,
             })
           : null;
-        const lastCallUsage = normalizeUsage(
-          (currentAttemptAssistant as { usage?: UsageLike } | undefined)?.usage,
-        );
+        const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
         const promptCacheObservation =
           cacheObservabilityEnabled &&
           (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
@@ -2355,7 +2352,7 @@ export async function runEmbeddedAttempt(
         assistantTexts,
         toolMetas: toolMetasNormalized,
         lastAssistant,
-        currentAttemptAssistant: currentAttemptAssistant as AssistantMessage | undefined,
+        currentAttemptAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
