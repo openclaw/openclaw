@@ -44,6 +44,7 @@ type BedrockDiscoveryCacheEntry = {
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 let hasLoggedBedrockError = false;
+let hasWarnedContextWindowDefault = false;
 
 // ---------------------------------------------------------------------------
 // Helper utilities
@@ -296,6 +297,7 @@ function resolveInferenceProfiles(
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
   hasLoggedBedrockError = false;
+  hasWarnedContextWindowDefault = false;
 }
 
 export function resolveBedrockConfigApiKey(
@@ -388,7 +390,7 @@ export async function discoverBedrockModels(params: {
     // Sort: global cross-region profiles first (recommended for most users —
     // better capacity, automatic failover, no data sovereignty constraints),
     // then remaining profiles/models alphabetically.
-    return discovered.toSorted((a, b) => {
+    const sorted = discovered.toSorted((a, b) => {
       const aGlobal = a.id.startsWith("global.") ? 0 : 1;
       const bGlobal = b.id.startsWith("global.") ? 0 : 1;
       if (aGlobal !== bGlobal) {
@@ -396,6 +398,32 @@ export async function discoverBedrockModels(params: {
       }
       return a.name.localeCompare(b.name);
     });
+
+    // Warn once when no provider filter is set and we're using the default context window.
+    // AWS Bedrock API does not expose token limits; all discovered models inherit the
+    // hardcoded DEFAULT_CONTEXT_WINDOW unless explicitly overridden in the user's config.
+    if (
+      providerFilter.length === 0 &&
+      !hasWarnedContextWindowDefault &&
+      defaultContextWindow === DEFAULT_CONTEXT_WINDOW
+    ) {
+      hasWarnedContextWindowDefault = true;
+      const modelList = sorted
+        .slice(0, 5)
+        .map((m) => `"${m.id}"`)
+        .join(", ");
+      const more = sorted.length > 5 ? ` and ${sorted.length - 5} more` : "";
+      log.warn(
+        `Bedrock discovery is using default context window (${DEFAULT_CONTEXT_WINDOW.toLocaleString()}) ` +
+          `for all models because the AWS API does not provide token limits. ` +
+          `Override per-model in your config, e.g.: ` +
+          `"models.amazon-bedrock.models.id.mistral.mistral-large-3-675b-instruct": { "contextWindow": 128000 }${more}. ` +
+          `Also set models.amazon-bedrock.discovery.defaultContextWindow to change the global default.`,
+        { models: modelList },
+      );
+    }
+
+    return sorted;
   })();
 
   if (refreshIntervalSeconds > 0) {
