@@ -58,6 +58,12 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
 }) {
   let observations: MatrixPostHealthySyncDecryptFailureObservation[] = [];
   let warningEmitted = false;
+  let trackedHealthySyncSinceMs: number | undefined;
+
+  const resetObservations = () => {
+    observations = [];
+    warningEmitted = false;
+  };
 
   const pruneObservations = (nowMs: number) => {
     observations = observations.filter(
@@ -71,10 +77,15 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   return {
     recordFailure(roomId: string, event: MatrixRawEvent, error: Error) {
       const nowMs = Date.now();
+      const healthySyncSinceMs = params.getHealthySyncSinceMs?.();
+      if (healthySyncSinceMs !== trackedHealthySyncSinceMs) {
+        trackedHealthySyncSinceMs = healthySyncSinceMs;
+        resetObservations();
+      }
       if (
         !isFreshPostHealthySyncDecryptFailure({
           event,
-          healthySyncSinceMs: params.getHealthySyncSinceMs?.(),
+          healthySyncSinceMs,
           graceMs: params.startupGraceMs,
           nowMs,
         })

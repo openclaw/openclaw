@@ -1680,6 +1680,88 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     }
   });
 
+  it("resets tracked failures when healthy sync restarts before the old window expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    try {
+      let healthySyncSinceMs = Date.now() - 60_000;
+      const { logger, failedDecryptListener } = createHarness({
+        accountId: "ops",
+        getHealthySyncSinceMs: () => healthySyncSinceMs,
+      });
+      if (!failedDecryptListener) {
+        throw new Error("room.failed_decryption listener was not registered");
+      }
+
+      for (const index of [1, 2, 3]) {
+        await failedDecryptListener(
+          `!room-first-${index}:example.org`,
+          {
+            event_id: `$enc-first-${index}`,
+            sender: `@alice-first-${index}:matrix.example.org`,
+            type: EventType.RoomMessageEncrypted,
+            origin_server_ts: Date.now() - index * 1_000,
+            content: {},
+          },
+          new Error("The sender's device has not sent us the keys for this message."),
+        );
+      }
+
+      healthySyncSinceMs = Date.now();
+
+      for (const index of [1, 2, 3]) {
+        await failedDecryptListener(
+          `!room-second-${index}:example.org`,
+          {
+            event_id: `$enc-second-${index}`,
+            sender: `@alice-second-${index}:matrix.example.org`,
+            type: EventType.RoomMessageEncrypted,
+            origin_server_ts: Date.now() + index,
+            content: {},
+          },
+          new Error("The sender's device has not sent us the keys for this message."),
+        );
+      }
+
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        5,
+        "Failed to decrypt fresh post-healthy-sync message",
+        expect.objectContaining({
+          eventId: "$enc-second-1",
+          freshAfterHealthySync: true,
+          postHealthySyncFailureCount: 1,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        6,
+        "Failed to decrypt fresh post-healthy-sync message",
+        expect.objectContaining({
+          eventId: "$enc-second-2",
+          freshAfterHealthySync: true,
+          postHealthySyncFailureCount: 2,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        7,
+        "Failed to decrypt fresh post-healthy-sync message",
+        expect.objectContaining({
+          eventId: "$enc-second-3",
+          freshAfterHealthySync: true,
+          postHealthySyncFailureCount: 3,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        8,
+        "matrix: repeated fresh encrypted messages are still failing to decrypt after Matrix resumed healthy sync. This device may still be missing new room keys. Check 'openclaw matrix verify status --verbose --account ops' and 'openclaw matrix devices list --account ops'.",
+        expect.objectContaining({
+          sampleEventIds: ["$enc-second-1", "$enc-second-2", "$enc-second-3"],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not throw when getUserId fails during decrypt guidance lookup", async () => {
     const { logger, logVerboseMessage, failedDecryptListener } = createHarness({
       accountId: "ops",
