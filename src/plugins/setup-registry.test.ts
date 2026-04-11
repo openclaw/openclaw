@@ -12,6 +12,8 @@ const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
+let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
+let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
@@ -23,13 +25,16 @@ afterEach(() => {
 });
 
 describe("setup-registry getJiti", () => {
-  beforeAll(async () => {
-    ({ clearPluginSetupRegistryCache, resolvePluginSetupRegistry, runPluginSetupConfigMigrations } =
-      await import("./setup-registry.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     resetRegistryJitiMocks();
+    vi.resetModules();
+    ({
+      clearPluginSetupRegistryCache,
+      resolvePluginSetupRegistry,
+      resolvePluginSetupProvider,
+      resolvePluginSetupCliBackend,
+      runPluginSetupConfigMigrations,
+    } = await import("./setup-registry.js"));
     clearPluginSetupRegistryCache();
   });
 
@@ -194,5 +199,107 @@ describe("setup-registry getJiti", () => {
 
     expect(result.changes).toEqual(["voice-call"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers setup provider descriptors over top-level provider ids", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "amazon-bedrock",
+          rootDir: pluginRoot,
+          providers: ["legacy-bedrock"],
+          setup: {
+            providers: [{ id: "amazon-bedrock" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({
+              id: "amazon-bedrock",
+              label: "Amazon Bedrock",
+              auth: [],
+            });
+          },
+        },
+      });
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "amazon-bedrock", env: {} })).toEqual(
+      expect.objectContaining({
+        id: "amazon-bedrock",
+        label: "Amazon Bedrock",
+      }),
+    );
+    expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+  });
+
+  it("resolves setup cli backends from descriptors without loading every setup-api", () => {
+    const openaiRoot = makeTempDir();
+    const anthropicRoot = makeTempDir();
+    fs.writeFileSync(path.join(openaiRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(anthropicRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: openaiRoot,
+          cliBackends: ["legacy-openai-cli"],
+          setup: {
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+        {
+          id: "anthropic",
+          rootDir: anthropicRoot,
+          cliBackends: ["claude-cli"],
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation((modulePath: string) => {
+      return () => ({
+        default: {
+          register(api: {
+            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+          }) {
+            api.registerCliBackend(
+              modulePath.includes(openaiRoot)
+                ? { id: "codex-cli", config: { command: "codex" } }
+                : { id: "claude-cli", config: { command: "claude" } },
+            );
+          },
+        },
+      });
+    });
+
+    const first = resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} });
+    const second = resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} });
+
+    expect(first).toEqual({
+      pluginId: "openai",
+      backend: {
+        id: "codex-cli",
+        config: {
+          command: "codex",
+        },
+      },
+    });
+    expect(second).toEqual(first);
+    expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
   });
 });

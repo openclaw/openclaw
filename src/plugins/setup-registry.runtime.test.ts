@@ -18,7 +18,11 @@ describe("setup-registry runtime fallback", () => {
         {
           id: "openai",
           origin: "bundled",
-          cliBackends: ["Codex-CLI"],
+          cliBackends: ["legacy-openai-cli"],
+          setup: {
+            cliBackends: ["Codex-CLI"],
+            requiresRuntime: true,
+          },
         },
         {
           id: "local",

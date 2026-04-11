@@ -268,6 +268,12 @@ Top-level `cliBackends` stays valid and continues to describe CLI inference
 backends. `setup.cliBackends` is the setup-specific descriptor surface for
 control-plane/setup flows that should stay metadata-only.
 
+When present, `setup.providers` and `setup.cliBackends` are the preferred
+descriptor-first lookup surface for setup discovery. If the descriptor only
+narrows the candidate plugin and setup still needs richer setup-time runtime
+hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
+fallback execution path.
+
 ### setup.providers reference
 
 | Field         | Required | Type       | What it means                                                                      |
@@ -278,12 +284,12 @@ control-plane/setup flows that should stay metadata-only.
 
 ### setup fields
 
-| Field              | Required | Type       | What it means                                                               |
-| ------------------ | -------- | ---------- | --------------------------------------------------------------------------- |
-| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.             |
-| `cliBackends`      | No       | `string[]` | Setup-time backend ids available without full runtime activation.           |
-| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                  |
-| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs plugin runtime execution after descriptor lookup. |
+| Field              | Required | Type       | What it means                                                            |
+| ------------------ | -------- | ---------- | ------------------------------------------------------------------------ |
+| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.          |
+| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup.           |
+| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.               |
+| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup. |
 
 ## uiHints reference
 

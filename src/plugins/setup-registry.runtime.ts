@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { listSetupCliBackendIds } from "./setup-descriptors.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -35,9 +36,11 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
     return bundledSetupCliBackendsCache;
   }
   bundledSetupCliBackendsCache = loadPluginManifestRegistry({ cache: true })
-    .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.cliBackends.length > 0)
+    .plugins.filter(
+      (plugin) => plugin.origin === "bundled" && listSetupCliBackendIds(plugin).length > 0,
+    )
     .flatMap((plugin) =>
-      plugin.cliBackends.map(
+      listSetupCliBackendIds(plugin).map(
         (backendId) =>
           ({
             pluginId: plugin.id,
