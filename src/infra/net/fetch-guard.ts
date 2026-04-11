@@ -374,7 +374,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           meta: {
             captureOrigin: "guarded-fetch",
             ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-            ...(params.capture?.meta ?? {}),
+            ...params.capture?.meta,
           },
         });
       }

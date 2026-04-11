@@ -1,30 +1,36 @@
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 
-type RuntimeTrackedChannelRegistry = {
-  channels?: Array<{
-    plugin: {
-      id?: string | null;
-      meta?: {
-        aliases?: readonly string[];
-        markdownCapable?: boolean;
-      } | null;
-      conversationBindings?: {
-        supportsCurrentConversationBinding?: boolean;
-      } | null;
-    };
-  }>;
-};
+export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
-    activeRegistry?: RuntimeTrackedChannelRegistry | null;
+    activeVersion?: number;
+    activeRegistry?: ActivePluginChannelRegistry | null;
     channel?: {
-      registry: RuntimeTrackedChannelRegistry | null;
+      registry: ActivePluginChannelRegistry | null;
+      version?: number;
     };
   };
 };
 
-export function getActivePluginChannelRegistryFromState(): RuntimeTrackedChannelRegistry | null {
+function countChannels(registry: ActivePluginChannelRegistry | null | undefined): number {
+  return registry?.channels?.length ?? 0;
+}
+
+export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
   const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
-  return state?.channel?.registry ?? state?.activeRegistry ?? null;
+  const pinnedRegistry = state?.channel?.registry ?? null;
+  if (countChannels(pinnedRegistry) > 0) {
+    return pinnedRegistry;
+  }
+  const activeRegistry = state?.activeRegistry ?? null;
+  if (countChannels(activeRegistry) > 0) {
+    return activeRegistry;
+  }
+  return pinnedRegistry ?? activeRegistry;
+}
+
+export function getActivePluginChannelRegistryVersionFromState(): number {
+  const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
+  return state?.channel?.registry ? (state.channel.version ?? 0) : (state?.activeVersion ?? 0);
 }

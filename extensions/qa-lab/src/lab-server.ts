@@ -16,7 +16,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   getDebugProxyCaptureStore,
   resolveDebugProxySettings,
-  type CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
@@ -38,6 +37,21 @@ import {
 import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
+
+const CAPTURE_QUERY_PRESETS = new Set([
+  "double-sends",
+  "retry-storms",
+  "cache-busting",
+  "ws-duplicate-frames",
+  "missing-ack",
+  "error-bursts",
+]);
+
+function isCaptureQueryPreset(
+  value: string,
+): value is Parameters<ReturnType<typeof getDebugProxyCaptureStore>["queryPreset"]>[0] {
+  return CAPTURE_QUERY_PRESETS.has(value);
+}
 
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
@@ -66,7 +80,10 @@ function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
   }
 }
 
-function readCaptureMetaString(meta: Record<string, unknown> | null, key: string): string | undefined {
+function readCaptureMetaString(
+  meta: Record<string, unknown> | null,
+  key: string,
+): string | undefined {
   const value = meta?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -100,7 +117,10 @@ function defaultPortForProtocol(protocol: string): number {
   return 0;
 }
 
-async function probeTcpReachability(rawUrl: string, timeoutMs = 700): Promise<QaStartupProbeStatus> {
+async function probeTcpReachability(
+  rawUrl: string,
+  timeoutMs = 700,
+): Promise<QaStartupProbeStatus> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -742,7 +762,9 @@ export async function startQaLabServer(
       if (req.method === "GET" && url.pathname === "/api/capture/events") {
         const sessionId = url.searchParams.get("sessionId")?.trim();
         writeJson(res, 200, {
-          events: sessionId ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa) : [],
+          events: sessionId
+            ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+            : [],
         });
         return;
       }
@@ -758,10 +780,14 @@ export async function startQaLabServer(
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/capture/query") {
-        const preset = url.searchParams.get("preset")?.trim() as CaptureQueryPreset | null;
+        const preset = url.searchParams.get("preset")?.trim();
         const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
         if (!preset) {
           writeError(res, 400, "Missing preset");
+          return;
+        }
+        if (!isCaptureQueryPreset(preset)) {
+          writeError(res, 400, "Unknown preset");
           return;
         }
         writeJson(res, 200, {

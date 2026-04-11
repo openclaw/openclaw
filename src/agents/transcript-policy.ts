@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
-import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";
+import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";

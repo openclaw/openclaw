@@ -6,15 +6,15 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
 import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";

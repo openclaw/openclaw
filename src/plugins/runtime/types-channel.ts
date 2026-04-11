@@ -6,11 +6,10 @@
  * like `channel.discord` or `channel.slack`.
  */
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
-
-type ReadChannelAllowFromStore =
-  typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
-type UpsertChannelPairingRequest =
-  typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+import type {
+  ReadChannelAllowFromStoreForAccount,
+  UpsertChannelPairingRequestForAccount,
+} from "../../pairing/pairing-store.types.js";
 type ShouldHandleTextCommands =
   import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
 type BuildMentionRegexes = import("../../auto-reply/reply/mentions.types.js").BuildMentionRegexes;
@@ -23,16 +22,6 @@ type RecordSessionMetaFromInbound =
   import("../../config/sessions/runtime-types.js").RecordSessionMetaFromInbound;
 type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
-
-type ReadChannelAllowFromStoreForAccount = (params: {
-  channel: Parameters<ReadChannelAllowFromStore>[0];
-  accountId: string;
-  env?: Parameters<ReadChannelAllowFromStore>[1];
-}) => ReturnType<ReadChannelAllowFromStore>;
-
-type UpsertChannelPairingRequestForAccount = (
-  params: Omit<Parameters<UpsertChannelPairingRequest>[0], "accountId"> & { accountId: string },
-) => ReturnType<UpsertChannelPairingRequest>;
 
 export type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord

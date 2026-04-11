@@ -1,6 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -90,9 +90,11 @@ describe("listMicrosoftVoices", () => {
     process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
 
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
-    ) as unknown as typeof globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
+      ) as unknown as typeof globalThis.fetch;
 
     const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
     const store = getDebugProxyCaptureStore(
@@ -117,7 +119,9 @@ describe("listMicrosoftVoices", () => {
       events.some((event) => event.kind === "request" && event.host === "speech.platform.bing.com"),
     ).toBe(true);
     expect(
-      events.some((event) => event.kind === "response" && event.host === "speech.platform.bing.com"),
+      events.some(
+        (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
+      ),
     ).toBe(true);
   });
 
@@ -131,12 +135,13 @@ describe("listMicrosoftVoices", () => {
     process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
 
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 })) as unknown as typeof globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
+    ) as unknown as typeof globalThis.fetch;
 
     const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
-    const { finalizeDebugProxyCapture, initializeDebugProxyCapture } = await import(
-      "../../src/proxy-capture/runtime.js"
-    );
+    const { finalizeDebugProxyCapture, initializeDebugProxyCapture } =
+      await import("../../src/proxy-capture/runtime.js");
     const store = getDebugProxyCaptureStore(
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
@@ -160,7 +165,8 @@ describe("listMicrosoftVoices", () => {
         .getSessionEvents("ms-voices-global-session", 10)
         .filter((event) => event.host === "speech.platform.bing.com");
       expect(events).toHaveLength(2);
-      expect(events.map((event) => event.kind).sort()).toEqual(["request", "response"]);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
     } finally {
       globalThis.fetch = originalFetch;
       finalizeDebugProxyCapture();
