@@ -927,6 +927,11 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+# Stop the pre-update gateway before replacing the package. Otherwise the old
+# host can observe new plugin metadata mid-update and abort config validation.
+/usr/bin/pkill -9 -f openclaw-gateway || true
+/usr/bin/pkill -9 -f 'openclaw gateway run' || true
+/usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
@@ -982,6 +987,11 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+# Stop the pre-update manual gateway before replacing the package. Otherwise
+# the old host can observe new plugin metadata mid-update and abort validation.
+pkill -9 -f openclaw-gateway || true
+pkill -9 -f 'openclaw gateway run' || true
+pkill -9 -f 'openclaw.mjs gateway' || true
 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
