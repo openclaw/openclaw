@@ -29,6 +29,10 @@ export async function modelsExplainCommand(
   };
 
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
+  const inferredFamilyRoutingApplied =
+    Boolean(opts.model) &&
+    resolved.model === opts.model &&
+    resolved.provider !== (opts.provider ?? defaults.provider);
   const payload = {
     agentId: agentId ?? "main",
     input: {
@@ -36,11 +40,14 @@ export async function modelsExplainCommand(
       modelOverride: opts.model ?? null,
     },
     defaults,
+    resolution: {
+      startedFromDefault: `${defaults.provider}/${defaults.model}`,
+      explicitProviderOverrideApplied: opts.provider ?? null,
+      explicitModelOverrideApplied: opts.model ?? null,
+      familyInferenceApplied: inferredFamilyRoutingApplied,
+    },
     resolved,
-    inferredFamilyRoutingApplied:
-      Boolean(opts.model) &&
-      resolved.model === opts.model &&
-      resolved.provider !== (opts.provider ?? defaults.provider),
+    inferredFamilyRoutingApplied,
   };
 
   if (opts.json) {
@@ -52,8 +59,14 @@ export async function modelsExplainCommand(
   runtime.log(`Input provider override: ${payload.input.providerOverride ?? "-"}`);
   runtime.log(`Input model override: ${payload.input.modelOverride ?? "-"}`);
   runtime.log(`Default resolved: ${payload.defaults.provider}/${payload.defaults.model}`);
-  runtime.log(`Final resolved: ${payload.resolved.provider}/${payload.resolved.model}`);
   runtime.log(
-    `Family inference applied: ${payload.inferredFamilyRoutingApplied ? "yes" : "no"}`,
+    `Explicit provider override applied: ${payload.resolution.explicitProviderOverrideApplied ?? "-"}`,
   );
+  runtime.log(
+    `Explicit model override applied: ${payload.resolution.explicitModelOverrideApplied ?? "-"}`,
+  );
+  runtime.log(
+    `Family inference applied: ${payload.resolution.familyInferenceApplied ? "yes" : "no"}`,
+  );
+  runtime.log(`Final resolved: ${payload.resolved.provider}/${payload.resolved.model}`);
 }

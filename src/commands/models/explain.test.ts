@@ -51,11 +51,13 @@ describe("modelsExplainCommand", () => {
 
     expect(writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        resolved: {
-          provider: "openai-codex",
+        resolved: expect.objectContaining({
           model: "gpt-5.4",
-        },
-        inferredFamilyRoutingApplied: true,
+        }),
+        resolution: expect.objectContaining({
+          explicitProviderOverrideApplied: null,
+          explicitModelOverrideApplied: "gpt-5.4",
+        }),
       }),
       2,
     );
