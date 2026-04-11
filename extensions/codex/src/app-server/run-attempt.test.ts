@@ -119,6 +119,56 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("does not leak unhandled rejections when shutdown closes before interrupt", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const requests: Array<{ method: string; params: unknown }> = [];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+        }
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "inProgress" } };
+        }
+        if (method === "turn/interrupt") {
+          throw new Error("codex app-server client is closed");
+        }
+        return {};
+      });
+      __testing.setCodexAppServerClientFactoryForTests(
+        async () =>
+          ({
+            request,
+            addNotificationHandler: () => () => undefined,
+            addRequestHandler: () => () => undefined,
+          }) as never,
+      );
+      const abortController = new AbortController();
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      params.abortSignal = abortController.signal;
+
+      const run = runCodexAppServerAttempt(params);
+      await vi.waitFor(() =>
+        expect(requests.some((entry) => entry.method === "turn/start")).toBe(true),
+      );
+      abortController.abort("shutdown");
+
+      await expect(run).resolves.toMatchObject({ aborted: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("forwards image attachments to the app-server turn input", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
