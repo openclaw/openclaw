@@ -63,6 +63,8 @@ export const es: TranslationMap = {
     relink: "Volver a vincular",
     waitForScan: "Esperar escaneo",
     logout: "Cerrar sesión",
+    newChat: "Nuevo chat",
+    renameChat: "Renombrar chat",
   },
   channels: {
     health: {
