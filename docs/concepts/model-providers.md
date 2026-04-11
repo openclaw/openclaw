@@ -581,6 +581,37 @@ Coding models (`volcengine-plan`):
 - `volcengine-plan/kimi-k2-thinking`
 - `volcengine-plan/glm-4.7`
 
+To enable Ark Responses session cache, configure the `cache` parameter and `model.api` = `openai-responses`. The system automatically manages `caching`, `thinking`, and `previous_response_id` fields:
+
+```json5
+{
+  models: {
+    providers: {
+      volcengine: {
+        api: "openai-responses",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      models: {
+        "volcengine/doubao-seed-1-8-251228": {
+          params: {
+            cache: {
+              enable: true,
+              ttlSec: 3600, // Cache TTL in seconds (default 3600)
+              thinking: true, // Enable thinking (default true)
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`cache.enable` must be `true` to activate caching. Other fields are optional with defaults: `ttlSec: 3600`, `thinking: true`.
+
 ### BytePlus (International)
 
 BytePlus ARK provides access to the same models as Volcano Engine for international users.

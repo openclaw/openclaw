@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
+import { createVolcengineCacheWrapper } from "./cache.js";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "volcengine";
@@ -77,6 +78,7 @@ export default definePluginEntry({
         }));
         return [...volcengineModels, ...volcenginePlanModels];
       },
+      wrapStreamFn: (ctx) => createVolcengineCacheWrapper(ctx.streamFn, ctx.extraParams),
     });
   },
 });

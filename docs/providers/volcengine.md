@@ -36,6 +36,42 @@ openclaw onboard --auth-choice volcengine-api-key
 }
 ```
 
+## Session caching
+
+Enable session-based response caching via the `cache` and `model.api` parameters. The cache
+automatically manages `caching`, `thinking`, and `previous_response_id` fields
+for multi-turn conversations:
+
+```json5
+{
+  models: {
+    providers: {
+      volcengine: {
+        api: "openai-responses",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      models: {
+        "volcengine/doubao-seed-2-0-lite-260215": {
+          params: {
+            cache: {
+              enable: true,
+              ttlSec: 7200, // cache TTL in seconds (default: 3600)
+              thinking: false, // enable thinking (default: true)
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`cache.enable` must be `true` to activate caching. Other fields are optional
+and fall back to defaults (`ttlSec: 3600`, `thinking: true`).
+
 ## Non-interactive example
 
 ```bash
