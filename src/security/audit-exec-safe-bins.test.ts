@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectExecRuntimeFindings } from "./audit.js";
@@ -115,7 +116,12 @@ describe("security audit exec safe-bin findings", () => {
     const riskyGlobalTrustedDirs =
       process.platform === "win32"
         ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
-        : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
+        : [
+            "/usr/local/bin",
+            "/snap/bin",
+            "/home/ci-user/.nvm/versions/node/v22/bin",
+            "/tmp/openclaw-safe-bins",
+          ];
     const findings = collectExecRuntimeFindings({
       tools: {
         exec: {
@@ -128,7 +134,7 @@ describe("security audit exec safe-bin findings", () => {
             id: "ops",
             tools: {
               exec: {
-                safeBinTrustedDirs: ["./relative-bin-dir"],
+                safeBinTrustedDirs: ["./relative-bin-dir", join(process.cwd(), "relative-bin-dir")],
               },
             },
           },

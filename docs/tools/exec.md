@@ -71,7 +71,7 @@ Notes:
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
-- `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
+- `tools.exec.safeBinTrustedDirs`: additional explicit immutable directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`; mutable dirs like `/usr/local/bin`, `/snap/bin`, `~/.nvm`, or workspace script dirs must use explicit executable-path allowlist entries instead.
 - `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
 Example:
@@ -160,9 +160,9 @@ Use the two controls for different jobs:
 - `tools.exec.safeBinProfiles`: explicit argv policy for custom safe bins.
 - allowlist: explicit trust for executable paths.
 
-Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
+Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). Also do not add `cat` or `ls`: they are filesystem readers, not stdin-only stream filters. If you need any of these, use explicit executable path/glob allowlist entries (for example `/usr/bin/python3`, `/bin/cat`, `/bin/ls`, or `~/.nvm/**/bin/node`) and keep approval prompts enabled.
 `openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries.
-`openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins`.
+`openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq`, `cat`, or `ls` back into `safeBins`.
 If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require a fresh approval.
 
 For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).

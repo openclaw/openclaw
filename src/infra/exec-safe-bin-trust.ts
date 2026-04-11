@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Keep defaults to OS-managed immutable bins only.
-// User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
+// Mutable locations (package-manager bins, home-scoped bins, relative/workspace dirs)
+// must use explicit path-based approvals instead of the safe-bin fast path.
 const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 
 type TrustedSafeBinDirsParams = {
@@ -26,6 +27,37 @@ export type WritableTrustedSafeBinDir = {
   worldWritable: boolean;
 };
 
+export function classifyRiskyExplicitSafeBinTrustedDir(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!path.isAbsolute(trimmed)) {
+    return "relative/workspace-scoped directory is mutable and depends on process cwd";
+  }
+  const normalized = path.resolve(trimmed).replace(/\\/g, "/").toLowerCase();
+  const normalizedCwd = path.resolve(process.cwd()).replace(/\\/g, "/").toLowerCase();
+  if (normalized === normalizedCwd || normalized.startsWith(`${normalizedCwd}/`)) {
+    return "workspace-scoped directory is mutable and depends on project contents";
+  }
+  if (normalized === "/usr/local/bin") {
+    return "package-manager bin directory is mutable and not an immutable safe-bin root";
+  }
+  if (normalized === "/snap/bin") {
+    return "snap shim directory is mutable and not an immutable safe-bin root";
+  }
+  if (
+    normalized.startsWith("/home/") ||
+    normalized.startsWith("/users/") ||
+    normalized.includes("/.nvm/") ||
+    normalized.endsWith("/.nvm") ||
+    normalized.includes("/.local/bin")
+  ) {
+    return "home-scoped bin directory is mutable and not an immutable safe-bin root";
+  }
+  return null;
+}
+
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
 function normalizeTrustedDir(value: string): string | null {
@@ -46,6 +78,7 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
 
 function resolveTrustedSafeBinDirs(entries: readonly string[]): string[] {
   const resolved = entries
+    .filter((entry) => !classifyRiskyExplicitSafeBinTrustedDir(entry))
     .map((entry) => normalizeTrustedDir(entry))
     .filter((entry): entry is string => Boolean(entry));
   return Array.from(new Set(resolved)).toSorted();

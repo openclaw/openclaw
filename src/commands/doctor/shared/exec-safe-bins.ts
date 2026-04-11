@@ -1,11 +1,16 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../../../infra/exec-safe-bin-runtime-policy.js";
-import { listRiskyConfiguredSafeBins } from "../../../infra/exec-safe-bin-semantics.js";
 import {
+  isRejectedSafeBin,
+  listRiskyConfiguredSafeBins,
+} from "../../../infra/exec-safe-bin-semantics.js";
+import {
+  classifyRiskyExplicitSafeBinTrustedDir,
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
@@ -117,7 +122,7 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
   for (const scope of collectExecSafeBinScopes(cfg)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
     for (const bin of scope.safeBins) {
-      if (scope.mergedProfiles[bin]) {
+      if (scope.mergedProfiles[bin] || isRejectedSafeBin(bin)) {
         continue;
       }
       hits.push({
@@ -237,9 +242,18 @@ export function collectExecSafeBinTrustedDirHintWarnings(
   if (hits.length > 5) {
     lines.push(`- ${hits.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`);
   }
-  lines.push(
-    "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+  const riskyMutableHits = hits.filter((hit) =>
+    Boolean(classifyRiskyExplicitSafeBinTrustedDir(path.dirname(hit.resolvedPath))),
   );
+  if (riskyMutableHits.length > 0) {
+    lines.push(
+      "- Mutable bin directories (for example ~/.nvm, /usr/local/bin, /snap/bin, or workspace-relative script dirs) are not valid safeBinTrustedDirs roots; use an explicit executable-path allowlist entry instead.",
+    );
+  } else {
+    lines.push(
+      "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+    );
+  }
   return lines;
 }
 
@@ -255,6 +269,9 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   for (const scope of collectExecSafeBinScopes(next)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
     for (const hit of listRiskyConfiguredSafeBins(scope.safeBins)) {
+      if (isRejectedSafeBin(hit.bin)) {
+        continue;
+      }
       warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
     }
     const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
@@ -264,6 +281,12 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
     const profileHolder =
       asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
     for (const bin of missingBins) {
+      if (isRejectedSafeBin(bin)) {
+        warnings.push(
+          `- ${scope.scopePath}.safeBins includes '${bin}': remove it from safeBins and use an explicit executable-path allowlist entry or approval-gated run instead.`,
+        );
+        continue;
+      }
       if (interpreterBins.has(bin)) {
         warnings.push(
           `- ${scope.scopePath}.safeBins includes interpreter/runtime '${bin}' without profile; remove it from safeBins or use explicit allowlist entries.`,

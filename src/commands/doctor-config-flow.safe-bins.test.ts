@@ -109,4 +109,44 @@ describe("doctor config flow safe bins", () => {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it("steers mutable safe-bin roots to explicit allowlist entries instead of safeBinTrustedDirs", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-safe-bins-nvm-"));
+    const nvmDir = path.join(dir, ".nvm", "versions", "node", "v22", "bin");
+    const binPath = path.join(nvmDir, "python3");
+    try {
+      await fs.mkdir(nvmDir, { recursive: true });
+      await fs.writeFile(binPath, "#!/bin/sh\necho ok\n", "utf-8");
+      await fs.chmod(binPath, 0o755);
+      await withEnvAsync(
+        {
+          PATH: `${nvmDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        async () => {
+          await runDoctorConfigWithInput({
+            config: {
+              tools: {
+                exec: {
+                  safeBins: ["python3"],
+                  safeBinProfiles: {
+                    python3: {},
+                  },
+                },
+              },
+            },
+            run: loadAndMaybeMigrateDoctorConfig,
+          });
+        },
+      );
+      expect(noteSpy).toHaveBeenCalledWith(
+        expect.stringContaining("explicit executable-path allowlist entry"),
+        "Doctor warnings",
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
 });

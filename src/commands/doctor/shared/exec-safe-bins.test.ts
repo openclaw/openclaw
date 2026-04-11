@@ -100,6 +100,48 @@ describe("doctor exec safe bin helpers", () => {
     expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
   });
 
+  it("rejects cat/ls safeBins instead of scaffolding profiles", () => {
+    const hits = scanExecSafeBinCoverage({
+      tools: {
+        exec: {
+          safeBins: ["cat", "ls"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(hits).toEqual([
+      {
+        scopePath: "tools.exec",
+        bin: "cat",
+        kind: "riskySemantics",
+        warning:
+          "cat reads named files by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
+      },
+      {
+        scopePath: "tools.exec",
+        bin: "ls",
+        kind: "riskySemantics",
+        warning:
+          "ls enumerates filesystem paths by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
+      },
+    ]);
+
+    const result = maybeRepairExecSafeBinProfiles({
+      tools: {
+        exec: {
+          safeBins: ["cat", "ls"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- tools.exec.safeBins includes 'cat': remove it from safeBins and use an explicit executable-path allowlist entry or approval-gated run instead.",
+      "- tools.exec.safeBins includes 'ls': remove it from safeBins and use an explicit executable-path allowlist entry or approval-gated run instead.",
+    ]);
+    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
+  });
+
   it("flags safeBins that resolve outside trusted directories", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
     const binPath = join(tempDir, "custom-safe-bin");
@@ -131,5 +173,36 @@ describe("doctor exec safe bin helpers", () => {
     );
 
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("steers mutable trusted-dir candidates to explicit allowlist entries", () => {
+    const warnings = collectExecSafeBinTrustedDirHintWarnings([
+      {
+        scopePath: "tools.exec",
+        bin: "python3",
+        resolvedPath: "/home/test/.nvm/versions/node/v22/bin/python3",
+      },
+    ]);
+
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("outside trusted safe-bin dirs"),
+        expect.stringContaining("explicit executable-path allowlist entry"),
+      ]),
+    );
+  });
+
+  it("still hints safeBinTrustedDirs for non-mutable immutable directories", () => {
+    const warnings = collectExecSafeBinTrustedDirHintWarnings([
+      {
+        scopePath: "tools.exec",
+        bin: "custom-safe-bin",
+        resolvedPath: "/usr/libexec/custom-safe-bin",
+      },
+    ]);
+
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("tools.exec.safeBinTrustedDirs")]),
+    );
   });
 });

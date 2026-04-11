@@ -15,9 +15,9 @@ import {
 } from "./exec-safe-bin-trust.js";
 
 export type ExecSafeBinConfigScope = {
-  safeBins?: string[] | null;
+  safeBins?: readonly string[] | null;
   safeBinProfiles?: SafeBinProfileFixtures | null;
-  safeBinTrustedDirs?: string[] | null;
+  safeBinTrustedDirs?: readonly string[] | null;
 };
 
 const INTERPRETER_LIKE_SAFE_BINS = new Set([

@@ -8,6 +8,7 @@ export type SafeBinSemanticValidationParams = {
 type SafeBinSemanticRule = {
   validate?: (params: SafeBinSemanticValidationParams) => boolean;
   configWarning?: string;
+  rejectSafeBin?: boolean;
 };
 
 const JQ_ENV_FILTER_PATTERN = /(^|[^.$A-Za-z0-9_])env([^A-Za-z0-9_]|$)/;
@@ -16,7 +17,9 @@ const ALWAYS_DENY_SAFE_BIN_SEMANTICS = () => false;
 
 const UNSAFE_SAFE_BIN_WARNINGS = {
   awk: "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+  cat: "cat reads named files by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
   jq: "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+  ls: "ls enumerates filesystem paths by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
   sed: "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
 } as const;
 
@@ -27,6 +30,11 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
         (token) => JQ_ENV_FILTER_PATTERN.test(token) || JQ_ENV_VARIABLE_PATTERN.test(token),
       ),
     configWarning: UNSAFE_SAFE_BIN_WARNINGS.jq,
+  },
+  cat: {
+    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
+    configWarning: UNSAFE_SAFE_BIN_WARNINGS.cat,
+    rejectSafeBin: true,
   },
   awk: {
     validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
@@ -52,6 +60,11 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
     validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
     configWarning: UNSAFE_SAFE_BIN_WARNINGS.sed,
   },
+  ls: {
+    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
+    configWarning: UNSAFE_SAFE_BIN_WARNINGS.ls,
+    rejectSafeBin: true,
+  },
 };
 
 export function normalizeSafeBinName(raw: string): string {
@@ -67,6 +80,10 @@ export function normalizeSafeBinName(raw: string): string {
 export function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
   const normalized = typeof binName === "string" ? normalizeSafeBinName(binName) : "";
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
+}
+
+export function isRejectedSafeBin(binName?: string): boolean {
+  return Boolean(getSafeBinSemanticRule(binName)?.rejectSafeBin);
 }
 
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {

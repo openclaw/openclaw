@@ -407,6 +407,108 @@ function resolveShellWrapperScriptArgv(params: {
   return [params.shellScriptCandidatePath, ...scriptArgs];
 }
 
+function resolveCandidatePathFromToken(token: string, cwd?: string): string | undefined {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (path.isAbsolute(trimmed)) {
+    return trimmed;
+  }
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
+  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
+  return path.resolve(base, expanded);
+}
+
+function resolveInterpreterScriptCandidate(params: {
+  effectiveArgv: string[];
+  cwd?: string;
+}): { scriptPath: string; scriptArgv: string[] } | null {
+  const argv = params.effectiveArgv;
+  if (!Array.isArray(argv) || argv.length < 2) {
+    return null;
+  }
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (!executable || detectInterpreterInlineEvalArgv(argv)) {
+    return null;
+  }
+
+  if (executable === "blender") {
+    for (let idx = 1; idx < argv.length; idx += 1) {
+      const token = argv[idx]?.trim() ?? "";
+      if (!token) {
+        continue;
+      }
+      if (token === "-P" || token === "--python") {
+        const next = argv[idx + 1]?.trim() ?? "";
+        const scriptPath = resolveCandidatePathFromToken(next, params.cwd);
+        if (!scriptPath) {
+          return null;
+        }
+        return {
+          scriptPath,
+          scriptArgv: [scriptPath, ...argv.slice(idx + 2)],
+        };
+      }
+      if (token.startsWith("--python=") && token.length > "--python=".length) {
+        const scriptPath = resolveCandidatePathFromToken(
+          token.slice("--python=".length),
+          params.cwd,
+        );
+        if (!scriptPath) {
+          return null;
+        }
+        return {
+          scriptPath,
+          scriptArgv: [scriptPath, ...argv.slice(idx + 1)],
+        };
+      }
+    }
+    return null;
+  }
+
+  if (!["python", "python2", "python3", "pypy", "pypy3"].includes(executable)) {
+    return null;
+  }
+
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (token === "--") {
+      const next = argv[idx + 1]?.trim() ?? "";
+      const scriptPath = resolveCandidatePathFromToken(next, params.cwd);
+      if (!scriptPath) {
+        return null;
+      }
+      return {
+        scriptPath,
+        scriptArgv: [scriptPath, ...argv.slice(idx + 2)],
+      };
+    }
+    if (token === "-m" || token === "-c") {
+      return null;
+    }
+    if (token === "-W" || token === "-X") {
+      idx += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    const scriptPath = resolveCandidatePathFromToken(token, params.cwd);
+    if (!scriptPath) {
+      return null;
+    }
+    return {
+      scriptPath,
+      scriptArgv: [scriptPath, ...argv.slice(idx + 1)],
+    };
+  }
+  return null;
+}
+
 function resolveSegmentAllowlistMatch(params: {
   segment: ExecCommandSegment;
   context: ExecAllowlistContext;
@@ -483,10 +585,27 @@ function resolveSegmentAllowlistMatch(params: {
           params.context.platform,
         )
       : null;
+  const interpreterScriptCandidate = resolveInterpreterScriptCandidate({
+    effectiveArgv,
+    cwd: params.context.cwd,
+  });
+  const interpreterScriptMatch = interpreterScriptCandidate
+    ? matchAllowlist(
+        params.context.allowlist,
+        {
+          rawExecutable: interpreterScriptCandidate.scriptPath,
+          resolvedPath: interpreterScriptCandidate.scriptPath,
+          executableName: path.basename(interpreterScriptCandidate.scriptPath),
+        },
+        interpreterScriptCandidate.scriptArgv,
+        params.context.platform,
+      )
+    : null;
   return {
     effectiveArgv,
     inlineCommand,
-    match: executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch,
+    match:
+      executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch ?? interpreterScriptMatch,
   };
 }
 
@@ -962,8 +1081,33 @@ function collectAllowAlwaysPatterns(params: {
   if (!candidatePath) {
     return;
   }
+  const effectiveArgv = segment.resolution?.effectiveArgv ?? segment.argv;
+  const interpreterScriptCandidate = resolveInterpreterScriptCandidate({
+    effectiveArgv,
+    cwd: params.cwd,
+  });
+  const normalizedCandidateExecutable = normalizeExecutableToken(candidatePath);
+  if (
+    interpreterScriptCandidate &&
+    (normalizedCandidateExecutable === "blender" ||
+      isInterpreterLikeAllowlistPattern(candidatePath))
+  ) {
+    if (
+      normalizedCandidateExecutable === "blender" ||
+      params.strictInlineEval !== true ||
+      detectInterpreterInlineEvalArgv(effectiveArgv) !== null
+    ) {
+      const argPattern = buildScriptArgPatternFromArgv(
+        effectiveArgv,
+        interpreterScriptCandidate.scriptPath,
+        params.cwd,
+        params.platform,
+      );
+      addAllowAlwaysPattern(params.out, interpreterScriptCandidate.scriptPath, argPattern);
+      return;
+    }
+  }
   if (isInterpreterLikeAllowlistPattern(candidatePath)) {
-    const effectiveArgv = segment.resolution?.effectiveArgv ?? segment.argv;
     if (
       params.strictInlineEval !== true ||
       detectInterpreterInlineEvalArgv(effectiveArgv) !== null

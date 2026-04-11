@@ -34,6 +34,18 @@ describe("exec allowlist matching", () => {
     }
   });
 
+  it("matches canonical resolved-path glob patterns for common Linux-managed runtimes", () => {
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/home/fancymatt/.nvm/versions/node/v22.22.1/bin/python3",
+      executableName: "python3",
+    };
+    expect(
+      matchAllowlist([{ pattern: "/home/fancymatt/.nvm/**/bin/python3" }], resolution)?.pattern,
+    ).toBe("/home/fancymatt/.nvm/**/bin/python3");
+    expect(matchAllowlist([{ pattern: "python3" }], resolution)).toBeNull();
+  });
+
   it("matches absolute paths containing regex metacharacters literally", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {

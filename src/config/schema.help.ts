@@ -558,7 +558,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
   "tools.exec.safeBinTrustedDirs":
-    "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
+    "Additional explicit immutable directories trusted for safe-bin path checks (PATH entries are never auto-trusted; mutable dirs like /usr/local/bin, /snap/bin, ~/.nvm, or workspace-relative script dirs are not valid safe-bin roots).",
   "tools.exec.safeBinProfiles":
     "Optional per-binary safe-bin profiles (positional limits + allowed/denied flags).",
   "tools.profile":

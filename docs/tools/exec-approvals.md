@@ -237,7 +237,7 @@ This is defense-in-depth for interpreter loaders that do not map cleanly to one 
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
-Patterns should resolve to **binary paths** (basename-only entries are ignored).
+Patterns should resolve to **binary paths** (basename-only entries such as `python3` or `rg` are ignored).
 Legacy `agents.default` entries are migrated to `agents.main` on load.
 Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
@@ -273,6 +273,7 @@ that can run in allowlist mode **without** explicit allowlist entries. Safe bins
 positional file args and path-like tokens, so they can only operate on the incoming stream.
 Treat this as a narrow fast-path for stream filters, not a general trust list.
 Do **not** add interpreter or runtime binaries (for example `python3`, `node`, `ruby`, `bash`, `sh`, `zsh`) to `safeBins`.
+Do **not** add `cat` or `ls` to `safeBins` either: `cat` reads named files by design and `ls` enumerates filesystem paths by design, so both must use explicit executable-path allowlist entries (or approval-gated runs) instead of the stdin-only safe-bin path.
 If a command can evaluate code, execute subcommands, or read files by design, prefer explicit allowlist entries and keep approval prompts enabled.
 Custom safe bins must define an explicit profile in `tools.exec.safeBinProfiles.<bin>`.
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
@@ -302,9 +303,10 @@ used to smuggle file reads.
 Safe bins must also resolve from trusted binary directories (system defaults plus optional
 `tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
 Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
-If your safe-bin executable lives in package-manager/user paths (for example
-`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
-to `tools.exec.safeBinTrustedDirs`.
+If your safe-bin executable lives in a mutable package-manager/user/workspace path (for example
+`/usr/local/bin`, `/snap/bin`, `~/.nvm/...`, or `./scripts/...`), do not treat that directory as a
+safe-bin root; use an explicit executable-path allowlist entry instead. Reserve
+`tools.exec.safeBinTrustedDirs` for additional immutable directories you control.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
@@ -321,7 +323,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
+If you allowlist interpreters via explicit path/glob entries like `/usr/bin/python3`, `/usr/bin/node`, or `~/.nvm/**/bin/node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
 
 Default safe bins:
 
@@ -338,13 +340,13 @@ rejected so file operands cannot be smuggled as ambiguous positionals.
 
 ### Safe bins versus allowlist
 
-| Topic            | `tools.exec.safeBins`                                  | Allowlist (`exec-approvals.json`)                            |
-| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------ |
-| Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                        |
-| Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob pattern                        |
-| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility |
-| Typical examples | `head`, `tail`, `tr`, `wc`                             | `jq`, `python3`, `node`, `ffmpeg`, custom CLIs               |
-| Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects               |
+| Topic            | `tools.exec.safeBins`                                  | Allowlist (`exec-approvals.json`)                                                                                   |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                                                                               |
+| Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob pattern                                                                               |
+| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility                                                        |
+| Typical examples | `head`, `tail`, `tr`, `wc`                             | `/bin/cat`, `/bin/ls`, `/usr/bin/jq`, `/usr/bin/python3`, `~/.nvm/**/bin/node`, `/usr/bin/ffmpeg`, custom CLI paths |
+| Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects                                                                      |
 
 Configuration location:
 

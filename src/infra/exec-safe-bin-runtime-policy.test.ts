@@ -118,18 +118,31 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
   });
 
-  it("does not trust package-manager bin dirs unless explicitly configured", () => {
+  it("keeps mutable dirs out of safe-bin trust even when explicitly configured", () => {
     const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
-    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
     expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/snap/bin"))).toBe(false);
 
     const optedIn = resolveExecSafeBinRuntimePolicy({
       global: {
-        safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
+        safeBinTrustedDirs: [
+          "/usr/libexec",
+          "/usr/local/bin",
+          "/snap/bin",
+          "/home/test/.nvm/versions/node/v22/bin",
+          "./scripts",
+          path.join(process.cwd(), "scripts"),
+        ],
       },
     });
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/libexec"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/snap/bin"))).toBe(false);
+    expect(
+      optedIn.trustedSafeBinDirs.has(path.resolve("/home/test/.nvm/versions/node/v22/bin")),
+    ).toBe(false);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("./scripts"))).toBe(false);
+    expect(optedIn.trustedSafeBinDirs.has(path.join(process.cwd(), "scripts"))).toBe(false);
   });
 
   it("emits runtime warning when explicitly trusted dir is writable", async () => {

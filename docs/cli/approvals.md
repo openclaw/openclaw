@@ -151,10 +151,13 @@ setup above, but only for the local machine.
 
 ## Allowlist helpers
 
+Allowlist entries must be executable **paths or globs**. Bare names like `python3`, `node`, or `rg` do not match resolved Linux/macOS runtime paths.
+
 ```bash
 openclaw approvals allowlist add "~/Projects/**/bin/rg"
 openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"
 openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
+openclaw approvals allowlist add --agent worker "~/.nvm/**/bin/python3"
 
 openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 ```
