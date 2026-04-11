@@ -285,8 +285,8 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
  * Check if a task is due based on its interval and last run time.
  */
 export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs: number): boolean {
-  if (lastRunMs === undefined) {
-    return true; // Never run, always due
+  if (lastRunMs === undefined || lastRunMs > nowMs) {
+    return true; // Never run, or clock moved backward — treat as due
   }
 
   try {

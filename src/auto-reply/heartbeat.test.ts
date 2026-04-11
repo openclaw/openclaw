@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  isTaskDue,
   parseHeartbeatTasks,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -280,5 +281,26 @@ interval: should-not-bleed
         prompt: "Check for urgent emails",
       },
     ]);
+  });
+});
+
+describe("isTaskDue", () => {
+  it("returns true when task has never run", () => {
+    expect(isTaskDue(undefined, "30m", Date.now())).toBe(true);
+  });
+
+  it("returns true when interval has elapsed", () => {
+    const now = 1_000_000;
+    expect(isTaskDue(now - 31 * 60 * 1000, "30m", now)).toBe(true);
+  });
+
+  it("returns false when interval has not elapsed", () => {
+    const now = 1_000_000;
+    expect(isTaskDue(now - 10 * 60 * 1000, "30m", now)).toBe(false);
+  });
+
+  it("returns true when lastRunMs is in the future (clock skew)", () => {
+    const now = 1_000_000;
+    expect(isTaskDue(now + 5 * 60 * 1000, "30m", now)).toBe(true);
   });
 });
