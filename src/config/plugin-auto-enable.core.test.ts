@@ -57,7 +57,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.autoEnabledReasons).toEqual({});
   });
 
-  it("auto-enables built-in channels without appending to plugins.allow", () => {
+  it("auto-enables built-in channels and preserves them in restrictive plugins.allow", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
@@ -68,7 +68,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
     expect(result.autoEnabledReasons).toEqual({
       slack: ["slack configured"],
     });
@@ -285,7 +285,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(validateConfigObject(result.config).ok).toBe(true);
   });
 
-  it("does not append built-in WhatsApp to plugins.allow during auto-enable", () => {
+  it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
@@ -301,8 +301,50 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
     expect(validateConfigObject(result.config).ok).toBe(true);
+  });
+
+  it("preserves configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            discord: {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
+    expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
+  });
+
+  it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            "missing-plugin": {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
+    expect(result.changes).toEqual([]);
   });
 
   it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
