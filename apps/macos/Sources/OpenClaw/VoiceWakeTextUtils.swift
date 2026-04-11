@@ -27,8 +27,20 @@ enum VoiceWakeTextUtils {
             if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
                 return true
             }
+            // Prefix match for CJK: "莱财在不在" starts with trigger "莱财".
+            if triggerTokens.count == 1,
+               triggerTokens[0].unicodeScalars.contains(where: { Self.isCJKScalar($0) }),
+               tokens[0].hasPrefix(triggerTokens[0]) {
+                return true
+            }
         }
         return false
+    }
+
+    private static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
+        (scalar.value >= 0x4E00 && scalar.value <= 0x9FFF)   // CJK Unified
+        || (scalar.value >= 0x3040 && scalar.value <= 0x30FF) // Hiragana/Katakana
+        || (scalar.value >= 0xAC00 && scalar.value <= 0xD7AF) // Hangul
     }
 
     static func textOnlyCommand(
