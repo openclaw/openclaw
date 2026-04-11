@@ -11,7 +11,7 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =

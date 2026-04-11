@@ -7,9 +7,8 @@ export {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  type DeliveryContext,
-  type DeliveryContextSessionSource,
 } from "./delivery-context.shared.js";
+export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 export function formatConversationTarget(params: {
   channel?: string;

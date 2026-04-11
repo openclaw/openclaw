@@ -8,8 +8,8 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
-  type DeliveryContext,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
