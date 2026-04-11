@@ -152,7 +152,7 @@ export function getToolResult(
 
 function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
   const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
+  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "image"] as const) {
     const source = typeof params[key] === "string" ? params[key] : undefined;
     const normalized = normalizeOptionalString(source);
     if (normalized && source) {
