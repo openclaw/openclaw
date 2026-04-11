@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -344,6 +345,8 @@ export async function launchOpenClawChrome(
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
+        // WSL2 needs DISPLAY set to connect to the X server.
+        ...(isWSL2Sync() ? { DISPLAY: ":0" } : {}),
       },
     }) as unknown as ChildProcessWithoutNullStreams;
   };
