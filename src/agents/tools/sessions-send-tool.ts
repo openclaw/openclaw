@@ -103,7 +103,10 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readStringParam(params, "label"));
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
-      if (sessionKeyParam && labelParam) {
+      // When sessionKey and label are both provided but equal, treat it as
+      // sessionKey-only.  LLMs / UI layers sometimes mirror the value into
+      // both fields unintentionally (see #64699).
+      if (sessionKeyParam && labelParam && sessionKeyParam !== labelParam) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
