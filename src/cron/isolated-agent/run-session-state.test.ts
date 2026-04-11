@@ -155,8 +155,10 @@ describe("createPersistCronSessionEntry", () => {
       expect(call?.sessionKey).toBe(agentSessionKey);
       expect(call?.isNewSession).toBe(true);
       // IMPORTANT: the captured entry must be read BEFORE persist runs,
-      // while the store still has the prior entry.
-      expect(call?.store[agentSessionKey]).toBe(priorEntry);
+      // while the store still has the prior entry. Uses deep equality
+      // (not reference equality) because `makeCronSession` structuredClones
+      // the initial store to isolate tests from each other.
+      expect(call?.store[agentSessionKey]).toEqual(priorEntry);
     });
 
     it("archives the prior transcript after the first persist call", async () => {
