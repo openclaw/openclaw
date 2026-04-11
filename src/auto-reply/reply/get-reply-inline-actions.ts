@@ -390,7 +390,7 @@ export async function handleInlineActions(params: {
         allowed: elevatedAllowed,
         failures: elevatedFailures,
       },
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,
