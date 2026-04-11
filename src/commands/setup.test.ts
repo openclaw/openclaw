@@ -4,6 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { setupCommand } from "./setup.js";
 
+function createSetupDeps(home: string) {
+  const configPath = path.join(home, ".openclaw", "openclaw.json");
+  return {
+    ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
+      dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
+    })),
+    mkdir: vi.fn(async () => {}),
+    resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
+    writeConfigFile: vi.fn(async (config: unknown) => {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+    }),
+  };
+}
+
 describe("setupCommand", () => {
   it("writes gateway.mode=local on first run", async () => {
     await withTempHome(async (home) => {
@@ -12,8 +27,10 @@ describe("setupCommand", () => {
         error: vi.fn(),
         exit: vi.fn(),
       };
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, ".openclaw", "workspace");
 
-      await setupCommand(undefined, runtime);
+      await setupCommand({ workspace }, runtime, deps);
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const raw = await fs.readFile(configPath, "utf-8");
@@ -33,6 +50,7 @@ describe("setupCommand", () => {
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "custom-workspace");
+      const deps = createSetupDeps(home);
 
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
@@ -46,7 +64,7 @@ describe("setupCommand", () => {
         }),
       );
 
-      await setupCommand(undefined, runtime);
+      await setupCommand(undefined, runtime, deps);
 
       const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         agents?: { defaults?: { workspace?: string } };
@@ -67,11 +85,13 @@ describe("setupCommand", () => {
       };
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, ".openclaw", "workspace");
 
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, '"not-an-object"', "utf-8");
 
-      await setupCommand(undefined, runtime);
+      await setupCommand({ workspace }, runtime, deps);
 
       const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         agents?: { defaults?: { workspace?: string } };

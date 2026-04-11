@@ -287,7 +287,7 @@ async function bindConversationAndWait(params: {
       originatingAccountId: params.originatingAccountId,
     });
 
-    const mainHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    const mainHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 16,
     });
@@ -316,7 +316,7 @@ async function waitForAgentRunOk(
   runId: string,
   timeoutMs = LIVE_TIMEOUT_MS,
 ) {
-  const result = await client.request<{ status?: string }>(
+  const result: { status?: string } = await client.request(
     "agent.wait",
     {
       runId,
@@ -345,7 +345,7 @@ async function sendChatAndWait(params: {
     content: string;
   }>;
 }) {
-  const started = await params.client.request<{ runId?: string; status?: string }>("chat.send", {
+  const started: { runId?: string; status?: string } = await params.client.request("chat.send", {
     sessionKey: params.sessionKey,
     message: params.message,
     idempotencyKey: params.idempotencyKey,
@@ -371,7 +371,7 @@ async function waitForAssistantText(params: {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 16,
     });
@@ -387,7 +387,7 @@ async function waitForAssistantText(params: {
     await sleep(500);
   }
 
-  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
     sessionKey: params.sessionKey,
     limit: 16,
   });
@@ -408,7 +408,7 @@ async function waitForAssistantTurn(params: {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 16,
     });
@@ -421,7 +421,7 @@ async function waitForAssistantTurn(params: {
     await sleep(500);
   }
 
-  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
     sessionKey: params.sessionKey,
     limit: 16,
   });

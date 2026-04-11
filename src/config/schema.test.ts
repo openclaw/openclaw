@@ -305,6 +305,26 @@ describe("config schema", () => {
     });
   });
 
+  it("rejects allowPrivateNetwork on media-understanding request config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        media: {
+          image: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4.1-mini",
+                request: {
+                  allowPrivateNetwork: true,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects unknown keys inside web fetch firecrawl config", () => {
     expect(() =>
       ToolsSchema.parse({
