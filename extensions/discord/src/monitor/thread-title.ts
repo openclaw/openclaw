@@ -7,16 +7,25 @@ import {
 } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { withAbortTimeout } from "./timeouts.js";
 
-const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 10_000;
+// Reasoning models (e.g. MiniMax M2 via anthropic-messages) vary a lot in
+// thinking latency: observed 5.8s on one success, 10s+ timeout on another
+// test with almost identical input. rename runs fire-and-forget, so a generous
+// ceiling is safe — the worst case is a slightly delayed rename, not a stuck
+// user message.
+const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
 const MAX_THREAD_TITLE_CHANNEL_NAME_CHARS = 120;
 const MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS = 320;
 // Budget generous enough to cover reasoning-model thinking tokens plus the
-// short text output. Lower values (e.g. 24) starve reasoning models of output
-// capacity: the entire budget is consumed by the thinking block before any
-// text is emitted, so extractAssistantText returns empty and the rename is
-// silently skipped.
-const DISCORD_THREAD_TITLE_MAX_TOKENS = 512;
+// short text output. Lower values starve reasoning models of output capacity:
+// the entire budget is consumed by the thinking block before any text is
+// emitted, so extractAssistantText returns empty and the rename is silently
+// skipped. Real-world MiniMax M2 thinking passes for moderately complex
+// messages can consume 1-3k tokens, so the ceiling must be well above that;
+// 4096 leaves comfortable headroom for thinking plus the short title output.
+// Non-reasoning providers still stop early at end-of-sequence and do not
+// actually consume the full budget.
+const DISCORD_THREAD_TITLE_MAX_TOKENS = 4096;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
 

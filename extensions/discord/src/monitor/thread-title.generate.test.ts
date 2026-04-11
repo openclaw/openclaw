@@ -173,7 +173,7 @@ describe("generateThreadTitle", () => {
     ).toContain("Channel description: Deploy updates and incident notes");
     expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
       expect.objectContaining({
-        maxTokens: 512,
+        maxTokens: 4096,
       }),
     );
     expect(
