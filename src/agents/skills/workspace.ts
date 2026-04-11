@@ -500,7 +500,7 @@ function loadSkillEntries(
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
-        .sort((a, b) => a.name.localeCompare(b.name))
+        .sort((a, b) => a.name.localeCompare(b.name, "en"))
         .slice(0, limits.maxSkillsLoadedPerSource);
     }
 
@@ -575,7 +575,7 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => a.name.localeCompare(b.name, "en"))
     .map((skill) => {
       const frontmatter =
         readSkillFrontmatterSafe({
@@ -764,7 +764,7 @@ function resolveWorkspaceSkillPromptState(
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
   const promptSkills = compactSkillPaths(resolvedSkills)
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
