@@ -138,7 +138,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    // Always transition to the target status when no other runs are in flight.
+    // This recovers from edge cases where activeChatRunId was cleared early
+    // (e.g. by a concurrent event) causing wasActiveRun to be false even
+    // though the run genuinely finished — leaving the UI stuck on "streaming".
+    if (params.wasActiveRun || (sessionRuns.size === 0 && !state.activeChatRunId)) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -153,7 +157,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || (sessionRuns.size === 0 && !state.activeChatRunId)) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
