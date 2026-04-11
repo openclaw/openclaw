@@ -27,6 +27,11 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "@tloncorp/tlon-skill"
+  - "@tloncorp/tlon-skill-darwin-arm64"
+  - "@tloncorp/tlon-skill-darwin-x64"
+  - "@tloncorp/tlon-skill-linux-x64"
+  - "@tloncorp/tlon-skill-linux-arm64"
 
 onlyBuiltDependencies:
   - "@discordjs/opus"

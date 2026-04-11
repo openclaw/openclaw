@@ -36,14 +36,19 @@ function createChatHeaderState(
     modelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
+    thinkingLevel?: string | null;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  let currentThinkingLevel: string | null | undefined = overrides.thinkingLevel ?? undefined;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
+      if ("thinkingLevel" in params) {
+        currentThinkingLevel = params.thinkingLevel as string | null | undefined;
+      }
       const nextModel = (params.model as string | null | undefined) ?? null;
       if (!nextModel) {
         currentModel = null;
@@ -74,6 +79,7 @@ function createChatHeaderState(
         model: currentModel,
         modelProvider: currentModelProvider,
         omitSessionFromList,
+        thinkingLevel: currentThinkingLevel,
       });
     }
     if (method === "models.list") {
@@ -96,6 +102,7 @@ function createChatHeaderState(
       model: currentModel,
       modelProvider: currentModelProvider,
       omitSessionFromList,
+      thinkingLevel: currentThinkingLevel,
     }),
     chatModelOverrides: {},
     chatModelCatalog: catalog,

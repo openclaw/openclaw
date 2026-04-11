@@ -112,6 +112,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+      acpx:
+        specifier: 0.5.3
+        version: 0.5.3
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
