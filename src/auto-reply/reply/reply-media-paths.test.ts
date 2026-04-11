@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
@@ -14,6 +15,10 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+
+function asOpenClawConfig(config: OpenClawConfig): OpenClawConfig {
+  return config;
+}
 
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
@@ -91,7 +96,7 @@ describe("createReplyMediaPathNormalizer", () => {
       containerWorkdir: "/workspace",
     });
     const normalize = createReplyMediaPathNormalizer({
-      cfg: { tools: { fs: { workspaceOnly: true } } },
+      cfg: asOpenClawConfig({ tools: { fs: { workspaceOnly: true } } }),
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
@@ -152,9 +157,9 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("keeps tool-generated media under the OpenClaw tmp root when sandbox mode is off", async () => {
-    const tmpAudioPath = path.join(resolvePreferredOpenClawTmpDir(), "tts", "reply.opus");
+    const tmpAudioPath = path.join(resolvePreferredOpenClawTmpDir(), "tts-abc123", "reply.opus");
     const normalize = createReplyMediaPathNormalizer({
-      cfg: { sandbox: { mode: "off" } },
+      cfg: asOpenClawConfig({}),
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
@@ -174,7 +179,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   it("still drops absolute host-local media outside the OpenClaw tmp root when sandbox mode is off", async () => {
     const normalize = createReplyMediaPathNormalizer({
-      cfg: { sandbox: { mode: "off" } },
+      cfg: asOpenClawConfig({}),
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
@@ -188,6 +193,29 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: true,
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
+  it("still drops non-media files under the OpenClaw tmp root", async () => {
+    const tmpPromptPath = path.join(
+      resolvePreferredOpenClawTmpDir(),
+      "openclaw-cli-system-prompt-abc123",
+      "system-prompt.md",
+    );
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: asOpenClawConfig({}),
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [tmpPromptPath],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
     });
     expect(saveMediaSource).not.toHaveBeenCalled();
   });

@@ -19,6 +19,10 @@ const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const AGENT_STATE_MEDIA_DIRNAME = path.join(".openclaw", "media");
 const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
+const MANAGED_TMP_REPLY_MEDIA_DIRS = new Set(["tts"]);
+const MANAGED_TMP_REPLY_MEDIA_PREFIXES = ["tts-"];
+
+let cachedPreferredTmpDir: string | undefined;
 
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -35,8 +39,24 @@ function isManagedGlobalReplyMediaPath(candidate: string): boolean {
   return MANAGED_GLOBAL_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
 }
 
+function resolveCachedPreferredTmpDir(): string {
+  if (!cachedPreferredTmpDir) {
+    cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
+  }
+  return cachedPreferredTmpDir;
+}
+
 function isManagedTmpReplyMediaPath(candidate: string): boolean {
-  return isPathInside(resolvePreferredOpenClawTmpDir(), candidate);
+  const tmpRoot = resolveCachedPreferredTmpDir();
+  const relative = path.relative(path.resolve(tmpRoot), path.resolve(candidate));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const firstSegment = relative.split(path.sep)[0] ?? "";
+  return (
+    MANAGED_TMP_REPLY_MEDIA_DIRS.has(firstSegment) ||
+    MANAGED_TMP_REPLY_MEDIA_PREFIXES.some((prefix) => firstSegment.startsWith(prefix))
+  );
 }
 
 function isAllowedAbsoluteReplyMediaPath(params: {
