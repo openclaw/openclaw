@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { qaSuiteTesting } from "./suite.js";
@@ -39,16 +42,37 @@ describe("qa suite failure reply handling", () => {
     }
   });
 
-  it("keeps programmatic suite output dirs within the repo root", () => {
-    expect(
-      qaSuiteTesting.resolveQaSuiteOutputDir(
-        "/tmp/openclaw-repo",
-        "/tmp/openclaw-repo/.artifacts/qa-e2e/custom",
-      ),
-    ).toBe("/tmp/openclaw-repo/.artifacts/qa-e2e/custom");
-    expect(() =>
-      qaSuiteTesting.resolveQaSuiteOutputDir("/tmp/openclaw-repo", "/tmp/outside"),
-    ).toThrow("QA suite outputDir must stay within the repo root.");
+  it("keeps programmatic suite output dirs within the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-existing-root-"));
+    try {
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(
+          repoRoot,
+          path.join(repoRoot, ".artifacts", "qa-e2e", "custom"),
+        ),
+      ).resolves.toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "custom"));
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(repoRoot, "/tmp/outside"),
+      ).rejects.toThrow("QA suite outputDir must stay within the repo root.");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked suite output dirs that escape the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-root-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-outside-"));
+    try {
+      await mkdir(path.join(repoRoot, ".artifacts"), { recursive: true });
+      await symlink(outsideRoot, path.join(repoRoot, ".artifacts", "qa-e2e"), "dir");
+
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(repoRoot, ".artifacts/qa-e2e/custom"),
+      ).rejects.toThrow("QA suite outputDir must not traverse symlinks.");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it("maps suite work with bounded concurrency while preserving order", async () => {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -449,9 +449,27 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("rejects preserved gateway artifacts outside the repo root", async () => {
-    expect(() =>
+    await expect(
       __testing.assertQaArtifactDirWithinRepo("/tmp/openclaw-repo", "/tmp/outside"),
-    ).toThrow("QA gateway artifact directory must stay within the repo root.");
+    ).rejects.toThrow("QA gateway artifact directory must stay within the repo root.");
+  });
+
+  it("rejects preserved gateway artifacts that traverse symlinks", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-guard-repo-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-guard-outside-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, ".artifacts"), { recursive: true });
+    await symlink(outsideRoot, path.join(repoRoot, ".artifacts", "qa-e2e"), "dir");
+
+    await expect(
+      __testing.assertQaArtifactDirWithinRepo(
+        repoRoot,
+        path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime"),
+      ),
+    ).rejects.toThrow("QA gateway artifact directory must not traverse symlinks.");
   });
 
   it("cleans startup temp roots when they are not preserved", async () => {

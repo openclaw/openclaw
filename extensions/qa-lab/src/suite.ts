@@ -15,7 +15,7 @@ import {
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { assertRepoBoundPath, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 import {
   hasDiscoveryLabels,
@@ -261,7 +261,7 @@ function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
   return resolveQaLiveTurnTimeoutMs(env, fallbackMs);
 }
 
-function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
+async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
   if (!outputDir) {
     return path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
   }
@@ -270,13 +270,9 @@ function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
     if (!resolved) {
       throw new Error("QA suite outputDir must be set.");
     }
-    return resolved;
+    return await assertRepoBoundPath(repoRoot, resolved, "QA suite outputDir");
   }
-  const relative = path.relative(repoRoot, outputDir);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("QA suite outputDir must stay within the repo root.");
-  }
-  return outputDir;
+  return await assertRepoBoundPath(repoRoot, outputDir, "QA suite outputDir");
 }
 
 export type QaSuiteResult = {
@@ -1420,7 +1416,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     typeof params?.fastMode === "boolean"
       ? params.fastMode
       : isQaFastModeEnabled({ primaryModel, alternateModel });
-  const outputDir = resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
+  const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   await fs.mkdir(outputDir, { recursive: true });
   const catalog = readQaBootstrapScenarioCatalog();
   const selectedCatalogScenarios = selectQaSuiteScenarios({

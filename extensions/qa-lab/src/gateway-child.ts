@@ -16,6 +16,7 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { assertRepoBoundPath } from "./cli-paths.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
@@ -156,13 +157,8 @@ async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; tar
   await fs.writeFile(params.targetPath, redactQaGatewayDebugText(contents), "utf8");
 }
 
-function assertQaArtifactDirWithinRepo(repoRoot: string, artifactDir: string) {
-  const resolvedArtifactDir = path.resolve(artifactDir);
-  const relative = path.relative(repoRoot, resolvedArtifactDir);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("QA gateway artifact directory must stay within the repo root.");
-  }
-  return resolvedArtifactDir;
+async function assertQaArtifactDirWithinRepo(repoRoot: string, artifactDir: string) {
+  return await assertRepoBoundPath(repoRoot, artifactDir, "QA gateway artifact directory");
 }
 
 async function cleanupQaGatewayTempRoots(params: {
@@ -183,7 +179,7 @@ async function preserveQaGatewayDebugArtifacts(params: {
   repoRoot?: string;
 }) {
   const preserveToDir = params.repoRoot
-    ? assertQaArtifactDirWithinRepo(params.repoRoot, params.preserveToDir)
+    ? await assertQaArtifactDirWithinRepo(params.repoRoot, params.preserveToDir)
     : params.preserveToDir;
   await fs.rm(preserveToDir, { recursive: true, force: true });
   await fs.mkdir(preserveToDir, { recursive: true, mode: 0o700 });
