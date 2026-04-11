@@ -107,6 +107,16 @@ export async function applyResetModelOverride(params: {
   }
   const rawBody = normalizeOptionalString(params.bodyStripped);
   if (!rawBody) {
+    if (params.sessionEntry) {
+      applyModelOverrideToSessionEntry({
+        entry: params.sessionEntry,
+        selection: {
+          provider: params.defaultProvider,
+          model: params.defaultModel,
+          isDefault: true,
+        },
+      });
+    }
     return {};
   }
 

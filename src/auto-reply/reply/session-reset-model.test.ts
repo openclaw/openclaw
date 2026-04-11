@@ -85,4 +85,28 @@ describe("applyResetModelOverride", () => {
     expect(sessionEntry.modelOverride).toBeUndefined();
     expect(sessionCtx.BodyStripped).toBe("minimax summarize");
   });
+
+  it("clears model override when resetTriggered is true but body is empty", async () => {
+    const fixture = createResetFixture({
+      modelOverride: "gpt-5.4",
+      providerOverride: "openai",
+    });
+    await applyResetModelOverride({
+      cfg: fixture.cfg,
+      resetTriggered: true,
+      bodyStripped: undefined,
+      sessionCtx: fixture.sessionCtx,
+      ctx: fixture.ctx,
+      sessionEntry: fixture.sessionEntry,
+      sessionStore: fixture.sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: fixture.aliasIndex,
+      modelCatalog,
+    });
+
+    expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+    expect(fixture.sessionEntry.providerOverride).toBeUndefined();
+  });
 });
