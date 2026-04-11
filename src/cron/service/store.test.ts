@@ -161,4 +161,32 @@ describe("cron service store seam coverage", () => {
     const after = await fs.readFile(storePath, "utf8");
     expect(after).toBe(before);
   });
+
+  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "unsafe-session-target-job",
+      name: "unsafe session target job",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:../../outside",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {},
+    });
+
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    const job = findJobOrThrow(state, "unsafe-session-target-job");
+    expect(job.sessionTarget).toBe("session:../../outside");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: "unsafe-session-target-job" }),
+      expect.stringContaining("invalid persisted sessionTarget"),
+    );
+  });
 });

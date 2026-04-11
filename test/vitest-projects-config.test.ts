@@ -24,11 +24,11 @@ describe("projects vitest config", () => {
     expect(createCommandsVitestConfig().test.pool).toBe("threads");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig().test.pool).toBe("threads");
   });
 
-  it("keeps the contracts lane on the non-isolated runner by default", () => {
+  it("keeps the contracts lane on the non-isolated fork runner by default", () => {
     const config = createContractsVitestConfig();
+    expect(config.test.pool).toBe("forks");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });

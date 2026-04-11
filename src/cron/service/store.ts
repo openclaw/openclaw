@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -38,7 +39,19 @@ export async function ensureLoaded(
   for (const [index, job] of jobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
-    const normalized = normalizeCronJobInput(raw);
+    let normalized: Record<string, unknown> | null;
+    try {
+      normalized = normalizeCronJobInput(raw);
+    } catch (error) {
+      if (!isInvalidCronSessionTargetIdError(error)) {
+        throw error;
+      }
+      normalized = null;
+      state.deps.log.warn(
+        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
+        "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
+      );
+    }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
     jobs[index] = hydrated;
