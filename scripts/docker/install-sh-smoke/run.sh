@@ -2,26 +2,31 @@
 set -euo pipefail
 
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
+SMOKE_MODE="${OPENCLAW_INSTALL_SMOKE_MODE:-install}"
 SMOKE_PREVIOUS_VERSION="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
+UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
+UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=../install-sh-common/cli-verify.sh
 source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
 
-echo "==> Resolve npm versions"
-if [[ "$SKIP_PREVIOUS" == "1" ]]; then
-  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
-  PREVIOUS_VERSION="$LATEST_VERSION"
-elif [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
-  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
-  PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
-else
-  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" dist-tags.latest)"
-  VERSIONS_JSON="$(quiet_npm view "$PACKAGE_NAME" versions --json)"
-  PREVIOUS_VERSION="$(LATEST_VERSION="$LATEST_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node - <<'NODE'
+run_install_smoke() {
+  echo "==> Resolve npm versions"
+  if [[ "$SKIP_PREVIOUS" == "1" ]]; then
+    LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
+    PREVIOUS_VERSION="$LATEST_VERSION"
+  elif [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
+    LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
+    PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
+  else
+    LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" dist-tags.latest)"
+    VERSIONS_JSON="$(quiet_npm view "$PACKAGE_NAME" versions --json)"
+    PREVIOUS_VERSION="$(LATEST_VERSION="$LATEST_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node - <<'NODE'
 const latest = String(process.env.LATEST_VERSION || "");
 const raw = process.env.VERSIONS_JSON || "[]";
 let versions;
@@ -44,24 +49,101 @@ if (latestIndex <= 0) {
 process.stdout.write(String(versions[latestIndex - 1] ?? latest));
 NODE
 )"
-fi
+  fi
 
-echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
+  echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
 
-if [[ "$SKIP_PREVIOUS" == "1" ]]; then
-  echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
-else
-  echo "==> Preinstall previous (forces installer upgrade path)"
-  quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
-fi
+  if [[ "$SKIP_PREVIOUS" == "1" ]]; then
+    echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
+  else
+    echo "==> Preinstall previous (forces installer upgrade path)"
+    quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+  fi
 
-echo "==> Run official installer one-liner"
-curl -fsSL "$INSTALL_URL" | bash -s -- --no-prompt
+  echo "==> Run official installer one-liner"
+  curl -fsSL "$INSTALL_URL" | bash -s -- --no-prompt
 
-echo "==> Verify installed version"
-if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
-  printf "%s" "$LATEST_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
-fi
-verify_installed_cli "$PACKAGE_NAME" "$LATEST_VERSION"
+  echo "==> Verify installed version"
+  if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
+    printf "%s" "$LATEST_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+  fi
+  verify_installed_cli "$PACKAGE_NAME" "$LATEST_VERSION"
 
-echo "OK"
+  echo "OK"
+}
+
+run_update_smoke() {
+  if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION is required for update mode" >&2
+    return 1
+  fi
+  if [[ -z "$UPDATE_TAG_URL" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for update mode" >&2
+    return 1
+  fi
+
+  echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
+  echo "==> Install baseline release"
+  quiet_npm install -g "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
+
+  echo "==> Run openclaw update from host-served tgz"
+  UPDATE_JSON="$(openclaw update --tag "$UPDATE_TAG_URL" --yes --json)"
+  printf "%s\n" "$UPDATE_JSON"
+
+  UPDATE_JSON="$UPDATE_JSON" \
+    UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
+    UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    UPDATE_TAG_URL="$UPDATE_TAG_URL" \
+    node - <<'NODE'
+const payload = JSON.parse(process.env.UPDATE_JSON || "{}");
+const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
+const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
+const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
+if (payload.status !== "ok") {
+  throw new Error(`expected update status ok, got ${JSON.stringify(payload.status)}`);
+}
+if ((payload.before?.version ?? null) !== baselineVersion) {
+  throw new Error(
+    `expected before.version ${baselineVersion}, got ${JSON.stringify(payload.before?.version)}`,
+  );
+}
+if ((payload.after?.version ?? null) !== expectedVersion) {
+  throw new Error(
+    `expected after.version ${expectedVersion}, got ${JSON.stringify(payload.after?.version)}`,
+  );
+}
+if (payload.reason != null) {
+  throw new Error(`expected no failure reason, got ${JSON.stringify(payload.reason)}`);
+}
+const steps = Array.isArray(payload.steps) ? payload.steps : [];
+const updateStep = steps.find((step) => step?.name === "global update");
+if (!updateStep) {
+  throw new Error("missing global update step in update JSON");
+}
+if (Number(updateStep.exitCode ?? 1) !== 0) {
+  throw new Error(`global update step failed: ${JSON.stringify(updateStep)}`);
+}
+if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
+  throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+}
+NODE
+
+  echo "==> Verify updated version"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  echo "OK"
+}
+
+case "$SMOKE_MODE" in
+  install)
+    run_install_smoke
+    ;;
+  update)
+    run_update_smoke
+    ;;
+  *)
+    echo "ERROR: unsupported OPENCLAW_INSTALL_SMOKE_MODE=$SMOKE_MODE" >&2
+    exit 1
+    ;;
+esac
