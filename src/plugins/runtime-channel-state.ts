@@ -4,9 +4,11 @@ export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
+    activeVersion?: number;
     activeRegistry?: PluginRegistry | null;
     channel?: {
       registry: PluginRegistry | null;
+      version?: number;
     };
   };
 };
@@ -26,4 +28,9 @@ export function getActivePluginChannelRegistryFromState(): PluginRegistry | null
     return activeRegistry;
   }
   return pinnedRegistry ?? activeRegistry;
+}
+
+export function getActivePluginChannelRegistryVersionFromState(): number {
+  const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
+  return state?.channel?.registry ? (state.channel.version ?? 0) : (state?.activeVersion ?? 0);
 }
