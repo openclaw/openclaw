@@ -945,9 +945,8 @@ export async function runEmbeddedPiAgent(
             // Structured overflow diagnostic event (Patch 3A).
             // One JSON event per overflow attempt with enough detail to compare
             // runtime assembled prompt size with compaction estimate.
-            const toolResultMessages = attempt.messagesSnapshot?.filter(
-              (m: { role?: string }) => m.role === "tool",
-            ) ?? [];
+            const toolResultMessages =
+              attempt.messagesSnapshot?.filter((m: { role?: string }) => m.role === "tool") ?? [];
             const overflowDiagnostic = {
               event: "context_overflow_diagnostic",
               diagId: overflowDiagId,
@@ -968,9 +967,7 @@ export async function runEmbeddedPiAgent(
               error: errorText.slice(0, 500),
               timestamp: new Date().toISOString(),
             };
-            log.warn(
-              `[context-overflow-event] ${JSON.stringify(overflowDiagnostic)}`,
-            );
+            log.warn(`[context-overflow-event] ${JSON.stringify(overflowDiagnostic)}`);
 
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -1098,9 +1095,7 @@ export async function runEmbeddedPiAgent(
                 attempt: overflowCompactionAttempts,
                 timestamp: new Date().toISOString(),
               };
-              log.warn(
-                `[overflow-compaction-event] ${JSON.stringify(compactionDiagnostic)}`,
-              );
+              log.warn(`[overflow-compaction-event] ${JSON.stringify(compactionDiagnostic)}`);
 
               if (compactResult.compacted) {
                 if (preflightRecovery?.route === "compact_then_truncate") {
@@ -1131,39 +1126,17 @@ export async function runEmbeddedPiAgent(
               );
 
               // Circuit breaker (Patch 3B): if compaction explicitly says context
-              // is already under target but runtime still overflows, there is a
-              // budget mismatch. Attempt tool result truncation as a last resort
-              // but do NOT keep retrying the prompt — that creates the reset/replay
-              // loop seen in the incident.
+              // is already under target but runtime still overflows AND tool result
+              // truncation has already been attempted, there is a confirmed budget
+              // mismatch. Hard-stop the retry loop instead of endlessly resetting.
               const compactionSaysUnderTarget =
                 !compactResult.compacted &&
                 typeof compactResult.reason === "string" &&
                 /under.target|below.threshold|nothing.to.compact/i.test(compactResult.reason);
-              if (compactionSaysUnderTarget) {
+              if (compactionSaysUnderTarget && toolResultTruncationAttempted) {
                 log.warn(
-                  `[circuit-breaker] compaction reports under target but runtime still overflows for ` +
-                    `${provider}/${modelId}. Forcing tool result truncation and stopping retry loop.`,
-                );
-                // Force tool result truncation as last resort
-                if (!toolResultTruncationAttempted) {
-                  toolResultTruncationAttempted = true;
-                  const truncResult = await truncateOversizedToolResultsInSession({
-                    sessionFile: params.sessionFile,
-                    contextWindowTokens: ctxInfo.tokens,
-                    sessionId: params.sessionId,
-                    sessionKey: params.sessionKey,
-                  });
-                  if (truncResult.truncated) {
-                    log.info(
-                      `[circuit-breaker] Truncated ${truncResult.truncatedCount} tool result(s) as fallback; retrying once.`,
-                    );
-                    // Allow exactly one more attempt after truncation
-                    continue;
-                  }
-                }
-                // Truncation didn't help or was already attempted — hard stop
-                log.warn(
-                  `[circuit-breaker] Overflow persists after compaction + truncation. Stopping retry loop.`,
+                  `[circuit-breaker] compaction reports under target and truncation already attempted ` +
+                    `but runtime still overflows for ${provider}/${modelId}. Stopping retry loop.`,
                 );
                 attempt.setTerminalLifecycleMeta?.({
                   replayInvalid: resolveReplayInvalidForAttempt(),

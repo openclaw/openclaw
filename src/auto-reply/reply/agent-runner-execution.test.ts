@@ -1669,9 +1669,14 @@ describe("runAgentTurnWithFallback", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
-    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-    expect(sessionEntry.modelOverrideSource).toBe("auto");
+    // Patch 1: fallback now writes to failoverState, not override fields
+    expect(sessionEntry.failoverState).toBeDefined();
+    expect(sessionEntry.failoverState?.active).toBe(true);
+    expect(sessionEntry.failoverState?.to.provider).toBe("openai-codex");
+    expect(sessionEntry.failoverState?.to.model).toBe("gpt-5.4");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
@@ -1834,14 +1839,14 @@ describe("runAgentTurnWithFallback", () => {
       now: 123,
     });
 
+    // Patch 1: fallback now writes to failoverState, not override fields
     expect(updated).toBe(true);
-    expect(entry).toMatchObject({
-      updatedAt: 123,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet",
-      modelOverrideSource: "auto",
-      authProfileOverride: "anthropic:openclaw",
-      authProfileOverrideSource: "user",
-    });
+    expect(entry.failoverState).toBeDefined();
+    expect(entry.failoverState?.active).toBe(true);
+    expect(entry.failoverState?.to.provider).toBe("anthropic");
+    expect(entry.failoverState?.to.model).toBe("claude-sonnet");
+    // User auth profile override should be preserved (not touched by failover)
+    expect(entry.authProfileOverride).toBe("anthropic:openclaw");
+    expect(entry.authProfileOverrideSource).toBe("user");
   });
 });

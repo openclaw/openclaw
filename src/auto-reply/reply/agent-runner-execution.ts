@@ -132,11 +132,7 @@ function applyFailoverState(
     startedAt: new Date(now).toISOString(),
   };
   const prev = entry.failoverState;
-  if (
-    prev?.active &&
-    prev.to.provider === next.to.provider &&
-    prev.to.model === next.to.model
-  ) {
+  if (prev?.active && prev.to.provider === next.to.provider && prev.to.model === next.to.model) {
     return false;
   }
   entry.failoverState = next;
@@ -151,9 +147,12 @@ function rollbackFailoverStateIfUnchanged(
 ): boolean {
   const current = entry.failoverState;
   // Only roll back if the current state matches what we set
-  if (expected?.active && current?.active &&
-      current.to.provider === expected.to.provider &&
-      current.to.model === expected.to.model) {
+  if (
+    expected?.active &&
+    current?.active &&
+    current.to.provider === expected.to.provider &&
+    current.to.model === expected.to.model
+  ) {
     entry.failoverState = previous;
     return true;
   }
@@ -200,17 +199,6 @@ export function sanitizeFailoverPollutedEntry(entry: SessionEntry): boolean {
   return true;
 }
 
-// Legacy types kept for backward compatibility with existing test imports
-type FallbackSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
 export function applyFallbackCandidateSelectionToEntry(params: {
   entry: SessionEntry;
   run: FollowupRun["run"];
@@ -235,12 +223,6 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     updated,
     nextState: updated ? params.entry.failoverState : undefined,
   };
-}
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
 }
 
 /**
