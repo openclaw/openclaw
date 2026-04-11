@@ -1,8 +1,29 @@
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../infra/restart-sentinel.js", async () => {
+  const actual = await vi.importActual("../infra/restart-sentinel.js");
+  return {
+    ...(actual as Record<string, unknown>),
+    writeRestartSentinel: vi.fn(),
+  };
+});
+
+vi.mock("../infra/doctor-summary.js", () => ({
+  runDoctorNonInteractiveSummary: vi.fn(async () => "doctor summary"),
+}));
+
+vi.mock("../infra/openclaw-root.js", async () => {
+  const actual = await vi.importActual("../infra/openclaw-root.js");
+  return {
+    ...(actual as Record<string, unknown>),
+    resolveOpenClawPackageRoot: vi.fn(async () => "/tmp/openclaw"),
+  };
+});
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -496,6 +517,13 @@ describe("startGatewayConfigReloader", () => {
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
       expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(vi.mocked(writeRestartSentinel)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "error",
+          doctorSummary: "doctor summary",
+          stats: expect.objectContaining({ mode: "config.reload" }),
+        }),
+      );
       expect(unhandled).toEqual([]);
 
       watcher.emit("change");

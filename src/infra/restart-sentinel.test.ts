@@ -108,12 +108,13 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
-  it("formats summary, distinct reason, and doctor hint together", () => {
+  it("formats summary, distinct reason, doctor summary, and doctor hint together", () => {
     const payload = {
       kind: "config-patch" as const,
       status: "error" as const,
       ts: Date.now(),
       message: "Patch failed",
+      doctorSummary: "gateway unhealthy; config validation failed",
       doctorHint: "Run openclaw doctor",
       stats: { mode: "patch", reason: "validation failed" },
     };
@@ -123,6 +124,7 @@ describe("restart sentinel", () => {
         "Gateway restart config-patch error (patch)",
         "Patch failed",
         "Reason: validation failed",
+        "Doctor: gateway unhealthy; config validation failed",
         "Run openclaw doctor",
       ].join("\n"),
     );

@@ -1,5 +1,6 @@
 import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { runDoctorNonInteractiveSummary } from "../../infra/doctor-summary.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -64,6 +65,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       };
     }
 
+    const doctorSummary =
+      result.status === "error"
+        ? await runDoctorNonInteractiveSummary({
+            cwd: result.root,
+            entry: result.root ? `${result.root}/openclaw.mjs` : undefined,
+          })
+        : null;
+
     const payload: RestartSentinelPayload = {
       kind: "update",
       status: result.status,
@@ -73,6 +82,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
+      doctorSummary,
       stats: {
         mode: result.mode,
         root: result.root ?? undefined,

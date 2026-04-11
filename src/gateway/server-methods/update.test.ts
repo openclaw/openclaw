@@ -53,6 +53,10 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
+vi.mock("../../infra/doctor-summary.js", () => ({
+  runDoctorNonInteractiveSummary: vi.fn(async () => "doctor summary"),
+}));
+
 vi.mock("../../infra/restart.js", () => ({
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
@@ -182,6 +186,7 @@ describe("update.run restart scheduling", () => {
       reason: "build-failed",
       steps: [],
       durationMs: 100,
+      root: "/tmp/openclaw",
     });
 
     let payload: { ok: boolean; restart: unknown } | undefined;
@@ -194,5 +199,6 @@ describe("update.run restart scheduling", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
+    expect(capturedPayload?.doctorSummary).toBe("doctor summary");
   });
 });
