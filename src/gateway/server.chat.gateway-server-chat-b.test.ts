@@ -203,6 +203,95 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history does not merge stale codex-cli history into reset sessions with local transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const originalHome = process.env.HOME;
+      const homeDir = path.join(sessionDir, "home");
+      const cliSessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
+      const codexSessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+      await fs.mkdir(codexSessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(codexSessionsDir, `rollout-2026-04-11T15-38-33-${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:34.000Z",
+            type: "event_msg",
+            payload: {
+              type: "user_message",
+              message: "stale external question",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-11T07:38:35.000Z",
+            type: "event_msg",
+            payload: {
+              type: "agent_message",
+              message: "stale external answer",
+              phase: "final_answer",
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      process.env.HOME = homeDir;
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              updatedAt: Date.now(),
+              modelProvider: "codex-cli",
+              model: "gpt-5.4",
+              suppressCliHistoryImport: true,
+              cliSessionBindings: {
+                "codex-cli": {
+                  sessionId: cliSessionId,
+                },
+              },
+            },
+          },
+        });
+
+        await writeMainSessionTranscript(sessionDir, [
+          JSON.stringify({
+            message: {
+              role: "user",
+              timestamp: Date.now(),
+              content: "fresh local question",
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              timestamp: Date.now() + 1,
+              content: [{ type: "text", text: "fresh local answer" }],
+            },
+          }),
+        ]);
+
+        const messages = await fetchHistoryMessages(ws);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "fresh local question",
+        });
+        expect(messages[1]).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "fresh local answer" }],
+        });
+        expect(JSON.stringify(messages)).not.toContain("stale external");
+      } finally {
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+      }
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
