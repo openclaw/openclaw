@@ -868,9 +868,12 @@ export const dispatchTelegramMessage = async ({
       existing.shouldClear = existing.shouldClear && shouldClear;
     }
     for (const [stream, cleanupState] of streamCleanupStates) {
-      await stream.stop();
       if (cleanupState.shouldClear) {
+        // Clear (delete) directly — calling stop() first would flush debounced
+        // partial content (e.g. "NO" from NO_REPLY) as a visible message.
         await stream.clear();
+      } else {
+        await stream.stop();
       }
     }
     for (const archivedPreview of archivedAnswerPreviews) {
