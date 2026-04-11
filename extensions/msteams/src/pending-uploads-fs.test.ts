@@ -29,7 +29,9 @@ function makeEnv(stateDir: string): NodeJS.ProcessEnv {
 async function cleanupTempDirs(): Promise<void> {
   while (createdTempDirs.length > 0) {
     const dir = createdTempDirs.pop();
-    if (!dir) continue;
+    if (!dir) {
+      continue;
+    }
     try {
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch {
