@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.2.12",
+  "version": "2026.4.11",
   "description": "Compatibility shim that forwards to openclaw",
   "bin": {
     "clawdbot": "./bin/clawdbot.js"
