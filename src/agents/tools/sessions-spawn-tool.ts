@@ -104,7 +104,10 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
+    description:
+      "Only applies to runtime='acp'. When 'parent', forwards child-run progress to the requester session as system events.",
+  }),
   lightContext: Type.Optional(
     Type.Boolean({
       description:
@@ -174,7 +177,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const requestedStreamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo = runtime === "acp" ? requestedStreamTo : undefined;
       const lightContext = params.lightContext === true;
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
@@ -199,13 +203,6 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
 
       if (resumeSessionId && runtime !== "acp") {
         return jsonResult({
