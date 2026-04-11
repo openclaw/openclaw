@@ -18,7 +18,7 @@
 //   4. Clean shutdown: stop() clears the polling interval, stops
 //      ProcessWatcher. Does NOT terminate tmux sessions.
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { applyArmTransition, InvalidTransitionError } from "../head/arm-fsm.ts";
 import type { EventLogService } from "../head/event-log.ts";
@@ -232,10 +232,53 @@ export class NodeAgent {
           // Start watching for exit.
           this.watchArm(arm);
         } else {
-          // Session not found -- transition to failed.
-          await this.transitionArm(arm, "failed", "arm.failed", {
-            reason: "session_not_found_on_poll",
-          });
+          // Session not found. Before declaring failure, check the
+          // sentinel file — the command may have exited cleanly before
+          // this poll tick ran. Fast-exiting commands (echo, simple
+          // scripts) commonly hit this race: the tmux session is gone
+          // but the sentinel file has the exit code.
+          const sentinelPath = path.join(this.sentinelDir, `${arm.arm_id}.exit`);
+          let exitCode: number | null = null;
+          if (existsSync(sentinelPath)) {
+            try {
+              const content = readFileSync(sentinelPath, "utf8").trim();
+              if (/^-?\d+$/.test(content)) {
+                exitCode = Number.parseInt(content, 10);
+              }
+            } catch {
+              // Best-effort sentinel read.
+            }
+          }
+
+          if (exitCode === 0) {
+            // Clean exit — drive starting → active → completed.
+            const activated = await this.transitionArm(arm, "active", "arm.active");
+            if (activated) {
+              const updatedArm = this.registry.getArm(arm.arm_id);
+              if (updatedArm) {
+                await this.transitionArm(updatedArm, "completed", "arm.completed", {
+                  exit_code: 0,
+                });
+              }
+            }
+          } else if (exitCode !== null) {
+            // Non-zero exit — drive starting → active → failed.
+            const activated = await this.transitionArm(arm, "active", "arm.active");
+            if (activated) {
+              const updatedArm = this.registry.getArm(arm.arm_id);
+              if (updatedArm) {
+                await this.transitionArm(updatedArm, "failed", "arm.failed", {
+                  exit_code: exitCode,
+                  reason: `exit_code_${exitCode}`,
+                });
+              }
+            }
+          } else {
+            // No sentinel, no session — genuinely failed.
+            await this.transitionArm(arm, "failed", "arm.failed", {
+              reason: "session_not_found_on_poll",
+            });
+          }
         }
       }
     } finally {
