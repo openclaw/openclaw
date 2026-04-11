@@ -785,6 +785,82 @@ describe("plamo provider plugin", () => {
     });
   });
 
+  it("does not double-count reasoning tokens in streamed usage", async () => {
+    const { provider, catalog } = await loadPlamoCatalog();
+
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-stream-usage-reasoning",
+          choices: [{ index: 0, delta: { content: "ok" } }],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-stream-usage-reasoning",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 3 },
+            completion_tokens_details: { reasoning_tokens: 7 },
+          },
+        })}\n\n`,
+      );
+      res.end("data: [DONE]\n\n");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected tcp server address");
+    }
+
+    const [model] = catalog.provider.models;
+    const wrapped = createWrappedPlamoStream(provider);
+    const stream = await wrapped(
+      {
+        ...model,
+        provider: "plamo",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } as never,
+      {
+        systemPrompt: "system prompt",
+        messages: [{ role: "user", content: "こんにちは" }],
+      } as never,
+      {
+        apiKey: "test-key",
+      } as never,
+    );
+
+    let result: Awaited<ReturnType<typeof stream.result>> | undefined;
+    try {
+      for await (const _event of stream) {
+        // Drain the stream so the final usage is available.
+      }
+      result = await stream.result();
+    } finally {
+      server.close();
+    }
+
+    expect(result).toMatchObject({
+      stopReason: "stop",
+      usage: {
+        input: 7,
+        output: 20,
+        cacheRead: 3,
+        totalTokens: 30,
+      },
+      content: [{ type: "text", text: "ok" }],
+    });
+  });
+
   it("treats native SSE EOF without finish_reason as an error", async () => {
     const { provider, catalog } = await loadPlamoCatalog();
 
