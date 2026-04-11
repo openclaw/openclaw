@@ -1,8 +1,24 @@
+import { createHash } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
+
+function resolveRuntimeEnvProfileId(apiKey: string): string {
+  return `zai:runtime-env-${createHash("sha256").update(apiKey, "utf8").digest("hex").slice(0, 12)}`;
+}
+
+function resolveProfileApiKey(profile: {
+  credential: { type: string; key?: string };
+  profileId: string;
+}): string {
+  expect(profile.credential.type).toBe("api_key");
+  if (!profile.credential.key) {
+    throw new Error(`expected api_key credential for ${profile.profileId}`);
+  }
+  return profile.credential.key;
+}
 
 describe("zai provider plugin", () => {
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
@@ -241,7 +257,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-a"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -251,7 +267,7 @@ describe("zai provider plugin", () => {
         },
       },
       {
-        profileId: "zai:runtime-env-2",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-b"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -261,7 +277,7 @@ describe("zai provider plugin", () => {
         },
       },
       {
-        profileId: "zai:runtime-env-3",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-1"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -271,7 +287,7 @@ describe("zai provider plugin", () => {
         },
       },
       {
-        profileId: "zai:runtime-env-4",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-2"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -281,7 +297,7 @@ describe("zai provider plugin", () => {
         },
       },
       {
-        profileId: "zai:runtime-env-5",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-legacy"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -343,7 +359,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-next"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -370,7 +386,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-single"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -408,7 +424,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-next"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -446,7 +462,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-next"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -480,7 +496,7 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:runtime-env-1",
+        profileId: resolveRuntimeEnvProfileId("sk-zai-next"),
         persistence: "runtime-only",
         credential: {
           type: "api_key",
@@ -502,12 +518,12 @@ describe("zai provider plugin", () => {
       store: {
         version: 1,
         profiles: {
-          "zai:runtime-env-1": {
+          [resolveRuntimeEnvProfileId("sk-zai-a")]: {
             type: "api_key",
             provider: "zai",
             key: "sk-zai-a",
           },
-          "zai:runtime-env-2": {
+          [resolveRuntimeEnvProfileId("sk-zai-b")]: {
             type: "api_key",
             provider: "zai",
             key: "sk-zai-b",
@@ -517,8 +533,41 @@ describe("zai provider plugin", () => {
     } as never);
 
     expect(profiles?.map((profile) => profile.profileId)).toEqual([
-      "zai:runtime-env-1",
-      "zai:runtime-env-2",
+      resolveRuntimeEnvProfileId("sk-zai-a"),
+      resolveRuntimeEnvProfileId("sk-zai-b"),
     ]);
+  });
+
+  it("keeps runtime env profile ids stable when env key ordering changes", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const forward = provider.resolveExternalAuthProfiles?.({
+      env: {
+        ZAI_API_KEYS: "sk-zai-a,sk-zai-b",
+      },
+      store: {
+        version: 1,
+        profiles: {},
+      },
+    } as never);
+    const reversed = provider.resolveExternalAuthProfiles?.({
+      env: {
+        ZAI_API_KEYS: "sk-zai-b,sk-zai-a",
+      },
+      store: {
+        version: 1,
+        profiles: {},
+      },
+    } as never);
+
+    expect(
+      forward
+        ?.map((profile) => [resolveProfileApiKey(profile), profile.profileId] as const)
+        .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
+    ).toEqual(
+      reversed
+        ?.map((profile) => [resolveProfileApiKey(profile), profile.profileId] as const)
+        .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
+    );
   });
 });

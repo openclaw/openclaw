@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -131,6 +132,13 @@ function collectZaiRotationApiKeys(params: {
   return apiKeys;
 }
 
+function resolveZaiEnvRotationProfileId(apiKey: string): string {
+  // Keep runtime overlay ids stable per key so persisted cooldown/usage state
+  // does not get reassigned when env list ordering changes between runs.
+  const keyFingerprint = createHash("sha256").update(apiKey, "utf8").digest("hex").slice(0, 12);
+  return `${ENV_ROTATION_PROFILE_ID_PREFIX}-${keyFingerprint}`;
+}
+
 function resolveZaiEnvRotationProfiles(ctx: { env: NodeJS.ProcessEnv; store: AuthProfileStore }) {
   const liveOverride = normalizeOptionalSecretInput(ctx.env.OPENCLAW_LIVE_ZAI_KEY);
   if (liveOverride) {
@@ -158,7 +166,7 @@ function resolveZaiEnvRotationProfiles(ctx: { env: NodeJS.ProcessEnv; store: Aut
     return undefined;
   }
   return apiKeys.map((apiKey, index) => ({
-    profileId: `${ENV_ROTATION_PROFILE_ID_PREFIX}-${index + 1}`,
+    profileId: resolveZaiEnvRotationProfileId(apiKey),
     persistence: "runtime-only" as const,
     credential: {
       type: "api_key" as const,
