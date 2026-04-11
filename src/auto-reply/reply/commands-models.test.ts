@@ -234,4 +234,24 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("localai");
   });
+
+  it("uses the canonical target session agent when wrapper agentId differs", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models", scopedCfg, "discord", {
+        agentId: "main",
+        sessionKey: "agent:support:main",
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("localai");
+  });
 });

@@ -384,12 +384,12 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     return unauthorized;
   }
 
-  const modelsAgentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
+  const modelsAgentId = params.sessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+      })
+    : params.agentId;
   const modelsAgentDir = resolveAgentDir(params.cfg, modelsAgentId);
 
   const reply = await resolveModelsCommandReply({
