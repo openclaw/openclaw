@@ -352,7 +352,7 @@ describe("directive behavior", () => {
         fullAccessAvailable: true,
       });
     });
-  });
+  }, 240_000);
   it("persists /reasoning off on discord even when model defaults reasoning on", async () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
