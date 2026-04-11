@@ -7,7 +7,7 @@ import {
 } from "./runtime-state.js";
 
 function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
-  return registry as PluginRegistry | null;
+  return registry;
 }
 
 const state: RegistryState = (() => {
