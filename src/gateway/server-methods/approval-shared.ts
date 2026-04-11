@@ -1,5 +1,6 @@
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,
@@ -15,7 +16,7 @@ export const APPROVAL_NOT_FOUND_DETAILS = {
 type PendingApprovalLookupError =
   | "missing"
   | {
-      code: ErrorCodes.INVALID_REQUEST;
+      code: (typeof ErrorCodes)["INVALID_REQUEST"];
       message: string;
     };
 
@@ -112,7 +113,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   inputId: unknown;
   respond: RespondFn;
 }): Promise<void> {
-  const id = typeof params.inputId === "string" ? params.inputId.trim() : "";
+  const id = normalizeOptionalString(params.inputId) ?? "";
   if (!id) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
     return;

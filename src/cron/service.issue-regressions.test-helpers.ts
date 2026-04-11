@@ -1,10 +1,18 @@
 import { vi } from "vitest";
-import { CronService } from "./service.js";
 import {
   createDefaultIsolatedRunner,
   noopLogger,
   setupCronRegressionFixtures,
-} from "./service.regression-fixtures.js";
+  createAbortAwareIsolatedRunner,
+  createDueIsolatedJob,
+  createIsolatedRegressionJob,
+  createRunningCronServiceState,
+  createDeferred,
+  topOfHourOffsetMs,
+  writeCronJobs,
+  writeCronStoreSnapshot,
+} from "../../test/helpers/cron/service-regression-fixtures.js";
+import { CronService } from "./service.js";
 
 export type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
@@ -21,7 +29,7 @@ export {
   topOfHourOffsetMs,
   writeCronJobs,
   writeCronStoreSnapshot,
-} from "./service.regression-fixtures.js";
+};
 
 export async function startCronForStore(params: {
   storePath: string;

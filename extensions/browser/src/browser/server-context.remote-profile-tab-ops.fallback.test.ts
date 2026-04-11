@@ -1,21 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  installRemoteProfileTestLifecycle,
   loadRemoteProfileTestDeps,
   type RemoteProfileTestDeps,
-} from "./server-context.remote-profile-tab-ops.shared.js";
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
 
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = deps.originalFetch;
-});
-
-afterEach(async () => {
-  await deps.closePlaywrightBrowserConnection().catch(() => {});
-  globalThis.fetch = deps.originalFetch;
-  vi.restoreAllMocks();
-});
+installRemoteProfileTestLifecycle(deps);
 
 describe("browser remote profile fallback and attachOnly behavior", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {

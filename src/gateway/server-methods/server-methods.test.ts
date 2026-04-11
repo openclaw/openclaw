@@ -227,13 +227,11 @@ describe("timestampOptsFromConfig", () => {
   it.each([
     {
       name: "extracts timezone from config",
-      // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
       expected: "America/Chicago",
     },
     {
       name: "falls back gracefully with empty config",
-      // oxlint-disable-next-line typescript/no-explicit-any
       cfg: {} as any,
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
@@ -375,6 +373,20 @@ describe("exec approval handlers", () => {
       context: {} as ExecApprovalGetArgs["context"],
       client: null,
       req: { id: "req-get", type: "req", method: "exec.approval.get" },
+      isWebchatConnect: execApprovalNoop,
+    });
+  }
+
+  async function listExecApprovals(params: {
+    handlers: ExecApprovalHandlers;
+    respond: ReturnType<typeof vi.fn>;
+  }) {
+    return params.handlers["exec.approval.list"]({
+      params: {} as never,
+      respond: params.respond as never,
+      context: {} as never,
+      client: null,
+      req: { id: "req-list", type: "req", method: "exec.approval.list" },
       isWebchatConnect: execApprovalNoop,
     });
   }
@@ -603,6 +615,47 @@ describe("exec approval handlers", () => {
     await resolveExecApproval({
       handlers,
       id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("lists pending exec approvals", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-list-1",
+        twoPhase: true,
+        host: "gateway",
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond });
+
+    expect(listRespond).toHaveBeenCalledWith(
+      true,
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "approval-list-1",
+          request: expect.objectContaining({
+            command: "echo ok",
+          }),
+        }),
+      ]),
+      undefined,
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-list-1",
       respond: resolveRespond,
       context,
     });
@@ -989,6 +1042,26 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects explicit approval ids with the reserved plugin prefix", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "plugin:approval-123", host: "gateway" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "approval ids starting with plugin: are reserved",
+      }),
+    );
   });
 
   it("accepts unique short approval id prefixes", async () => {
@@ -1440,6 +1513,39 @@ describe("logs.tail", () => {
       expect.objectContaining({
         file: newer,
         lines: ['{"msg":"new"}'],
+      }),
+      undefined,
+    );
+
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("redacts sensitive CLI tokens from returned lines", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+
+    await fsPromises.writeFile(
+      file,
+      "starting gog gmail watch serve --token push-token-bbbbbbbbbbbbbbbbbbbb --hook-token hook-token-aaaaaaaaaaaaaaaaaaaa\n",
+    );
+
+    setLoggerOverride({ file });
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: {},
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file,
+        lines: ["starting gog gmail watch serve --token push-t…bbbb --hook-token hook-t…aaaa"],
       }),
       undefined,
     );

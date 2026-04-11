@@ -6,10 +6,10 @@ import {
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
-const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
 async function runSetup(params: {
   cfg?: OpenClawConfig;
@@ -19,7 +19,7 @@ async function runSetup(params: {
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,
@@ -132,9 +132,7 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
     expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -155,7 +153,7 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.groups).toEqual({});
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("No group allowlist entries added yet."),
+        message.includes("No group allowlist entries added yet."),
       ),
     ).toBe(true);
   });
@@ -208,9 +206,7 @@ describe("zalouser setup wizard", () => {
     expect(seen).not.toContain("Zalo Personal DM policy");
     expect(seen).toContain("Zalouser allowFrom (name or user id)");
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -295,7 +291,10 @@ describe("zalouser setup wizard", () => {
 
     const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
     expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -317,8 +316,11 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.zalouser?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("shows the account-scoped current DM policy in quickstart notes", async () => {
@@ -348,7 +350,7 @@ describe("zalouser setup wizard", () => {
 
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+        message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
       ),
     ).toBe(true);
   });

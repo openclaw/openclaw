@@ -3,27 +3,20 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { tryResolveLoadedOutboundTarget } from "./targets-loaded.js";
 
 const mocks = vi.hoisted(() => ({
-  getChannelPlugin: vi.fn(),
-  getActivePluginRegistry: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
-}));
-
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistry: mocks.getActivePluginRegistry,
+  getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
 }));
 
 describe("tryResolveLoadedOutboundTarget", () => {
   beforeEach(() => {
-    mocks.getChannelPlugin.mockReset();
-    mocks.getActivePluginRegistry.mockReset();
+    mocks.getLoadedChannelPlugin.mockReset();
   });
 
   it("returns undefined when no loaded plugin exists", () => {
-    mocks.getChannelPlugin.mockReturnValue(undefined);
-    mocks.getActivePluginRegistry.mockReturnValue(null);
+    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
 
     expect(tryResolveLoadedOutboundTarget({ channel: "telegram", to: "123" })).toBeUndefined();
   });
@@ -32,7 +25,7 @@ describe("tryResolveLoadedOutboundTarget", () => {
     const cfg: OpenClawConfig = {
       channels: { telegram: { defaultTo: "123456789" } },
     };
-    mocks.getChannelPlugin.mockReturnValue({
+    mocks.getLoadedChannelPlugin.mockReturnValue({
       id: "telegram",
       meta: { label: "Telegram" },
       capabilities: {},

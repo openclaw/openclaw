@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -33,8 +34,26 @@ export function writeJson(res: ServerResponse, statusCode: number, body: unknown
 
 export function writeError(res: ServerResponse, statusCode: number, error: unknown) {
   writeJson(res, statusCode, {
-    error: error instanceof Error ? error.message : String(error),
+    error: formatErrorMessage(error),
   });
+}
+
+export async function closeQaHttpServer(server: Server): Promise<void> {
+  let forceCloseTimer: NodeJS.Timeout | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeIdleConnections?.();
+      forceCloseTimer = setTimeout(() => {
+        server.closeAllConnections?.();
+      }, 250);
+      forceCloseTimer.unref();
+    });
+  } finally {
+    if (forceCloseTimer) {
+      clearTimeout(forceCloseTimer);
+    }
+  }
 }
 
 export async function handleQaBusRequest(params: {
@@ -171,9 +190,7 @@ export async function startQaBusServer(params: { state: QaBusState; port?: numbe
     port: address.port,
     baseUrl: `http://127.0.0.1:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }

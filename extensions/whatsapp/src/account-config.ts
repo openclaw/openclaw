@@ -8,9 +8,9 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
 } from "openclaw/plugin-sdk/channel-streaming";
-import type { WhatsAppAccountConfig } from "./runtime-api.js";
+import type { WhatsAppAccountConfig } from "./account-types.js";
 
-function resolveWhatsAppAccountConfig(
+function _resolveWhatsAppAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): WhatsAppAccountConfig | undefined {

@@ -6,6 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -38,7 +39,9 @@ type TogetherVideoResponse = {
 };
 
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
-  return req.cfg?.models?.providers?.together?.baseUrl?.trim() || TOGETHER_BASE_URL;
+  return (
+    normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl) ?? TOGETHER_BASE_URL
+  );
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -48,14 +51,17 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
   if (Array.isArray(payload.outputs)) {
     for (const entry of payload.outputs) {
-      const url = entry.video_url?.trim() || entry.url?.trim();
+      const url = normalizeOptionalString(entry.video_url) ?? normalizeOptionalString(entry.url);
       if (url) {
         return url;
       }
     }
     return undefined;
   }
-  return payload.outputs?.video_url?.trim() || payload.outputs?.url?.trim();
+  return (
+    normalizeOptionalString(payload.outputs?.video_url) ??
+    normalizeOptionalString(payload.outputs?.url)
+  );
 }
 
 async function pollTogetherVideo(params: {
@@ -81,7 +87,9 @@ async function pollTogetherVideo(params: {
       return payload;
     }
     if (payload.status === "failed") {
-      throw new Error(payload.error?.message?.trim() || "Together video generation failed");
+      throw new Error(
+        normalizeOptionalString(payload.error?.message) ?? "Together video generation failed",
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
@@ -100,7 +108,7 @@ async function downloadTogetherVideo(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "Together generated video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -126,11 +134,21 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      maxDurationSeconds: 12,
-      supportsSize: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 12,
+        supportsSize: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 12,
+        supportsSize: true,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {
@@ -161,14 +179,15 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           transport: "http",
         });
       const body: Record<string, unknown> = {
-        model: req.model?.trim() || DEFAULT_TOGETHER_VIDEO_MODEL,
+        model: normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL,
         prompt: req.prompt,
       };
       if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
         body.seconds = String(Math.max(1, Math.round(req.durationSeconds)));
       }
-      if (req.size?.trim()) {
-        const match = /^(\d+)x(\d+)$/u.exec(req.size.trim());
+      const size = normalizeOptionalString(req.size);
+      if (size) {
+        const match = /^(\d+)x(\d+)$/u.exec(size);
         if (match) {
           body.width = Number.parseInt(match[1] ?? "", 10);
           body.height = Number.parseInt(match[2] ?? "", 10);
@@ -176,10 +195,10 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       }
       if (req.inputImages?.[0]) {
         const input = req.inputImages[0];
-        const value = input.url?.trim()
-          ? input.url.trim()
+        const value = normalizeOptionalString(input.url)
+          ? normalizeOptionalString(input.url)
           : input.buffer
-            ? toDataUrl(input.buffer, input.mimeType?.trim() || "image/png")
+            ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
             : undefined;
         if (!value) {
           throw new Error("Together reference image is missing image data.");
@@ -198,7 +217,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       try {
         await assertOkOrThrowHttpError(response, "Together video generation failed");
         const submitted = (await response.json()) as TogetherVideoResponse;
-        const videoId = submitted.id?.trim();
+        const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");
         }

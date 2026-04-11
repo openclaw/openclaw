@@ -1,4 +1,5 @@
 import type { ChatEventPayload } from "./controllers/chat.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
   if (!payload || payload.state !== "final") {
@@ -8,7 +9,7 @@ export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): bo
     return true;
   }
   const message = payload.message as Record<string, unknown>;
-  const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+  const role = normalizeLowercaseStringOrEmpty(message.role);
   if (role && role !== "assistant") {
     return true;
   }

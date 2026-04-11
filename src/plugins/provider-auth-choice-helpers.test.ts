@@ -23,8 +23,9 @@ describe("applyProviderAuthConfigPatch", () => {
       agents: {
         defaults: {
           models: {
-            "codex-cli/gpt-5.4": { alias: "Codex" },
-            "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini" },
+            "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+            "claude-cli/claude-opus-4-6": { alias: "Opus" },
+            "openai/gpt-5.2": {},
           },
         },
       },

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   jsonResult,
   readNumberParam,
@@ -92,6 +93,52 @@ async function getSupplementMemoryReadResult(params: {
     ...rest,
     text: content,
   };
+}
+
+async function resolveMemoryReadFailureResult(params: {
+  error: unknown;
+  requestedCorpus?: "memory" | "wiki" | "all";
+  relPath: string;
+  from?: number;
+  lines?: number;
+  agentSessionKey?: string;
+}) {
+  if (params.requestedCorpus === "all") {
+    const supplement = await getSupplementMemoryReadResult({
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+      agentSessionKey: params.agentSessionKey,
+      corpus: params.requestedCorpus,
+    });
+    if (supplement) {
+      return jsonResult(supplement);
+    }
+  }
+  const message = formatErrorMessage(params.error);
+  return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
+}
+
+async function executeMemoryReadResult<T>(params: {
+  read: () => Promise<T>;
+  requestedCorpus?: "memory" | "wiki" | "all";
+  relPath: string;
+  from?: number;
+  lines?: number;
+  agentSessionKey?: string;
+}) {
+  try {
+    return jsonResult(await params.read());
+  } catch (error) {
+    return await resolveMemoryReadFailureResult({
+      error,
+      requestedCorpus: params.requestedCorpus,
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+      agentSessionKey: params.agentSessionKey,
+    });
+  }
 }
 
 export function createMemorySearchTool(options: {
@@ -193,7 +240,7 @@ export function createMemorySearchTool(options: {
             mode: searchMode,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           return jsonResult(buildMemorySearchUnavailableResult(message));
         }
       },
@@ -242,31 +289,21 @@ export function createMemoryGetTool(options: {
         }
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {
-          try {
-            const result = await readAgentMemoryFile({
-              cfg,
-              agentId,
-              relPath,
-              from: from ?? undefined,
-              lines: lines ?? undefined,
-            });
-            return jsonResult(result);
-          } catch (err) {
-            if (requestedCorpus === "all") {
-              const supplement = await getSupplementMemoryReadResult({
+          return await executeMemoryReadResult({
+            read: async () =>
+              await readAgentMemoryFile({
+                cfg,
+                agentId,
                 relPath,
                 from: from ?? undefined,
                 lines: lines ?? undefined,
-                agentSessionKey: options.agentSessionKey,
-                corpus: requestedCorpus,
-              });
-              if (supplement) {
-                return jsonResult(supplement);
-              }
-            }
-            const message = err instanceof Error ? err.message : String(err);
-            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-          }
+              }),
+            requestedCorpus,
+            relPath,
+            from: from ?? undefined,
+            lines: lines ?? undefined,
+            agentSessionKey: options.agentSessionKey,
+          });
         }
         const memory = await getMemoryManagerContextWithPurpose({
           cfg,
@@ -276,29 +313,19 @@ export function createMemoryGetTool(options: {
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
-        try {
-          const result = await memory.manager.readFile({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-          });
-          return jsonResult(result);
-        } catch (err) {
-          if (requestedCorpus === "all") {
-            const supplement = await getSupplementMemoryReadResult({
+        return await executeMemoryReadResult({
+          read: async () =>
+            await memory.manager.readFile({
               relPath,
               from: from ?? undefined,
               lines: lines ?? undefined,
-              agentSessionKey: options.agentSessionKey,
-              corpus: requestedCorpus,
-            });
-            if (supplement) {
-              return jsonResult(supplement);
-            }
-          }
-          const message = err instanceof Error ? err.message : String(err);
-          return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-        }
+            }),
+          requestedCorpus,
+          relPath,
+          from: from ?? undefined,
+          lines: lines ?? undefined,
+          agentSessionKey: options.agentSessionKey,
+        });
       },
   });
 }

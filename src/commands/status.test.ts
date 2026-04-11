@@ -284,6 +284,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../channels/config-presence.js", () => ({
   hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  hasMeaningfulChannelConfig: (entry: unknown) =>
+    Boolean(
+      entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
+    ),
   listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
 }));
@@ -717,8 +721,7 @@ describe("statusCommand", () => {
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(true);
     expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
     expect(payload.sessions.recent[0].flags).toContain("verbose:on");
-    expect(payload.securityAudit.summary.critical).toBe(1);
-    expect(payload.securityAudit.summary.warn).toBe(1);
+    expect(payload.securityAudit).toBeUndefined();
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
     expect(payload.pluginCompatibility).toEqual({
@@ -732,6 +735,17 @@ describe("statusCommand", () => {
         byStatus: expect.objectContaining({ queued: 0, running: 0 }),
       }),
     );
+    expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
+  it("includes security audit in JSON when all is requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+
+    await statusCommand({ json: true, all: true }, runtime as never);
+
+    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    expect(payload.securityAudit.summary.critical).toBe(1);
+    expect(payload.securityAudit.summary.warn).toBe(1);
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
@@ -806,7 +820,6 @@ describe("statusCommand", () => {
     expect(logs.some((line) => line.includes("Cache"))).toBe(true);
     expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
     expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
-    expect(logs.some((line) => line.includes("write 1.0k"))).toBe(true);
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {

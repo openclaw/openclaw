@@ -30,6 +30,7 @@ native OpenClaw plugin registers against one or more capability types:
 | Capability             | Registration method                              | Example plugins                      |
 | ---------------------- | ------------------------------------------------ | ------------------------------------ |
 | Text inference         | `api.registerProvider(...)`                      | `openai`, `anthropic`                |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | `openai`, `anthropic`                |
 | Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`            |
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |
@@ -608,14 +609,17 @@ conversation, and it runs after core approval handling finishes.
 
 Provider plugins now have two layers:
 
-- manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
-  runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
-  labels and CLI flag metadata before runtime load
+- manifest metadata: `providerAuthEnvVars` for cheap provider env-auth lookup
+  before runtime load, `providerAuthAliases` for provider variants that share
+  auth, `channelEnvVars` for cheap channel env/setup lookup before runtime
+  load, plus `providerAuthChoices` for cheap onboarding/auth-choice labels and
+  CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery` plus `applyConfigDefaults`
 - runtime hooks: `normalizeModelId`, `normalizeTransport`,
   `normalizeConfig`,
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
-  `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
+  `resolveSyntheticAuth`, `resolveExternalAuthProfiles`,
+  `shouldDeferSyntheticProfileAuth`,
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `contributeResolvedModelCompat`, `capabilities`,
   `normalizeToolSchemas`, `inspectToolSchemas`,
@@ -637,63 +641,70 @@ needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
 that generic auth/status/model-picker paths should see without loading plugin
-runtime. Use manifest `providerAuthChoices` when onboarding/auth-choice CLI
-surfaces should know the provider's choice id, group labels, and simple
+runtime. Use manifest `providerAuthAliases` when one provider id should reuse
+another provider id's env vars, auth profiles, config-backed auth, and API-key
+onboarding choice. Use manifest `providerAuthChoices` when onboarding/auth-choice
+CLI surfaces should know the provider's choice id, group labels, and simple
 one-flag auth wiring without loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
+
+Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
+generic shell-env fallback, config/status checks, or setup prompts should see
+without loading channel runtime.
 
 ### Hook order and usage
 
 For model/provider plugins, OpenClaw calls hooks in this rough order.
 The "When to use" column is the quick decision guide.
 
-| #   | Hook                              | What it does                                                                             | When to use                                                                                                                                 |
-| --- | --------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation          | Provider owns a catalog or base URL defaults                                                                                                |
-| 2   | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                | Defaults depend on auth mode, env, or provider model-family semantics                                                                       |
-| --  | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                    | _(not a plugin hook)_                                                                                                                       |
-| 3   | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                               | Provider owns alias cleanup before canonical model resolution                                                                               |
-| 4   | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                | Provider owns transport cleanup for custom provider ids in the same transport family                                                        |
-| 5   | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                     | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries |
-| 6   | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                         | Provider needs endpoint-driven native streaming usage metadata fixes                                                                        |
-| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                 | Provider has provider-owned env-marker API-key resolution; `amazon-bedrock` also has a built-in AWS env-marker resolver here                |
-| 8   | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext             | Provider can operate with a synthetic/local credential marker                                                                               |
-| 9   | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                | Provider stores synthetic placeholder profiles that should not win precedence                                                               |
-| 10  | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                 | Provider accepts arbitrary upstream model ids                                                                                               |
-| 11  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                     | Provider needs network metadata before resolving unknown ids                                                                                |
-| 12  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                         | Provider needs transport rewrites but still uses a core transport                                                                           |
-| 13  | `contributeResolvedModelCompat`   | Contribute compat flags for vendor models behind another compatible transport            | Provider recognizes its own models on proxy transports without taking over the provider                                                     |
-| 14  | `capabilities`                    | Provider-owned transcript/tooling metadata used by shared core logic                     | Provider needs transcript/provider-family quirks                                                                                            |
-| 15  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                              | Provider needs transport-family schema cleanup                                                                                              |
-| 16  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                            | Provider wants keyword warnings without teaching core provider-specific rules                                                               |
-| 17  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                        | Provider needs tagged reasoning/final output instead of native fields                                                                       |
-| 18  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                        | Provider needs default request params or per-provider param cleanup                                                                         |
-| 19  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                             | Provider needs a custom wire protocol, not just a wrapper                                                                                   |
-| 20  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                        | Provider needs request headers/body/model compat wrappers without a custom transport                                                        |
-| 21  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                     | Provider wants generic transports to send provider-native turn identity                                                                     |
-| 22  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                              | Provider wants generic WS transports to tune session headers or fallback policy                                                             |
-| 23  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string               | Provider stores extra auth metadata and needs a custom runtime token shape                                                                  |
-| 24  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy            | Provider does not fit the shared `pi-ai` refreshers                                                                                         |
-| 25  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                            | Provider needs provider-owned auth repair guidance after refresh failure                                                                    |
-| 26  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                           | Provider has raw overflow errors generic heuristics would miss                                                                              |
-| 27  | `classifyFailoverReason`          | Provider-owned failover reason classification                                            | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                        |
-| 28  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                         | Provider needs proxy-specific cache TTL gating                                                                                              |
-| 29  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                | Provider needs a provider-specific missing-auth recovery hint                                                                               |
-| 30  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                    | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                               |
-| 31  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                    | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                   |
-| 32  | `isBinaryThinking`                | On/off reasoning toggle for binary-thinking providers                                    | Provider exposes only binary thinking on/off                                                                                                |
-| 33  | `supportsXHighThinking`           | `xhigh` reasoning support for selected models                                            | Provider wants `xhigh` on only a subset of models                                                                                           |
-| 34  | `resolveDefaultThinkingLevel`     | Default `/think` level for a specific model family                                       | Provider owns default `/think` policy for a model family                                                                                    |
-| 35  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                        | Provider owns live/smoke preferred-model matching                                                                                           |
-| 36  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference | Provider needs a token exchange or short-lived request credential                                                                           |
-| 37  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces               | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
-| 38  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved       | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
-| 39  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                               | Memory embedding behavior belongs with the provider plugin                                                                                  |
-| 40  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                  | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
-| 41  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                  | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
-| 42  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                     | Provider transport needs stricter turn validation after generic sanitation                                                                  |
-| 43  | `onModelSelected`                 | Run provider-owned post-selection side effects                                           | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
+| #   | Hook                              | What it does                                                                                                   | When to use                                                                                                                                 |
+| --- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                |
+| 2   | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                       |
+| --  | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                       |
+| 3   | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                               |
+| 4   | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                        |
+| 5   | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries |
+| 6   | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                        |
+| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Provider has provider-owned env-marker API-key resolution; `amazon-bedrock` also has a built-in AWS env-marker resolver here                |
+| 8   | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                               |
+| 9   | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens                                                          |
+| 10  | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                               |
+| 11  | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                               |
+| 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                |
+| 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                           |
+| 14  | `contributeResolvedModelCompat`   | Contribute compat flags for vendor models behind another compatible transport                                  | Provider recognizes its own models on proxy transports without taking over the provider                                                     |
+| 15  | `capabilities`                    | Provider-owned transcript/tooling metadata used by shared core logic                                           | Provider needs transcript/provider-family quirks                                                                                            |
+| 16  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                              |
+| 17  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                               |
+| 18  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                       |
+| 19  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                         |
+| 20  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                   |
+| 21  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                        |
+| 22  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                     |
+| 23  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                             |
+| 24  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                  |
+| 25  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared `pi-ai` refreshers                                                                                         |
+| 26  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                    |
+| 27  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                              |
+| 28  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                        |
+| 29  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                              |
+| 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                               |
+| 31  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                                          | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                               |
+| 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                   |
+| 33  | `isBinaryThinking`                | On/off reasoning toggle for binary-thinking providers                                                          | Provider exposes only binary thinking on/off                                                                                                |
+| 34  | `supportsXHighThinking`           | `xhigh` reasoning support for selected models                                                                  | Provider wants `xhigh` on only a subset of models                                                                                           |
+| 35  | `resolveDefaultThinkingLevel`     | Default `/think` level for a specific model family                                                             | Provider owns default `/think` policy for a model family                                                                                    |
+| 36  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                           |
+| 37  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                           |
+| 38  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                             |
+| 39  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                         |
+| 40  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                  |
+| 41  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                             |
+| 42  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                           |
+| 43  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                  |
+| 44  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                |
 
 `normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
 matched provider plugin, then fall through other hook-capable provider plugins
@@ -1112,7 +1123,8 @@ authoring plugins:
   `openclaw/plugin-sdk/secret-input`, and
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
   wiring. `channel-inbound` is the shared home for debounce, mention matching,
-  envelope formatting, and inbound envelope context helpers.
+  inbound mention-policy helpers, envelope formatting, and inbound envelope
+  context helpers.
   `channel-setup` is the narrow optional-install setup seam.
   `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
   deferred startup, including the import-safe setup patch adapters.
@@ -1125,6 +1137,9 @@ authoring plugins:
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-gateway-runtime`,
+  `openclaw/plugin-sdk/approval-handler-adapter-runtime`,
+  `openclaw/plugin-sdk/approval-handler-runtime`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
@@ -1143,9 +1158,9 @@ authoring plugins:
   assistant-visible-text stripping, markdown render/chunking helpers, redaction
   helpers, directive-tag helpers, and safe-text utilities.
 - Approval-specific channel seams should prefer one `approvalCapability`
-  contract on the plugin. Core then reads approval auth, delivery, render, and
-  native-routing behavior through that one capability instead of mixing
-  approval behavior into unrelated plugin fields.
+  contract on the plugin. Core then reads approval auth, delivery, render,
+  native-routing, and lazy native-handler behavior through that one capability
+  instead of mixing approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
   compatibility shim for older plugins. New code should import the narrower
   generic primitives instead, and repo code should not add new imports of the
@@ -1485,14 +1500,23 @@ Use this when your plugin needs to replace or extend the default context
 pipeline rather than just add memory search or hooks.
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function (api) {
   api.registerContextEngine("lossless-claw", () => ({
     info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact() {
       return { ok: true, compacted: false };
@@ -1505,7 +1529,10 @@ If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
 ```ts
-import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", () => ({
@@ -1517,8 +1544,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact(params) {
       return await delegateCompactionToRuntime(params);

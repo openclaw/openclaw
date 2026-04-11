@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -150,7 +150,28 @@ export async function transcribeAudioFile(params: {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  language?: string;
+  prompt?: string;
 }): Promise<{ text: string | undefined }> {
-  const result = await runMediaUnderstandingFile({ ...params, capability: "audio" });
+  const cfg =
+    params.language || params.prompt
+      ? {
+          ...params.cfg,
+          tools: {
+            ...params.cfg.tools,
+            media: {
+              ...params.cfg.tools?.media,
+              audio: {
+                ...params.cfg.tools?.media?.audio,
+                ...(params.language ? { _requestLanguageOverride: params.language } : {}),
+                ...(params.prompt ? { _requestPromptOverride: params.prompt } : {}),
+                ...(params.language ? { language: params.language } : {}),
+                ...(params.prompt ? { prompt: params.prompt } : {}),
+              },
+            },
+          },
+        }
+      : params.cfg;
+  const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return { text: result.text };
 }

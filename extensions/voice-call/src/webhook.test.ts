@@ -24,9 +24,9 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    getRealtimeTranscriptionProvider: vi.fn<
-      (...args: unknown[]) => RealtimeTranscriptionProviderPlugin | undefined
-    >(() => realtimeTranscriptionProvider),
+    getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
+      () => realtimeTranscriptionProvider,
+    ),
     listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
   };
 });
@@ -57,7 +57,7 @@ const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig
     ...overrides,
     serve: {
       ...base.serve,
-      ...(overrides.serve ?? {}),
+      ...overrides.serve,
     },
   };
 };

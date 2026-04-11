@@ -3,8 +3,6 @@ import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
-  shouldRegisterPrimarySubcommand,
-  shouldSkipPluginCommandRegistration,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
 
@@ -39,71 +37,6 @@ describe("rewriteUpdateFlagArgv", () => {
       "update",
       "--json",
     ]);
-  });
-});
-
-describe("shouldRegisterPrimarySubcommand", () => {
-  it("skips eager primary registration for help/version invocations", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status", "--help"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-v"])).toBe(false);
-  });
-
-  it("keeps eager primary registration for regular command runs", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status"])).toBe(true);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "acp", "-v"])).toBe(true);
-  });
-});
-
-describe("shouldSkipPluginCommandRegistration", () => {
-  it("skips plugin registration for root help/version", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "--help"],
-        primary: null,
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips plugin registration for builtin subcommand help", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "config", "--help"],
-        primary: "config",
-        hasBuiltinPrimary: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips plugin registration for builtin command runs", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "sessions", "--json"],
-        primary: "sessions",
-        hasBuiltinPrimary: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps plugin registration for non-builtin help", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "voicecall", "--help"],
-        primary: "voicecall",
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps plugin registration for non-builtin command runs", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "voicecall", "status"],
-        primary: "voicecall",
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -171,5 +104,48 @@ describe("resolveMissingPluginCommandMessage", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("explains that dreaming is a runtime slash command, not a CLI command", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {});
+    expect(message).toContain("runtime slash command");
+    expect(message).toContain("/dreaming");
+    expect(message).toContain("memory-core");
+    expect(message).toContain("openclaw memory");
+  });
+
+  it("returns the runtime command message even when plugins.allow is set", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    });
+    expect(message).toContain("runtime slash command");
+    expect(message).not.toContain("plugins.allow");
+  });
+
+  it("points command names in plugins.allow at their parent plugin", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        allow: ["dreaming"],
+      },
+    });
+    expect(message).toContain('"dreaming" is not a plugin');
+    expect(message).toContain('"memory-core"');
+    expect(message).toContain("plugins.allow");
+  });
+
+  it("explains parent plugin disablement for runtime command aliases", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: false,
+          },
+        },
+      },
+    });
+    expect(message).toContain("plugins.entries.memory-core.enabled=false");
+    expect(message).not.toContain("runtime slash command");
   });
 });

@@ -99,6 +99,7 @@ beforeEach(() => {
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
+const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -186,6 +187,12 @@ async function writeAuthStore(
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
+    }),
+  );
+  await fs.writeFile(
+    path.join(agentDir, "auth-state.json"),
+    JSON.stringify({
+      version: 1,
       usageStats:
         usageStats ??
         ({
@@ -197,7 +204,7 @@ async function writeAuthStore(
 }
 
 async function readUsageStats(agentDir: string) {
-  const raw = await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8");
+  const raw = await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8");
   return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
 }
 
@@ -212,6 +219,12 @@ async function writeMultiProfileAuthStore(agentDir: string) {
         "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
+    }),
+  );
+  await fs.writeFile(
+    path.join(agentDir, "auth-state.json"),
+    JSON.stringify({
+      version: 1,
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
@@ -376,7 +389,28 @@ function mockAllProvidersOverloaded() {
   });
 }
 
-describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
+describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+  it("falls back on OpenRouter-style no-endpoints assistant errors", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(NO_ENDPOINTS_FOUND_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:model-not-found-no-endpoints",
+        runId: "run:model-not-found-no-endpoints",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("model_not_found");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -580,6 +614,12 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
             "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
             "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
           },
+        }),
+      );
+      await fs.writeFile(
+        path.join(agentDir, "auth-state.json"),
+        JSON.stringify({
+          version: 1,
           usageStats: {
             "openai:p1": { lastUsed: 1 },
             "openai:p2": { lastUsed: 2 },

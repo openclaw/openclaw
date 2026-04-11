@@ -34,6 +34,19 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  resolveProviderBuiltInModelSuppression: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
+
 describe("resolveModelAsync startup retry", () => {
   const runtimeHooks = {
     applyProviderResolvedModelCompatWithPlugins: () => undefined,

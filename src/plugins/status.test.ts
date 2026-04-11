@@ -62,6 +62,7 @@ vi.mock("../plugin-sdk/facade-runtime.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 
@@ -208,6 +209,50 @@ function createAutoEnabledStatusConfig(
     },
   };
   return { rawConfig, autoEnabledConfig };
+}
+
+function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
+  const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+    {
+      demo: { enabled: true },
+    },
+    { channels: { demo: { enabled: true } } },
+  );
+  const autoEnabledReasons = {
+    demo: ["demo configured"],
+  };
+  applyPluginAutoEnableMock.mockReturnValue({
+    config: autoEnabledConfig,
+    changes: [],
+    autoEnabledReasons,
+  });
+  setSinglePluginLoadResult(
+    createPluginRecord({
+      id: "demo",
+      name: "Demo",
+      description: "Auto-enabled plugin",
+      origin: "bundled",
+      hookCount: 1,
+    }),
+    {
+      typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
+    },
+  );
+
+  expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
+    createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
+    createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+  ]);
+
+  expectAutoEnabledStatusLoad({
+    rawConfig,
+  });
+  expectPluginLoaderCall({
+    config: autoEnabledConfig,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons,
+    loadModules: true,
+  });
 }
 
 function expectNoCompatibilityWarnings() {
@@ -404,48 +449,7 @@ describe("plugin status reports", () => {
   });
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: { enabled: true },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo",
-        description: "Auto-enabled plugin",
-        origin: "bundled",
-        hookCount: 1,
-      }),
-      {
-        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
-      },
-    );
-
-    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
-      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-    ]);
-
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectPluginLoaderCall({
-      config: autoEnabledConfig,
-      activationSourceConfig: rawConfig,
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-      loadModules: true,
-    });
+    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -467,48 +471,7 @@ describe("plugin status reports", () => {
   });
 
   it("preserves raw config activation context for compatibility-derived reports", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: { enabled: true },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo",
-        description: "Auto-enabled plugin",
-        origin: "bundled",
-        hookCount: 1,
-      }),
-      {
-        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
-      },
-    );
-
-    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
-      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-    ]);
-
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectPluginLoaderCall({
-      config: autoEnabledConfig,
-      activationSourceConfig: rawConfig,
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-      loadModules: true,
-    });
+    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -674,24 +637,25 @@ describe("plugin status reports", () => {
     expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
   });
 
-  it("treats a CLI-command-only plugin as a non-capability", () => {
+  it("treats a CLI-command-only plugin as a plain capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
-        id: "openai",
-        name: "OpenAI",
-        cliCommands: ["openai"],
+        id: "anthropic",
+        name: "Anthropic",
+        cliBackendIds: ["claude-cli"],
       }),
     );
 
-    const inspect = expectInspectReport("openai");
+    const inspect = expectInspectReport("anthropic");
 
     expectInspectShape(inspect, {
-      shape: "non-capability",
-      capabilityMode: "none",
-      capabilityKinds: [],
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["cli-backend"],
     });
-    expect(inspect.capabilities).toEqual([]);
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
+
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

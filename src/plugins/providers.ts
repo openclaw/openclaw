@@ -74,17 +74,41 @@ export function resolveDiscoveredProviderPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
+  includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
-    )
+  });
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter((plugin) => {
+      if (!(plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)))) {
+        return false;
+      }
+      if (!shouldFilterUntrustedWorkspacePlugins || plugin.origin !== "workspace") {
+        return true;
+      }
+      const activation = resolveEffectivePluginActivationState({
+        id: plugin.id,
+        origin: plugin.origin,
+        config: normalizedConfig,
+        rootConfig: params.config,
+        enabledByDefault: plugin.enabledByDefault,
+      });
+      if (activation.activated) {
+        return true;
+      }
+      const explicitlyTrustedButDisabled =
+        normalizedConfig.enabled &&
+        !normalizedConfig.deny.includes(plugin.id) &&
+        normalizedConfig.allow.includes(plugin.id) &&
+        normalizedConfig.entries[plugin.id]?.enabled === false;
+      return explicitlyTrustedButDisabled;
+    })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -203,8 +227,14 @@ export function resolveOwningPluginIdsForProvider(params: {
 
   const registry = resolveManifestRegistry(params);
   const pluginIds = registry.plugins
-    .filter((plugin) =>
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
+    .filter(
+      (plugin) =>
+        plugin.providers.some(
+          (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+        ) ||
+        plugin.cliBackends.some(
+          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
+        ),
     )
     .map((plugin) => plugin.id);
 

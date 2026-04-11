@@ -1,7 +1,4 @@
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
-import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
-import { readBestEffortConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -24,6 +21,13 @@ let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | un
 let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
 let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
 let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+let commandConfigResolutionModulePromise:
+  | Promise<typeof import("../cli/command-config-resolution.js")>
+  | undefined;
+let commandSecretTargetsModulePromise:
+  | Promise<typeof import("../cli/command-secret-targets.js")>
+  | undefined;
 
 function loadStatusScanDepsRuntimeModule() {
   statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
@@ -53,6 +57,21 @@ function loadGatewayCallModule() {
 function loadStatusSummaryModule() {
   statusSummaryModulePromise ??= import("./status.summary.js");
   return statusSummaryModulePromise;
+}
+
+function loadConfigModule() {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
+
+function loadCommandConfigResolutionModule() {
+  commandConfigResolutionModulePromise ??= import("../cli/command-config-resolution.js");
+  return commandConfigResolutionModulePromise;
+}
+
+function loadCommandSecretTargetsModule() {
+  commandSecretTargetsModulePromise ??= import("../cli/command-secret-targets.js");
+  return commandSecretTargetsModulePromise;
 }
 
 async function resolveStatusChannelsStatus(params: {
@@ -142,12 +161,14 @@ export async function collectStatusScanOverview(params: {
   } = await loadStatusScanCommandConfig({
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readBestEffortConfig,
+    readBestEffortConfig: async () => (await loadConfigModule()).readBestEffortConfig(),
     resolveConfig: async (loadedConfig) =>
-      await resolveCommandConfigWithSecrets({
+      await (
+        await loadCommandConfigResolutionModule()
+      ).resolveCommandConfigWithSecrets({
         config: loadedConfig,
         commandName: params.commandName,
-        targetIds: getStatusCommandSecretTargetIds(),
+        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(),
         mode: "read_only_status",
         ...(params.runtime ? { runtime: params.runtime } : {}),
       }),

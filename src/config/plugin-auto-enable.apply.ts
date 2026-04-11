@@ -4,9 +4,11 @@ import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js
 import {
   materializePluginAutoEnableCandidatesInternal,
   resolvePluginAutoEnableManifestRegistry,
-  type PluginAutoEnableCandidate,
-  type PluginAutoEnableResult,
 } from "./plugin-auto-enable.shared.js";
+import type {
+  PluginAutoEnableCandidate,
+  PluginAutoEnableResult,
+} from "./plugin-auto-enable.types.js";
 
 export function materializePluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;

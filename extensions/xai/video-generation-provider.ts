@@ -6,11 +6,11 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
-  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
@@ -40,32 +40,41 @@ type XaiVideoStatusResponse = {
   } | null;
 };
 
+type VideoGenerationSourceInput = {
+  url?: string;
+  buffer?: Buffer;
+  mimeType?: string;
+};
+
 function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
-  return req.cfg?.models?.providers?.xai?.baseUrl?.trim() || DEFAULT_XAI_VIDEO_BASE_URL;
+  return (
+    normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ?? DEFAULT_XAI_VIDEO_BASE_URL
+  );
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function resolveImageUrl(input: VideoGenerationSourceAsset | undefined): string | undefined {
+function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
-  if (input.url?.trim()) {
-    return input.url.trim();
+  const inputUrl = normalizeOptionalString(input.url);
+  if (inputUrl) {
+    return inputUrl;
   }
   if (!input.buffer) {
     throw new Error("xAI image-to-video input is missing image data.");
   }
-  return toDataUrl(input.buffer, input.mimeType?.trim() || "image/png");
+  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
 }
 
-function resolveInputVideoUrl(input: VideoGenerationSourceAsset | undefined): string | undefined {
+function resolveInputVideoUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
-  const url = input.url?.trim();
+  const url = normalizeOptionalString(input.url);
   if (url) {
     return url;
   }
@@ -88,7 +97,7 @@ function resolveDurationSeconds(params: {
 }
 
 function resolveAspectRatio(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || !XAI_VIDEO_ASPECT_RATIOS.has(trimmed)) {
     return undefined;
   }
@@ -132,7 +141,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
 
   const mode = resolveXaiVideoMode(req);
   const body: Record<string, unknown> = {
-    model: req.model?.trim() || DEFAULT_XAI_VIDEO_MODEL,
+    model: normalizeOptionalString(req.model) ?? DEFAULT_XAI_VIDEO_MODEL,
     prompt: req.prompt,
   };
 
@@ -210,7 +219,10 @@ async function pollXaiVideo(params: {
         return payload;
       case "failed":
       case "expired":
-        throw new Error(payload.error?.message?.trim() || `xAI video generation ${payload.status}`);
+        throw new Error(
+          normalizeOptionalString(payload.error?.message) ??
+            `xAI video generation ${payload.status}`,
+        );
       case "queued":
       case "processing":
       default:
@@ -233,7 +245,7 @@ async function downloadXaiVideo(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "xAI generated video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -254,12 +266,32 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 1,
-      maxDurationSeconds: 15,
-      supportsAspectRatio: true,
-      supportsResolution: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 15,
+        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+        resolutions: ["480P", "720P"],
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 15,
+        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+        resolutions: ["480P", "720P"],
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputVideos: 1,
+        maxDurationSeconds: 15,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
     },
     async generateVideo(req) {
       const auth = await resolveApiKeyForProvider({
@@ -298,10 +330,11 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "xAI video generation failed");
         const submitted = (await response.json()) as XaiVideoCreateResponse;
-        const requestId = submitted.request_id?.trim();
+        const requestId = normalizeOptionalString(submitted.request_id);
         if (!requestId) {
           throw new Error(
-            submitted.error?.message?.trim() || "xAI video generation response missing request_id",
+            normalizeOptionalString(submitted.error?.message) ??
+              "xAI video generation response missing request_id",
           );
         }
         const completed = await pollXaiVideo({
@@ -311,7 +344,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           baseUrl,
           fetchFn,
         });
-        const videoUrl = completed.video?.url?.trim();
+        const videoUrl = normalizeOptionalString(completed.video?.url);
         if (!videoUrl) {
           throw new Error("xAI video generation completed without an output URL");
         }
@@ -322,7 +355,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         });
         return {
           videos: [video],
-          model: req.model?.trim() || DEFAULT_XAI_VIDEO_MODEL,
+          model: normalizeOptionalString(req.model) ?? DEFAULT_XAI_VIDEO_MODEL,
           metadata: {
             requestId,
             status: completed.status,

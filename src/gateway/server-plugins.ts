@@ -8,7 +8,9 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
@@ -380,6 +382,19 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
+function createGatewayPluginRegistrationLogger(params?: {
+  suppressInfoLogs?: boolean;
+}): PluginLogger {
+  const logger = createPluginRuntimeLoaderLogger();
+  if (params?.suppressInfoLogs !== true) {
+    return logger;
+  }
+  return {
+    ...logger,
+    info: (_message: string) => undefined,
+  };
+}
+
 export function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;
   activationSourceConfig?: ReturnType<typeof loadConfig>;
@@ -395,18 +410,22 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
+  suppressPluginInfoLogs?: boolean;
 }) {
+  const activationAutoEnabled =
+    params.activationSourceConfig !== undefined
+      ? applyPluginAutoEnable({
+          config: params.activationSourceConfig,
+          env: process.env,
+        })
+      : undefined;
   const autoEnabled =
     params.activationSourceConfig !== undefined
       ? {
           config: params.cfg,
-          changes: [],
+          changes: activationAutoEnabled?.changes ?? [],
           autoEnabledReasons:
-            params.autoEnabledReasons ??
-            applyPluginAutoEnable({
-              config: params.activationSourceConfig,
-              env: process.env,
-            }).autoEnabledReasons,
+            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
         }
       : params.autoEnabledReasons !== undefined
         ? {
@@ -441,12 +460,9 @@ export function loadGatewayPlugins(params: {
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
-    logger: {
-      info: (msg) => params.log.info(msg),
-      warn: (msg) => params.log.warn(msg),
-      error: (msg) => params.log.error(msg),
-      debug: (msg) => params.log.debug(msg),
-    },
+    logger: createGatewayPluginRegistrationLogger({
+      suppressInfoLogs: params.suppressPluginInfoLogs,
+    }),
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,

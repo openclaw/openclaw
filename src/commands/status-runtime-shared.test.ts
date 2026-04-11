@@ -4,6 +4,7 @@ import {
   resolveStatusGatewayHealthSafe,
   resolveStatusLastHeartbeat,
   resolveStatusRuntimeDetails,
+  resolveStatusRuntimeSnapshot,
   resolveStatusSecurityAudit,
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
@@ -215,6 +216,34 @@ describe("status-runtime-shared", () => {
       lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
+    });
+  });
+
+  it("resolves the shared runtime snapshot with security audit and runtime details", async () => {
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: { mode: "local" } },
+        timeoutMs: 1234,
+        usage: true,
+        deep: true,
+        gatewayReachable: true,
+        includeSecurityAudit: true,
+      }),
+    ).resolves.toEqual({
+      securityAudit: { summary: { critical: 0 }, findings: [] },
+      usage: { providers: [] },
+      health: { ok: true },
+      lastHeartbeat: { ok: true },
+      gatewayService: { label: "LaunchAgent" },
+      nodeService: { label: "node" },
+    });
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
+      config: { gateway: {} },
+      sourceConfig: { gateway: { mode: "local" } },
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
     });
   });
 });

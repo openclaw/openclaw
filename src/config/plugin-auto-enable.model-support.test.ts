@@ -15,6 +15,7 @@ function makeRegistry(
       channels: [],
       providers: [],
       modelSupport: plugin.modelSupport,
+      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,

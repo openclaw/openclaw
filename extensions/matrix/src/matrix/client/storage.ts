@@ -406,6 +406,7 @@ export async function maybeMigrateLegacyStorage(params: {
       rollbackError
         ? `Failed migrating legacy Matrix client storage: ${String(err)}. Rollback also failed: ${rollbackError}`
         : `Failed migrating legacy Matrix client storage: ${String(err)}`,
+      { cause: err },
     );
   }
   if (moved.length > 0) {

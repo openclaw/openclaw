@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { z } from "openclaw/plugin-sdk/zod";
-import { AcpxPluginConfigSchema } from "./config-schema.js";
+import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
   AcpxPermissionMode,
@@ -176,7 +177,7 @@ function resolveConfiguredMcpServers(params: {
   pluginToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
-  const resolved = { ...(params.mcpServers ?? {}) };
+  const resolved = { ...params.mcpServers };
   if (!params.pluginToolsMcpBridge) {
     return resolved;
   }
@@ -223,7 +224,7 @@ export function resolveAcpxPluginConfig(params: {
   });
   const agents = Object.fromEntries(
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
-      name.trim().toLowerCase(),
+      normalizeLowercaseStringOrEmpty(name),
       entry.command.trim(),
     ]),
   );
@@ -237,8 +238,12 @@ export function resolveAcpxPluginConfig(params: {
     pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
-    timeoutSeconds: normalized.timeoutSeconds,
+    timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    legacyCompatibilityConfig: {
+      strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
+      queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
+    },
     mcpServers,
     agents,
   };

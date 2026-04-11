@@ -1,5 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
 import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -11,6 +13,10 @@ export async function resolveAnnounceTarget(params: {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
   const fallback = parsed ?? parsedDisplay ?? null;
+  const fallbackThreadId =
+    fallback?.threadId ??
+    parseThreadSessionSuffix(params.sessionKey).threadId ??
+    parseThreadSessionSuffix(params.displayKey).threadId;
 
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
@@ -53,8 +59,11 @@ export async function resolveAnnounceTarget(params: {
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
       (typeof origin?.accountId === "string" ? origin.accountId : undefined);
+    const threadId = normalizeOptionalStringifiedId(
+      deliveryContext?.threadId ?? match?.lastThreadId ?? origin?.threadId ?? fallbackThreadId,
+    );
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, threadId };
     }
   } catch {
     // ignore

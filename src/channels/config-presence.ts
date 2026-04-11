@@ -6,6 +6,8 @@ import {
 } from "../channels/plugins/persisted-auth-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
+import { isRecord } from "../utils.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -13,14 +15,6 @@ const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 type ChannelPresenceOptions = {
   includePersistedAuthState?: boolean;
 };
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
@@ -42,7 +36,12 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
   return fs.existsSync(resolveStateDir(env, os.homedir));
 }
 
-const PERSISTED_AUTH_STATE_CHANNEL_IDS = listBundledChannelIdsWithPersistedAuthState();
+let persistedAuthStateChannelIds: string[] | null = null;
+
+function getPersistedAuthStateChannelIds(): string[] {
+  persistedAuthStateChannelIds ??= listBundledChannelIdsWithPersistedAuthState();
+  return persistedAuthStateChannelIds;
+}
 
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
@@ -76,7 +75,7 @@ export function listPotentialConfiguredChannelIds(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
-    for (const channelId of PERSISTED_AUTH_STATE_CHANNEL_IDS) {
+    for (const channelId of getPersistedAuthStateChannelIds()) {
       if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
         configuredChannelIds.add(channelId);
       }
@@ -104,7 +103,7 @@ function hasEnvConfiguredChannel(
   if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
-  return PERSISTED_AUTH_STATE_CHANNEL_IDS.some((channelId) =>
+  return getPersistedAuthStateChannelIds().some((channelId) =>
     hasBundledChannelPersistedAuthState({ channelId, cfg, env }),
   );
 }

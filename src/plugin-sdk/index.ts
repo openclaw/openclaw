@@ -40,19 +40,23 @@ export type {
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "../channels/plugins/setup-wizard.js";
+} from "../channels/plugins/setup-wizard-types.js";
 export type {
+  AgentHarness,
   AnyAgentTool,
+  CliBackendPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderPreparedRuntimeAuth,
   ProviderRuntimeModel,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
 } from "../plugins/types.js";
+export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 export type {
   PluginRuntime,
   RuntimeLogger,
@@ -77,6 +81,12 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+} from "../plugins/memory-state.js";
+export type { CliBackendConfig } from "../config/types.js";
 export * from "./image-generation.js";
 export * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
@@ -105,5 +115,8 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
-export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "../context-engine/delegate.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";

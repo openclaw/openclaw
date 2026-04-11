@@ -1,4 +1,5 @@
 export {
+  listControlledSubagentRuns,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   sendControlledSubagentMessage,

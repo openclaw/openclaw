@@ -232,6 +232,10 @@ describe("provider attribution", () => {
       endpointClass: "xai-native",
       hostname: "api.x.ai",
     });
+    expect(resolveProviderEndpoint("https://api.grok.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.grok.x.ai",
+    });
     expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
       endpointClass: "zai-native",
       hostname: "api.z.ai",

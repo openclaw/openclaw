@@ -13,7 +13,15 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
-  sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+  sendPoll: vi.fn<
+    () => Promise<{
+      messageId: string;
+      toJid?: string;
+      channelId?: string;
+      conversationId?: string;
+      pollId?: string;
+    }>
+  >(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
@@ -214,6 +222,36 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ messageId: "m-media" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("passes outbound session context for gateway media sends", async () => {
+    mockDeliverySuccess("m-whatsapp-media");
+
+    await runSend({
+      to: "+15551234567",
+      message: "caption",
+      mediaUrl: "file:///tmp/workspace/photo.png",
+      channel: "whatsapp",
+      agentId: "work",
+      idempotencyKey: "idem-whatsapp-media",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrl: "file:///tmp/workspace/photo.png",
+            mediaUrls: undefined,
+          },
+        ],
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:whatsapp:resolved",
+        }),
+      }),
     );
   });
 

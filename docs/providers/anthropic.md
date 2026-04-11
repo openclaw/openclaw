@@ -1,5 +1,5 @@
 ---
-summary: "Use Anthropic Claude via API keys in OpenClaw"
+summary: "Use Anthropic Claude via API keys or Claude CLI in OpenClaw"
 read_when:
   - You want to use Anthropic models in OpenClaw
 title: "Anthropic"
@@ -7,31 +7,19 @@ title: "Anthropic"
 
 # Anthropic (Claude)
 
-Anthropic builds the **Claude** model family and provides access via an API.
-In OpenClaw, new Anthropic setup should use an API key. Existing legacy
-Anthropic token profiles are still honored at runtime if they are already
-configured.
+Anthropic builds the **Claude** model family and provides access via an API and
+Claude CLI. In OpenClaw, Anthropic API keys and Claude CLI reuse are both
+supported. Existing legacy Anthropic token profiles are still honored at
+runtime if they are already configured.
 
 <Warning>
-For Anthropic in OpenClaw, the billing split is:
+Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so
+OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this
+integration unless Anthropic publishes a new policy.
 
-- **Anthropic API key**: normal Anthropic API billing.
-- **Claude subscription auth inside OpenClaw**: Anthropic told OpenClaw users on
-  **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that this counts as
-  third-party harness usage and requires **Extra Usage** (pay-as-you-go,
-  billed separately from the subscription).
-
-Our local repros match that split:
-
-- direct `claude -p` may still work
-- `claude -p --append-system-prompt ...` can trip the Extra Usage guard when
-  the prompt identifies OpenClaw
-- the same OpenClaw-like system prompt does **not** reproduce the block on the
-  Anthropic SDK + `ANTHROPIC_API_KEY` path
-
-So the practical rule is: **Anthropic API key, or Claude subscription with
-Extra Usage**. If you want the clearest production path, use an Anthropic API
-key.
+For long-lived gateway hosts, Anthropic API keys are still the clearest and
+most predictable production path. If you already use Claude CLI on the host,
+OpenClaw can reuse that login directly.
 
 Anthropic's current public docs:
 
@@ -202,10 +190,7 @@ requests.
 This only activates when `params.context1m` is explicitly set to `true` for
 that model.
 
-Requirement: Anthropic must allow long-context usage on that credential
-(typically API key billing, or OpenClaw's Claude-login path / legacy token auth
-with Extra Usage enabled). Otherwise Anthropic returns:
-`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+Requirement: Anthropic must allow long-context usage on that credential.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
 legacy Anthropic token auth (`sk-ant-oat-*`). If you configure
@@ -213,38 +198,31 @@ legacy Anthropic token auth (`sk-ant-oat-*`). If you configure
 falls back to the standard context window by skipping the context1m beta
 header while keeping the required OAuth betas.
 
-## Removed: Claude CLI backend
+## Claude CLI backend
 
-The bundled Anthropic `claude-cli` backend was removed.
+The bundled Anthropic `claude-cli` backend is supported in OpenClaw.
 
-- Anthropic's April 4, 2026 notice says OpenClaw-driven Claude-login traffic is
-  third-party harness usage and requires **Extra Usage**.
-- Our local repros also show that direct
-  `claude -p --append-system-prompt ...` can hit the same guard when the
-  appended prompt identifies OpenClaw.
-- The same OpenClaw-like system prompt does not hit that guard on the
-  Anthropic SDK + `ANTHROPIC_API_KEY` path.
-- Use Anthropic API keys for Anthropic traffic in OpenClaw.
+- Anthropic staff told us this usage is allowed again.
+- OpenClaw therefore treats Claude CLI reuse and `claude -p` usage as
+  sanctioned for this integration unless Anthropic publishes a new policy.
+- Anthropic API keys remain the clearest production path for always-on gateway
+  hosts and explicit server-side billing control.
+- Setup and runtime details are in [/gateway/cli-backends](/gateway/cli-backends).
 
 ## Notes
 
 - Anthropic's public Claude Code docs still document direct CLI usage such as
-  `claude -p`, but Anthropic's separate notice to OpenClaw users says the
-  **OpenClaw** Claude-login path is third-party harness usage and requires
-  **Extra Usage** (pay-as-you-go billed separately from the subscription).
-  Our local repros also show that direct
-  `claude -p --append-system-prompt ...` can hit the same guard when the
-  appended prompt identifies OpenClaw, while the same prompt shape does not
-  reproduce on the Anthropic SDK + `ANTHROPIC_API_KEY` path. For production, we
-  recommend Anthropic API keys instead.
-- Anthropic setup-token is available again in OpenClaw as a legacy/manual path. Anthropic's OpenClaw-specific billing notice still applies, so use it with the expectation that Anthropic requires **Extra Usage** for this path.
+  `claude -p`, and Anthropic staff told us OpenClaw-style Claude CLI usage is
+  allowed again. We are treating that guidance as settled unless Anthropic
+  publishes a new policy change.
+- Anthropic setup-token remains available in OpenClaw as a supported token-auth path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting
 
 **401 errors / token suddenly invalid**
 
-- Legacy Anthropic token auth can expire or be revoked.
+- Anthropic token auth can expire or be revoked.
 - For new setup, migrate to an Anthropic API key.
 
 **No API key found for provider "anthropic"**

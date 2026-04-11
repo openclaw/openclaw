@@ -76,6 +76,13 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     triggerMessage: string;
     requesterIsSubagent?: boolean;
     requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
+    directOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
   }) => {
@@ -98,6 +105,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       return { delivered: true, path: "queue" };
     }
 
+    const effectiveOrigin =
+      params.completionDirectOrigin ?? params.requesterOrigin ?? params.directOrigin;
+
     await callGatewayMock({
       method: "agent",
       params: {
@@ -105,16 +115,16 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         message: params.triggerMessage,
         deliver:
           !params.requesterIsSubagent &&
-          params.requesterOrigin?.channel !== "webchat" &&
-          Boolean(params.requesterOrigin?.channel && params.requesterOrigin?.to),
+          effectiveOrigin?.channel !== "webchat" &&
+          Boolean(effectiveOrigin?.channel && effectiveOrigin?.to),
         bestEffortDeliver: params.bestEffortDeliver,
         ...(params.requesterIsSubagent
           ? {}
           : {
-              channel: params.requesterOrigin?.channel,
-              to: params.requesterOrigin?.to,
-              accountId: params.requesterOrigin?.accountId,
-              threadId: params.requesterOrigin?.threadId,
+              channel: effectiveOrigin?.channel,
+              to: effectiveOrigin?.to,
+              accountId: effectiveOrigin?.accountId,
+              threadId: effectiveOrigin?.threadId,
             }),
       },
     });
@@ -355,8 +365,6 @@ describe("subagent announce seam flow", () => {
           sessionKey: "agent:main:main",
           deliver: false,
           bestEffortDeliver: true,
-          channel: "webchat",
-          to: "chat:123",
           accountId: "default",
         }),
       }),

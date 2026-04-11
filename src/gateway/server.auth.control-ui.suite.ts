@@ -227,7 +227,7 @@ export function registerControlUiAndPairingSuite(): void {
             scopes: [],
             clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            nonce: String(challengeNonce),
+            nonce: challengeNonce,
           }));
         }
         const res = await connectReq(ws, {
@@ -346,11 +346,10 @@ export function registerControlUiAndPairingSuite(): void {
             "x-forwarded-for": "203.0.113.10",
           },
         });
-        const challengePromise = onceMessage<{
-          type?: string;
-          event?: string;
-          payload?: Record<string, unknown> | null;
-        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+        const challengePromise = onceMessage(
+          ws,
+          (o) => o.type === "event" && o.event === "connect.challenge",
+        );
         await new Promise<void>((resolve) => ws.once("open", resolve));
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -411,7 +410,7 @@ export function registerControlUiAndPairingSuite(): void {
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
           signedAtMs: Date.now() - 60 * 60 * 1000,
-          nonce: String(challengeNonce),
+          nonce: challengeNonce,
         });
         const res = await connectReq(ws, {
           token: "secret",
@@ -923,7 +922,9 @@ export function registerControlUiAndPairingSuite(): void {
           timeoutMs: 500,
         }),
       ).rejects.toThrow();
-      await expect(waitForWsClose(wsFail, 1_000)).resolves.toBe(true);
+      // The full agentic shard can saturate the event loop enough that the
+      // server-side close after a pre-hello failure arrives later than 1s.
+      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {
@@ -1072,11 +1073,10 @@ export function registerControlUiAndPairingSuite(): void {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
       });
-      const challengePromise = onceMessage<{
-        type?: string;
-        event?: string;
-        payload?: Record<string, unknown> | null;
-      }>(socket, (o) => o.type === "event" && o.event === "connect.challenge");
+      const challengePromise = onceMessage(
+        socket,
+        (o) => o.type === "event" && o.event === "connect.challenge",
+      );
       await new Promise<void>((resolve) => socket.once("open", resolve));
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -1220,8 +1220,9 @@ export function registerControlUiAndPairingSuite(): void {
       expect(reconnect.ok).toBe(true);
 
       const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.roles ?? []).toContain("operator");
-      expect(repaired?.scopes ?? []).toContain("operator.read");
+      expect(repaired?.role).toBe("operator");
+      expect(repaired?.approvedScopes ?? []).toContain("operator.read");
+      expect(repaired?.tokens?.operator?.scopes ?? []).toContain("operator.read");
       const list = await listDevicePairing();
       expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
     } finally {

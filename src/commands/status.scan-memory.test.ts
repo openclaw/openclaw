@@ -30,14 +30,44 @@ describe("status.scan-memory", () => {
     const requireDefaultStore = vi.fn((agentId: string) => `/tmp/${agentId}.sqlite`);
     await resolveStatusMemoryStatusSnapshot({
       cfg: { agents: {} },
-      agentStatus: { agents: [{ id: "main" }] },
+      agentStatus: {
+        defaultId: "main",
+        totalSessions: 0,
+        bootstrapPendingCount: 0,
+        agents: [
+          {
+            id: "main",
+            workspaceDir: null,
+            bootstrapPending: false,
+            sessionsPath: "/tmp/main.json",
+            sessionsCount: 0,
+            lastUpdatedAt: null,
+            lastActiveAgeMs: null,
+          },
+        ],
+      },
       memoryPlugin: { enabled: true, slot: "memory-core" },
       requireDefaultStore,
     });
 
     expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
       cfg: { agents: {} },
-      agentStatus: { agents: [{ id: "main" }] },
+      agentStatus: {
+        defaultId: "main",
+        totalSessions: 0,
+        bootstrapPendingCount: 0,
+        agents: [
+          {
+            id: "main",
+            workspaceDir: null,
+            bootstrapPending: false,
+            sessionsPath: "/tmp/main.json",
+            sessionsCount: 0,
+            lastUpdatedAt: null,
+            lastActiveAgeMs: null,
+          },
+        ],
+      },
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig: mocks.resolveMemorySearchConfig,
       getMemorySearchManager: mocks.getMemorySearchManager,

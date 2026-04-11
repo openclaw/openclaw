@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { stripAssistantInternalScaffolding } from "./assistant-visible-text.js";
+import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
+  stripAssistantInternalScaffolding,
+} from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -116,11 +120,54 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips closed <tool_result> blocks", () => {
+      expectVisibleText(
+        'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
+    it("strips dangling <tool_result> content to end-of-string", () => {
+      expectVisibleText('Result:\n<tool_result>\n{"output": "data"}\n', "Result:\n");
+    });
+
+    it("strips <tool_result> closed with mismatched </tool_call> and preserves trailing text", () => {
+      expectVisibleText(
+        'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
+    it("does not let </tool_result> close a <tool_call> block", () => {
+      expectVisibleText(
+        'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
     it("hides dangling <tool_call> content to end-of-string", () => {
       expectVisibleText(
         'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
         "Let me run.\n",
       );
+    });
+
+    it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Qwen-style <tool_call> with whitespace before nested XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call>\n<function=search><parameter=query>test</parameter></function>\n</tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips dangling Qwen-style <tool_call> with nested XML to end", () => {
+      expectVisibleText("prefix\n<tool_call><function=read><parameter=path>/home", "prefix\n");
     });
 
     it("does not close early on </tool_call> text inside JSON strings", () => {
@@ -283,7 +330,7 @@ describe("stripAssistantInternalScaffolding", () => {
 
   describe("model special token stripping", () => {
     it("strips Kimi/GLM special tokens in isolation", () => {
-      expectVisibleText("<|assistant|>Here is the answer<|end|>", "Here is the answer ");
+      expectVisibleText("<|assistant|>Here is the answer<|end|>", "Here is the answer");
     });
 
     it("strips full-width pipe DeepSeek tokens", () => {
@@ -293,7 +340,7 @@ describe("stripAssistantInternalScaffolding", () => {
     it("strips special tokens mixed with normal text", () => {
       expectVisibleText(
         "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
-        "Start  middle  end",
+        "Start middle end",
       );
     });
 
@@ -363,8 +410,54 @@ describe("stripAssistantInternalScaffolding", () => {
     });
 
     it("resets special-token regex state between calls", () => {
-      expect(stripModelSpecialTokens("prefix <|assistant|>")).toBe("prefix  ");
-      expect(stripModelSpecialTokens("<|assistant|>short")).toBe(" short");
+      expect(stripModelSpecialTokens("prefix <|assistant|>")).toBe("prefix ");
+      expect(stripModelSpecialTokens("<|assistant|>short")).toBe("short");
     });
+  });
+});
+
+describe("sanitizeAssistantVisibleText", () => {
+  it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
+    const input = [
+      '<invoke name="read">payload</invoke></minimax:tool_call>',
+      '<tool_result>{"output":"hidden"}</tool_result>',
+      "[Tool Call: read (ID: toolu_1)]",
+      'Arguments: {"path":"/tmp/x"}',
+      "<think>secret</think>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips relevant-memories blocks on the canonical user-visible path", () => {
+    const input = [
+      "<relevant-memories>",
+      "internal note",
+      "</relevant-memories>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+});
+
+describe("sanitizeAssistantVisibleTextWithProfile", () => {
+  it("uses the history profile to preserve block-boundary whitespace", () => {
+    const input = ["Hi ", '<tool_result>{"output":"hidden"}</tool_result>', "there"].join("");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("Hi there");
+  });
+
+  it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {
+    const input = [
+      "[Tool Call: read (ID: toolu_1)]",
+      'Arguments: {"path":"/tmp/x"}',
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
+      "[Tool Call: read (ID: toolu_1)]",
+    );
   });
 });

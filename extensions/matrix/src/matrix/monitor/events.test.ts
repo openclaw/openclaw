@@ -13,8 +13,16 @@ type VerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 
 function getSentNoticeBody(sendMessage: ReturnType<typeof vi.fn>, index = 0): string {
   const calls = sendMessage.mock.calls as unknown[][];
-  const payload = (calls[index]?.[1] ?? {}) as { body?: string };
+  return getSentNoticeBodyFromCall(calls[index] ?? []);
+}
+
+function getSentNoticeBodyFromCall(call: unknown[]): string {
+  const payload = (call[1] ?? {}) as { body?: string };
   return payload.body ?? "";
+}
+
+function getSentNoticeBodies(sendMessage: ReturnType<typeof vi.fn>): string[] {
+  return (sendMessage.mock.calls as unknown[][]).map(getSentNoticeBodyFromCall);
 }
 
 function createHarness(params?: {
@@ -495,7 +503,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("posts SAS emoji/decimal details when verification summaries expose them", async () => {
-    const { sendMessage, roomEventListener, listVerifications } = createHarness({
+    const {
+      sendMessage,
+      roomEventListener,
+      listVerifications: _listVerifications,
+    } = createHarness({
       joinedMembersByRoom: {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -528,9 +540,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
       expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
     });
@@ -591,9 +601,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 2468 1357 9753"))).toBe(true);
     });
   });
@@ -735,9 +743,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(true);
     });
   });
@@ -808,9 +814,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("Matrix verification started with"))).toBe(true);
     });
 
@@ -840,16 +844,12 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 2468 1357 9753"))).toBe(true);
     });
     const calls = sendMessage.mock.calls as unknown[][];
     const sasCall = calls.find((call) =>
-      String((call[1] as { body?: string } | undefined)?.body ?? "").includes(
-        "SAS decimal: 2468 1357 9753",
-      ),
+      getSentNoticeBodyFromCall(call).includes("SAS decimal: 2468 1357 9753"),
     );
     expect((sasCall?.[0] ?? "") as string).toBe("!dm-active:example.org");
   });
@@ -893,7 +893,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
       await vi.advanceTimersByTimeAsync(500);
       verifications[0] = {
-        ...verifications[0]!,
+        ...verifications[0],
         sas: {
           decimal: [1234, 5678, 9012],
           emoji: [
@@ -906,9 +906,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       await vi.advanceTimersByTimeAsync(500);
 
       await vi.waitFor(() => {
-        const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-          String((call[1] as { body?: string } | undefined)?.body ?? ""),
-        );
+        const bodies = getSentNoticeBodies(sendMessage);
         expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
       });
     } finally {
@@ -1108,9 +1106,9 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       expect(listVerifications).toHaveBeenCalledTimes(2);
     });
 
-    const sasBodies = sendMessage.mock.calls
-      .map((call) => String(((call as unknown[])[1] as { body?: string } | undefined)?.body ?? ""))
-      .filter((body) => body.includes("SAS emoji:"));
+    const sasBodies = getSentNoticeBodies(sendMessage).filter((body) =>
+      body.includes("SAS emoji:"),
+    );
     expect(sasBodies).toHaveLength(1);
   });
 
@@ -1168,14 +1166,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
     });
-    const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-      String((call[1] as { body?: string } | undefined)?.body ?? ""),
-    );
+    const bodies = getSentNoticeBodies(sendMessage);
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
   });
 
@@ -1217,9 +1211,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
     });
   });
@@ -1280,14 +1272,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await vi.waitFor(() => {
-      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-        String((call[1] as { body?: string } | undefined)?.body ?? ""),
-      );
+      const bodies = getSentNoticeBodies(sendMessage);
       expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
     });
-    const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
-      String((call[1] as { body?: string } | undefined)?.body ?? ""),
-    );
+    const bodies = getSentNoticeBodies(sendMessage);
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
   });
 

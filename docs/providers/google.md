@@ -1,9 +1,9 @@
 ---
 title: "Google (Gemini)"
-summary: "Google Gemini setup (API key, image generation, media understanding, web search)"
+summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, web search)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
-  - You need the API key auth flow
+  - You need the API key or OAuth auth flow
 ---
 
 # Google (Gemini)
@@ -15,6 +15,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
+- Alternative provider: `google-gemini-cli` (OAuth)
 
 ## Quick start
 
@@ -45,6 +46,46 @@ openclaw onboard --non-interactive \
   --gemini-api-key "$GEMINI_API_KEY"
 ```
 
+## OAuth (Gemini CLI)
+
+An alternative provider `google-gemini-cli` uses PKCE OAuth instead of an API
+key. This is an unofficial integration; some users report account
+restrictions. Use at your own risk.
+
+- Default model: `google-gemini-cli/gemini-3-flash-preview`
+- Alias: `gemini-cli`
+- Install prerequisite: local Gemini CLI available as `gemini`
+  - Homebrew: `brew install gemini-cli`
+  - npm: `npm install -g @google/gemini-cli`
+- Login:
+
+```bash
+openclaw models auth login --provider google-gemini-cli --set-default
+```
+
+Environment variables:
+
+- `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
+- `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
+
+(Or the `GEMINI_CLI_*` variants.)
+
+If Gemini CLI OAuth requests fail after login, set
+`GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
+retry.
+
+If login fails before the browser flow starts, make sure the local `gemini`
+command is installed and on `PATH`. OpenClaw supports both Homebrew installs
+and global npm installs, including common Windows/npm layouts.
+
+Gemini CLI JSON usage notes:
+
+- Reply text comes from the CLI JSON `response` field.
+- Usage falls back to `stats` when the CLI leaves `usage` empty.
+- `stats.cached` is normalized into OpenClaw `cacheRead`.
+- If `stats.input` is missing, OpenClaw derives input tokens from
+  `stats.input_tokens - stats.cached`.
+
 ## Capabilities
 
 | Capability             | Supported         |
@@ -57,6 +98,9 @@ openclaw onboard --non-interactive \
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+| Gemma 4 models         | Yes               |
+
+Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4. Setting thinking to `off` preserves thinking disabled instead of mapping to `MINIMAL`.
 
 ## Direct Gemini cache reuse
 
@@ -98,8 +142,9 @@ The bundled `google` image-generation provider defaults to
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
 
-Image generation, media understanding, and Gemini Grounding all stay on the
-`google` provider id.
+The OAuth-only `google-gemini-cli` provider is a separate text-inference
+surface. Image generation, media understanding, and Gemini Grounding stay on
+the `google` provider id.
 
 To use Google as the default image provider:
 

@@ -8,12 +8,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import {
-  isMattermostConfigured,
-  mattermostSetupAdapter,
-  resolveMattermostAccountWithSecrets,
-} from "./setup-core.js";
-import { listMattermostAccountIds } from "./setup.accounts.runtime.js";
+import { isMattermostConfigured, resolveMattermostAccountWithSecrets } from "./setup-core.js";
 import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
 import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 

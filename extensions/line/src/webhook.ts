@@ -1,4 +1,4 @@
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
@@ -7,7 +7,7 @@ const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
 export interface LineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: WebhookRequestBody) => Promise<void>;
+  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
   runtime?: RuntimeEnv;
 }
 
@@ -21,7 +21,7 @@ function readRawBody(req: Request): string | null {
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
-function parseWebhookBody(rawBody?: string | null): WebhookRequestBody | null {
+function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | null {
   if (!rawBody) {
     return null;
   }
@@ -83,7 +83,7 @@ export function createLineWebhookMiddleware(
 
 export interface StartLineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: WebhookRequestBody) => Promise<void>;
+  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
   runtime?: RuntimeEnv;
   path?: string;
 }

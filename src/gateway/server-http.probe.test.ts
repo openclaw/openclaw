@@ -9,6 +9,29 @@ import {
 } from "./server-http.test-harness.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 
+describe("gateway OpenAI-compatible disabled HTTP routes", () => {
+  it("returns 404 when compat endpoints are disabled", async () => {
+    await withGatewayServer({
+      prefix: "openai-compat-disabled",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        for (const path of ["/v1/chat/completions", "/v1/responses"]) {
+          const req = createRequest({
+            path,
+            method: "POST",
+            headers: { "content-type": "application/json" },
+          });
+          const { res, getBody } = createResponse();
+          await dispatchRequest(server, req, res);
+
+          expect(res.statusCode, path).toBe(404);
+          expect(getBody(), path).toBe("Not Found");
+        }
+      },
+    });
+  });
+});
+
 describe("gateway probe endpoints", () => {
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({

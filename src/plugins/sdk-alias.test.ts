@@ -10,10 +10,14 @@ import {
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
+  createPluginLoaderJitiCacheKey,
   buildPluginLoaderJitiOptions,
+  isBundledPluginExtensionPath,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   normalizeJitiAliasTargetPath,
+  resolvePluginLoaderJitiConfig,
+  resolvePluginLoaderJitiTryNative,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
@@ -221,8 +225,14 @@ function expectPluginSdkAliasTargets(
   expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
     fs.realpathSync(params.rootAliasPath),
   );
+  expect(fs.realpathSync(aliases["@openclaw/plugin-sdk"] ?? "")).toBe(
+    fs.realpathSync(params.rootAliasPath),
+  );
   if (params.channelRuntimePath) {
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(params.channelRuntimePath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(params.channelRuntimePath),
     );
   }
@@ -686,6 +696,103 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
+  it("keeps plugin loader dist shortcuts off on Windows", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(
+        resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
+          preferBuiltDist: true,
+        }),
+      ).toBe(false);
+      expect(
+        resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+          preferBuiltDist: true,
+        }),
+      ).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
+  it("allows plugin loader dist shortcuts on non-Windows hosts", () => {
+    expect(
+      resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps plugin loader Jiti cache keys stable across alias insertion order", () => {
+    expect(
+      createPluginLoaderJitiCacheKey({
+        tryNative: true,
+        aliasMap: {
+          zeta: "/repo/zeta.js",
+          alpha: "/repo/alpha.js",
+        },
+      }),
+    ).toBe(
+      createPluginLoaderJitiCacheKey({
+        tryNative: true,
+        aliasMap: {
+          alpha: "/repo/alpha.js",
+          zeta: "/repo/zeta.js",
+        },
+      }),
+    );
+  });
+
+  it("returns plugin loader Jiti config with stable cache keys", () => {
+    const first = resolvePluginLoaderJitiConfig({
+      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
+      argv1: "/repo/openclaw.mjs",
+      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      preferBuiltDist: true,
+    });
+    const second = resolvePluginLoaderJitiConfig({
+      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
+      argv1: "/repo/openclaw.mjs",
+      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      preferBuiltDist: true,
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it("detects bundled plugin extension paths across source and dist roots", () => {
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/extensions/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(true);
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/dist/extensions/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(true);
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/vendor/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes Windows alias targets before handing them to Jiti", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
@@ -715,7 +822,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/infra-runtime";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -745,6 +852,7 @@ export const syntheticRuntimeMarker = {
     const withAlias = createJiti(jitiBaseUrl, {
       ...buildPluginLoaderJitiOptions({
         "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
+        "@openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });

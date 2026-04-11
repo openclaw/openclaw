@@ -32,91 +32,26 @@ vi.mock("./outbound-session.js", () => ({
   resolveOutboundSessionRoute: vi.fn(async () => null),
 }));
 
-vi.mock("./message-action-threading.js", () => ({
-  resolveAndApplyOutboundThreadId: vi.fn(
-    (
-      actionParams: Record<string, unknown>,
-      context: {
-        cfg: OpenClawConfig;
-        to: string;
-        accountId?: string | null;
-        toolContext?: Record<string, unknown>;
-        resolveAutoThreadId?: (params: {
-          cfg: OpenClawConfig;
-          accountId?: string | null;
-          to: string;
-          toolContext?: Record<string, unknown>;
-          replyToId?: string;
-        }) => string | undefined;
-      },
-    ) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolved =
-        explicit ??
-        context.resolveAutoThreadId?.({
-          cfg: context.cfg,
-          accountId: context.accountId,
-          to: context.to,
-          toolContext: context.toolContext,
-          replyToId,
-        });
-      if (resolved && !actionParams.threadId) {
-        actionParams.threadId = resolved;
-      }
-      return resolved ?? undefined;
-    },
-  ),
-  prepareOutboundMirrorRoute: vi.fn(
-    async ({
-      actionParams,
-      cfg,
-      to,
-      accountId,
-      toolContext,
-      agentId,
-      resolveAutoThreadId,
-    }: {
-      actionParams: Record<string, unknown>;
-      cfg: OpenClawConfig;
-      to: string;
-      accountId?: string | null;
-      toolContext?: Record<string, unknown>;
-      agentId?: string;
-      resolveAutoThreadId?: (params: {
-        cfg: OpenClawConfig;
-        accountId?: string | null;
-        to: string;
-        toolContext?: Record<string, unknown>;
-        replyToId?: string;
-      }) => string | undefined;
-    }) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolvedThreadId =
-        explicit ??
-        resolveAutoThreadId?.({
-          cfg,
-          accountId,
-          to,
-          toolContext,
-          replyToId,
-        });
-      if (resolvedThreadId && !actionParams.threadId) {
-        actionParams.threadId = resolvedThreadId;
-      }
-      if (agentId) {
-        actionParams.__agentId = agentId;
-      }
-      return {
-        resolvedThreadId,
-        outboundRoute: null,
-      };
-    },
-  ),
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (id: string) =>
+    id === "feishu"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
 }));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -231,6 +166,11 @@ describe("runMessageAction plugin dispatch", () => {
       },
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
       actions: {
         describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
         supportsAction: ({ action }) =>
@@ -335,7 +275,8 @@ describe("runMessageAction plugin dispatch", () => {
         sessionId: "session-123",
         agentId: "alpha",
         toolContext: {
-          currentChannelId: "chat:oc_123",
+          currentChannelId: "oc_123",
+          currentChannelProvider: "feishu",
           currentThreadTs: "thread-456",
           currentMessageId: "msg-789",
         },
@@ -352,12 +293,343 @@ describe("runMessageAction plugin dispatch", () => {
           agentId: "alpha",
           mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
           toolContext: expect.objectContaining({
-            currentChannelId: "chat:oc_123",
+            currentChannelId: "oc_123",
+            currentChannelProvider: "feishu",
             currentThreadTs: "thread-456",
             currentMessageId: "msg-789",
           }),
         }),
       );
+    });
+
+    it("uses requester session channel policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "id:trusted-user": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
+
+    it("uses requester username policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu username policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "username:alice_u": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderUsername: "alice_u",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
+
+    it("uses requester account policy for host-media reads when destination account differs", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu account policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+                destination: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          allow: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          accountId: "destination",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterAccountId: "source",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.accountId).toBe("destination");
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
+
+    it("falls back to the resolved account policy when requester account is unavailable", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "WhatsApp account policy fallback test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            whatsapp: {
+              enabled: true,
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "whatsapp",
+          accountId: "source",
+          target: "group:ops",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.accountId).toBe("source");
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
     });
   });
 
