@@ -372,7 +372,9 @@ export async function runYouContents(params: YouContentsParams): Promise<Record<
 
   const results = (Array.isArray(payload) ? payload : []).map((r) => ({
     url: typeof r.url === "string" ? r.url : "",
-    title: r.title ? wrapWebContent(r.title, "web_fetch") : undefined,
+    title: r.title
+      ? wrapExternalContent(r.title, { source: "web_fetch", includeWarning: false })
+      : undefined,
     ...(r.markdown
       ? {
           markdown: wrapExternalContent(r.markdown, { source: "web_fetch", includeWarning: false }),
