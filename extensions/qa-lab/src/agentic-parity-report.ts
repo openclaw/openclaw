@@ -68,9 +68,11 @@ const SUSPICIOUS_PASS_PATTERNS = [
   /incomplete turn/i,
   /\btimed out\b/i,
   /\btimeout\b/i,
-  /\bblocked\b/i,
   /\berror\b/i,
-  /\bfailed\b/i,
+  /\bfailed to\b/i,
+  /\bcould not\b/i,
+  /\bunable to\b/i,
+  /did not continue/i,
 ] as const;
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {

@@ -130,6 +130,27 @@ describe("qa agentic parity report", () => {
     );
   });
 
+  it("ignores neutral Failed and Blocked headings in passing protocol reports", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Source and docs discovery report",
+          status: "pass",
+          details: `Worked:
+- Read the seeded QA material.
+Failed:
+- None observed.
+Blocked:
+- No live provider evidence in this lane.
+Follow-up:
+- Re-run with a real provider if needed.`,
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
+  });
+
   it("renders a readable markdown parity report", () => {
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",

@@ -228,7 +228,7 @@ describe("qa mock openai server", () => {
           },
           {
             type: "function_call_output",
-            output: "Replay safety: unsafe after write.\n",
+            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
           },
         ],
       }),
