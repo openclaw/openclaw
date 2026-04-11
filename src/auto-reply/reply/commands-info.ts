@@ -115,6 +115,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       ctx: params.ctx,
       command: params.command,
     });
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
     const agentId = sessionBound
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -146,10 +147,10 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
           ? String(params.ctx.MessageThreadId)
           : undefined,
       currentMessageId: threadingContext.currentMessageId,
-      groupId: params.sessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+      groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
       groupChannel:
-        params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+        targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+      groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
       replyToMode: resolveReplyToMode(
         params.cfg,
         params.ctx.OriginatingChannel ?? params.ctx.Provider,
