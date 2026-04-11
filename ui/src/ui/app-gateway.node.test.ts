@@ -278,6 +278,52 @@ describe("connectGateway", () => {
     expect(chatHost.chatQueue).toHaveLength(0);
   });
 
+  it("clears stale run-scoped queue items and resumes queued work after a normal reconnect hello", async () => {
+    const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    const chatHost = host as typeof host & {
+      chatRunId: string | null;
+      chatQueue: Array<{
+        id: string;
+        text: string;
+        createdAt: number;
+        pendingRunId?: string;
+      }>;
+    };
+    chatHost.chatRunId = "run-1";
+    chatHost.chatQueue = [
+      {
+        id: "pending",
+        text: "/steer tighten the plan",
+        createdAt: 1,
+        pendingRunId: "run-1",
+      },
+      {
+        id: "queued",
+        text: "follow up",
+        createdAt: 2,
+      },
+    ];
+
+    client.emitClose({ code: 1006 });
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "follow up",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      });
+      expect(chatHost.chatQueue).toHaveLength(0);
+      expect(chatHost.chatRunId).toBeNull();
+    });
+  });
+
   it("rehydrates pending plugin approvals after a normal reconnect hello", async () => {
     const host = createHost();
     host.execApprovalQueue = [
