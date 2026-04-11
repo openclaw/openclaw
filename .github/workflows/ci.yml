@@ -321,16 +321,19 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
           if git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
             git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+            echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+          elif git cat-file -e "origin/${BASE_REF}:.pre-commit-config.yaml" 2>/dev/null; then
+            git show "origin/${BASE_REF}:.pre-commit-config.yaml" > "$trusted_config"
+            echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
           else
-            echo "Base commit ${BASE_SHA} does not contain .pre-commit-config.yaml; using checked-out config instead."
-            cp .pre-commit-config.yaml "$trusted_config"
+            echo "::warning::Neither base commit ${BASE_SHA} nor origin/${BASE_REF} contain .pre-commit-config.yaml; falling back to checked-out config for pre-commit hooks."
           fi
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
