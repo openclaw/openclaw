@@ -958,13 +958,31 @@ fi
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 # Same-guest npm upgrades can leave launchd holding the old gateway process or
 # module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
-/opt/homebrew/bin/openclaw gateway restart
+# Fresh npm installs may not have a launchd service yet, so fall back to the
+# same manual gateway launch used by the fresh macOS lane.
+/opt/homebrew/bin/openclaw gateway restart || true
+gateway_ready=0
 for _ in 1 2 3 4 5 6 7 8; do
   if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    gateway_ready=1
     break
   fi
   sleep 2
 done
+if [ "\$gateway_ready" != "1" ]; then
+  stop_openclaw_gateway_processes
+  /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-npm-update-macos-gateway.log 2>&1 </dev/null &
+  for _ in 1 2 3 4 5 6 7 8; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+fi
+if [ "\$gateway_ready" != "1" ]; then
+  tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
+fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
