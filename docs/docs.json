@@ -1166,6 +1166,8 @@
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
+                   "tools/exec-approvals",
+                    "tools/exec-approval-limitations",
                   {
                     "group": "Web Browser",
                     "pages": [
