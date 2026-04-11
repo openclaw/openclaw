@@ -1130,6 +1130,69 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await allowlistServer.close({ reason: "responses allowlist hardening test done" });
     }
 
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfig = configPath
+      ? await fs.readFile(configPath, "utf-8").catch(() => undefined)
+      : undefined;
+
+    const denyAllConfig = {
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              enabled: true,
+              maxUrlParts: 1,
+              files: {
+                allowUrl: true,
+                urlAllowlist: [],
+              },
+              images: {
+                allowUrl: true,
+                urlAllowlist: [],
+              },
+            },
+          },
+        },
+      },
+    };
+    await writeGatewayConfig(denyAllConfig);
+
+    const denyAllPort = await getFreePort();
+    const denyAllServer = await startServer(denyAllPort, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+
+      const fileBlocked = await postResponses(denyAllPort, {
+        model: "openclaw",
+        input: buildUrlInputMessage({
+          kind: "input_file",
+          text: "fetch this",
+          url: "https://cdn.example.com/file.txt",
+        }),
+      });
+      await expectInvalidRequest(fileBlocked, /invalid request|allowlist|blocked/i);
+
+      const imageBlocked = await postResponses(denyAllPort, {
+        model: "openclaw",
+        input: buildUrlInputMessage({
+          kind: "input_image",
+          text: "fetch this",
+          url: "https://images.example.com/image.png",
+        }),
+      });
+      await expectInvalidRequest(imageBlocked, /invalid request|allowlist|blocked/i);
+      expect(agentCommand).not.toHaveBeenCalled();
+    } finally {
+      await denyAllServer.close({ reason: "responses empty allowlist hardening test done" });
+      if (configPath) {
+        if (previousConfig === undefined) {
+          await fs.rm(configPath, { force: true });
+        } else {
+          await fs.writeFile(configPath, previousConfig, "utf-8");
+        }
+      }
+    }
+
     const capConfig = buildResponsesUrlPolicyConfig(0);
     await writeGatewayConfig(capConfig);
 

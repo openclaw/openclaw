@@ -885,6 +885,61 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("treats an explicit empty image URL allowlist as deny-all", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+    }
+    const previousConfig = await fs.readFile(configPath, "utf-8").catch(() => undefined);
+    const denyAllConfig = {
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: {
+              enabled: true,
+              images: {
+                allowUrl: true,
+                urlAllowlist: [],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await writeGatewayConfig(denyAllConfig);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look at this" },
+              { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+            ],
+          },
+        ],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message ?? "").toMatch(/invalid image_url content|allowlist|blocked/i);
+      expect(agentCommand).not.toHaveBeenCalled();
+    } finally {
+      await server.close({ reason: "openai empty allowlist hardening test done" });
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+    }
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {

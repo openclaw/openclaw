@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 describe("normalizeInputHostnameAllowlist", () => {
-  it("treats missing and empty allowlists as unset", () => {
+  it("treats a missing allowlist as unset", () => {
     expect(normalizeInputHostnameAllowlist(undefined)).toBeUndefined();
-    expect(normalizeInputHostnameAllowlist([])).toBeUndefined();
   });
 
-  it("drops whitespace-only entries and treats the result as unset", () => {
-    expect(normalizeInputHostnameAllowlist(["", "   "])).toBeUndefined();
+  it("preserves an explicit empty allowlist as deny-all", () => {
+    expect(normalizeInputHostnameAllowlist([])).toEqual([]);
+  });
+
+  it("fails closed when configured entries trim down to nothing", () => {
+    expect(normalizeInputHostnameAllowlist(["", "   "])).toEqual([]);
   });
 
   it("preserves trimmed hostname patterns", () => {

@@ -2,15 +2,17 @@
  * Normalize optional gateway URL-input hostname allowlists.
  *
  * Semantics are intentionally:
- * - missing / empty / whitespace-only list => no hostname allowlist restriction
- * - deny-all URL fetching => use the corresponding `allowUrl: false` switch
+ * - missing list => no hostname allowlist restriction
+ * - explicit empty / fully trimmed-empty list => deny all URL fetches
  */
 export function normalizeInputHostnameAllowlist(
   values: string[] | undefined,
 ): string[] | undefined {
-  if (!values || values.length === 0) {
+  if (values === undefined) {
     return undefined;
   }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
+  if (values.length === 0) {
+    return [];
+  }
+  return values.map((value) => value.trim()).filter((value) => value.length > 0);
 }

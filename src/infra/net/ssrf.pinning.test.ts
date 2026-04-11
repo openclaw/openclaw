@@ -108,6 +108,54 @@ describe("ssrf pinning", () => {
     ).toThrow("Pinned lookup requires at least one address for example.com");
   });
 
+  it("blocks all hostnames when hostnameAllowlist is an explicit empty array", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: [] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("blocks all hostnames when hostnameAllowlist contains only bare wildcards", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(lookup).not.toHaveBeenCalled();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*."] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+  });
+
+  it("allows all hostnames when hostnameAllowlist is undefined (not configured)", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: {},
+      }),
+    ).resolves.toMatchObject({ hostname: "example.com" });
+  });
+
   it("enforces hostname allowlist when configured", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

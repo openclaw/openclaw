@@ -501,6 +501,18 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks all fetches when hostnameAllowlist is an explicit empty array", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://example.com/file.txt",
+        fetchImpl,
+        policy: { hostnameAllowlist: [] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("enforces hostname allowlist policies", async () => {
     const fetchImpl = vi.fn();
     await expect(

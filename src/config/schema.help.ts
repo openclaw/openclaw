@@ -415,7 +415,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images.allowUrl":
     "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported). Set this to `false` to disable URL fetching entirely.",
   "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
-    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Empty or omitted lists mean no hostname allowlist restriction.",
+    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Omitted means no restriction; an explicit empty list denies all URL fetches.",
   "gateway.http.endpoints.chatCompletions.images.allowedMimes":
     "Allowed MIME types for `image_url` parts (case-insensitive list).",
   "gateway.http.endpoints.chatCompletions.images.maxBytes":
