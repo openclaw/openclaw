@@ -4,6 +4,17 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runBtwSideQuestionMock = vi.fn();
+const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: resolveSessionAgentIdMock,
+  };
+});
 
 vi.mock("../../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
@@ -22,6 +33,8 @@ function buildParams(commandBody: string) {
 describe("handleBtwCommand", () => {
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
+    resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdMock.mockReturnValue("main");
   });
 
   it("returns usage when the side question is missing", async () => {
@@ -141,6 +154,35 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: expect.stringContaining("/agents/worker-1/agent"),
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the canonical session agent when resolving a fallback agent dir", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentId = "main";
+    params.agentDir = undefined;
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    resolveSessionAgentIdMock.mockReturnValue("worker-1");
+    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:worker-1:whatsapp:direct:12345",
+      config: expect.any(Object),
+    });
     expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: expect.stringContaining("/agents/worker-1/agent"),
