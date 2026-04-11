@@ -241,6 +241,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
+  let healthySyncSinceMs: number | undefined;
 
   try {
     client = await resolveSharedMatrixClient({
@@ -358,8 +359,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
-      startupMs,
       startupGraceMs,
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
@@ -374,6 +375,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
     });
+    healthySyncSinceMs ??= Date.now();
     logVerboseMessage("matrix: client started");
 
     // Shared client is already started via resolveSharedMatrixClient.
