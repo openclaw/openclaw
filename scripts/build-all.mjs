@@ -2,10 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import path from "node:path";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+
 export const BUILD_ALL_STEPS = [
   { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
@@ -59,16 +61,41 @@ export const BUILD_ALL_STEPS = [
   },
 ];
 
+/**
+ * Helper to ensure we aren't passing a native binary path as a JS exec path
+ * to child processes that might try to run it with 'node'.
+ */
+function sanitizeEnv(env) {
+  const npmPath = env.npm_execpath;
+  if (npmPath) {
+    const ext = path.extname(npmPath).toLowerCase();
+    const isJs = ext === '.js' || ext === '.cjs' || ext === '.mjs';
+    
+    // If it's a native binary (no JS extension), we remove it from the env
+    // so child processes resolve 'pnpm' from the system PATH instead.
+    if (!isJs) {
+      const newEnv = { ...env };
+      delete newEnv.npm_execpath;
+      return newEnv;
+    }
+  }
+  return env;
+}
+
 function resolveStepEnv(step, env, platform) {
+  let finalEnv = sanitizeEnv(env);
+
   if (platform !== "win32" || !step.windowsNodeOptions) {
-    return env;
+    return finalEnv;
   }
-  const currentNodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+
+  const currentNodeOptions = finalEnv.NODE_OPTIONS?.trim() ?? "";
   if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return env;
+    return finalEnv;
   }
+
   return {
-    ...env,
+    ...finalEnv,
     NODE_OPTIONS: currentNodeOptions
       ? `${currentNodeOptions} ${step.windowsNodeOptions}`
       : step.windowsNodeOptions,
@@ -78,6 +105,7 @@ function resolveStepEnv(step, env, platform) {
 export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
+  
   if (step.kind === "pnpm") {
     const runner = resolvePnpmRunner({
       pnpmArgs: step.pnpmArgs,
