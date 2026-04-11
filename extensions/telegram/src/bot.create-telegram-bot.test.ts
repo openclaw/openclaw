@@ -2386,6 +2386,55 @@ describe("createTelegramBot", () => {
     expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(dispatchCall?.replyOptions?.skillFilter).toEqual([]);
   });
+  it("falls back to channel-level topic prompts in multi-account setups", async () => {
+    let dispatchCall:
+      | {
+          ctx: {
+            GroupSystemPrompt?: unknown;
+          };
+        }
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+      dispatchCall = params as typeof dispatchCall;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              systemPrompt: "Channel-level group prompt",
+              topics: {
+                "99": {
+                  systemPrompt: "Channel-level topic prompt",
+                },
+              },
+            },
+          },
+          accounts: {
+            default: { botToken: "123:default" },
+            secondary: { botToken: "456:secondary" },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok", accountId: "default" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler(makeForumGroupMessageCtx({ threadId: 99 }));
+
+    const payload = dispatchCall?.ctx;
+    expect(payload).toBeDefined();
+    if (!payload) {
+      return;
+    }
+    expect(payload.GroupSystemPrompt).toBe(
+      "Channel-level group prompt\n\nChannel-level topic prompt",
+    );
+  });
   it("threads native command replies inside topics", async () => {
     commandSpy.mockClear();
     sendMessageSpy.mockClear();

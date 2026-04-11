@@ -444,21 +444,30 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       overrideOrder: "after-config",
     });
   const loadFreshTelegramAccountConfig = () => {
+    const freshCfg = telegramDeps.loadConfig();
     try {
-      return resolveTelegramAccount({
-        cfg: telegramDeps.loadConfig(),
-        accountId: account.accountId,
-      }).config;
+      return {
+        cfg: freshCfg,
+        accountConfig: resolveTelegramAccount({
+          cfg: freshCfg,
+          accountId: account.accountId,
+        }).config,
+      };
     } catch (error) {
       logVerbose(
         `telegram: failed to load fresh config for account ${account.accountId}; using startup snapshot: ${String(error)}`,
       );
-      return telegramCfg;
+      return { cfg, accountConfig: telegramCfg };
     }
   };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const freshTelegramCfg = loadFreshTelegramAccountConfig();
-    const groups = freshTelegramCfg.groups;
+    const { cfg: freshCfg, accountConfig: freshTelegramCfg } = loadFreshTelegramAccountConfig();
+    // Multi-account routing should still honor channel-level group prompt/skill/topic
+    // config, matching the requireMention fallback behavior.
+    const groups =
+      freshCfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+      freshCfg.channels?.telegram?.groups ??
+      freshTelegramCfg.groups;
     const direct = freshTelegramCfg.direct;
     const chatIdStr = String(chatId);
     const isDm = !chatIdStr.startsWith("-");
