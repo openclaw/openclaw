@@ -527,7 +527,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("github-copilot");
     expect(state.model).toBe("claude-sonnet-4.6");
-    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
     expect(sessionStore[sessionKey]?.model).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();

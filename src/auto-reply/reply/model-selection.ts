@@ -317,7 +317,9 @@ export async function createModelSelectionState(params: {
         store[sessionKey] = sessionEntry;
       });
     }
-    resetModelOverride = true;
+    // Do not set `resetModelOverride` here: that flag is reserved for allowlist/disallowed
+    // override recovery and triggers `Model override not allowed...` system events
+    // (`get-reply-directives-apply.ts`). Auto-failover cleanup only retries the primary.
   }
 
   const directStoredOverride = resolvePersistedOverrideModelRef({

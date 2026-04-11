@@ -8,17 +8,34 @@ export type ModelOverrideSelection = {
 };
 
 /**
+ * Mirrors auth override source inference in `resolveSessionAuthProfileOverride`
+ * (`src/agents/auth-profiles/session-override.ts`) so cleanup stays consistent.
+ */
+function inferredAuthProfileOverrideSource(entry: SessionEntry): "auto" | "user" | undefined {
+  const current = normalizeOptionalString(entry.authProfileOverride);
+  return (
+    entry.authProfileOverrideSource ??
+    (typeof entry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined)
+  );
+}
+
+/**
  * Clears failover-persisted session model state (`modelOverrideSource: "auto"`) plus
  * sticky runtime `model` / `modelProvider` fields so the next inbound turn re-resolves
  * the agent primary from config instead of staying pinned on the last fallback model.
  *
- * Preserves `authProfileOverride*` when `authProfileOverrideSource === "user"` — failover
- * can persist `modelOverrideSource: "auto"` alongside a user-selected auth profile.
+ * Clears `authProfileOverride*` only when auth is not user-attributed (explicit `"user"`,
+ * or legacy undefined source with a profile id and no compaction counter — inferred user).
  */
 export function clearAutoFailoverSessionModelStickyState(entry: SessionEntry): boolean {
   if (entry.modelOverrideSource !== "auto") {
     return false;
   }
+  const shouldClearAuthProfileFields = inferredAuthProfileOverrideSource(entry) !== "user";
   let updated = false;
   const del = (key: keyof SessionEntry) => {
     if (Object.hasOwn(entry, key)) {
@@ -29,7 +46,7 @@ export function clearAutoFailoverSessionModelStickyState(entry: SessionEntry): b
   del("providerOverride");
   del("modelOverride");
   del("modelOverrideSource");
-  if (entry.authProfileOverrideSource !== "user") {
+  if (shouldClearAuthProfileFields) {
     del("authProfileOverride");
     del("authProfileOverrideSource");
     del("authProfileOverrideCompactionCount");

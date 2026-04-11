@@ -260,4 +260,36 @@ describe("clearAutoFailoverSessionModelStickyState", () => {
     expect(entry.authProfileOverride).toBe("user-picked-profile");
     expect(entry.authProfileOverrideSource).toBe("user");
   });
+
+  it("preserves legacy user auth profile when source is unset but profile id is present", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-legacy-auth",
+      updatedAt: Date.now(),
+      modelOverrideSource: "auto",
+      providerOverride: "azure",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "legacy-user-profile",
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(true);
+
+    expect(entry.authProfileOverride).toBe("legacy-user-profile");
+    expect(entry.modelOverride).toBeUndefined();
+  });
+
+  it("clears auth fields when compaction count implies auto-sourced profile", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-inferred-auto-auth",
+      updatedAt: Date.now(),
+      modelOverrideSource: "auto",
+      providerOverride: "azure",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "auto-bound-profile",
+      authProfileOverrideCompactionCount: 1,
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(true);
+
+    expect(entry.authProfileOverride).toBeUndefined();
+  });
 });
