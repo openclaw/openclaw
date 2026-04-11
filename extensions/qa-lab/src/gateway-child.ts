@@ -222,6 +222,12 @@ export function normalizeQaProviderModeEnv(
   return env;
 }
 
+export function resolveQaGatewayChildProviderMode(
+  providerMode?: "mock-openai" | "live-frontier",
+): "mock-openai" | "live-frontier" {
+  return providerMode ?? "mock-openai";
+}
+
 function resolveQaLiveCliAuthEnv(
   baseEnv: NodeJS.ProcessEnv,
   opts?: {
@@ -429,8 +435,8 @@ export async function stageQaMockAuthProfiles(params: {
   agentIds?: readonly string[];
   providers?: readonly string[];
 }): Promise<OpenClawConfig> {
-  const agentIds = params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS;
-  const providers = params.providers ?? QA_MOCK_AUTH_PROVIDERS;
+  const agentIds = [...new Set(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS)];
+  const providers = [...new Set(params.providers ?? QA_MOCK_AUTH_PROVIDERS)];
   let next = params.cfg;
   for (const agentId of agentIds) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
@@ -447,13 +453,15 @@ export async function stageQaMockAuthProfiles(params: {
         },
         agentDir,
       });
-      next = applyAuthProfileConfig(next, {
-        profileId,
-        provider,
-        mode: "api_key",
-        displayName: `QA mock ${provider} credential`,
-      });
     }
+  }
+  for (const provider of providers) {
+    next = applyAuthProfileConfig(next, {
+      profileId: buildQaMockProfileId(provider),
+      provider,
+      mode: "api_key",
+      displayName: `QA mock ${provider} credential`,
+    });
   }
   return next;
 }
@@ -503,6 +511,7 @@ export const __testing = {
   preserveQaGatewayDebugArtifacts,
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
+  resolveQaGatewayChildProviderMode,
   resolveQaLiveAnthropicSetupToken,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
@@ -932,8 +941,9 @@ export async function startQaGatewayChild(params: {
     fs.mkdir(xdgDataHome, { recursive: true }),
     fs.mkdir(xdgCacheHome, { recursive: true }),
   ]);
+  const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
   const liveProviderIds =
-    params.providerMode === "live-frontier"
+    providerMode === "live-frontier"
       ? [params.primaryModel, params.alternateModel]
           .map((modelRef) =>
             typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
@@ -966,7 +976,7 @@ export async function startQaGatewayChild(params: {
         controlUiEnabled: params.controlUiEnabled,
       }),
       controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-      providerMode: params.providerMode,
+      providerMode,
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
       enabledPluginIds,
@@ -985,7 +995,7 @@ export async function startQaGatewayChild(params: {
       cfg,
       stateDir,
     });
-    if (params.providerMode === "mock-openai") {
+    if (providerMode === "mock-openai") {
       cfg = await stageQaMockAuthProfiles({
         cfg,
         stateDir,
@@ -1051,7 +1061,7 @@ export async function startQaGatewayChild(params: {
           xdgCacheHome,
           bundledPluginsDir,
           compatibilityHostVersion: runtimeHostVersion,
-          providerMode: params.providerMode,
+          providerMode,
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
