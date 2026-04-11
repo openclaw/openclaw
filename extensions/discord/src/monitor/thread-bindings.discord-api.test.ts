@@ -1,4 +1,4 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
@@ -68,6 +68,35 @@ describe("resolveChannelIdForBinding", () => {
     expect(resolved).toBe("channel-explicit");
     expect(createDiscordRestClient).not.toHaveBeenCalled();
     expect(restGet).not.toHaveBeenCalled();
+  });
+
+  it("normalizes explicit channel:<snowflake> to a REST snowflake without resolving route", async () => {
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "thread-1",
+      channelId: "channel:987654321098765432",
+    });
+
+    expect(resolved).toBe("987654321098765432");
+    expect(createDiscordRestClient).not.toHaveBeenCalled();
+    expect(restGet).not.toHaveBeenCalled();
+  });
+
+  it("normalizes channel:<snowflake> threadId before Discord REST channel lookup", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "111222333444555666",
+      type: ChannelType.GuildText,
+      parent_id: "category-1",
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "channel:111222333444555666",
+    });
+
+    expect(resolved).toBe("111222333444555666");
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(restGet.mock.calls[0]?.[0]).toBe(Routes.channel("111222333444555666"));
   });
 
   it("returns parent channel for thread channels", async () => {
