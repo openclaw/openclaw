@@ -90,7 +90,7 @@ beforeEach(() => {
 describe("gateway-restart plugin tool", () => {
   it("rejects commands not in allowlist", async () => {
     const { api, registerTool } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     const tool = getRegisteredTool(registerTool);
     const result = (await tool.execute("call-1", {
@@ -104,7 +104,7 @@ describe("gateway-restart plugin tool", () => {
 
   it("writes marker after pre-commands succeed", async () => {
     const { api, registerTool } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     const tool = getRegisteredTool(registerTool);
     execSyncMock.mockReturnValue("installed\n");
@@ -128,7 +128,7 @@ describe("gateway-restart plugin tool", () => {
 
   it("does not write marker when pre-command fails", async () => {
     const { api, registerTool } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     const tool = getRegisteredTool(registerTool);
     execSyncMock.mockImplementation(() => {
@@ -148,7 +148,7 @@ describe("gateway-restart plugin tool", () => {
 describe("gateway-restart plugin watcher service", () => {
   it("does nothing when no marker exists", async () => {
     const { api, registerService, followupRuntime } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     fsMocks.existsSync.mockReturnValue(false);
 
@@ -160,7 +160,7 @@ describe("gateway-restart plugin watcher service", () => {
 
   it("enqueues followup and deletes marker on success", async () => {
     const { api, registerService, followupRuntime } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     const marker = {
       sessionKey: "agent:main:telegram:direct:123",
@@ -187,7 +187,7 @@ describe("gateway-restart plugin watcher service", () => {
 
   it("leaves marker when enqueue fails", async () => {
     const { api, registerService, followupRuntime } = createApi();
-    gatewayRestartPlugin.register(api);
+    await gatewayRestartPlugin.register(api);
 
     const marker = {
       sessionKey: "agent:main:telegram:direct:123",
