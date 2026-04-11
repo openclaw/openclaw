@@ -4,6 +4,7 @@ import {
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
+import { captureHttpExchange } from "../../src/proxy-capture/runtime.js";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -130,21 +131,35 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const requestHeaders = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    };
+    const requestBody = JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: responseFormat,
+      ...(speed != null && { speed }),
+      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+    });
     const response = await fetch(`${baseUrl}/audio/speech`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        ...(speed != null && { speed }),
-        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-      }),
+      headers: requestHeaders,
+      body: requestBody,
       signal: controller.signal,
+    });
+    captureHttpExchange({
+      url: `${baseUrl}/audio/speech`,
+      method: "POST",
+      requestHeaders,
+      requestBody,
+      response,
+      transport: "http",
+      meta: {
+        provider: "openai",
+        capability: "tts",
+      },
     });
 
     if (!response.ok) {

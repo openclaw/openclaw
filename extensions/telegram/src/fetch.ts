@@ -1,4 +1,5 @@
 import * as dns from "node:dns";
+import { randomUUID } from "node:crypto";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -10,11 +11,13 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { resolveEffectiveDebugProxyUrl } from "../../../src/proxy-capture/env.js";
+import { captureHttpExchange } from "../../../src/proxy-capture/runtime.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
-import { getProxyUrlFromFetch } from "./proxy.js";
+import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -495,15 +498,20 @@ export function resolveTelegramTransport(
     dnsDecision,
   });
 
-  const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
+  const effectiveProxyFetch =
+    proxyFetch ?? (() => {
+      const debugProxyUrl = resolveEffectiveDebugProxyUrl(undefined);
+      return debugProxyUrl ? makeProxyFetch(debugProxyUrl) : undefined;
+    })();
+  const explicitProxyUrl = effectiveProxyFetch ? getProxyUrlFromFetch(effectiveProxyFetch) : undefined;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
   const sourceFetch = explicitProxyUrl
     ? undiciSourceFetch
-    : proxyFetch
-      ? resolveWrappedFetch(proxyFetch)
+    : effectiveProxyFetch
+      ? resolveWrappedFetch(effectiveProxyFetch)
       : undiciSourceFetch;
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
-  if (proxyFetch && !explicitProxyUrl) {
+  if (effectiveProxyFetch && !explicitProxyUrl) {
     return { fetch: sourceFetch, sourceFetch };
   }
 
@@ -544,10 +552,20 @@ export function resolveTelegramTransport(
     let err: unknown;
 
     try {
-      return await sourceFetch(
+      const response = await sourceFetch(
         input,
         withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
       );
+      captureHttpExchange({
+        url: input instanceof URL ? input.toString() : String(input),
+        method: init?.method ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+        response,
+        flowId: randomUUID(),
+        meta: { subsystem: "telegram-fetch" },
+      });
+      return response;
     } catch (caught) {
       err = caught;
     }
@@ -569,6 +587,15 @@ export function resolveTelegramTransport(
           input,
           withDispatcherIfMissing(init, nextAttempt.createDispatcher()),
         );
+        captureHttpExchange({
+          url: input instanceof URL ? input.toString() : String(input),
+          method: init?.method ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "telegram-fetch", fallbackAttempt: nextIndex },
+        });
         stickyAttemptIndex = nextIndex;
         return response;
       } catch (caught) {

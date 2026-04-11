@@ -1,4 +1,5 @@
 import * as carbonGateway from "@buape/carbon/gateway";
+import { randomUUID } from "node:crypto";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -6,6 +7,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveEffectiveDebugProxyUrl } from "../../../../src/proxy-capture/env.js";
+import { captureHttpExchange, captureWsEvent } from "../../../../src/proxy-capture/runtime.js";
 import * as undici from "undici";
 import * as ws from "ws";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
@@ -240,6 +243,7 @@ function createGatewayPlugin(params: {
     webSocketCtor?: DiscordGatewayWebSocketCtor;
   };
 }): carbonGateway.GatewayPlugin {
+  const wsFlowId = randomUUID();
   class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
     private gatewayInfoUsedFallback = false;
 
@@ -280,6 +284,44 @@ function createGatewayPlugin(params: {
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      captureWsEvent({
+        url,
+        direction: "local",
+        kind: "ws-open",
+        flowId: wsFlowId,
+        meta: { subsystem: "discord-gateway" },
+      });
+      socket.on?.("message", (data: unknown) => {
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: wsFlowId,
+          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
+      socket.on?.("close", (code: number, reason: Buffer) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-close",
+          flowId: wsFlowId,
+          closeCode: code,
+          payload: reason,
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
+      socket.on?.("error", (error: Error) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: wsFlowId,
+          errorText: error.message,
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
       if ("binaryType" in socket) {
         try {
           socket.binaryType = "arraybuffer";
@@ -309,7 +351,7 @@ export function createDiscordGatewayPlugin(params: {
   };
 }): carbonGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
-  const proxy = params.discordConfig?.proxy?.trim();
+  const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -319,7 +361,19 @@ export function createDiscordGatewayPlugin(params: {
   if (!proxy) {
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => fetch(input, init as RequestInit),
+      fetchImpl: async (input, init) => {
+        const response = await fetch(input, init as RequestInit);
+        captureHttpExchange({
+          url: input,
+          method: (init?.method as string | undefined) ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "discord-gateway-metadata" },
+        });
+        return response;
+      },
       runtime: params.runtime,
       testing: params.__testing
         ? {
@@ -342,7 +396,22 @@ export function createDiscordGatewayPlugin(params: {
 
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => (params.__testing?.undiciFetch ?? undici.fetch)(input, init),
+      fetchImpl: async (input, init) => {
+        const response = (await (params.__testing?.undiciFetch ?? undici.fetch)(
+          input,
+          init,
+        )) as unknown as Response;
+        captureHttpExchange({
+          url: input,
+          method: (init?.method as string | undefined) ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "discord-gateway-metadata" },
+        });
+        return response;
+      },
       fetchInit: { dispatcher: fetchAgent },
       wsAgent,
       runtime: params.runtime,
