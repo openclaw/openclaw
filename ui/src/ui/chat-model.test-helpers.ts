@@ -61,6 +61,7 @@ export function createSessionsListResult(
     defaultsModel?: string | null;
     defaultsProvider?: string | null;
     omitSessionFromList?: boolean;
+    thinkingLevel?: string | null;
   } = {},
 ): SessionsListResult {
   const {
@@ -69,6 +70,7 @@ export function createSessionsListResult(
     defaultsModel = "gpt-5",
     defaultsProvider = defaultsModel ? "openai" : null,
     omitSessionFromList = false,
+    thinkingLevel,
   } = params;
 
   return {
@@ -86,6 +88,7 @@ export function createSessionsListResult(
           createMainSessionRow({
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
+            ...(thinkingLevel !== undefined ? { thinkingLevel: thinkingLevel ?? undefined } : {}),
           }),
         ],
   };

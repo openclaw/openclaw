@@ -40,6 +40,132 @@ function flushTasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
+function createChatHeaderState(
+  overrides: {
+    model?: string | null;
+    modelProvider?: string | null;
+    models?: ModelCatalogEntry[];
+    omitSessionFromList?: boolean;
+    thinkingLevel?: string | null;
+  } = {},
+): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
+  let currentModel = overrides.model ?? null;
+  let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
+  const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  let currentThinkingLevel: string | null | undefined = overrides.thinkingLevel ?? undefined;
+  const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
+  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "sessions.patch") {
+      if ("thinkingLevel" in params) {
+        currentThinkingLevel = params.thinkingLevel as string | null | undefined;
+      }
+      const nextModel = (params.model as string | null | undefined) ?? null;
+      if (!nextModel) {
+        currentModel = null;
+        currentModelProvider = null;
+      } else {
+        const normalized = nextModel.trim();
+        const slashIndex = normalized.indexOf("/");
+        if (slashIndex > 0) {
+          currentModelProvider = normalized.slice(0, slashIndex);
+          currentModel = normalized.slice(slashIndex + 1);
+        } else {
+          currentModel = normalized;
+          const matchingProviders = catalog
+            .filter((entry) => entry.id === normalized)
+            .map((entry) => entry.provider)
+            .filter(Boolean);
+          currentModelProvider =
+            matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
+        }
+      }
+      return { ok: true, key: "main" };
+    }
+    if (method === "chat.history") {
+      return { messages: [], thinkingLevel: null };
+    }
+    if (method === "sessions.list") {
+      return createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+        thinkingLevel: currentThinkingLevel,
+      });
+    }
+    if (method === "models.list") {
+      return { models: catalog };
+    }
+    if (method === "tools.effective") {
+      return {
+        agentId: "main",
+        profile: "coding",
+        groups: [],
+      };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const state = {
+    sessionKey: "main",
+    connected: true,
+    sessionsHideCron: true,
+    sessionsResult: createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      omitSessionFromList,
+      thinkingLevel: currentThinkingLevel,
+    }),
+    chatModelOverrides: {},
+    chatModelCatalog: catalog,
+    chatModelsLoading: false,
+    client: { request } as unknown as GatewayBrowserClient,
+    settings: {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+    },
+    chatMessage: "",
+    chatStream: null,
+    chatStreamStartedAt: null,
+    chatRunId: null,
+    chatQueue: [],
+    chatMessages: [],
+    chatLoading: false,
+    chatThinkingLevel: null,
+    lastError: null,
+    chatAvatarUrl: null,
+    basePath: "",
+    hello: null,
+    agentsList: null,
+    agentsPanel: "overview",
+    agentsSelectedId: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    applySettings(next: AppViewState["settings"]) {
+      state.settings = next;
+    },
+    loadAssistantIdentity: vi.fn(),
+    resetToolStream: vi.fn(),
+    resetChatScroll: vi.fn(),
+  } as unknown as AppViewState & {
+    client: GatewayBrowserClient;
+    settings: AppViewState["settings"];
+  };
+  return { state, request };
+}
+
 async function flushAssistantAttachmentAvailabilityChecks() {
   await Promise.resolve();
   await Promise.resolve();
