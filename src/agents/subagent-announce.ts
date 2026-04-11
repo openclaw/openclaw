@@ -181,7 +181,7 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
 }): string {
-  const noReplyGuard = `Reply ONLY with ${SILENT_REPLY_TOKEN} when ALL of these hold: (a) this completion is a duplicate of one already processed in this turn, (b) the result is already covered in a prior reply, or (c) it is only incremental confirmation that does not materially change the user-facing conclusion. In every other case you MUST produce a substantive reply.`;
+  const noReplyGuard = `Reply ONLY with ${SILENT_REPLY_TOKEN} when ANY of these applies: (a) this completion is a duplicate of one already processed in this turn, (b) the result is already covered in a prior reply, or (c) it is only incremental confirmation that does not materially change the user-facing conclusion. In every other case you MUST produce a substantive reply.`;
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). ${noReplyGuard}`;
   }

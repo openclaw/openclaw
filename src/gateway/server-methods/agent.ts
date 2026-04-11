@@ -110,7 +110,7 @@ function buildAcpTurnExtraSystemPrompt(params: {
   sessionEntry?: SessionEntry;
 }): string | undefined {
   const existing = normalizeOptionalString(params.existing);
-  const hasAcpSession = Boolean((params.sessionEntry as { acp?: unknown } | undefined)?.acp);
+  const hasAcpSession = Boolean(params.sessionEntry?.acp);
   if (!hasAcpSession) {
     return existing || undefined;
   }
