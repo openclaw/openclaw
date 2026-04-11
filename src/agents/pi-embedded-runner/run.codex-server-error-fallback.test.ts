@@ -41,6 +41,7 @@ describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
       provider: "openai-codex",
       model: "gpt-5.4",
     });
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
