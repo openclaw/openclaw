@@ -200,6 +200,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.meta.livenessState).toBe("blocked");
   });
 
   it("does not attempt compaction when prompt token usage is low", async () => {
@@ -238,6 +239,27 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
+  });
+
+  it("retries one silent idle timeout before surfacing an error", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          idleTimedOut: true,
+          assistantTexts: [],
+          lastAssistant: {
+            usage: { input: 20000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
   });
 
   it("does not attempt compaction for low-context timeouts on later retries", async () => {

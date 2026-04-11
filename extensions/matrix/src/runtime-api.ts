@@ -10,6 +10,7 @@ export {
   readReactionParams,
   readStringArrayParam,
   readStringParam,
+  ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";

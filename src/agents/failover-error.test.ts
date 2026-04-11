@@ -181,6 +181,53 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 404,
+        message: "No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "404 No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("classifies generic model-does-not-exist messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The model gpt-foo does not exist.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("does not classify generic access errors as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The deployment does not exist or you do not have access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not classify generic deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The endpoint has been deprecated. Transition to v2 API for continued access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies model-scoped deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      }),
+    ).toBe("model_not_found");
+  });
+
   it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
     expect(
       resolveFailoverReasonFromError({

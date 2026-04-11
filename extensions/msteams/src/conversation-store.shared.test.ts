@@ -155,6 +155,30 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
     });
   });
 
+  it("preserves graphChatId across upserts that omit it", async () => {
+    const store = await createStore();
+
+    await store.upsert("conv-graph", {
+      conversation: { id: "conv-graph", conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
+    });
+
+    // Second upsert without graphChatId (normal activity-based upsert)
+    await store.upsert("conv-graph", {
+      conversation: { id: "conv-graph", conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    await expect(store.get("conv-graph")).resolves.toMatchObject({
+      graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
+    });
+  });
+
   it("prefers the freshest personal conversation for repeated upserts of the same user", async () => {
     const store = await createStore();
 

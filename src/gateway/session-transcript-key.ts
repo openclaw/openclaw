@@ -12,6 +12,7 @@ import {
 } from "./session-utils.js";
 
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
+const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
 
 function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -135,6 +136,16 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
           ? freshestMatch?.key
           : undefined;
     if (resolvedKey) {
+      // Evict oldest-inserted entry when cache exceeds size cap (FIFO bound).
+      if (
+        !TRANSCRIPT_SESSION_KEY_CACHE.has(targetPath) &&
+        TRANSCRIPT_SESSION_KEY_CACHE.size >= TRANSCRIPT_SESSION_KEY_CACHE_MAX
+      ) {
+        const oldest = TRANSCRIPT_SESSION_KEY_CACHE.keys().next().value;
+        if (oldest !== undefined) {
+          TRANSCRIPT_SESSION_KEY_CACHE.delete(oldest);
+        }
+      }
       TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
       return resolvedKey;
     }

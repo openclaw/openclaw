@@ -127,7 +127,20 @@ describe("resolveExecTarget", () => {
         sandboxAvailable: true,
       }),
     ).toThrow(
-      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway or auto to allow this override).",
+      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway to allow this override).",
+    );
+  });
+
+  it("rejects per-call host=node override from auto when sandbox is available", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow(
+      "exec host not allowed (requested node; configured host is auto; set tools.exec.host=node to allow this override).",
     );
   });
 

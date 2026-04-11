@@ -1,9 +1,9 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "experimentalSortImports": {
+  "sortImports": {
     "newlinesBetween": false,
   },
-  "experimentalSortPackageJson": {
+  "sortPackageJson": {
     "sortScripts": true,
   },
   "tabWidth": 2,
