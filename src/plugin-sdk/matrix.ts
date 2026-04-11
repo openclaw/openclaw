@@ -84,7 +84,7 @@ export type {
   ChannelResolveResult,
   ChannelSetupInput,
   ChannelToolSend,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";

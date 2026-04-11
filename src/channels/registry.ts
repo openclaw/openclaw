@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
   CHANNEL_IDS,
   CHAT_CHANNEL_ALIASES,
@@ -12,7 +11,7 @@ import {
   normalizeChatChannelId,
   type ChatChannelId,
 } from "./ids.js";
-import type { ChannelId, ChannelMeta } from "./plugins/types.js";
+import type { ChannelId, ChannelMeta } from "./plugins/types.public.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
 
@@ -56,13 +55,7 @@ function findRegisteredChannelPluginEntryById(
     (entry) => normalizeOptionalLowercaseString(entry.plugin.id) === normalizedId,
   );
 }
-export {
-  CHAT_CHANNEL_ALIASES,
-  getChatChannelMeta,
-  listChatChannelAliases,
-  listChatChannels,
-  normalizeChatChannelId,
-};
+export { CHAT_CHANNEL_ALIASES, listChatChannelAliases, normalizeChatChannelId };
 
 // Channel docking: prefer this helper in shared code. Importing from
 // `src/channels/plugins/*` can eagerly load channel implementations.
@@ -99,12 +92,12 @@ export function getRegisteredChannelPluginMeta(
   return findRegisteredChannelPluginEntryById(id)?.plugin.meta ?? null;
 }
 
-export function formatChannelPrimerLine(meta: ChatChannelMeta): string {
+export function formatChannelPrimerLine(meta: ChannelMeta): string {
   return `${meta.label}: ${meta.blurb}`;
 }
 
 export function formatChannelSelectionLine(
-  meta: ChatChannelMeta,
+  meta: ChannelMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
   const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
+import { normalizeProviderId } from "../../../agents/model-selection-normalize.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import { normalizeTalkSection } from "../../../config/talk.js";

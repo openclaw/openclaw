@@ -14,7 +14,8 @@ import {
 } from "../../plugins/bundled-channel-runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 type GeneratedBundledChannelEntry = {
   id: string;

@@ -16,6 +16,7 @@ export {
   resolveMentionGatingWithBypass,
   resolveInboundMentionDecision,
 } from "../channels/mention-gating.js";
+export { getChatChannelMeta } from "../channels/chat-meta.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -51,7 +52,7 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";

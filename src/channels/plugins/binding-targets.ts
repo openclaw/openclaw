@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import { ensureStatefulTargetBuiltinsRegistered } from "./stateful-target-builtins.js";
 import {

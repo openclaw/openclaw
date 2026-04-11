@@ -3,6 +3,12 @@ import type { LogLevel } from "../../logging/levels.js";
 
 export type { HeartbeatRunResult };
 
+type RuntimeWriteConfigOptions = {
+  envSnapshotForRestore?: Record<string, string | undefined>;
+  expectedConfigPath?: string;
+  unsetPaths?: string[][];
+};
+
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -23,8 +29,11 @@ export type RunHeartbeatOnceOptions = {
 export type PluginRuntimeCore = {
   version: string;
   config: {
-    loadConfig: typeof import("../../config/config.js").loadConfig;
-    writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
+    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
+    writeConfigFile: (
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
+      options?: RuntimeWriteConfigOptions,
+    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -145,18 +154,18 @@ export type PluginRuntimeCore = {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

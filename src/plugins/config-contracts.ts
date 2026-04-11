@@ -3,7 +3,7 @@ import { isRecord } from "../utils.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
-import type { PluginOrigin } from "./types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginConfigContractMatch = {
   path: string;

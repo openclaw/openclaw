@@ -13,6 +13,7 @@ import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -135,9 +136,7 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
-function resolvePluginGatewayAuthBypassPaths(
-  configSnapshot: ReturnType<typeof loadConfig>,
-): Set<string> {
+function resolvePluginGatewayAuthBypassPaths(configSnapshot: OpenClawConfig): Set<string> {
   const paths = new Set<string>();
   for (const plugin of listBundledChannelPlugins()) {
     for (const path of plugin.gateway?.resolveGatewayAuthBypassPaths?.({ cfg: configSnapshot }) ??

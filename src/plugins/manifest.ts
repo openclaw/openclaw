@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -11,7 +11,8 @@ import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
