@@ -46,6 +46,7 @@ import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/text-runtime";
+import { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
@@ -56,6 +57,7 @@ const log = createSubsystemLogger("memory");
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const QMD_WATCH_STABILITY_MS = 200;
+const QMD_SESSION_DIRTY_DEBOUNCE_MS = 5_000;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -267,6 +269,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedTimer: NodeJS.Timeout | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
+  private sessionWatchTimer: NodeJS.Timeout | null = null;
+  private sessionUnsubscribe: (() => void) | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -360,6 +364,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     await this.ensureCollections();
     this.ensureWatcher();
+    this.ensureSessionListener();
 
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
@@ -1191,6 +1196,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
     }
+    if (this.sessionWatchTimer) {
+      clearTimeout(this.sessionWatchTimer);
+      this.sessionWatchTimer = null;
+    }
+    if (this.sessionUnsubscribe) {
+      this.sessionUnsubscribe();
+      this.sessionUnsubscribe = null;
+    }
     if (this.watcher) {
       await this.watcher.close().catch(() => undefined);
       this.watcher = null;
@@ -1305,6 +1318,40 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
     }, this.syncSettings.watchDebounceMs);
+  }
+
+  private ensureSessionListener(): void {
+    if (!this.sessionExporter || this.sessionUnsubscribe || this.closed) {
+      return;
+    }
+    this.sessionUnsubscribe = onSessionTranscriptUpdate((update) => {
+      if (this.closed) {
+        return;
+      }
+      const sessionFile = update.sessionFile;
+      if (!sessionFile || !this.isSessionFileForAgent(sessionFile)) {
+        return;
+      }
+      this.scheduleSessionSync();
+    });
+  }
+
+  private scheduleSessionSync(): void {
+    if (this.sessionWatchTimer) {
+      clearTimeout(this.sessionWatchTimer);
+    }
+    this.sessionWatchTimer = setTimeout(() => {
+      this.sessionWatchTimer = null;
+      void this.runUpdate("session-delta").catch((err) => {
+        log.warn(`qmd session-delta sync failed: ${String(err)}`);
+      });
+    }, QMD_SESSION_DIRTY_DEBOUNCE_MS);
+  }
+
+  private isSessionFileForAgent(sessionFile: string): boolean {
+    const resolvedFile = path.resolve(sessionFile);
+    const resolvedDir = path.resolve(path.join(this.agentStateDir, "sessions"));
+    return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
   private async maybeWarmSession(sessionKey?: string): Promise<void> {
