@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
@@ -99,6 +98,7 @@ import type {
   ProviderSyntheticAuthResult,
 } from "./provider-external-auth.types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingPolicyContext,
@@ -184,6 +184,7 @@ export type {
   WebSearchProviderToolDefinition,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
+export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -360,17 +361,6 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
-};
-
-/**
- * Fully-resolved runtime model shape used by the embedded runner.
- *
- * Catalog hooks publish config-time `models.providers` entries.
- * Runtime hooks below operate on the final `pi-ai` model object after
- * discovery/override merging, just before inference runs.
- */
-export type ProviderRuntimeModel = Model<Api> & {
-  contextTokens?: number;
 };
 
 export type ProviderRuntimeProviderConfig = {
