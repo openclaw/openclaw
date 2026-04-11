@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -5,13 +11,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
-import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import {
   asFiniteNumber,

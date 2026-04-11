@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureWsEvent,
@@ -5,7 +6,6 @@ import {
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { z } from "openclaw/plugin-sdk/zod";
-import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
@@ -280,7 +280,7 @@ export function createMattermostConnectOnce(
             direction: "inbound",
             kind: "ws-frame",
             flowId,
-            payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+            payload: Buffer.from(rawDataToString(data)),
             meta: { subsystem: "mattermost-websocket" },
           });
           const raw = rawDataToString(data);

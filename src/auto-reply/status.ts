@@ -12,7 +12,7 @@ import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
-import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
+import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,

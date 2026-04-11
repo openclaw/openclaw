@@ -245,7 +245,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;
     const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
-    if (finalCreds) {
+    if (finalCreds?.type === "secret") {
       const enableDelegated = await params.prompter.confirm({
         message: "Enable delegated auth? (required for reactions and write operations)",
         initialValue: false,

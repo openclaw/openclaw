@@ -1,13 +1,13 @@
 import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
+import {
   asObject,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 

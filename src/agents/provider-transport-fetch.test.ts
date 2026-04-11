@@ -1,5 +1,5 @@
+import type { Model } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Model } from "./model-types.js";
 
 const {
   fetchWithSsrFGuardMock,
@@ -7,7 +7,10 @@ const {
   resolveProviderRequestPolicyConfigMock,
 } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
-  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({ ...current, ...overrides })),
+  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
+    ...current,
+    ...overrides,
+  })),
   resolveProviderRequestPolicyConfigMock: vi.fn(() => ({ allowPrivateNetwork: false })),
 }));
 
@@ -30,7 +33,9 @@ describe("buildGuardedModelFetch", () => {
       release: vi.fn(async () => undefined),
     });
     mergeModelProviderRequestOverridesMock.mockClear();
-    resolveProviderRequestPolicyConfigMock.mockClear().mockReturnValue({ allowPrivateNetwork: false });
+    resolveProviderRequestPolicyConfigMock
+      .mockClear()
+      .mockReturnValue({ allowPrivateNetwork: false });
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_URL;
   });

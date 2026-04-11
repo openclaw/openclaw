@@ -1,16 +1,16 @@
+import { randomUUID } from "node:crypto";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import {
   asFiniteNumber,
