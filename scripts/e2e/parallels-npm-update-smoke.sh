@@ -11,6 +11,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+PYTHON_BIN="${PYTHON_BIN:-}"
 PACKAGE_SPEC=""
 UPDATE_TARGET=""
 JSON_OUTPUT=0
@@ -61,6 +62,35 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+resolve_python_bin() {
+  local candidate
+
+  python_bin_usable() {
+    "$1" - <<'PY' >/dev/null 2>&1
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(1)
+_value: tuple[int, ...] | None = None
+PY
+  }
+
+  if [[ -n "$PYTHON_BIN" ]]; then
+    [[ -x "$PYTHON_BIN" ]] || die "PYTHON_BIN is not executable: $PYTHON_BIN"
+    python_bin_usable "$PYTHON_BIN" || die "PYTHON_BIN must be Python 3.10+: $PYTHON_BIN"
+    return
+  fi
+
+  for candidate in "$(command -v python3 || true)" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if python_bin_usable "$candidate"; then
+      PYTHON_BIN="$candidate"
+      return
+    fi
+  done
+
+  die "Python 3.10+ is required"
+}
 
 usage() {
   cat <<'EOF'
@@ -142,12 +172,13 @@ esac
 
 API_KEY_VALUE="${!API_KEY_ENV:-}"
 [[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
+resolve_python_bin
 
 resolve_linux_vm_name() {
   local json requested
   json="$(prlctl list --all --json)"
   requested="$LINUX_VM"
-  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" python3 - <<'PY'
+  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" "$PYTHON_BIN" - <<'PY'
 import difflib
 import json
 import os
@@ -220,7 +251,7 @@ resolve_host_ip() {
 }
 
 allocate_host_port() {
-  python3 - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import socket
 
 sock = socket.socket()
@@ -242,7 +273,7 @@ pack_main_tgz() {
   ensure_current_build
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$CURRENT_HEAD_SHORT.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
@@ -452,7 +483,7 @@ start_server() {
   say "Serve update helper artifacts on $HOST_IP:$HOST_PORT"
   (
     cd "$MAIN_TGZ_DIR"
-    exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
+    exec "$PYTHON_BIN" -m http.server "$HOST_PORT" --bind 0.0.0.0
   ) >/tmp/openclaw-parallels-npm-update-http.log 2>&1 &
   SERVER_PID=$!
   sleep 1
@@ -475,7 +506,7 @@ wait_job() {
 
 extract_log_progress() {
   local log_path="$1"
-  python3 - "$log_path" <<'PY'
+  "$PYTHON_BIN" - "$log_path" <<'PY'
 import pathlib
 import sys
 
@@ -557,7 +588,7 @@ monitor_jobs_progress() {
 
 extract_last_version() {
   local log_path="$1"
-  python3 - "$log_path" <<'PY'
+  "$PYTHON_BIN" - "$log_path" <<'PY'
 import pathlib
 import re
 import sys
@@ -573,7 +604,7 @@ guest_powershell() {
   local script="$1"
   local encoded
   encoded="$(
-    SCRIPT_CONTENT="$script" python3 - <<'PY'
+    SCRIPT_CONTENT="$script" "$PYTHON_BIN" - <<'PY'
 import base64
 import os
 
@@ -588,7 +619,7 @@ PY
 host_timeout_exec() {
   local timeout_s="$1"
   shift
-  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+  HOST_TIMEOUT_S="$timeout_s" "$PYTHON_BIN" - "$@" <<'PY'
 import os
 import subprocess
 import sys
@@ -670,7 +701,7 @@ guest_powershell_poll() {
   local script="$2"
   local encoded
   encoded="$(
-    SCRIPT_CONTENT="$script" python3 - <<'PY'
+    SCRIPT_CONTENT="$script" "$PYTHON_BIN" - <<'PY'
 import base64
 import os
 
@@ -734,7 +765,7 @@ EOF
     if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
       return "$log_rc"
     fi
-    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+    GUEST_LOG="$guest_log" "$PYTHON_BIN" - "$log_state_path" <<'PY'
 import os
 import pathlib
 import sys
@@ -893,7 +924,7 @@ EOF
 
 write_summary_json() {
   local summary_path="$RUN_DIR/summary.json"
-  python3 - "$summary_path" <<'PY'
+  "$PYTHON_BIN" - "$summary_path" <<'PY'
 import json
 import os
 import sys
