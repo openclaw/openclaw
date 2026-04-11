@@ -552,7 +552,7 @@ export async function dispatchReplyFromConfig(params: {
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
+        const result = await routeReplyRuntime!.routeReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
@@ -613,7 +613,7 @@ export async function dispatchReplyFromConfig(params: {
         ttsAuto: sessionTtsAuto,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
+        const result = await routeReplyRuntime!.routeReply({
           payload: ttsPayload,
           channel: originatingChannel,
           to: originatingTo,
