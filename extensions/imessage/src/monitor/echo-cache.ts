@@ -27,7 +27,14 @@ function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  // Strip U+FFFD replacement characters and C0/C1 control characters that imsg
+  // injects when extracting text from NSAttributedString (attributedBody column).
+  // Without this, the echo cache stores clean text but the reflected copy has
+  // garbage prefixes, defeating text-based deduplication. See: #61312, #61821
+  const normalized = text
+    .replace(/[\ufffd\ufffe\uffff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
   return normalized ? normalized : null;
 }
 
