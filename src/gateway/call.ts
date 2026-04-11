@@ -288,13 +288,20 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     ? undefined
     : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const envAuth = resolveExplicitGatewayAuth({
+    token: process.env.OPENCLAW_GATEWAY_TOKEN,
+    password: process.env.OPENCLAW_GATEWAY_PASSWORD,
+  });
   const cliUrlOverride = explicitUrl;
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const canSkipConfigLoad = canSkipGatewayConfigLoad({
     config: opts.config,
     urlOverride,
-    explicitAuth,
+    explicitAuth: {
+      token: explicitAuth.token ?? envAuth.token,
+      password: explicitAuth.password ?? envAuth.password,
+    },
   });
   const config = opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : resolveGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);

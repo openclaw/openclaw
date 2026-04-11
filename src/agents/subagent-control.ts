@@ -221,6 +221,14 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
   return {};
 }
 
+function resolveWaitTransportErrorResult(runId: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/gateway timeout/i.test(message)) {
+    return { status: "timeout" as const, runId, error: message };
+  }
+  return { status: "error" as const, runId, error: message };
+}
+
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
   const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
   if (pendingDescendants > 0) {
@@ -940,11 +948,21 @@ export async function sendControlledSubagentMessage(params: {
 
     const waitMs = 30_000;
     const waitGatewayTimeoutMs = resolveSubagentWaitGatewayTimeoutMs(params.cfg, waitMs);
-    const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
-      method: "agent.wait",
-      params: { runId, timeoutMs: waitMs },
-      timeoutMs: waitGatewayTimeoutMs,
-    });
+    let wait:
+      | {
+          status?: string;
+          error?: string;
+        }
+      | undefined;
+    try {
+      wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
+        method: "agent.wait",
+        params: { runId, timeoutMs: waitMs },
+        timeoutMs: waitGatewayTimeoutMs,
+      });
+    } catch (error) {
+      return resolveWaitTransportErrorResult(runId, error);
+    }
     if (wait?.status === "timeout") {
       return { status: "timeout" as const, runId };
     }

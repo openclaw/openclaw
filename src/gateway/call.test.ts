@@ -305,7 +305,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
-  it("falls back when env url override and explicit auth are provided", async () => {
+  it("skips config loading when env url override and explicit auth are provided", async () => {
     loadConfig.mockImplementation(() => {
       throw new Error("loadConfig failure should not block env override auth");
     });
@@ -396,8 +396,8 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("uses remote tlsFingerprint with env URL override", async () => {
-    loadConfig.mockReturnValue({
+  it("uses remote tlsFingerprint with env URL override when config is already provided", async () => {
+    const config = {
       gateway: {
         mode: "remote",
         remote: {
@@ -405,7 +405,7 @@ describe("callGateway url resolution", () => {
           tlsFingerprint: "remote-fingerprint",
         },
       },
-    });
+    } satisfies OpenClawConfig;
     setGatewayNetworkDefaults(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
@@ -413,6 +413,7 @@ describe("callGateway url resolution", () => {
 
     await callGateway({
       method: "health",
+      config,
     });
 
     expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
