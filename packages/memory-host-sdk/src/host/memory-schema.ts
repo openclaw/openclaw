@@ -4,6 +4,12 @@ import { formatErrorMessage } from "../../../../src/infra/errors.js";
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
+function quoteTable(table: string): string {
+  return table
+    .split(".")
+    .map((part) => quoteIdentifier(part))
+    .join(".");
+}
 
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
