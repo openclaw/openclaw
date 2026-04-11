@@ -313,7 +313,7 @@ describe("memory-core dreaming phases", () => {
     }
 
     const dailyReadCount = readSpy.mock.calls.filter(
-      ([target]) => String(target) === dailyPath,
+      ([target]) => typeof target === "string" && target === dailyPath,
     ).length;
     expect(dailyReadCount).toBeLessThanOrEqual(1);
     await expect(
@@ -461,7 +461,7 @@ describe("memory-core dreaming phases", () => {
       );
     } finally {
       transcriptReadCount = readSpy.mock.calls.filter(
-        ([target]) => String(target) === transcriptPath,
+        ([target]) => typeof target === "string" && target === transcriptPath,
       ).length;
       readSpy.mockRestore();
       vi.unstubAllEnvs();

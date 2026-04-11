@@ -1,12 +1,14 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import {
   abortChatRun,
   loadChatHistory,
   sendChatMessage,
+  sendDetachedChatMessage,
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
@@ -35,6 +37,8 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
@@ -79,6 +83,10 @@ function isChatResetCommand(text: string) {
     return true;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+}
+
+function isBtwCommand(text: string) {
+  return /^\/btw(?::|\s|$)/i.test(text.trim());
 }
 
 export async function handleAbortChat(host: ChatHost) {
@@ -177,6 +185,36 @@ async function sendChatMessageNow(
   return ok;
 }
 
+async function sendDetachedBtwMessage(
+  host: ChatHost,
+  message: string,
+  opts?: {
+    previousDraft?: string;
+    attachments?: ChatAttachment[];
+    previousAttachments?: ChatAttachment[];
+  },
+) {
+  const runId = await sendDetachedChatMessage(
+    host as unknown as ChatState,
+    message,
+    opts?.attachments,
+  );
+  const ok = Boolean(runId);
+  if (!ok && opts?.previousDraft != null) {
+    host.chatMessage = opts.previousDraft;
+  }
+  if (!ok && opts?.previousAttachments) {
+    host.chatAttachments = opts.previousAttachments;
+  }
+  if (ok) {
+    setLastActiveSessionKey(
+      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+      host.sessionKey,
+    );
+  }
+  return ok;
+}
+
 async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
@@ -240,6 +278,19 @@ export async function handleSendChat(
 
   if (isChatStopCommand(message)) {
     await handleAbortChat(host);
+    return;
+  }
+
+  if (isBtwCommand(message)) {
+    if (messageOverride == null) {
+      host.chatMessage = "";
+      host.chatAttachments = [];
+    }
+    await sendDetachedBtwMessage(host, message, {
+      previousDraft: messageOverride == null ? previousDraft : undefined,
+      attachments: hasAttachments ? attachmentsToSend : undefined,
+      previousAttachments: messageOverride == null ? attachments : undefined,
+    });
     return;
   }
 
@@ -377,6 +428,8 @@ async function clearChatHistory(host: ChatHost) {
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
+    host.chatSideResult = null;
+    host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
     await loadChatHistory(host as unknown as ChatState);

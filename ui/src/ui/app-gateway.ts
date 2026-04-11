@@ -16,6 +16,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
@@ -108,6 +109,17 @@ type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
   resumeChatQueueAfterReconnect?: boolean;
 };
+
+type GatewayHostWithSideResults = GatewayHost & {
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
+};
+
+function isTerminalChatState(
+  state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
+): state is "final" | "aborted" | "error" {
+  return state === "final" || state === "aborted" || state === "error";
+}
 
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
@@ -245,6 +257,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
@@ -360,6 +373,15 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
+  const sideResultHost = host as GatewayHostWithSideResults;
+  const isTrackedSideResultTerminalEvent =
+    isTerminalChatState(payload?.state) &&
+    typeof payload?.runId === "string" &&
+    sideResultHost.chatSideResultTerminalRuns?.has(payload.runId) === true;
+  if (isTrackedSideResultTerminalEvent && payload?.runId) {
+    sideResultHost.chatSideResultTerminalRuns?.delete(payload.runId);
+    return;
+  }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
@@ -389,6 +411,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.side_result") {
+    const sideResult = parseChatSideResult(evt.payload);
+    if (!sideResult || sideResult.sessionKey !== host.sessionKey) {
+      return;
+    }
+    const sideResultHost = host as GatewayHostWithSideResults;
+    sideResultHost.chatSideResult = sideResult;
+    sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
     return;
   }
 

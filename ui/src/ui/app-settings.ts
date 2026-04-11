@@ -25,7 +25,13 @@ import {
 } from "./controllers/cron.ts";
 import { loadDebug, type DebugState } from "./controllers/debug.ts";
 import { loadDevices, type DevicesState } from "./controllers/devices.ts";
-import { loadDreamDiary, loadDreamingStatus, type DreamingState } from "./controllers/dreaming.ts";
+import {
+  loadDreamDiary,
+  loadDreamingStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
+  type DreamingState,
+} from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
@@ -272,13 +278,17 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
   void loadAgentIdentity(app, agentId);
   switch (host.agentsPanel) {
     case "files":
-      return void loadAgentFiles(app, agentId);
+      void loadAgentFiles(app, agentId);
+      return;
     case "skills":
-      return void loadAgentSkills(app, agentId);
+      void loadAgentSkills(app, agentId);
+      return;
     case "channels":
-      return void loadChannels(app, false);
+      void loadChannels(app, false);
+      return;
     case "cron":
-      return void loadCron(host);
+      void loadCron(host);
+      return;
   }
 }
 
@@ -326,7 +336,12 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
     case "dreams":
       await loadConfig(app);
-      await Promise.all([loadDreamingStatus(app), loadDreamDiary(app)]);
+      await Promise.all([
+        loadDreamingStatus(app),
+        loadDreamDiary(app),
+        loadWikiImportInsights(app),
+        loadWikiMemoryPalace(app),
+      ]);
       return;
     case "chat":
       await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

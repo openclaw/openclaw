@@ -175,10 +175,7 @@ describe("gateway e2e", () => {
         const sessionKey = "agent:dev:mock-openai";
 
         const runId = nextGatewayId("run");
-        const payload = await client.request<{
-          status?: unknown;
-          runId?: unknown;
-        }>(
+        const payload = await client.request(
           "agent",
           {
             sessionKey,
@@ -361,7 +358,7 @@ module.exports = {
           await prompter.note("write token");
           const token = await prompter.text({ message: "token" });
           await writeConfigFile({
-            gateway: { auth: { mode: "token", token: String(token) } },
+            gateway: { auth: { mode: "token", token } },
           });
           await prompter.outro("ok");
         },

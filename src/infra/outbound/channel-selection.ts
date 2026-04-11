@@ -34,7 +34,7 @@ function resolveKnownChannel(value?: string | null): MessageChannelId | undefine
   if (!isKnownChannel(normalized)) {
     return undefined;
   }
-  return normalized as MessageChannelId;
+  return normalized;
 }
 
 function resolveAvailableKnownChannel(params: {
@@ -171,9 +171,9 @@ export async function resolveMessageChannelSelection(params: {
         };
       }
       if (!isKnownChannel(normalized)) {
-        throw new Error(`Unknown channel: ${String(normalized)}`);
+        throw new Error(`Unknown channel: ${normalized}`);
       }
-      throw new Error(`Channel is unavailable: ${String(normalized)}`);
+      throw new Error(`Channel is unavailable: ${normalized}`);
     }
     return {
       channel: availableExplicit,

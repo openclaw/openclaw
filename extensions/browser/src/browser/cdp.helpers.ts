@@ -1,11 +1,17 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
-import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
+import {
+  SsrFBlockedError,
+  type SsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
+} from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 export { isLoopbackHost };
@@ -62,9 +68,13 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: ssrfPolicy,
-  });
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+      policy: ssrfPolicy,
+    });
+  } catch (error) {
+    throw new BrowserCdpEndpointBlockedError({ cause: error });
+  }
 }
 
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
@@ -152,6 +162,11 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   }
 }
 
+type CdpFetchResult = {
+  response: Response;
+  release: () => Promise<void>;
+};
+
 function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
@@ -217,23 +232,47 @@ export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const res = await fetchCdpChecked(url, timeoutMs, init);
-  return (await res.json()) as T;
+  const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  try {
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
 }
 
 export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-): Promise<Response> {
+  ssrfPolicy?: SsrFPolicy,
+): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  let guardedRelease: (() => Promise<void>) | undefined;
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearTimeout(t);
+    await guardedRelease?.();
+  };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await withNoProxyForCdpUrl(url, () =>
-      fetch(url, { ...init, headers, signal: ctrl.signal }),
-    );
+    const res = await withNoProxyForCdpUrl(url, async () => {
+      const guarded = await fetchWithSsrFGuard({
+        url,
+        init: { ...init, headers },
+        signal: ctrl.signal,
+        policy: ssrfPolicy ?? { allowPrivateNetwork: true },
+        auditContext: "browser-cdp",
+      });
+      guardedRelease = guarded.release;
+      return guarded.response;
+    });
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -241,9 +280,13 @@ export async function fetchCdpChecked(
       }
       throw new Error(`HTTP ${res.status}`);
     }
-    return res;
-  } finally {
-    clearTimeout(t);
+    return { response: res, release };
+  } catch (error) {
+    await release();
+    if (error instanceof SsrFBlockedError) {
+      throw new BrowserCdpEndpointBlockedError({ cause: error });
+    }
+    throw error;
   }
 }
 
@@ -251,8 +294,10 @@ export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  await fetchCdpChecked(url, timeoutMs, init);
+  const { release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  await release();
 }
 
 export function openCdpWebSocket(

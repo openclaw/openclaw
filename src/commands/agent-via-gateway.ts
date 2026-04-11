@@ -58,7 +58,7 @@ export type AgentCliOpts = {
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
+      ? Number.parseInt(opts.timeout, 10)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (Number.isNaN(raw) || raw < 0) {
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
@@ -122,14 +122,14 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
 
-  const response = await withProgress(
+  const response: GatewayAgentResponse = await withProgress(
     {
       label: "Waiting for agent reply…",
       indeterminate: true,
       enabled: opts.json !== true,
     },
     async () =>
-      await callGateway<GatewayAgentResponse>({
+      await callGateway({
         method: "agent",
         params: {
           message: body,
@@ -165,7 +165,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    runtime.log(response?.summary ? response.summary : "No reply from agent.");
     return response;
   }
 
