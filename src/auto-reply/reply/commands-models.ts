@@ -390,7 +390,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
         config: params.cfg,
       })
     : params.agentId;
-  const modelsAgentDir = resolveAgentDir(params.cfg, modelsAgentId);
+  const modelsAgentDir = modelsAgentId ? resolveAgentDir(params.cfg, modelsAgentId) : undefined;
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
