@@ -1,4 +1,4 @@
-import type { SkillCommandSpec } from "../agents/skills.js";
+import type { SkillCommandSpec } from "../agents/skills/types.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getChatCommands } from "./commands-registry.data.js";
