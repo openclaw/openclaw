@@ -95,7 +95,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       readStore: pairing.readStoreForDmPolicy,
     });
 
-    const dmAllowFrom = (msteamsCfg?.allowFrom ?? []).map((v) => String(v));
+    const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
     const groupAllowFrom = msteamsCfg?.groupAllowFrom;
     const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
       allowFrom: dmAllowFrom,
