@@ -9,6 +9,7 @@ import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.j
 export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -123,7 +124,20 @@ async function handleFileConsentInvoke(
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
       : undefined;
-  const pendingFile = getPendingUpload(uploadId);
+  // Prefer the in-memory store (same-process reply path); fall back to the
+  // FS-backed store so CLI `message send --media` flows work even when the
+  // invoke callback is delivered to a different process.
+  const inMemoryFile = getPendingUpload(uploadId);
+  const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
+  const pendingFile:
+    | {
+        buffer: Buffer;
+        filename: string;
+        contentType?: string;
+        conversationId: string;
+        consentCardActivityId?: string;
+      }
+    | undefined = inMemoryFile ?? fsFile;
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -200,6 +214,7 @@ async function handleFileConsentInvoke(
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
+        await removePendingUploadFs(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
@@ -209,6 +224,7 @@ async function handleFileConsentInvoke(
     // User declined
     log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
+    await removePendingUploadFs(uploadId);
   }
 
   return true;
