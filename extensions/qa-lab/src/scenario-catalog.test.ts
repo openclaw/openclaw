@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isQaScenarioPackAvailable,
   listQaScenarioMarkdownPaths,
   readQaBootstrapScenarioCatalog,
   readQaScenarioById,
@@ -77,5 +79,46 @@ describe("qa scenario catalog", () => {
     expect(
       characterConfig?.turns?.some((turn) => turn.expectFile?.path === "precious-status.html"),
     ).toBe(true);
+  });
+});
+
+// Regression coverage for openclaw/openclaw#64522: production builds ship
+// without the `qa/` directory, so any top-level code path that reads QA
+// scenario config must degrade gracefully rather than crash the CLI at
+// startup. We fake the absent state by stubbing `fs.existsSync` so the
+// internal `resolveRepoPath` walk-up cannot find the scenario pack.
+describe("qa scenario catalog when the pack is not shipped", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports the pack as available in the dev repo (sanity check)", () => {
+    expect(isQaScenarioPackAvailable()).toBe(true);
+  });
+
+  it("isQaScenarioPackAvailable returns false when the pack file cannot be resolved", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    expect(isQaScenarioPackAvailable()).toBe(false);
+  });
+
+  it("readQaScenarioExecutionConfig returns undefined instead of throwing", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    expect(() =>
+      readQaScenarioExecutionConfig("source-docs-discovery-report"),
+    ).not.toThrow();
+    expect(readQaScenarioExecutionConfig("source-docs-discovery-report")).toBeUndefined();
+  });
+
+  it("discovery-eval imports successfully when the pack is absent", async () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    // discovery-eval.ts runs readQaScenarioExecutionConfig at module load via
+    // a top-level const. Re-importing it under the stubbed fs proves the
+    // CLI startup path no longer crashes in production builds. The module
+    // should expose its exported helpers and the hardcoded fallback refs
+    // should be in effect.
+    vi.resetModules();
+    const discoveryEval = await import("./discovery-eval.js");
+    expect(typeof discoveryEval.reportsMissingDiscoveryFiles).toBe("function");
+    expect(discoveryEval.reportsMissingDiscoveryFiles("blocked by missing files")).toBe(true);
   });
 });

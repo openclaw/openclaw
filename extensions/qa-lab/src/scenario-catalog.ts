@@ -291,6 +291,31 @@ export function readQaScenarioById(id: string): QaSeedScenario {
   return scenario;
 }
 
+/**
+ * Returns true when the QA scenario pack index file is resolvable on disk.
+ *
+ * Production builds intentionally exclude the `qa/` directory, so any code
+ * that inspects QA scenarios must be able to detect "no pack shipped" and
+ * fall back gracefully — crashing the CLI at startup because a QA pack is
+ * not installed is not acceptable.
+ */
+export function isQaScenarioPackAvailable(): boolean {
+  return resolveRepoPath(QA_SCENARIO_PACK_INDEX_PATH, "file") !== null;
+}
+
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
+  // The scenario pack is intentionally absent from production builds. Callers
+  // like `discovery-eval.ts` invoke this function at module-load time through
+  // a top-level constant initializer, so throwing here crashes CLI startup
+  // before any command can register (see openclaw/openclaw#64522). Returning
+  // undefined lets those callers fall back to their hardcoded defaults.
+  //
+  // Note that we only short-circuit when the pack file is missing entirely.
+  // Any other failure — malformed YAML, missing fence, zod validation error,
+  // unknown scenario id — still propagates via readQaScenarioById, so real
+  // bugs in the pack are never silently swallowed.
+  if (!isQaScenarioPackAvailable()) {
+    return undefined;
+  }
   return readQaScenarioById(id).execution?.config;
 }
