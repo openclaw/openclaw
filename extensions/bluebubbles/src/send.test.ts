@@ -453,7 +453,7 @@ describe("send", () => {
       const body = JSON.parse(sendCall[1].body);
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
     });
 
     it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
@@ -613,7 +613,7 @@ describe("send", () => {
       expect(result.messageId).toBe("msg-uuid-plain");
       const sendCall = mockFetch.mock.calls[1];
       const body = JSON.parse(sendCall[1].body);
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
       expect(body.selectedMessageGuid).toBeUndefined();
       expect(body.partIndex).toBeUndefined();
     });
@@ -663,7 +663,7 @@ describe("send", () => {
 
         const sendCall = mockFetch.mock.calls[1];
         const body = JSON.parse(sendCall[1].body);
-        expect(body.method).toBeUndefined();
+        expect(body.method).toBe("apple-script");
         expect(body.selectedMessageGuid).toBeUndefined();
         expect(body.partIndex).toBeUndefined();
         expect(body.effectId).toBeUndefined();
