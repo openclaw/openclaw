@@ -144,6 +144,60 @@ describe("ollama provider models", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("retries /api/show after an empty result for the same digest", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          model_info: { "qwen3.context_length": 131072 },
+          capabilities: ["thinking", "tools"],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
+    const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
+
+    expect(first).toEqual([
+      {
+        name: "qwen3:32b",
+        digest: "sha256:abc123",
+        contextWindow: undefined,
+        capabilities: undefined,
+      },
+    ]);
+    expect(second).toEqual([
+      {
+        name: "qwen3:32b",
+        digest: "sha256:abc123",
+        contextWindow: 131072,
+        capabilities: ["thinking", "tools"],
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("normalizes /v1 base URLs before fetching and reuses the same cache entry", async () => {
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(requestUrl(input)).toBe("http://127.0.0.1:11434/api/show");
+      expect(JSON.parse(requestBodyText(init?.body))).toEqual({ name: "qwen3:32b" });
+      return jsonResponse({
+        model_info: { "qwen3.context_length": 131072 },
+        capabilities: ["thinking", "tools"],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434/v1/", [model]);
+    const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("buildOllamaModelDefinition sets input to text+image when vision capability is present", () => {
     const visionModel = buildOllamaModelDefinition("kimi-k2.5:cloud", 262144, [
       "vision",
