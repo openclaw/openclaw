@@ -153,7 +153,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || (!state.activeChatRunId && sessionRuns.size === 0)) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
