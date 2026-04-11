@@ -168,6 +168,11 @@ validate_named_volume() {
 
 validate_mount_spec() {
   local mount="$1"
+  local source_and_target="$mount"
+  local source_part=""
+  local remainder=""
+  local target_part=""
+  local options_part=""
 
   if contains_disallowed_chars "$mount"; then
     fail "OPENCLAW_EXTRA_MOUNTS entries cannot contain control characters."
@@ -182,8 +187,7 @@ validate_mount_spec() {
   #
   # Expected format: source:target[:options]
   # - We reject commas because they can change YAML structure in inline forms.
-  # - We only require at least one ':' separator; Docker Compose will do the
-  #   authoritative parsing (including Windows drive letters).
+  # - We allow a leading Windows drive-letter prefix in the source path.
   if [[ "$mount" == *","* ]]; then
     fail "Invalid mount format '$mount'. Commas are not allowed in mount specs."
   fi
@@ -191,17 +195,29 @@ validate_mount_spec() {
   if [[ "$mount" =~ ^[[:space:]] || "$mount" =~ [[:space:]]$ ]]; then
     fail "Invalid mount format '$mount'. Mount specs cannot start or end with whitespace."
   fi
-  if [[ "$mount" != *":"* || "$mount" == ":"* || "$mount" == *":" ]]; then
+
+  if [[ "$source_and_target" =~ ^[A-Za-z]:[\\/].* ]]; then
+    source_and_target="${source_and_target:2}"
+  fi
+  if [[ "$source_and_target" != *":"* || "$source_and_target" == ":"* || "$source_and_target" == *":" ]]; then
     fail "Invalid mount format '$mount'. Expected source:target[:options]."
   fi
-  # Reject empty segments (e.g. source::ro) to keep errors actionable.
-  if [[ "$mount" == *"::"* ]]; then
-    fail "Invalid mount format '$mount'. Empty mount path segments are not allowed."
+
+  source_part="${source_and_target%%:*}"
+  remainder="${source_and_target#*:}"
+  target_part="${remainder%%:*}"
+  if [[ "$remainder" == *":"* ]]; then
+    options_part="${remainder#*:}"
+    if [[ "$options_part" == *":"* ]]; then
+      fail "Invalid mount format '$mount'. Expected source:target[:options]."
+    fi
   fi
-  # Prevent YAML from interpreting the volume string as a mapping item.
-  # Example: '- source: target' becomes a mapping instead of a volume string.
-  if [[ "$mount" == *": "* || "$mount" == *" :"* ]]; then
-    fail "Invalid mount format '$mount'. Do not put spaces around ':' in mount specs."
+
+  if [[ -z "$source_part" || -z "$target_part" || ( "$remainder" == *":"* && -z "$options_part" ) ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options]."
+  fi
+  if [[ "$source_part" =~ ^[[:space:]] || "$source_part" =~ [[:space:]]$ || "$target_part" =~ ^[[:space:]] || "$target_part" =~ [[:space:]]$ || ( -n "$options_part" && ( "$options_part" =~ ^[[:space:]] || "$options_part" =~ [[:space:]]$ ) ) ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces around ':' separators."
   fi
 }
 

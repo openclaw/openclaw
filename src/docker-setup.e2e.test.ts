@@ -416,6 +416,39 @@ describe("docker-setup.sh", () => {
     expect(result.stderr).toContain("Invalid mount format");
   });
 
+  it("rejects OPENCLAW_EXTRA_MOUNTS entries with empty path segments", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTRA_MOUNTS: "source::ro",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Invalid mount format");
+  });
+
+  it("rejects OPENCLAW_EXTRA_MOUNTS entries with whitespace around ':' separators", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTRA_MOUNTS: "source: target",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("without spaces around ':' separators");
+  });
+
+  it("rejects drive-letter-only OPENCLAW_EXTRA_MOUNTS entries without a target", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTRA_MOUNTS: String.raw`C:\Users\John Doe`,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Expected source:target[:options]");
+  });
+
   it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
