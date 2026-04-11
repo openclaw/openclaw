@@ -557,6 +557,24 @@ export async function getReplyFromConfig(
           messageProvider: hookMessageProvider,
           trigger: opts?.isHeartbeat ? "heartbeat" : "user",
           channelId: hookMessageProvider,
+          mediaPaths:
+            Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0
+              ? [...ctx.MediaPaths]
+              : ctx.MediaPath
+                ? [ctx.MediaPath]
+                : [],
+          mediaUrls:
+            Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0
+              ? [...ctx.MediaUrls]
+              : ctx.MediaUrl
+                ? [ctx.MediaUrl]
+                : [],
+          mediaTypes:
+            Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length > 0
+              ? [...ctx.MediaTypes]
+              : ctx.MediaType
+                ? [ctx.MediaType]
+                : [],
         },
       );
       if (hookResult?.handled) {

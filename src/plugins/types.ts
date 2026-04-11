@@ -2279,6 +2279,12 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Absolute paths to inbound media files (images, audio, video, documents). */
+  mediaPaths?: string[];
+  /** URLs for inbound media (may be present even when mediaPaths is empty, e.g. remote-only channels). */
+  mediaUrls?: string[];
+  /** MIME types of inbound media. May be shorter than mediaPaths/mediaUrls when content types are unknown. */
+  mediaTypes?: string[];
 };
 
 // before_agent_reply hook
