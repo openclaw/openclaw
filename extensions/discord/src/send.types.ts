@@ -167,6 +167,7 @@ export type DiscordChannelEdit = {
   archived?: boolean;
   locked?: boolean;
   autoArchiveDuration?: number;
+  appliedTags?: string[];
   availableTags?: DiscordForumTag[];
 };
 

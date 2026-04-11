@@ -87,4 +87,26 @@ describe("handleDiscordMessageAction", () => {
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
+
+  it("forwards appliedTags for channel-edit actions", async () => {
+    await handleDiscordMessageAction({
+      action: "channel-edit",
+      params: {
+        channelId: "thread-123",
+        appliedTags: ["tag-1", "tag-2"],
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { channels: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channelEdit",
+        channelId: "thread-123",
+        appliedTags: ["tag-1", "tag-2"],
+      }),
+      expect.any(Object),
+    );
+  });
 });

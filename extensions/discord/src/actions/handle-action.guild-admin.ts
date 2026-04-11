@@ -197,6 +197,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
       integer: true,
     });
+    const appliedTags = readStringArrayParam(actionParams, "appliedTags");
     const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {
@@ -212,6 +213,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         archived,
         locked,
         autoArchiveDuration: autoArchiveDuration ?? undefined,
+        appliedTags: appliedTags ?? undefined,
         availableTags,
       },
       cfg,

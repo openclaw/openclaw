@@ -602,6 +602,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: undefined,
       locked: undefined,
       autoArchiveDuration: undefined,
+      appliedTags: undefined,
     });
   });
 
@@ -627,6 +628,31 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: true,
       locked: false,
       autoArchiveDuration: 1440,
+      appliedTags: undefined,
+    });
+  });
+
+  it("forwards appliedTags when editing forum posts", async () => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        appliedTags: ["tag-1", "tag-2"],
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith({
+      channelId: "C1",
+      name: undefined,
+      topic: undefined,
+      position: undefined,
+      parentId: undefined,
+      nsfw: undefined,
+      rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
+      appliedTags: ["tag-1", "tag-2"],
     });
   });
 
@@ -653,6 +679,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: undefined,
       locked: undefined,
       autoArchiveDuration: undefined,
+      appliedTags: undefined,
     });
   });
 

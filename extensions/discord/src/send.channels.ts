@@ -70,6 +70,9 @@ export async function editChannelDiscord(
   if (payload.autoArchiveDuration !== undefined) {
     body.auto_archive_duration = payload.autoArchiveDuration;
   }
+  if (payload.appliedTags !== undefined) {
+    body.applied_tags = payload.appliedTags;
+  }
   if (payload.availableTags !== undefined) {
     body.available_tags = payload.availableTags.map((t) => ({
       ...(t.id !== undefined && { id: t.id }),
