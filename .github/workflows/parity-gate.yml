@@ -5,6 +5,7 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - "extensions/qa-lab/**"
+      - "extensions/qa-channel/**"
       - "qa/scenarios/**"
       - "src/agents/**"
       - "src/context-engine/**"
