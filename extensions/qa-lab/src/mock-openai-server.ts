@@ -453,7 +453,12 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
   if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
-    if (toolOutput.includes("Replay safety: unsafe after write.")) {
+    if (
+      toolOutput.includes("Replay safety: unsafe after write.") ||
+      /compaction-retry-summary\.txt/i.test(toolOutput) ||
+      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
+      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
+    ) {
       return "Protocol note: replay unsafe after write.";
     }
     return "";
