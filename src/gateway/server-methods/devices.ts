@@ -1,5 +1,6 @@
 import {
   approveDevicePairing,
+  formatDevicePairingForbiddenMessage,
   getPairedDevice,
   listApprovedPairedDeviceRoles,
   listDevicePairing,
@@ -162,7 +163,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, formatDevicePairingForbiddenMessage(approved)),
       );
       return;
     }

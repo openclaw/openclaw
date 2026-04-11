@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
@@ -687,7 +687,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   let payload: GatewaySecretsResolveResult;
   try {
-    payload = await callGateway<GatewaySecretsResolveResult>({
+    payload = await callGateway({
       config: params.config,
       method: "secrets.resolve",
       requiredMethods: ["secrets.resolve"],

@@ -450,7 +450,7 @@ describe("MatrixCryptoBootstrapper", () => {
       initiatedByMe: false,
       accept: vi.fn(async () => {}),
     };
-    await listener?.(verificationRequest);
+    listener?.(verificationRequest);
 
     expect(deps.verificationManager.trackVerificationRequest).toHaveBeenCalledWith(
       verificationRequest,
@@ -480,7 +480,7 @@ describe("MatrixCryptoBootstrapper", () => {
       initiatedByMe: false,
       accept: vi.fn(async () => {}),
     };
-    await listener?.(verificationRequest);
+    listener?.(verificationRequest);
 
     expect(verificationRequest.accept).not.toHaveBeenCalled();
   });

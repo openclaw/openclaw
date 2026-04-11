@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import "../cron/isolated-agent.mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { __testing as agentCommandTesting } from "../agents/agent-command.js";
+import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -20,24 +20,31 @@ import {
   mockAgentCommandConfig,
   withAgentCommandTempHome,
 } from "./agent-command.test-support.js";
-import { agentCommand } from "./agent.js";
 
-vi.mock("../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
-    "../agents/auth-profiles.js",
-  );
+vi.mock("../agents/auth-profiles.js", () => {
   return {
-    ...actual,
     ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
   };
 });
 
-vi.mock("../agents/command/session-store.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/command/session-store.js")>(
-    "../agents/command/session-store.js",
-  );
+vi.mock("../agents/auth-profiles/store.js", () => {
+  const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
-    ...actual,
+    clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
+    ensureAuthProfileStore: vi.fn(createEmptyStore),
+    ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    loadAuthProfileStore: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
+    replaceRuntimeAuthProfileStoreSnapshots: vi.fn(),
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
+  };
+});
+
+vi.mock("../agents/command/session-store.js", () => {
+  return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });
@@ -184,19 +191,17 @@ describe("agentCommand runtime config", () => {
     });
   });
 
-  it("creates a session entry when deriving from --to", async () => {
+  it("derives a fresh session from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
+      const cfg = mockConfig(home, store);
 
-      await agentCommand({ message: "hello", to: "+1555" }, runtime);
+      const resolved = resolveSession({ cfg, to: "+1555" });
 
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { sessionId: string }
-      >;
-      const entry = Object.values(saved)[0];
-      expect(entry.sessionId).toBeTruthy();
+      expect(resolved.storePath).toBe(store);
+      expect(resolved.sessionKey).toBeTruthy();
+      expect(resolved.sessionId).toBeTruthy();
+      expect(resolved.isNewSession).toBe(true);
     });
   });
 });
