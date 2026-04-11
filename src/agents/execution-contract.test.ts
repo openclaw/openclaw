@@ -63,6 +63,7 @@ describe("resolveEffectiveExecutionContract", () => {
       for (const modelId of [
         "openai/gpt-5.4",
         "openai:gpt-5.4",
+        "openai/gpt-5o-mini",
         "openai-codex/gpt-5.4",
         "openai-codex:gpt-5.4",
       ]) {

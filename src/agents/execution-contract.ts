@@ -32,7 +32,7 @@ function stripProviderPrefix(modelId: string): string {
  *
  * Does NOT cover `gpt-4.5`, `gpt-6`, or any non-gpt-5 family member.
  */
-const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.\-o]|$)/;
+const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.\-o]|$)/i;
 
 /**
  * Supported provider + model combinations where strict-agentic is the intended
@@ -40,7 +40,7 @@ const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.\-o]|$)/;
  * resolver and the `update_plan` auto-enable gate converge on the same
  * definition of "GPT-5-family openai/openai-codex run".
  */
-function isStrictAgenticSupportedProviderModel(params: {
+export function isStrictAgenticSupportedProviderModel(params: {
   provider?: string | null;
   modelId?: string | null;
 }): boolean {
