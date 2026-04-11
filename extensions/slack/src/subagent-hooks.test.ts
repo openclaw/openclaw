@@ -41,6 +41,17 @@ vi.mock("./thread-bindings.js", () => ({
   autoBindSpawnedSlackSubagent: hookMocks.autoBindSpawnedSlackSubagent,
   listSlackThreadBindingsBySessionKey: hookMocks.listSlackThreadBindingsBySessionKey,
   unbindSlackThreadBindingsBySessionKey: hookMocks.unbindSlackThreadBindingsBySessionKey,
+  parseSlackChannelIdFromTo: (to: string | undefined): string | undefined => {
+    const trimmed = typeof to === "string" ? to.trim() : undefined;
+    if (!trimmed) {
+      return undefined;
+    }
+    if (trimmed.toLowerCase().startsWith("channel:")) {
+      const rest = trimmed.slice("channel:".length).trim();
+      return rest || undefined;
+    }
+    return trimmed;
+  },
 }));
 
 function registerHandlersForTest(

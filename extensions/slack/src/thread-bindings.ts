@@ -165,7 +165,7 @@ function toSessionBindingRecord(
   };
 }
 
-function parseSlackChannelIdFromTo(to: string | undefined): string | undefined {
+export function parseSlackChannelIdFromTo(to: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(to);
   if (!trimmed) {
     return undefined;

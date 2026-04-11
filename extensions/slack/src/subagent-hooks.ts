@@ -1,13 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   autoBindSpawnedSlackSubagent,
   listSlackThreadBindingsBySessionKey,
+  parseSlackChannelIdFromTo,
   unbindSlackThreadBindingsBySessionKey,
   type SlackBindingTargetKind,
 } from "./thread-bindings.js";
@@ -53,6 +54,22 @@ type SlackSubagentDeliveryTargetEvent = {
   };
 };
 
+type SlackSubagentSpawningResult =
+  | { status: "ok"; threadBindingReady?: boolean }
+  | { status: "error"; error: string }
+  | undefined;
+
+type SlackSubagentDeliveryTargetResult =
+  | {
+      origin: {
+        channel: "slack";
+        accountId?: string;
+        to: string;
+        threadId?: string | number;
+      };
+    }
+  | undefined;
+
 function normalizeSlackBindingTargetKind(raw?: string): SlackBindingTargetKind | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "subagent" || normalized === "acp") {
@@ -66,15 +83,21 @@ function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
     cfg: api.config,
     accountId,
   });
+  // Reuse the core 3-tier (account -> channel -> session) `enabled` chain so it
+  // stays in sync with `resolveThreadBindingSpawnPolicy`. The spawn flag stays
+  // local because Slack opts in explicitly (default false), unlike the core
+  // helper which would default it to true for `current`-placement channels.
+  const policy = resolveThreadBindingSpawnPolicy({
+    cfg: api.config,
+    channel: "slack",
+    accountId: account.accountId,
+    kind: "subagent",
+  });
   const baseThreadBindings = api.config.channels?.slack?.threadBindings;
   const accountThreadBindings =
     api.config.channels?.slack?.accounts?.[account.accountId]?.threadBindings;
   return {
-    enabled:
-      accountThreadBindings?.enabled ??
-      baseThreadBindings?.enabled ??
-      api.config.session?.threadBindings?.enabled ??
-      true,
+    enabled: policy.enabled,
     spawnSubagentSessions:
       accountThreadBindings?.spawnSubagentSessions ??
       baseThreadBindings?.spawnSubagentSessions ??
@@ -82,27 +105,16 @@ function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
   };
 }
 
-function parseSlackChannelIdFromTo(to: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(to);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.toLowerCase().startsWith("channel:")) {
-    return normalizeOptionalString(trimmed.slice("channel:".length));
-  }
-  return trimmed;
-}
-
 export async function handleSlackSubagentSpawning(
   api: OpenClawPluginApi,
   event: SlackSubagentSpawningEvent,
-) {
+): Promise<SlackSubagentSpawningResult> {
   if (!event.threadRequested) {
-    return;
+    return undefined;
   }
   const channel = normalizeOptionalLowercaseString(event.requester?.channel);
   if (channel !== "slack") {
-    return;
+    return undefined;
   }
   const threadBindingFlags = resolveThreadBindingFlags(api, event.requester?.accountId);
   if (!threadBindingFlags.enabled) {
@@ -156,13 +168,15 @@ export function handleSlackSubagentEnded(event: SlackSubagentEndedEvent) {
   });
 }
 
-export function handleSlackSubagentDeliveryTarget(event: SlackSubagentDeliveryTargetEvent) {
+export function handleSlackSubagentDeliveryTarget(
+  event: SlackSubagentDeliveryTargetEvent,
+): SlackSubagentDeliveryTargetResult {
   if (!event.expectsCompletionMessage) {
-    return;
+    return undefined;
   }
   const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
   if (requesterChannel !== "slack") {
-    return;
+    return undefined;
   }
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadTs =
@@ -177,7 +191,7 @@ export function handleSlackSubagentDeliveryTarget(event: SlackSubagentDeliveryTa
     targetKind: "subagent",
   });
   if (bindings.length === 0) {
-    return;
+    return undefined;
   }
 
   let binding: (typeof bindings)[number] | undefined;
@@ -202,7 +216,7 @@ export function handleSlackSubagentDeliveryTarget(event: SlackSubagentDeliveryTa
     binding = bindings[0];
   }
   if (!binding) {
-    return;
+    return undefined;
   }
   return {
     origin: {
