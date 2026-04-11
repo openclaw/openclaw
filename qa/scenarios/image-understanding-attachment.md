@@ -80,7 +80,7 @@ steps:
       # request that happens to share a debug log with this one.
       - set: imageRequest
         value:
-          expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].find((request) => String(request.prompt ?? '').includes('Image understanding check'))"
+          expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].find((request) => String(request.prompt ?? '').includes('Image understanding check')) : null"
       - assert:
           expr: "!env.mock || (imageRequest && (imageRequest.imageInputCount ?? 0) >= 1)"
           message:
