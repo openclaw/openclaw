@@ -256,6 +256,45 @@ function hasConfiguredPluginConfigEntry(cfg: OpenClawConfig): boolean {
   );
 }
 
+function listContainsNormalized(value: unknown, expected: string): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((entry) => normalizeOptionalLowercaseString(entry) === expected)
+  );
+}
+
+function toolPolicyReferencesBrowser(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (listContainsNormalized(value.allow, "browser") ||
+      listContainsNormalized(value.alsoAllow, "browser"))
+  );
+}
+
+function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
+  if (toolPolicyReferencesBrowser(cfg.tools)) {
+    return true;
+  }
+  const agentList = cfg.agents?.list;
+  return Array.isArray(agentList)
+    ? agentList.some((entry) => isRecord(entry) && toolPolicyReferencesBrowser(entry.tools))
+    : false;
+}
+
+function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
+  const entries = cfg.plugins?.entries;
+  if (isRecord(cfg.browser) || isRecord(cfg.acp) || hasBrowserToolReference(cfg)) {
+    return true;
+  }
+  if (isRecord(entries?.browser) || isRecord(entries?.acpx) || isRecord(entries?.xai)) {
+    return true;
+  }
+  if (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search)) {
+    return true;
+  }
+  return hasConfiguredPluginConfigEntry(cfg);
+}
+
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
@@ -320,6 +359,9 @@ export function configMayNeedPluginAutoEnable(
   }
   if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {
     return true;
+  }
+  if (!hasSetupAutoEnableRelevantConfig(cfg)) {
+    return false;
   }
   return (
     resolvePluginSetupAutoEnableReasons({
@@ -428,15 +470,17 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const entry of resolvePluginSetupAutoEnableReasons({
-    config: params.config,
-    env: params.env,
-  })) {
-    changes.push({
-      pluginId: entry.pluginId,
-      kind: "setup-auto-enable",
-      reason: entry.reason,
-    });
+  if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    for (const entry of resolvePluginSetupAutoEnableReasons({
+      config: params.config,
+      env: params.env,
+    })) {
+      changes.push({
+        pluginId: entry.pluginId,
+        kind: "setup-auto-enable",
+        reason: entry.reason,
+      });
+    }
   }
 
   return changes;

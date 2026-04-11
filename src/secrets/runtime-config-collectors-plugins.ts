@@ -47,6 +47,7 @@ export function collectPluginConfigAssignments(params: {
         workspaceDir,
         env: params.context.env,
         cache: true,
+        fallbackToBundledMetadata: false,
         pluginIds: Object.keys(entries),
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
