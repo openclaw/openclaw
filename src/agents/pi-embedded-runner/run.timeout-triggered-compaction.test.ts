@@ -578,4 +578,90 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
+
+  it("triggers compaction on idle timeout with no usage stats when preflight estimated high tokens", async () => {
+    // Idle timeout: model produced zero output → no usage stats
+    // But preflight estimated 150k tokens (high context pressure)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: undefined, // no output → no usage
+        preflightRecovery: {
+          route: "truncate_tool_results_only",
+          estimatedPromptTokens: 150000,
+        },
+      }),
+    );
+    // Compaction succeeds
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "idle timeout recovery compaction",
+        tokensBefore: 150000,
+        tokensAfter: 80000,
+      }),
+    );
+    // Retry after compaction succeeds
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        force: true,
+        compactionTarget: "budget",
+        runtimeContext: expect.objectContaining({
+          trigger: "timeout_recovery",
+          attempt: 1,
+        }),
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("triggers compaction on idle timeout with no usage stats and no preflight estimate (assumes high pressure)", async () => {
+    // Idle timeout with NO preflight recovery at all — should still compact
+    // because idle timeout + missing data → assume ratio = 1.0
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: undefined,
+      }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "idle timeout recovery (no preflight data)",
+        tokensBefore: 130000,
+        tokensAfter: 60000,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
+  });
+
+  it("does NOT trigger compaction on regular (non-idle) timeout with no usage stats", async () => {
+    // Regular timeout (NOT idle — model was producing output but was slow)
+    // with no usage stats → ratio defaults to 0 → no compaction
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: false,
+        lastAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
 });

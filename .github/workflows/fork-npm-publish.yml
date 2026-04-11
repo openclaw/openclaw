@@ -1,0 +1,107 @@
+name: Fork NPM Auto-Publish
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: fork-npm-publish
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # required for OIDC provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      # Second setup-node purely to wire npm registry auth (TOKEN → ~/.npmrc)
+      - name: Configure npm registry auth
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Derive scoped version
+        id: version
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "version=${BASE_VERSION}-fork.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already published
+        id: check
+        env:
+          FORK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "@vibetechnologies/openclaw@${FORK_VERSION}" version >/dev/null 2>&1; then
+            echo "already published, skipping"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Patch package name + version
+        if: steps.check.outputs.published == 'false'
+        env:
+          FORK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.name = "@vibetechnologies/openclaw";
+          pkg.version = process.env.FORK_VERSION;
+          fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          NODE
+          echo "Will publish @vibetechnologies/openclaw@${FORK_VERSION}"
+
+      - name: Publish @vibetechnologies/openclaw
+        if: steps.check.outputs.published == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Try OIDC trusted publishing first (no token needed)
+          if OPENCLAW_PREPACK_PREPARED=1 npm publish --provenance --access public 2>/dev/null; then
+            echo "✅ Published via OIDC"
+            exit 0
+          fi
+
+          # Fall back to token auth
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            OPENCLAW_PREPACK_PREPARED=1 npm publish --access public
+            echo "✅ Published via NPM_TOKEN"
+            exit 0
+          fi
+
+          echo "❌ No valid npm auth. Set NPM_TOKEN secret in repo settings." >&2
+          exit 1
+
+      - name: Skip (already published)
+        if: steps.check.outputs.published == 'true'
+        run: echo "⏭️ @vibetechnologies/openclaw@${{ steps.version.outputs.version }} already published, skipping"
+

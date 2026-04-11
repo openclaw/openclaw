@@ -13,6 +13,7 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   resolveAckExecutionFastPathInstruction,
+  resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -102,6 +103,65 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
+
+  it("treats stop thinking-only turns as incomplete", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "openai",
+          model: "mock-1",
+          content: [{ type: "thinking", thinking: "internal-only" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(text).toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
+  it("does not treat stop turns with visible assistant text as incomplete", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I finished the update."],
+        toolMetas: [],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "openai",
+          model: "mock-1",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(text).toBeNull();
+  });
+
+  it("does not treat stop turns with tool calls as incomplete", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "openai",
+          model: "mock-1",
+          content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: {} }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(text).toBeNull();
   });
 
   it("detects replay-safe planning-only GPT turns", () => {

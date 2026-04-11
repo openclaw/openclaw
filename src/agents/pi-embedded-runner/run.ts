@@ -820,10 +820,14 @@ export async function runEmbeddedPiAgent(
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
             const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const effectivePromptTokens =
+              lastTurnPromptTokens ?? preflightRecovery?.estimatedPromptTokens;
             const tokenUsedRatio =
-              lastTurnPromptTokens != null && ctxInfo.tokens > 0
-                ? lastTurnPromptTokens / ctxInfo.tokens
-                : 0;
+              effectivePromptTokens != null && ctxInfo.tokens > 0
+                ? effectivePromptTokens / ctxInfo.tokens
+                : idleTimedOut
+                  ? 1.0
+                  : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
                 `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to failover rotation`,
@@ -832,7 +836,7 @@ export async function runEmbeddedPiAgent(
               const timeoutDiagId = createCompactionDiagId();
               timeoutCompactionAttempts++;
               log.warn(
-                `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
+                `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%${lastTurnPromptTokens == null ? " [fallback estimate]" : ""}); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;

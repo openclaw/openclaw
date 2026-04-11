@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  TRUNCATION_ONLY_MAX_MESSAGES,
   estimatePrePromptTokens,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -172,6 +173,62 @@ describe("preemptive-compaction", () => {
     expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
     expect(potential.oversizedReducibleChars).toBeLessThan(desiredOverflowTokens * 4);
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
+    expect(result.route).toBe("truncate_tool_results_only");
+    expect(result.shouldCompact).toBe(false);
+  });
+
+  it("escalates truncate_tool_results_only to compact_then_truncate when message count exceeds threshold", () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < TRUNCATION_ONLY_MAX_MESSAGES + 1; i++) {
+      if (i % 2 === 0) {
+        messages.push(makeAssistantHistory(`history ${i}`));
+      } else {
+        messages.push(makeToolResultMessage("x".repeat(2000)));
+      }
+    }
+    const reserveTokens = 100;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: estimatedPromptTokens - 200 + reserveTokens,
+      reserveTokens,
+    });
+
+    expect(messages.length).toBeGreaterThan(TRUNCATION_ONLY_MAX_MESSAGES);
+    expect(result.route).toBe("compact_then_truncate");
+    expect(result.shouldCompact).toBe(true);
+  });
+
+  it("keeps truncate_tool_results_only when message count is below threshold", () => {
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < TRUNCATION_ONLY_MAX_MESSAGES - 1; i++) {
+      if (i % 2 === 0) {
+        messages.push(makeAssistantHistory(`history ${i}`));
+      } else {
+        messages.push(makeToolResultMessage("x".repeat(2000)));
+      }
+    }
+    const reserveTokens = 100;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: estimatedPromptTokens - 200 + reserveTokens,
+      reserveTokens,
+    });
+
+    expect(messages.length).toBeLessThan(TRUNCATION_ONLY_MAX_MESSAGES);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
   });

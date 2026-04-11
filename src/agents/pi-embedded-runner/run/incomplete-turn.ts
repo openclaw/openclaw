@@ -15,6 +15,8 @@ type IncompleteTurnAttempt = Pick<
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
+  | "assistantTexts"
+  | "toolMetas"
   | "lastAssistant"
   | "replayMetadata"
   | "promptErrorSource"
@@ -140,6 +142,21 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const stopReason = params.attempt.lastAssistant?.stopReason;
+  if (stopReason === "stop") {
+    const hasVisibleAssistantText = params.attempt.assistantTexts.some(
+      (text) => text.trim().length > 0,
+    );
+    const hasToolCalls =
+      params.attempt.toolMetas.length > 0 ||
+      params.attempt.lastAssistant?.content.some((block) => block.type === "toolCall") === true;
+    if (hasVisibleAssistantText || hasToolCalls) {
+      return null;
+    }
+    return params.attempt.replayMetadata.hadPotentialSideEffects
+      ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
+      : "⚠️ Agent couldn't generate a response. Please try again.";
+  }
+
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,

@@ -62,10 +62,12 @@ export type EmbeddedRunAttemptResult = {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         handled: true;
         truncatedCount?: number;
+        estimatedPromptTokens?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         handled?: false;
+        estimatedPromptTokens?: number;
       };
   sessionIdUsed: string;
   bootstrapPromptWarningSignaturesSeen?: string[];

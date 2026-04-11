@@ -1879,6 +1879,7 @@ export async function runEmbeddedAttempt(
                 route: "truncate_tool_results_only",
                 handled: true,
                 truncatedCount: truncationResult.truncatedCount,
+                estimatedPromptTokens: preemptiveCompaction.estimatedPromptTokens,
               };
               log.info(
                 `[context-overflow-precheck] early tool-result truncation succeeded for ` +
@@ -1898,7 +1899,10 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
                   `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
               );
-              preflightRecovery = { route: "compact_only" };
+              preflightRecovery = {
+                route: "compact_only",
+                estimatedPromptTokens: preemptiveCompaction.estimatedPromptTokens,
+              };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
               promptErrorSource = "precheck";
               skipPromptSubmission = true;
@@ -1907,8 +1911,14 @@ export async function runEmbeddedAttempt(
           if (preemptiveCompaction.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
-                ? { route: "compact_then_truncate" }
-                : { route: "compact_only" };
+                ? {
+                    route: "compact_then_truncate",
+                    estimatedPromptTokens: preemptiveCompaction.estimatedPromptTokens,
+                  }
+                : {
+                    route: "compact_only",
+                    estimatedPromptTokens: preemptiveCompaction.estimatedPromptTokens,
+                  };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             log.warn(
