@@ -199,9 +199,15 @@ function runFeishuWSClientUntilDead(params: {
         return;
       }
 
-      // If the SDK is not currently scheduling a reconnect, assume the socket is
-      // in a steady/healthy state. lastConnectTime will be stable here.
-      //
+      const internalWsClient = wsClient as Lark.WSClient & {
+        isConnecting?: boolean;
+        wsConfig?: { getWSInstance?: () => { readyState?: number } | null };
+      };
+      const isSocketOpen = internalWsClient.wsConfig?.getWSInstance?.()?.readyState === 1;
+      if (isSocketOpen) {
+        return;
+      }
+
       // NOTE: @larksuiteoapi/node-sdk does not reliably clear nextConnectTime on
       // successful reconnects, so we cannot treat `nextConnectTime > 0` as an
       // active reconnect signal. Instead, treat it as active ONLY when it is a
@@ -210,18 +216,19 @@ function runFeishuWSClientUntilDead(params: {
       // Healthy socket after a recovered reconnect typically yields:
       //   lastConnectTime = (recent)
       //   nextConnectTime = (stale value in the past)
-      // In that case, `nextConnectTime <= lastConnectTime` and we must not
-      // restart the supervisor.
+      //   isConnecting = false
+      // In that case, `nextConnectTime <= lastConnectTime` and/or the socket is
+      // already open, so we must not restart the supervisor.
       const isSchedulingReconnect = nextConnectTime > 0 && nextConnectTime > currentConnectTime;
-      if (!isSchedulingReconnect) {
-        return;
-      }
-
-      // Only flag a stall when a scheduled reconnect is overdue.
-      const overdueMs = Date.now() - nextConnectTime;
-      if (overdueMs >= FEISHU_WS_STALL_DETECT_MS) {
+      const reconnectDeadline = isSchedulingReconnect ? nextConnectTime : lastActivityAt;
+      const overdueMs = reconnectDeadline === null ? 0 : Date.now() - reconnectDeadline;
+      const retryBudgetExhausted = !internalWsClient.isConnecting;
+      if (overdueMs >= FEISHU_WS_STALL_DETECT_MS && (isSchedulingReconnect || retryBudgetExhausted)) {
+        const reason = isSchedulingReconnect
+          ? `nextConnectTime overdue by ${Math.round(overdueMs / 1000)}s`
+          : `retry budget exhausted ${Math.round(overdueMs / 1000)}s ago`;
         log(
-          `feishu[${accountId}]: WebSocket reconnect seems stalled (nextConnectTime overdue by ${Math.round(overdueMs / 1000)}s); will restart supervisor cycle`,
+          `feishu[${accountId}]: WebSocket reconnect seems stalled (${reason}); will restart supervisor cycle`,
         );
         clearInterval(stallPoller);
         abortSignal?.removeEventListener("abort", handleAbort);
