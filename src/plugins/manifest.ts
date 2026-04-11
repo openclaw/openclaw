@@ -38,6 +38,47 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
+
+export type PluginManifestActivation = {
+  /**
+   * Provider ids that should activate this plugin when explicitly requested.
+   * This is metadata only; runtime loading still happens through the loader.
+   */
+  onProviders?: string[];
+  /** Command ids that should activate this plugin. */
+  onCommands?: string[];
+  /** Channel ids that should activate this plugin. */
+  onChannels?: string[];
+  /** Route kinds that should activate this plugin. */
+  onRoutes?: string[];
+  /** Cheap capability hints used by future activation planning. */
+  onCapabilities?: PluginManifestActivationCapability[];
+};
+
+export type PluginManifestSetupProvider = {
+  /** Provider id surfaced during setup/onboarding. */
+  id: string;
+  /** Setup/auth methods that this provider supports. */
+  authMethods?: string[];
+  /** Environment variables that can satisfy setup without runtime loading. */
+  envVars?: string[];
+};
+
+export type PluginManifestSetup = {
+  /** Cheap provider setup metadata exposed before runtime loads. */
+  providers?: PluginManifestSetupProvider[];
+  /** Setup-time backend ids available without full runtime activation. */
+  cliBackends?: string[];
+  /** Config migration ids owned by this plugin's setup surface. */
+  configMigrations?: string[];
+  /**
+   * Whether setup still needs plugin runtime execution after descriptor lookup.
+   * Defaults to false when omitted.
+   */
+  requiresRuntime?: boolean;
+};
+
 export type PluginManifestConfigLiteral = string | number | boolean | null;
 
 export type PluginManifestDangerousConfigFlag = {
@@ -128,6 +169,10 @@ export type PluginManifest = {
    * and non-runtime auth-choice routing before provider runtime loads.
    */
   providerAuthChoices?: PluginManifestProviderAuthChoice[];
+  /** Cheap activation hints exposed before plugin runtime loads. */
+  activation?: PluginManifestActivation;
+  /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
+  setup?: PluginManifestSetup;
   skills?: string[];
   name?: string;
   description?: string;
@@ -366,6 +411,78 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
 }
 
+function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const onProviders = normalizeTrimmedStringList(value.onProviders);
+  const onCommands = normalizeTrimmedStringList(value.onCommands);
+  const onChannels = normalizeTrimmedStringList(value.onChannels);
+  const onRoutes = normalizeTrimmedStringList(value.onRoutes);
+  const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
+    (capability): capability is PluginManifestActivationCapability =>
+      capability === "provider" ||
+      capability === "channel" ||
+      capability === "tool" ||
+      capability === "hook",
+  );
+
+  const activation = {
+    ...(onProviders.length > 0 ? { onProviders } : {}),
+    ...(onCommands.length > 0 ? { onCommands } : {}),
+    ...(onChannels.length > 0 ? { onChannels } : {}),
+    ...(onRoutes.length > 0 ? { onRoutes } : {}),
+    ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
+  } satisfies PluginManifestActivation;
+
+  return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+function normalizeManifestSetupProviders(
+  value: unknown,
+): PluginManifestSetupProvider[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSetupProvider[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const id = normalizeOptionalString(entry.id) ?? "";
+    if (!id) {
+      continue;
+    }
+    const authMethods = normalizeTrimmedStringList(entry.authMethods);
+    const envVars = normalizeTrimmedStringList(entry.envVars);
+    normalized.push({
+      id,
+      ...(authMethods.length > 0 ? { authMethods } : {}),
+      ...(envVars.length > 0 ? { envVars } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const providers = normalizeManifestSetupProviders(value.providers);
+  const cliBackends = normalizeTrimmedStringList(value.cliBackends);
+  const configMigrations = normalizeTrimmedStringList(value.configMigrations);
+  const requiresRuntime =
+    typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
+  const setup = {
+    ...(providers ? { providers } : {}),
+    ...(cliBackends.length > 0 ? { cliBackends } : {}),
+    ...(configMigrations.length > 0 ? { configMigrations } : {}),
+    ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
+  } satisfies PluginManifestSetup;
+  return Object.keys(setup).length > 0 ? setup : undefined;
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -553,6 +670,8 @@ export function loadPluginManifest(
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
+  const activation = normalizeManifestActivation(raw.activation);
+  const setup = normalizeManifestSetup(raw.setup);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
@@ -584,6 +703,8 @@ export function loadPluginManifest(
       providerAuthAliases,
       channelEnvVars,
       providerAuthChoices,
+      activation,
+      setup,
       skills,
       name,
       description,

@@ -7,11 +7,13 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Tools/video_generate: allow providers and plugins to return URL-only generated video assets so agent delivery and `openclaw capability video generate --output ...` can forward or stream large videos without requiring the full file in memory first. (#61988) Thanks @xieyongliang.
+- Models/providers: surface how configured OpenAI-compatible endpoints are classified in embedded-agent debug logs, so local and proxy routing issues are easier to diagnose. (#64754) Thanks @ImLukeF.
 
 ### Fixes
 
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
 - QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown by routing QA command registration through a narrow facade. (#64648) Thanks @obviyus.
+- QA/packaging: ship the bundled QA scenario pack in npm releases and keep `openclaw completion --write-state` working even if QA setup is broken, so missing QA content only degrades QA instead of breaking broader CLI startup-adjacent flows. Thanks @vincentkoc.
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history before finalization so tool-generated audio reaches webchat clients again. (#63514) thanks @bittoby
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.

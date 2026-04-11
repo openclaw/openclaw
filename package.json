@@ -32,6 +32,7 @@
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
+    "qa/scenarios/",
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
