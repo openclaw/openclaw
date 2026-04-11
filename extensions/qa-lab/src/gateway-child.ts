@@ -107,6 +107,34 @@ async function closeWriteStream(stream: WriteStream) {
   });
 }
 
+async function preserveQaGatewayDebugArtifacts(params: {
+  preserveToDir: string;
+  stdoutLogPath: string;
+  stderrLogPath: string;
+  tempRoot: string;
+}) {
+  await fs.rm(params.preserveToDir, { recursive: true, force: true });
+  await fs.mkdir(params.preserveToDir, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    fs.cp(params.stdoutLogPath, path.join(params.preserveToDir, "gateway.stdout.log"), {
+      force: true,
+    }),
+    fs.cp(params.stderrLogPath, path.join(params.preserveToDir, "gateway.stderr.log"), {
+      force: true,
+    }),
+  ]);
+  await fs.writeFile(
+    path.join(params.preserveToDir, "README.txt"),
+    [
+      "Only sanitized gateway debug artifacts are preserved here.",
+      "The full QA gateway runtime was not copied because it may contain credentials or auth tokens.",
+      `Original runtime temp root: ${params.tempRoot}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function waitForChildExit(
   child: Pick<ReturnType<typeof spawn>, "exitCode" | "signalCode" | "once" | "off">,
   timeoutMs: number,
@@ -405,6 +433,7 @@ export const __testing = {
   isRetryableGatewayCallError,
   isRetryableRpcStartupError,
   isRetryableGatewayStartupError,
+  preserveQaGatewayDebugArtifacts,
   readQaLiveProviderConfigOverrides,
   resolveQaLiveAnthropicSetupToken,
   stageQaLiveAnthropicSetupToken,
@@ -1097,9 +1126,12 @@ export async function startQaGatewayChild(params: {
         await closeWriteStream(stdoutLog);
         await closeWriteStream(stderrLog);
         if (opts?.preserveToDir && !(opts?.keepTemp ?? keepTemp)) {
-          await fs.rm(opts.preserveToDir, { recursive: true, force: true });
-          await fs.mkdir(path.dirname(opts.preserveToDir), { recursive: true });
-          await fs.cp(tempRoot, opts.preserveToDir, { recursive: true });
+          await preserveQaGatewayDebugArtifacts({
+            preserveToDir: opts.preserveToDir,
+            stdoutLogPath,
+            stderrLogPath,
+            tempRoot,
+          });
         }
         if (!(opts?.keepTemp ?? keepTemp)) {
           await fs.rm(tempRoot, { recursive: true, force: true });

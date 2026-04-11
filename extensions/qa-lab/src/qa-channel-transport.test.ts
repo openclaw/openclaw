@@ -85,15 +85,38 @@ describe("qa channel transport", () => {
 
   it("inherits the shared failure-aware wait helper", async () => {
     const transport = createQaChannelTransport(createQaBusState());
+    let injected = false;
+
+    await expect(
+      transport.capabilities.waitForCondition(
+        async () => {
+          if (!injected) {
+            injected = true;
+            await transport.capabilities.injectOutboundMessage({
+              accountId: "default",
+              to: "dm:qa-operator",
+              text: "⚠️ agent failed before reply: synthetic failure for wait helper",
+            });
+          }
+          return undefined;
+        },
+        50,
+        10,
+      ),
+    ).rejects.toThrow("synthetic failure for wait helper");
+  });
+
+  it("captures a fresh failure cursor for each wait helper call", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
 
     await transport.capabilities.injectOutboundMessage({
       accountId: "default",
       to: "dm:qa-operator",
-      text: "⚠️ agent failed before reply: synthetic failure for wait helper",
+      text: "⚠️ agent failed before reply: stale failure should not leak",
     });
 
-    await expect(
-      transport.capabilities.waitForCondition(async () => undefined, 50, 10),
-    ).rejects.toThrow("synthetic failure for wait helper");
+    await expect(transport.capabilities.waitForCondition(async () => "ok", 50, 10)).resolves.toBe(
+      "ok",
+    );
   });
 });

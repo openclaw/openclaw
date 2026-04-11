@@ -402,6 +402,44 @@ describe("buildQaRuntimeEnv", () => {
     );
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves only sanitized gateway debug artifacts", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-preserve-src-"));
+    const preserveToDir = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-preserve-out-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+      await rm(preserveToDir, { recursive: true, force: true });
+    });
+
+    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+    await writeFile(stdoutLogPath, "stdout", "utf8");
+    await writeFile(stderrLogPath, "stderr", "utf8");
+    await mkdir(path.join(tempRoot, "state"), { recursive: true });
+    await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
+
+    await __testing.preserveQaGatewayDebugArtifacts({
+      preserveToDir,
+      stdoutLogPath,
+      stderrLogPath,
+      tempRoot,
+    });
+
+    expect((await readdir(preserveToDir)).toSorted()).toEqual([
+      "README.txt",
+      "gateway.stderr.log",
+      "gateway.stdout.log",
+    ]);
+    await expect(readFile(path.join(preserveToDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
+      "stdout",
+    );
+    await expect(readFile(path.join(preserveToDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
+      "stderr",
+    );
+    await expect(readFile(path.join(preserveToDir, "README.txt"), "utf8")).resolves.toContain(
+      "was not copied because it may contain credentials or auth tokens",
+    );
+  });
 });
 
 describe("resolveQaControlUiRoot", () => {

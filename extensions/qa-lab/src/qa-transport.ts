@@ -122,12 +122,12 @@ export function assertNoFailureReplies(
 }
 
 export function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
-  const sinceIndex = state.getSnapshot().messages.length;
   return async function waitForTransportCondition<T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs = 15_000,
     intervalMs = 100,
   ): Promise<T> {
+    const sinceIndex = state.getSnapshot().messages.length;
     return await waitForQaTransportCondition(
       async () => {
         assertNoFailureReplies(state, {

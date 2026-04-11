@@ -193,7 +193,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("does not block shutdown forever when an aborted account task never settles", async () => {
+  it("does not allow a second account task to start when stop times out", async () => {
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>
         await new Promise<void>(() => {
@@ -211,11 +211,14 @@ describe("server-channels auto restart", () => {
     const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(5_000);
     await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
 
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(account?.running).toBe(false);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {

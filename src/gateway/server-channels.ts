@@ -574,6 +574,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: true,
+            restartPending: false,
+            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+          });
+          return;
         }
         store.aborts.delete(id);
         store.tasks.delete(id);
