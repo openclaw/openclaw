@@ -1230,7 +1230,7 @@ deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
   # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
   # app process exits, so require a non-node client connection rather than a
-  # long-lived `Safari` process specifically.
+  # long-lived Safari process specifically.
   if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
     | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
     exit 0
