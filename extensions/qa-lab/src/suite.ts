@@ -1610,7 +1610,13 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         alternateModel,
         fastMode,
         concurrency,
-        scenarioIds: params?.scenarioIds,
+        // Record the scenario ids that actually ran (post-selectQaSuiteScenarios
+        // normalization) so the summary metadata matches the executed selection,
+        // not the raw caller input. selectQaSuiteScenarios dedupes via Set and
+        // reorders to catalog order, so passing params.scenarioIds directly
+        // would mislabel runs that repeated --scenario flags or used
+        // non-catalog order.
+        scenarioIds: selectedCatalogScenarios.map((scenario) => scenario.id),
       });
       lab.setLatestReport({
         outputPath: reportPath,
@@ -1771,7 +1777,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       alternateModel,
       fastMode,
       concurrency,
-      scenarioIds: params?.scenarioIds,
+      // Record the post-selection scenario ids (see the sibling
+      // writeQaSuiteArtifacts call above for the full reasoning).
+      scenarioIds: selectedCatalogScenarios.map((scenario) => scenario.id),
     });
     const latestReport = {
       outputPath: reportPath,
