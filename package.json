@@ -229,6 +229,10 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
+    "./plugin-sdk/media-mime": {
+      "types": "./dist/plugin-sdk/media-mime.d.ts",
+      "default": "./dist/plugin-sdk/media-mime.js"
+    },
     "./plugin-sdk/media-generation-runtime": {
       "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-generation-runtime.js"

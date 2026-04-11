@@ -541,7 +541,13 @@ function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
-export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
+type VeniceModelDiscoveryOptions = {
+  retryDelayMs?: number;
+};
+
+export async function discoverVeniceModels(
+  options: VeniceModelDiscoveryOptions = {},
+): Promise<ModelDefinitionConfig[]> {
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return staticVeniceModelDefinitions();
   }
@@ -565,9 +571,9 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
       },
       {
         attempts: 3,
-        minDelayMs: 300,
-        maxDelayMs: 2000,
-        jitter: 0.2,
+        minDelayMs: options.retryDelayMs ?? 300,
+        maxDelayMs: options.retryDelayMs ?? 2000,
+        jitter: options.retryDelayMs === undefined ? 0.2 : 0,
         label: "venice-model-discovery",
         shouldRetry: isRetryableVeniceDiscoveryError,
       },
