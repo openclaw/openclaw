@@ -27,6 +27,19 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
+function coerceLoadedChannelPlugin(
+  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
+): LoadedChannelPlugin | null {
+  const id = normalizeOptionalString(plugin?.id) ?? "";
+  if (!plugin || !id) {
+    return null;
+  }
+  if (!plugin.meta || typeof plugin.meta !== "object") {
+    plugin.meta = {};
+  }
+  return plugin as LoadedChannelPlugin;
+}
+
 function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: LoadedChannelPlugin[] = [];
@@ -52,14 +65,9 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const channelPlugins: LoadedChannelPlugin[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
-      const plugin = entry?.plugin;
-      const id = normalizeOptionalString(plugin?.id) ?? "";
-      if (plugin && id) {
-        channelPlugins.push({
-          ...plugin,
-          id,
-          meta: plugin.meta ?? {},
-        });
+      const plugin = coerceLoadedChannelPlugin(entry?.plugin);
+      if (plugin) {
+        channelPlugins.push(plugin);
       }
     }
   }
