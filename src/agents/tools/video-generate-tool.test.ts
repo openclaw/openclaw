@@ -127,7 +127,55 @@ describe("createVideoGenerateTool", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
-  it("starts background generation and wakes the session with MEDIA lines", async () => {
+  it("surfaces url-only generated videos without saving local files", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          url: "https://example.com/generated-lobster.mp4",
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+      metadata: { taskId: "task-1" },
+    });
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "vydra/veo3" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-url", { prompt: "friendly lobster surfing" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(text).toContain("Generated 1 video with vydra/veo3.");
+    expect(text).toContain("MEDIA:https://example.com/generated-lobster.mp4");
+    expect(result.details).toMatchObject({
+      provider: "vydra",
+      model: "veo3",
+      count: 1,
+      media: {
+        mediaUrls: ["https://example.com/generated-lobster.mp4"],
+      },
+      paths: ["https://example.com/generated-lobster.mp4"],
+      metadata: { taskId: "task-1" },
+    });
+  });
+
+  it("starts background generation and wakes the session with url-only MEDIA lines", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
       runtime: "cli",
@@ -143,25 +191,20 @@ describe("createVideoGenerateTool", () => {
     const wakeSpy = vi
       .spyOn(videoGenerateBackground, "wakeVideoGenerationTaskCompletion")
       .mockResolvedValue(undefined);
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
-      provider: "qwen",
-      model: "wan2.6-t2v",
+      provider: "vydra",
+      model: "veo3",
       attempts: [],
       ignoredOverrides: [],
       videos: [
         {
-          buffer: Buffer.from("video-bytes"),
+          url: "https://example.com/generated-lobster.mp4",
           mimeType: "video/mp4",
           fileName: "lobster.mp4",
         },
       ],
       metadata: { taskId: "task-1" },
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
-      size: 11,
-      contentType: "video/mp4",
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
@@ -169,7 +212,7 @@ describe("createVideoGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            videoGenerationModel: { primary: "vydra/veo3" },
           },
         },
       }),
@@ -200,6 +243,7 @@ describe("createVideoGenerateTool", () => {
     });
     expect(typeof scheduledWork).toBe("function");
     await scheduledWork?.();
+    expect(saveSpy).not.toHaveBeenCalled();
     expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(/^tool:video_generate:/),
@@ -217,7 +261,8 @@ describe("createVideoGenerateTool", () => {
           taskId: "task-123",
         }),
         status: "ok",
-        result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
+        mediaUrls: ["https://example.com/generated-lobster.mp4"],
+        result: expect.stringContaining("MEDIA:https://example.com/generated-lobster.mp4"),
       }),
     );
   });

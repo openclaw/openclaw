@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Tools/video_generate: allow providers and plugins to return URL-only generated video assets so agent delivery and `openclaw capability video generate --output ...` can forward or stream large videos without requiring the full file in memory first. (#61988) Thanks @xieyongliang.
+
 ### Fixes
 
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.

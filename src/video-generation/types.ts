@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedVideoAsset = {
-  buffer: Buffer;
+  /** Raw video bytes. Required for local delivery; omit when url is provided instead. */
+  buffer?: Buffer;
+  /** External URL for the video (for example a pre-signed cloud storage URL).
+   * When set and buffer is absent, delivery surfaces can forward the URL
+   * without downloading the full video into memory first. */
+  url?: string;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;
