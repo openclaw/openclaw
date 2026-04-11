@@ -31,11 +31,18 @@ type TelegramBotIdentity = {
   username?: string;
 };
 
-type TelegramQaScenarioId = "telegram-help-command" | "telegram-mention-gating";
+type TelegramQaScenarioId =
+  | "telegram-help-command"
+  | "telegram-commands-command"
+  | "telegram-tools-compact-command"
+  | "telegram-whoami-command"
+  | "telegram-context-command"
+  | "telegram-mention-gating";
 
 type TelegramQaScenarioRun = {
   expectReply: boolean;
   input: string;
+  expectedTextIncludes?: string[];
   matchText?: string;
 };
 
@@ -174,6 +181,47 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     buildRun: (sutUsername) => ({
       expectReply: true,
       input: `/help@${sutUsername}`,
+      expectedTextIncludes: ["/new", "/commands for full list"],
+    }),
+  },
+  {
+    id: "telegram-commands-command",
+    title: "Telegram commands list reply",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/commands@${sutUsername}`,
+      expectedTextIncludes: ["/help", "More: /tools for available capabilities"],
+    }),
+  },
+  {
+    id: "telegram-tools-compact-command",
+    title: "Telegram tools compact reply",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/tools@${sutUsername} compact`,
+      expectedTextIncludes: ["exec", "Use /tools verbose for descriptions."],
+    }),
+  },
+  {
+    id: "telegram-whoami-command",
+    title: "Telegram whoami reply",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/whoami@${sutUsername}`,
+      expectedTextIncludes: ["🧭 Identity", "Channel: telegram"],
+    }),
+  },
+  {
+    id: "telegram-context-command",
+    title: "Telegram context reply",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/context@${sutUsername}`,
+      expectedTextIncludes: ["/context list", "Inline shortcut"],
     }),
   },
   {
@@ -547,6 +595,22 @@ function matchesTelegramScenarioReply(params: {
   return Boolean(params.matchText && params.message.text.includes(params.matchText));
 }
 
+function assertTelegramScenarioReply(params: {
+  expectedTextIncludes?: string[];
+  message: TelegramObservedMessage;
+}) {
+  if (!params.message.text.trim()) {
+    throw new Error(`reply message ${params.message.messageId} was empty`);
+  }
+  for (const expected of params.expectedTextIncludes ?? []) {
+    if (!params.message.text.includes(expected)) {
+      throw new Error(
+        `reply message ${params.message.messageId} missing expected text: ${expected}`,
+      );
+    }
+  }
+}
+
 function classifyCanaryReply(params: {
   message: TelegramObservedMessage;
   groupId: string;
@@ -831,9 +895,10 @@ export async function runTelegramQaLive(params: {
           if (!scenarioRun.expectReply) {
             throw new Error(`unexpected reply message ${matched.message.messageId} matched`);
           }
-          if (!matched.message.text.trim()) {
-            throw new Error(`reply message ${matched.message.messageId} was empty`);
-          }
+          assertTelegramScenarioReply({
+            expectedTextIncludes: scenarioRun.expectedTextIncludes,
+            message: matched.message,
+          });
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -954,6 +1019,7 @@ export const __testing = {
   buildObservedMessagesArtifact,
   canaryFailureMessage,
   callTelegramApi,
+  assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
   matchesTelegramScenarioReply,
