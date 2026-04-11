@@ -608,15 +608,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
-          const discordProbe = probe as DiscordProbe;
           const lines = [];
-          if (discordProbe?.bot?.username) {
-            const botId = discordProbe.bot.id ? ` (${discordProbe.bot.id})` : "";
-            lines.push({ text: `Bot: @${discordProbe.bot.username}${botId}` });
+          if (probe?.bot?.username) {
+            const botId = probe.bot.id ? ` (${probe.bot.id})` : "";
+            lines.push({ text: `Bot: @${probe.bot.username}${botId}` });
           }
-          if (discordProbe?.application?.intents) {
+          if (probe?.application?.intents) {
             lines.push({
-              text: `Intents: ${formatDiscordIntents(discordProbe.application.intents)}`,
+              text: `Intents: ${formatDiscordIntents(probe.application.intents)}`,
             });
           }
           return lines;
