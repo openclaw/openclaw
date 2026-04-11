@@ -456,6 +456,41 @@ function Wait-GatewayRpcReady {
   }
 }
 
+function Stop-OpenClawGatewayProcesses {
+  Write-ProgressLog 'update.stop-old-gateway'
+  $patterns = @(
+    'openclaw-gateway',
+    'openclaw.*gateway --port 18789',
+    'openclaw.*gateway run',
+    'openclaw\.mjs gateway',
+    'dist\\index\.js gateway --port 18789'
+  )
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $commandLine = $_.CommandLine
+      if (-not $commandLine) {
+        $false
+      } else {
+        $matched = $false
+        foreach ($pattern in $patterns) {
+          if ($commandLine -match $pattern) {
+            $matched = $true
+            break
+          }
+        }
+        $matched
+      }
+    } |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+  Start-Sleep -Seconds 2
+}
+
 function Restart-GatewayWithRecovery {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath
@@ -511,6 +546,7 @@ try {
   Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
   Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
   Write-ProgressLog 'update.verify-version'
