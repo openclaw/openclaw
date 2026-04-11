@@ -37,6 +37,20 @@ describe("buildChromeSpawnEnv", () => {
     expect(env.DISPLAY).toBe(":1");
   });
 
+  // An empty-string DISPLAY is not a valid X display. Lock in the intent
+  // that the guard treats it as unset, so a future tightening of
+  // `!base.DISPLAY` to a strict `=== undefined` check cannot silently
+  // regress this path.
+  it("treats DISPLAY='' as unset and injects the :0 fallback on Linux", () => {
+    const env = buildChromeSpawnEnv({
+      base: { DISPLAY: "", PATH: "/usr/bin" },
+      platform: "linux",
+      headless: false,
+      home: HOME,
+    });
+    expect(env.DISPLAY).toBe(":0");
+  });
+
   it("does not inject DISPLAY when headless on Linux", () => {
     const env = buildChromeSpawnEnv({
       base: { PATH: "/usr/bin" },
