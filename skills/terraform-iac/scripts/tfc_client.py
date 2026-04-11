@@ -1286,7 +1286,7 @@ Best practice:
     vpc_azs = 2
     if enable_vpc_baseline:
         vpc_cidr = prompt("VPC CIDR for workload accounts", default="10.0.0.0/16")
-        vpc_azs = int(prompt("Number of AZs", default="2", choices=["2", "3"]))
+        vpc_azs = int(prompt_num("Number of AZs", default=2, min_val=2, max_val=3))
 
     # Account Vending
     print("\n  Account Vending Machine:")
@@ -1928,35 +1928,6 @@ resource "aws_ssoadmin_account_assignment" "{grp_safe}_workload" {{
     extra_principals_str = ""
     if extra_principals:
         extra_principals_str = "\n".join([f"    {p}," for p in extra_principals])
-
-    guardduty_admin_block = ""
-    if enable_gd:
-        guardduty_admin_block = f"""
-resource \"aws_guardduty_organization_admin_account\" \"audit\" {{
-  admin_account_id = aws_organizations_account.audit.id
-  depends_on       = [aws_organizations_organization.this]
-}}
-
-resource \"aws_guardduty_organization_configuration\" \"this\" {{
-  auto_enable = true
-  detector_id  = aws_guardduty_detector.audit.id
-  depends_on   = [aws_guardduty_organization_admin_account.audit]
-}}
-"""
-
-    guardduty_block = f"""
-resource \"aws_guardduty_detector\" \"audit\" {{
-  enable                               = true
-  finding_publishing_frequency        = \"SIX_HOURS\"
-  datasources {{
-    s3_logs {{ enable = true }}
-    kubernetes {{ audit_logs {{ enable = true }} }}
-    malware_protection {{ scan_ec2_instance_with_findings {{ ebs_volumes = true }} }}
-  }}
-  tags = local.tags
-}}
-
-{guardduty_admin_block}"""
 
     # Generate import block for existing organizations
     org_import_block = ""
@@ -2942,17 +2913,11 @@ alert at 50%, 80%, and 100% thresholds.
     if notify_type == "1":
         email = prompt("Alert email address")
         sns_block = ""
-        subscriber_block = f"""      subscriber {{
-        subscription_type = "EMAIL"
-        address           = "{email}"
-      }}"""
+        subscriber_line = f'      subscriber_email_addresses = ["{email}"]'
     else:
         sns_arn = prompt("SNS topic ARN (e.g. arn:aws:sns:us-east-1:123456789:alerts)")
         sns_block = ""
-        subscriber_block = f"""      subscriber {{
-        subscription_type = "SNS"
-        address           = "{sns_arn}"
-      }}"""
+        subscriber_line = f'      subscriber_sns_topic_arns  = ["{sns_arn}"]'
 
     # Summary
     alert_desc = ", ".join([f"{t}%" for t in thresholds])
@@ -2978,7 +2943,7 @@ alert at 50%, 80%, and 100% thresholds.
       threshold                  = {t}
       threshold_type             = "PERCENTAGE"
       notification_type          = "ACTUAL"
-{subscriber_block}
+{subscriber_line}
     }}
 """
 
@@ -2989,7 +2954,7 @@ alert at 50%, 80%, and 100% thresholds.
       threshold                  = {forecast_threshold}
       threshold_type             = "PERCENTAGE"
       notification_type          = "FORECASTED"
-{subscriber_block}
+{subscriber_line}
     }}
 """
 
