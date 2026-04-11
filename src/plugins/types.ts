@@ -17,7 +17,10 @@ import type { ModelProviderRequestTransportOverrides } from "../agents/provider-
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type {
+  ReplyDispatchKind,
+  ReplyDispatcher,
+} from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
