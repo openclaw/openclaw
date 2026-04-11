@@ -305,6 +305,49 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
   });
 
+  it("keeps synchronously registered cli backends even when register returns a promise", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+          }) {
+            api.registerCliBackend({
+              id: "codex-cli",
+              config: { command: "codex" },
+            });
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
+      pluginId: "openai",
+      backend: {
+        id: "codex-cli",
+        config: {
+          command: "codex",
+        },
+      },
+    });
+  });
+
   it("fails closed when multiple plugins claim the same setup provider id", () => {
     const bundledRoot = makeTempDir();
     const workspaceRoot = makeTempDir();

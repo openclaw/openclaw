@@ -35,19 +35,24 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   if (bundledSetupCliBackendsCache) {
     return bundledSetupCliBackendsCache;
   }
-  bundledSetupCliBackendsCache = loadPluginManifestRegistry({ cache: true })
-    .plugins.filter(
-      (plugin) => plugin.origin === "bundled" && listSetupCliBackendIds(plugin).length > 0,
-    )
-    .flatMap((plugin) =>
-      listSetupCliBackendIds(plugin).map(
+  bundledSetupCliBackendsCache = loadPluginManifestRegistry({ cache: true }).plugins.flatMap(
+    (plugin) => {
+      if (plugin.origin !== "bundled") {
+        return [];
+      }
+      const backendIds = listSetupCliBackendIds(plugin);
+      if (backendIds.length === 0) {
+        return [];
+      }
+      return backendIds.map(
         (backendId) =>
           ({
             pluginId: plugin.id,
             backend: { id: backendId },
           }) satisfies SetupCliBackendRuntimeEntry,
-      ),
-    );
+      );
+    },
+  );
   return bundledSetupCliBackendsCache;
 }
 
