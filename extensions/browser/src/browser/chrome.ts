@@ -124,6 +124,39 @@ export function buildOpenClawChromeLaunchArgs(params: {
   return args;
 }
 
+/**
+ * Build the environment passed to a spawned Chrome process.
+ *
+ * Kept as a pure helper so the platform-specific rules can be unit-tested
+ * without actually spawning Chrome. The rules are:
+ *   - HOME is pinned to the resolved user home so Chrome does not leak
+ *     preferences into whatever HOME the caller happened to inherit.
+ *   - On Linux in non-headless mode, DISPLAY is required for Chrome to
+ *     initialize its X11 ozone platform. Some launch contexts (WSL2, systemd
+ *     user units, launchd agents) don't propagate DISPLAY, so fall back to
+ *     ":0" when the caller didn't provide one. We never clobber an existing
+ *     DISPLAY — it may legitimately point at a remote or non-default X server.
+ *   - Headless Chrome (`--headless=new`) does not touch X, so no fallback.
+ *   - macOS and Windows have no X server and must not get a DISPLAY default.
+ */
+export function buildChromeSpawnEnv(params: {
+  base: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  headless: boolean;
+  home: string;
+}): NodeJS.ProcessEnv {
+  const { base, platform, headless, home } = params;
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    // Reduce accidental sharing with the user's env.
+    HOME: home,
+  };
+  if (platform === "linux" && !headless && !base.DISPLAY) {
+    env.DISPLAY = ":0";
+  }
+  return env;
+}
+
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
@@ -340,11 +373,12 @@ export async function launchOpenClawChrome(
     // the tuple overload resolution varies across @types/node versions.
     return spawn(exe.path, args, {
       stdio: ["ignore", "ignore", "pipe"],
-      env: {
-        ...process.env,
-        // Reduce accidental sharing with the user's env.
-        HOME: os.homedir(),
-      },
+      env: buildChromeSpawnEnv({
+        base: process.env,
+        platform: process.platform,
+        headless: resolved.headless,
+        home: os.homedir(),
+      }),
     }) as unknown as ChildProcessWithoutNullStreams;
   };
 
