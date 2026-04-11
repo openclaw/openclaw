@@ -33,8 +33,12 @@ describe("qa agentic parity report", () => {
   it("computes first-wave parity metrics from suite summaries", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [
-        { name: "Scenario A", status: "pass" },
-        { name: "Scenario B", status: "fail", details: "incomplete turn detected" },
+        { name: "Approval turn tool followthrough", status: "pass" },
+        {
+          name: "Compaction retry after mutating tool",
+          status: "fail",
+          details: "incomplete turn detected",
+        },
       ],
     };
 
@@ -48,6 +52,23 @@ describe("qa agentic parity report", () => {
       validToolCallCount: 1,
       validToolCallRate: 0.5,
       fakeSuccessCount: 0,
+    });
+  });
+
+  it("keeps non-tool scenarios out of the valid-tool-call metric", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        { name: "Approval turn tool followthrough", status: "pass" },
+        { name: "Memory recall after context switch", status: "pass" },
+        { name: "Image understanding from attachment", status: "pass" },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary)).toMatchObject({
+      totalScenarios: 3,
+      passedScenarios: 3,
+      validToolCallCount: 1,
+      validToolCallRate: 1,
     });
   });
 
