@@ -194,8 +194,9 @@ async function persistInitialChildSessionRuntimeModel(params: {
         candidates: target.storeKeys,
       });
       store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
+        modelOverride: model,
+        ...(provider ? { providerOverride: provider } : {}),
+        modelOverrideSource: "user",
       });
     });
     return undefined;

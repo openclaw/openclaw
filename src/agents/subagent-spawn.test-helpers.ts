@@ -92,11 +92,12 @@ export function installSessionStoreCaptureMock(
   );
 }
 
-export function expectPersistedRuntimeModel(params: {
+export function expectPersistedModelOverride(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
   provider: string;
   model: string;
+  source?: "user" | "auto";
 }) {
   const [persistedKey, persistedEntry] = Object.entries(params.persistedStore ?? {})[0] ?? [];
   if (typeof params.sessionKey === "string") {
@@ -105,9 +106,20 @@ export function expectPersistedRuntimeModel(params: {
     expect(persistedKey).toMatch(params.sessionKey);
   }
   expect(persistedEntry).toMatchObject({
-    modelProvider: params.provider,
-    model: params.model,
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    ...(params.source ? { modelOverrideSource: params.source } : {}),
   });
+}
+
+/** @deprecated Use expectPersistedModelOverride instead */
+export function expectPersistedRuntimeModel(params: {
+  persistedStore: SessionStore | undefined;
+  sessionKey: string | RegExp;
+  provider: string;
+  model: string;
+}) {
+  expectPersistedModelOverride({ ...params, source: "user" });
 }
 
 export async function loadSubagentSpawnModuleForTest(params: {

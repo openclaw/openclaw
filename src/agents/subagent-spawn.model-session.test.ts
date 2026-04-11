@@ -2,7 +2,7 @@ import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  expectPersistedRuntimeModel,
+  expectPersistedModelOverride,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
@@ -15,7 +15,7 @@ const pruneLegacyStoreKeysMock = vi.fn();
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
-describe("spawnSubagentDirect runtime model persistence", () => {
+describe("spawnSubagentDirect model override persistence", () => {
   beforeEach(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
@@ -42,7 +42,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     );
   });
 
-  it("persists runtime model fields on the child session before starting the run", async () => {
+  it("persists model override fields on the child session before starting the run", async () => {
     const operations: string[] = [];
     callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
       operations.push(`gateway:${opts.method ?? "unknown"}`);
@@ -81,11 +81,12 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       modelApplied: true,
     });
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    expectPersistedRuntimeModel({
+    expectPersistedModelOverride({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
       provider: "openai-codex",
       model: "gpt-5.4",
+      source: "user",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
     expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);

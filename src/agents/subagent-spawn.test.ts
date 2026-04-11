@@ -2,7 +2,7 @@ import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  expectPersistedRuntimeModel,
+  expectPersistedModelOverride,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
@@ -150,11 +150,12 @@ describe("spawnSubagentDirect seam flow", () => {
       label: undefined,
     });
 
-    expectPersistedRuntimeModel({
+    expectPersistedModelOverride({
       persistedStore,
       sessionKey: childSessionKey,
       provider: "openai-codex",
       model: "gpt-5.4",
+      source: "user",
     });
     expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
     expect(operations.indexOf("store:update")).toBeGreaterThan(
