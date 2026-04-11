@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -16,6 +15,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -40,8 +40,6 @@ type AllowFromReadCacheEntry = {
 type AllowFromStatLike = { mtimeMs: number; size: number } | null;
 
 const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
-
-export type PairingChannel = ChannelId;
 
 export type PairingRequest = {
   id: string;
