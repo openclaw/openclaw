@@ -133,6 +133,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
   },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional override for the LLM model used by Discord voice sessions (for example openai/gpt-4o). Leave unset to inherit the route/session default model.",
+  },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
     help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",

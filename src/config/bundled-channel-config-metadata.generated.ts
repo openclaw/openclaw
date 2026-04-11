@@ -1362,6 +1362,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             enabled: {
               type: "boolean",
             },
+            model: {
+              type: "string",
+              minLength: 1,
+            },
             autoJoin: {
               type: "array",
               items: {
@@ -2526,6 +2530,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   enabled: {
                     type: "boolean",
                   },
+                  model: {
+                    type: "string",
+                    minLength: 1,
+                  },
                   autoJoin: {
                     type: "array",
                     items: {
@@ -3056,8 +3064,8 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
       },
       "voice.model": {
-        label: "Discord Voice LLM Model",
-        help: "Optional override for the LLM model used by voice sessions (for example openai-codex/gpt-5.4). Leave unset to inherit the route/session default model.",
+        label: "Discord Voice Model",
+        help: "Optional override for the LLM model used by Discord voice sessions (for example openai/gpt-4o). Leave unset to inherit the route/session default model.",
       },
       "voice.autoJoin": {
         label: "Discord Voice Auto-Join",

@@ -1137,7 +1137,7 @@ If you want to mirror a working baseline quickly, use the values below as a star
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.4",
+        model: "openai/gpt-4o",
         daveEncryption: true,
         decryptionFailureTolerance: 24,
         tts: {
@@ -1159,14 +1159,15 @@ Required env keys for this baseline:
 
 For latency-sensitive voice sessions, start with a smaller/faster response model:
 
-- If you have Codex auth, `openai-codex/gpt-5.3-codex-spark` is typically lower-latency.
-- Otherwise use a fast OpenAI-family equivalent such as `openai/gpt-5.4-mini` or your provider's lowest-latency compatible choice.
+- If you already have Codex auth and want to use it here, `openai-codex/gpt-5.3-codex-spark` is often lower-latency.
+- Otherwise start with a fast OpenAI path such as `openai/gpt-5.4-mini` or your provider's lowest-latency compatible model.
+- If you use `openai-codex/*`, set up a valid Codex profile first (for example `openai-codex:<profile-alias>`) or this override will fail to resolve.
 - Keep TTS/STT at deterministic settings while you tune VC model latency (for example keep `gpt-4o-mini-transcribe` / `gpt-4o-mini-tts`).
 
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.model` can be set to override the LLM used for VC responses (for example `openai-codex/gpt-5.4`). Leave unset to inherit the route session default model.
+- `voice.model` can be set to override the LLM used for VC responses (for example `openai/gpt-4o`). Leave unset to inherit the route/session default model.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
@@ -1182,7 +1183,7 @@ Notes:
   - `voice.model` does **not** affect STT.
 - Brain/response model:
   - By default this uses the resolved route/session model (typically your active `agents.defaults.model.primary` chain).
-  - If configured, `channels.discord.voice.model` overrides only this VC LLM model (for example `openai-codex/gpt-5.4`), while everything else remains unchanged.
+  - If configured, `channels.discord.voice.model` overrides only this VC LLM model (for example `openai/gpt-4o`), while everything else remains unchanged.
 - TTS:
   - Response text is converted using `voice.tts` merged over `messages.tts` and then played back.
   - Default example in this doc uses `openai` + `gpt-4o-mini-tts`.
