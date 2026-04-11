@@ -1116,6 +1116,19 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("blocks RFC2544 benchmark-range literal URLs by default", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubMinimaxOkFetch();
+      const cfg = createMinimaxImageConfig();
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+
+      await expect(tool.execute("t1", { image: "http://198.18.0.153/file.png" })).rejects.toThrow(
+        /blocked host/i,
+      );
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");
