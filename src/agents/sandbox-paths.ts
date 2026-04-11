@@ -9,6 +9,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
+const MXC_URL_RE = /^mxc:\/\//i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
 
 function normalizeUnicodeSpaces(str: string): string {
@@ -95,6 +96,9 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   if (HTTP_URL_RE.test(raw)) {
+    return raw;
+  }
+  if (MXC_URL_RE.test(raw)) {
     return raw;
   }
   let candidate = raw;

@@ -23,6 +23,10 @@ const SANDBOX_MEDIA_PARAM_KEYS = [
   "mediaUrl",
   "fileUrl",
   "image",
+  "avatarPath",
+  "avatar_path",
+  "avatarUrl",
+  "avatar_url",
 ] as const;
 
 function readMediaParam(
