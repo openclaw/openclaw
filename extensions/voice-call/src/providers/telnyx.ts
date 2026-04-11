@@ -165,7 +165,7 @@ export class TelnyxProvider implements VoiceCallProvider {
           text: data.payload?.text || "",
         };
 
-      case "call.transcription":
+      case "call.transcription": {
         const transcriptionData = data.payload?.transcription_data;
         return {
           ...baseEvent,
@@ -174,6 +174,7 @@ export class TelnyxProvider implements VoiceCallProvider {
           isFinal: transcriptionData?.is_final ?? data.payload?.is_final ?? true,
           confidence: transcriptionData?.confidence ?? data.payload?.confidence,
         };
+      }
 
       case "call.hangup":
         return {
