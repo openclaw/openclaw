@@ -3,12 +3,6 @@ import { promises as fs } from "node:fs";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  isValidAgentId,
-  isCronSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
-import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -62,6 +56,22 @@ export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
 
 export { decodeStrictBase64 };
+
+type SubagentSpawnDeps = {
+  callGateway: typeof callGateway;
+  getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
+  loadConfig: typeof loadConfig;
+  updateSessionStore: typeof updateSessionStore;
+};
+
+const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
+  callGateway,
+  getGlobalHookRunner,
+  loadConfig,
+  updateSessionStore,
+};
+
+let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 
 export type SpawnSubagentParams = {
   task: string;
@@ -144,7 +154,7 @@ async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSessionStore(target.storePath, (store) => {
+    await subagentSpawnDeps.updateSessionStore(target.storePath, (store) => {
       pruneLegacyStoreKeys({
         store,
         canonicalKey: target.canonicalKey,
@@ -186,7 +196,7 @@ async function cleanupProvisionalSession(
   },
 ): Promise<void> {
   try {
-    await callGateway({
+    await subagentSpawnDeps.callGateway({
       method: "sessions.delete",
       params: {
         key: childSessionKey,
@@ -246,7 +256,7 @@ async function callSubagentSpawnGateway<T = Record<string, unknown>>(params: {
   params?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<T> {
-  return await callGateway<T>({
+  return await subagentSpawnDeps.callGateway<T>({
     method: params.method,
     params: params.params,
     timeoutMs: params.timeoutMs,
@@ -255,7 +265,7 @@ async function callSubagentSpawnGateway<T = Record<string, unknown>>(params: {
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
   agentId: string;
   label?: string;
@@ -361,8 +371,8 @@ export async function spawnSubagentDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
-  const hookRunner = getGlobalHookRunner();
-  const cfg = loadConfig();
+  const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
+  const cfg = subagentSpawnDeps.loadConfig();
   const startupWaitTimeoutMs = resolveSubagentStartupWaitTimeoutMs(cfg);
   const cleanupTimeoutMs = resolveSubagentCleanupTimeoutMs(cfg);
 
@@ -697,7 +707,7 @@ export async function spawnSubagentDirect(
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
-    const response = await callGateway<{ runId: string }>({
+    const response = await subagentSpawnDeps.callGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: childTaskMessage,
@@ -767,7 +777,7 @@ export async function spawnSubagentDirect(
     // Always delete the provisional child session after a failed spawn attempt.
     // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
     try {
-      await callGateway({
+      await subagentSpawnDeps.callGateway({
         method: "sessions.delete",
         params: {
           key: childSessionKey,
@@ -817,7 +827,7 @@ export async function spawnSubagentDirect(
       }
     }
     try {
-      await callGateway({
+      await subagentSpawnDeps.callGateway({
         method: "sessions.delete",
         params: {
           key: childSessionKey,
@@ -886,3 +896,14 @@ export async function spawnSubagentDirect(
     attachments: attachmentsReceipt,
   };
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
+    subagentSpawnDeps = overrides
+      ? {
+          ...defaultSubagentSpawnDeps,
+          ...overrides,
+        }
+      : defaultSubagentSpawnDeps;
+  },
+};

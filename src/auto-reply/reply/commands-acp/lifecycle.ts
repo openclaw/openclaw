@@ -34,12 +34,12 @@ import {
 import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStoreEntry } from "../../../config/sessions/store.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,

@@ -545,19 +545,19 @@ async function sweepSubagentRuns() {
       // Archive/purge is terminal for the run record; remove any retained attachments too.
       await safeRemoveAttachmentsDir(entry);
     }
-  }
-  // Sweep orphaned pendingLifecycleError entries (absolute TTL).
-  for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {
-    if (now - pending.endedAt > PENDING_ERROR_TTL_MS) {
-      clearPendingLifecycleError(runId);
+    // Sweep orphaned pendingLifecycleError entries (absolute TTL).
+    for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {
+      if (now - pending.endedAt > PENDING_ERROR_TTL_MS) {
+        clearPendingLifecycleError(runId);
+      }
     }
-  }
 
-  if (mutated) {
-    persistSubagentRuns();
-  }
-  if (subagentRuns.size === 0) {
-    stopSweeper();
+    if (mutated) {
+      persistSubagentRuns();
+    }
+    if (subagentRuns.size === 0) {
+      stopSweeper();
+    }
   } finally {
     sweepInProgress = false;
   }

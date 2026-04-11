@@ -174,7 +174,6 @@ describe("handleCompactCommand", () => {
         senderName: "Alice",
         senderUsername: "alice_u",
         senderE164: "+15551234567",
-        agentDir: "/tmp/openclaw-agent-compact",
       }),
     );
   });

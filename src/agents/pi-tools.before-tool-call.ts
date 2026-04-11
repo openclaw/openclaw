@@ -286,7 +286,7 @@ export async function runBeforeToolCallHook(args: {
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
-          const waitPromise: Promise<{
+          const waitPromise = callGatewayTool<{
             id?: string;
             decision?: string | null;
           }>("plugin.approval.waitDecision", { timeoutMs: approvalGatewayTimeoutMs }, { id });

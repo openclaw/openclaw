@@ -45,7 +45,10 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString, normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
@@ -119,7 +122,7 @@ type SpawnAcpResultFields = {
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
-  status: "accepted" | "forbidden" | "error";
+  status: "accepted";
   childSessionKey: string;
   runId: string;
   mode: SpawnAcpMode;
@@ -559,8 +562,6 @@ function resolveConversationRefForThreadBinding(params: {
       conversationId: genericConversationId,
       parentConversationId: params.threadId != null ? parentConversationId : undefined,
     });
-  }
-  return null;
   }
   return null;
 }
