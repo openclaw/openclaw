@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 
 const mocks = vi.hoisted(() => ({
   createModelSelectionState: vi.fn(),
@@ -83,7 +83,8 @@ async function loadResolveReplyDirectivesForTest() {
     resolveConfiguredDirectiveAliases: vi.fn(() => []),
   }));
   vi.doMock("./get-reply-directives-apply.js", () => ({
-    applyInlineDirectiveOverrides: (...args: unknown[]) => mocks.applyInlineDirectiveOverrides(...args),
+    applyInlineDirectiveOverrides: (...args: unknown[]) =>
+      mocks.applyInlineDirectiveOverrides(...args),
   }));
   vi.doMock("./get-reply-exec-overrides.js", () => ({
     resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
@@ -193,7 +194,7 @@ describe("resolveReplyDirectives", () => {
       commandAuthorized: false,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
-      aliasIndex: new Map(),
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
       provider: "openai",
       model: "gpt-4o-mini",
       hasResolvedHeartbeatModelOverride: false,
