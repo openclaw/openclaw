@@ -360,7 +360,7 @@ function mergeConfig(
           : undefined,
     },
     llmRecall: {
-      enabled: Boolean(llmRecall.enabled),
+      enabled: llmRecall.enabled,
       model: llmRecall.model,
       baseUrl: llmRecall.baseUrl,
       apiKey: llmRecall.apiKey,

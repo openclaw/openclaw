@@ -128,6 +128,26 @@ async function callSelectorLlm(
 }
 
 /**
+ * Resolve an apiKey value that may use `env:VAR_NAME` indirection.
+ * Falls back to the raw string if no `env:` prefix is found.
+ */
+function resolveApiKey(raw: string | undefined): string {
+  if (!raw) {
+    return "";
+  }
+  if (raw.startsWith("env:")) {
+    const envVar = raw.slice(4).trim();
+    return process.env[envVar] ?? "";
+  }
+  // Also handle ${VAR_NAME} template syntax
+  const templateMatch = /^\$\{([A-Z][A-Z0-9_]*)\}$/.exec(raw.trim());
+  if (templateMatch) {
+    return process.env[templateMatch[1]] ?? "";
+  }
+  return raw;
+}
+
+/**
  * Use a lightweight LLM to select the most relevant memory files for a query.
  * Returns up to cfg.llmRecall.maxFiles file paths (absolute) from memoryDir.
  * Returns empty array if llmRecall is disabled or no files are relevant.
@@ -147,7 +167,18 @@ export async function findRelevantMemories(
   }
 
   const manifest = buildManifest(metas);
-  const selected = await callSelectorLlm(query, manifest, cfg.llmRecall);
+
+  let selected: string[];
+  try {
+    const resolvedCfg = {
+      ...cfg.llmRecall,
+      apiKey: resolveApiKey(cfg.llmRecall.apiKey),
+    };
+    selected = await callSelectorLlm(query, manifest, resolvedCfg);
+  } catch {
+    // LLM recall is best-effort; fall back to empty selection on failure
+    return [];
+  }
 
   // Validate returned filenames exist in the scanned set
   const known = new Set(metas.map((m) => m.filename));
