@@ -14,7 +14,6 @@ type IncompleteTurnAttempt = Pick<
   | "clientToolCall"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -150,13 +149,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     lastAssistant: params.attempt.lastAssistant,
   });
   // Normal completion with no user-visible payloads (e.g. thinking-only while reasoning is off).
+  // Do not gate on didSendViaMessagingTool: that marks any outbound send, not necessarily this reply.
   const emptyAfterNormalCompletion =
     isEmptyVisiblePayloadAfterNormalStop(stopReason) && !incompleteTerminalAssistant;
   if (!incompleteTerminalAssistant && stopReason !== "error" && !emptyAfterNormalCompletion) {
-    return null;
-  }
-
-  if (emptyAfterNormalCompletion && params.attempt.didSendViaMessagingTool) {
     return null;
   }
 

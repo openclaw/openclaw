@@ -301,7 +301,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toContain("Please try again");
   });
 
-  it("does not flag incomplete turns when a reply was already sent via messaging tool", () => {
+  it("still surfaces incomplete turns for stop when messaging tools ran (send target may differ from current reply)", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
       didSendViaMessagingTool: true,
@@ -312,14 +312,14 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         content: [],
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+    expect(text).toBeTruthy();
+    expect(text).toMatch(/verify before retrying|Please try again/);
   });
 
   it("does not treat other stop reasons as empty normal completions", () => {
