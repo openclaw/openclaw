@@ -181,6 +181,10 @@ function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "fil
   return null;
 }
 
+export function hasQaScenarioPack(): boolean {
+  return resolveRepoPath(QA_SCENARIO_PACK_INDEX_PATH, "file") !== null;
+}
+
 function readTextFile(relativePath: string): string {
   const resolved = resolveRepoPath(relativePath, "file");
   if (!resolved) {
