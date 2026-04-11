@@ -81,10 +81,19 @@ pnpm exec vitest run src/agents/google-genai.live.test.ts
 
 ### Troubleshooting
 
+#### 1. Node.js / gaxios dynamic import bug
 If you encounter an error like `Cannot convert undefined or null to object` originating from `gaxios` when using Vertex AI on Node.js, it may be due to a known bug in how `gaxios` dynamically imports `node-fetch`.
 
 As a workaround (already applied in our test file), you can polyfill `window` at the very top of your entry script:
 
 ```typescript
 (global as any).window = globalThis;
+```
+
+#### 2. Resource Not Found (404) on Vertex AI
+If you get a 404 error when using aliases like `gemini-flash-latest` on Vertex AI, it is likely because that alias is not supported in your specific region (e.g., `us-central1`). 
+
+**Solution**: Switch to the `global` location, which supports these aliases:
+```bash
+export GOOGLE_CLOUD_LOCATION="global"
 ```
