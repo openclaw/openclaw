@@ -94,7 +94,11 @@ export function augmentChatHistoryWithCliSessionImports(params: {
         cliHistoryImportMatchesProvider(entry.provider, normalizedProvider),
       )
     : [];
-  const importsToMerge = params.localMessages.length === 0 ? availableImports : matchingImports;
+  const importsToMerge = normalizedProvider
+    ? matchingImports
+    : params.localMessages.length === 0
+      ? availableImports
+      : [];
   if (importsToMerge.length === 0) {
     return params.localMessages;
   }
