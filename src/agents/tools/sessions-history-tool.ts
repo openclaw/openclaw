@@ -10,7 +10,7 @@ import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { readEnvInt } from "../bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "../bash-tools.shared.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -34,7 +34,12 @@ const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 // matching the pattern used by PI_BASH_MAX_OUTPUT_CHARS in exec-runtime.
 // Default 4000 chars keeps session history responses compact while allowing
 // override for users who need longer context windows (#64970).
-const SESSIONS_HISTORY_TEXT_MAX_CHARS = readEnvInt("SESSIONS_HISTORY_TEXT_MAX_CHARS") ?? 4000;
+const SESSIONS_HISTORY_TEXT_MAX_CHARS = clampWithDefault(
+  readEnvInt("SESSIONS_HISTORY_TEXT_MAX_CHARS"),
+  4000,
+  1,
+  Number.MAX_SAFE_INTEGER,
+);
 type GatewayCaller = typeof callGateway;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
