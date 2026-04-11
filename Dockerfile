@@ -172,8 +172,9 @@ COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
-# Copy pre-configured openclaw.json for Render deployment
-COPY --chown=node:node .openclaw.json /tmp/.openclaw/openclaw.json
+# Copy start script for Render deployment
+COPY --chown=node:node render-start.sh /app/render-start.sh
+RUN chmod +x /app/render-start.sh
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -274,5 +275,5 @@ USER node
 #   - aliases: /health and /ready
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "openclaw.mjs", "gateway", "--bind", "lan", "--allow-unconfigured"]
+  CMD node -e "fetch('http://127.0.0.1:10000/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["/app/render-start.sh"]
