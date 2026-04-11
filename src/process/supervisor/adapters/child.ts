@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { decodeCapturedOutputBuffer } from "../../../node-host/invoke.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
@@ -104,14 +105,14 @@ export async function createChildAdapter(params: {
     : undefined;
 
   const onStdout = (listener: (chunk: string) => void) => {
-    child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+    child.stdout.on("data", (chunk: Buffer) => {
+      listener(decodeCapturedOutputBuffer({ buffer: chunk }));
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
-    child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+    child.stderr.on("data", (chunk: Buffer) => {
+      listener(decodeCapturedOutputBuffer({ buffer: chunk }));
     });
   };
 
