@@ -189,6 +189,11 @@ vi.mock("./helpers.js", () => ({
 
 vi.mock("./session.js", () => ({
   resolveCronSession: resolveCronSessionMock,
+  // Rotation-archival helpers used by createPersistCronSessionEntry. The
+  // default mocks match the no-rotation happy path — tests that exercise
+  // rotation explicitly can override via vi.mocked(...).mockReturnValue(...).
+  capturePriorIsolatedEntryForArchival: vi.fn().mockReturnValue(undefined),
+  archivePriorIsolatedEntryAfterRotation: vi.fn().mockResolvedValue(undefined),
 }));
 
 export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
