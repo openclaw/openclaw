@@ -76,9 +76,14 @@ function loadBindingsIntoMemory(): void {
       continue;
     }
     const conversation = normalizeConversationRef(record.conversation);
+    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+    if (!targetSessionKey) {
+      continue;
+    }
     bindingsByConversationKey.set(buildConversationKey(conversation), {
       ...record,
       bindingId: buildBindingId(conversation),
+      targetSessionKey,
       conversation,
     });
   }

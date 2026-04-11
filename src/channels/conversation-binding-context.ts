@@ -160,16 +160,23 @@ export function resolveConversationBindingContext(
     fallbackTo: params.fallbackTo ?? undefined,
   });
   if (resolvedByProvider?.conversationId) {
+    const providerConversationId = normalizeOptionalString(resolvedByProvider.conversationId);
+    if (!providerConversationId) {
+      return null;
+    }
+    const providerParentConversationId = normalizeOptionalString(
+      resolvedByProvider.parentConversationId,
+    );
     const resolvedParentConversationId =
       shouldDefaultParentConversationToSelf(loadedPlugin) &&
       !threadId &&
-      !resolvedByProvider.parentConversationId
-        ? resolvedByProvider.conversationId
-        : resolvedByProvider.parentConversationId;
+      !providerParentConversationId
+        ? providerConversationId
+        : providerParentConversationId;
     return {
       channel,
       accountId,
-      conversationId: resolvedByProvider.conversationId,
+      conversationId: providerConversationId,
       ...(resolvedParentConversationId
         ? { parentConversationId: resolvedParentConversationId }
         : {}),

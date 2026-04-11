@@ -8,6 +8,7 @@ import {
   __testing,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
+  listGenericCurrentConversationBindingsBySession,
   resolveGenericCurrentConversationBinding,
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
@@ -122,6 +123,54 @@ describe("generic current-conversation bindings", () => {
         label: "slack-dm",
       }),
     });
+  });
+
+  it("normalizes persisted target session keys on reload", async () => {
+    const filePath = __testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:slack\u241fdefault\u241f\u241fuser:U123",
+            targetSessionKey: " agent:codex:acp:slack-dm ",
+            targetKind: "session",
+            conversation: {
+              channel: "slack",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "slack-dm",
+            },
+          },
+        ],
+      }),
+    );
+
+    const resolved = resolveGenericCurrentConversationBinding({
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+    });
+
+    expect(resolved).toMatchObject({
+      bindingId: "generic:slack\u241fdefault\u241f\u241fuser:U123",
+      targetSessionKey: "agent:codex:acp:slack-dm",
+      metadata: expect.objectContaining({
+        label: "slack-dm",
+      }),
+    });
+    expect(listGenericCurrentConversationBindingsBySession("agent:codex:acp:slack-dm")).toEqual([
+      expect.objectContaining({
+        bindingId: "generic:slack\u241fdefault\u241f\u241fuser:U123",
+        targetSessionKey: "agent:codex:acp:slack-dm",
+      }),
+    ]);
   });
 
   it("drops self-parent conversation refs when storing generic current bindings", async () => {
