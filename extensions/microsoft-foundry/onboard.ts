@@ -256,12 +256,7 @@ async function promptEndpointAndModelBase(
         if (!val) {
           return "Endpoint URL is required";
         }
-        try {
-          new URL(val);
-        } catch {
-          return "Invalid URL";
-        }
-        return undefined;
+        return URL.canParse(val) ? undefined : "Invalid URL";
       },
     })
   ).trim();
