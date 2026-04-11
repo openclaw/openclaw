@@ -47,7 +47,6 @@ type ZaiSearchResult = {
 export type ZaiMcpSearchParams = {
   apiKey: string;
   query: string;
-  count?: number;
   freshness?: string;
   domainFilter?: string;
 };
@@ -73,10 +72,10 @@ async function callZaiMcpSearch(params: ZaiMcpSearchParams): Promise<ZaiSearchRe
   try {
     await client.connect(transport);
 
+    // Only pass schema-supported params: search_query, search_domain_filter,
+    // search_recency_filter, content_size, location. `count` is not in the schema
+    // and causes silent empty results — we slice on our side instead.
     const args: Record<string, unknown> = { search_query: params.query };
-    if (params.count !== undefined) {
-      args.count = params.count;
-    }
     if (params.freshness) {
       args.search_recency_filter = params.freshness;
     }
@@ -179,7 +178,6 @@ function createZaiToolDefinition(
       const rawResults = await mcpSearchFn({
         apiKey,
         query,
-        count: Math.max(1, Math.min(50, count)),
         freshness: freshness ? ZAI_FRESHNESS_MAP[freshness] : undefined,
         domainFilter: domainFilter ?? undefined,
       });
