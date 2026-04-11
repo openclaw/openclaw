@@ -94,6 +94,7 @@ export function buildEmbeddedExtensionFactories(params: {
       modelId: params.modelId,
       modelContextTokens: params.model?.contextTokens,
       modelContextWindow: params.model?.contextWindow,
+      modelContextWindowIsLiteralDefault: params.model?.contextWindowIsLiteralDefault,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {

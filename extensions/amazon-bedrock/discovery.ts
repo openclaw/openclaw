@@ -155,6 +155,7 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
 function toModelDefinition(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
+  discoveryConfig: BedrockDiscoveryConfig | undefined,
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
   return {
@@ -164,6 +165,9 @@ function toModelDefinition(
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
     contextWindow: defaults.contextWindow,
+    contextWindowIsLiteralDefault:
+      defaults.contextWindow === DEFAULT_CONTEXT_WINDOW &&
+      discoveryConfig?.defaultContextWindow === undefined,
     maxTokens: defaults.maxTokens,
   };
 }
@@ -283,6 +287,10 @@ function resolveInferenceProfiles(
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow: baseModel?.contextWindow ?? defaults.contextWindow,
+      contextWindowIsLiteralDefault: baseModel?.contextWindow
+        ? baseModel.contextWindowIsLiteralDefault
+        : defaults.contextWindow === DEFAULT_CONTEXT_WINDOW &&
+          config?.defaultContextWindow === undefined,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
   }
@@ -360,10 +368,14 @@ export async function discoverBedrockModels(params: {
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
-      const def = toModelDefinition(summary, {
-        contextWindow: defaultContextWindow,
-        maxTokens: defaultMaxTokens,
-      });
+      const def = toModelDefinition(
+        summary,
+        {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        },
+        params.config,
+      );
       discovered.push(def);
       const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
       seenIds.add(normalizedId);

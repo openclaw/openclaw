@@ -112,6 +112,7 @@ export function resolveEffectiveRuntimeModel(params: {
     modelId: params.modelId,
     modelContextTokens: readPiModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
+    modelContextWindowIsLiteralDefault: params.runtimeModel.contextWindowIsLiteralDefault,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
