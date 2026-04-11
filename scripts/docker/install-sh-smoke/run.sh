@@ -7,7 +7,10 @@ SMOKE_PREVIOUS_VERSION="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-}"
 SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
 DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
+FRESH_VERSION="${OPENCLAW_INSTALL_FRESH_VERSION:-}"
+FRESH_TAG_URL="${OPENCLAW_INSTALL_FRESH_TAG_URL:-}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
 
 run_install_smoke() {
+  if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
+    echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
+    echo "==> Install latest release tarball"
+    quiet_npm install -g --omit=optional "$FRESH_TAG_URL"
+
+    echo "==> Verify installed version"
+    if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
+      printf "%s" "$FRESH_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+    fi
+    verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
+
+    echo "OK"
+    return 0
+  fi
+
   echo "==> Resolve npm versions"
   if [[ "$SKIP_PREVIOUS" == "1" ]]; then
     LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
@@ -84,12 +102,26 @@ run_update_smoke() {
 
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
-  quiet_npm install -g "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    quiet_npm install -g --omit=optional "$UPDATE_BASELINE_TAG_URL"
+  else
+    quiet_npm install -g --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  fi
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
   echo "==> Run openclaw update from host-served tgz"
-  UPDATE_JSON="$(openclaw update --tag "$UPDATE_TAG_URL" --yes --json)"
+  local update_status
+  set +e
+  UPDATE_JSON="$(
+    npm_config_omit=optional NPM_CONFIG_OMIT=optional openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>&1
+  )"
+  update_status=$?
+  set -e
   printf "%s\n" "$UPDATE_JSON"
+  if [[ "$update_status" -ne 0 ]]; then
+    echo "ERROR: openclaw update failed with exit code $update_status" >&2
+    return "$update_status"
+  fi
 
   UPDATE_JSON="$UPDATE_JSON" \
     UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
