@@ -204,7 +204,7 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
-  const requiredScenarioCoverage = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
+  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
     const candidate = candidateByName.get(name);
     const baseline = baselineByName.get(name);
     return {
@@ -212,7 +212,8 @@ export function buildQaAgenticParityComparison(params: {
       candidateStatus: requiredCoverageStatus(candidate),
       baselineStatus: requiredCoverageStatus(baseline),
     };
-  }).filter(
+  });
+  const requiredScenarioCoverage = requiredScenarioStatuses.filter(
     (scenario) =>
       scenario.candidateStatus === "missing" ||
       scenario.baselineStatus === "missing" ||
@@ -222,6 +223,26 @@ export function buildQaAgenticParityComparison(params: {
   for (const scenario of requiredScenarioCoverage) {
     failures.push(
       `Missing required parity scenario coverage for ${scenario.name}: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
+    );
+  }
+  // Required parity scenarios that ran on both sides but FAILED also fail
+  // the gate. Without this check, a run where both models fail the same
+  // required scenarios still produced pass=true, because the downstream
+  // metric comparisons are purely relative (candidate vs baseline) and
+  // the suspicious-pass fake-success check only catches passes that carry
+  // failure-sounding details. Excluding missing/skip here keeps operator
+  // output from double-counting the same scenario with two lines.
+  const requiredScenarioFailures = requiredScenarioStatuses.filter(
+    (scenario) =>
+      scenario.candidateStatus !== "missing" &&
+      scenario.baselineStatus !== "missing" &&
+      scenario.candidateStatus !== "skip" &&
+      scenario.baselineStatus !== "skip" &&
+      (scenario.candidateStatus === "fail" || scenario.baselineStatus === "fail"),
+  );
+  for (const scenario of requiredScenarioFailures) {
+    failures.push(
+      `Required parity scenario ${scenario.name} failed: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
     );
   }
   // Required parity scenarios are already reported via `requiredScenarioCoverage`
