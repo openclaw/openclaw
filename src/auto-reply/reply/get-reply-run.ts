@@ -347,8 +347,18 @@ export async function runPreparedReply(
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
-  const threadStarterBody = normalizeOptionalString(ctx.ThreadStarterBody);
-  const threadHistoryBody = normalizeOptionalString(ctx.ThreadHistoryBody);
+  const threadStarterBodyRaw = normalizeOptionalString(ctx.ThreadStarterBody);
+  const threadHistoryBodyRaw = normalizeOptionalString(ctx.ThreadHistoryBody);
+  // Thread context bodies are also untrusted channel content; apply the same wrapping.
+  const isExternalChannel = Boolean(channelProvider && isExternalChannelProvider(channelProvider));
+  const threadStarterBody =
+    threadStarterBodyRaw && isExternalChannel && channelProvider
+      ? wrapChannelMessageBody(threadStarterBodyRaw, channelProvider)
+      : threadStarterBodyRaw;
+  const threadHistoryBody =
+    threadHistoryBodyRaw && isExternalChannel && channelProvider
+      ? wrapChannelMessageBody(threadHistoryBodyRaw, channelProvider)
+      : threadHistoryBodyRaw;
   const threadContextNote = threadHistoryBody
     ? `[Thread history - for context]\n${threadHistoryBody}`
     : threadStarterBody
@@ -561,7 +571,9 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-    summaryLine: baseBodyTrimmedRaw,
+    // Use the raw unwrapped body for the human-readable queue label;
+    // baseBodyTrimmedRaw contains boundary markers after wrapping.
+    summaryLine: rawBaseBody.trim(),
     enqueuedAt: Date.now(),
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
