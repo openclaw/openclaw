@@ -1,9 +1,21 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import fs from "node:fs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
+/**
+ * Checks if the filename looks like pnpm.
+ */
 function isPnpmExecPath(value) {
   return /^pnpm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+}
+
+/**
+ * Checks if the file path has a JavaScript-related extension.
+ */
+function isJavaScriptFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === '.js' || ext === '.cjs' || ext === '.mjs';
 }
 
 export function resolvePnpmRunner(params = {}) {
@@ -15,13 +27,25 @@ export function resolvePnpmRunner(params = {}) {
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
-    return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
-      shell: false,
-    };
+    // If it's a JS file, we must run it through Node.
+    if (isJavaScriptFile(npmExecPath)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    } else {
+      // If it's a native binary (ELF on Linux/Pi or EXE on Windows), 
+      // run the path directly without prepending 'node'.
+      return {
+        command: npmExecPath,
+        args: pnpmArgs,
+        shell: false,
+      };
+    }
   }
 
+  // Windows fallback logic
   if (platform === "win32") {
     return {
       command: comSpec,
@@ -31,6 +55,7 @@ export function resolvePnpmRunner(params = {}) {
     };
   }
 
+  // General fallback logic
   return {
     command: "pnpm",
     args: pnpmArgs,
