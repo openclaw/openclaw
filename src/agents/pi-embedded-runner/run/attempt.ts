@@ -1217,6 +1217,7 @@ export async function runEmbeddedAttempt(
       const idleTimeoutMs = resolveLlmIdleTimeoutMs({
         cfg: params.config,
         trigger: params.trigger,
+        reasoning: params.model.reasoning,
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(

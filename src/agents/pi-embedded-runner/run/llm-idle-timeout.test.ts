@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
+  DEFAULT_REASONING_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
@@ -84,6 +85,37 @@ describe("resolveLlmIdleTimeoutMs", () => {
   it("keeps an explicit cron idle timeout when configured", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 45 } } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(45_000);
+  });
+
+  it("returns reasoning default for reasoning models when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ reasoning: true })).toBe(
+      DEFAULT_REASONING_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("returns standard default for non-reasoning models", () => {
+    expect(resolveLlmIdleTimeoutMs({ reasoning: false })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("prefers explicit idleTimeoutSeconds over reasoning default", () => {
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 90 } } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, reasoning: true })).toBe(90_000);
+  });
+
+  it("prefers agents.defaults.timeoutSeconds over reasoning default", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 240 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, reasoning: true })).toBe(240_000);
+  });
+
+  it("keeps idleTimeoutSeconds=0 disabled even for reasoning models", () => {
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, reasoning: true })).toBe(0);
+  });
+
+  it("uses reasoning default for cron trigger with reasoning model when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", reasoning: true })).toBe(
+      DEFAULT_REASONING_LLM_IDLE_TIMEOUT_MS,
+    );
   });
 });
 

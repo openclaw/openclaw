@@ -12,6 +12,14 @@ import type { EmbeddedRunTrigger } from "./params.js";
 export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000;
 
 /**
+ * Default idle timeout for reasoning/thinking models in milliseconds.
+ * Reasoning models (e.g. glm-5.1, o1, o3) take significantly longer
+ * to produce the first token due to extended chain-of-thought processing.
+ * Default: 180 seconds (3x the standard timeout).
+ */
+export const DEFAULT_REASONING_LLM_IDLE_TIMEOUT_MS = 180_000;
+
+/**
  * Maximum safe timeout value (approximately 24.8 days).
  */
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
@@ -23,6 +31,8 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
   trigger?: EmbeddedRunTrigger;
+  /** Whether the target model is a reasoning/thinking model. */
+  reasoning?: boolean;
 }): number {
   const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means explicitly disabled (no timeout).
@@ -40,6 +50,12 @@ export function resolveLlmIdleTimeoutMs(params?: {
     agentTimeoutSeconds > 0
   ) {
     return Math.min(Math.floor(agentTimeoutSeconds) * 1000, MAX_SAFE_TIMEOUT_MS);
+  }
+
+  // Reasoning models need a longer default timeout because chain-of-thought
+  // processing can delay the first token well beyond the standard 60s window.
+  if (params?.reasoning) {
+    return DEFAULT_REASONING_LLM_IDLE_TIMEOUT_MS;
   }
 
   if (params?.trigger === "cron") {
