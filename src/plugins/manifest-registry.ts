@@ -516,8 +516,10 @@ export function loadPluginManifestRegistry(
             })
           : loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
+      const isWorkspaceMissingManifest =
+        candidate.origin === "workspace" && manifestRes.reason === "not-found";
       diagnostics.push({
-        level: "error",
+        level: isWorkspaceMissingManifest ? "warn" : "error",
         message: manifestRes.error,
         source: manifestRes.manifestPath,
       });

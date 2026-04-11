@@ -191,9 +191,11 @@ export type PluginManifestProviderAuthChoice = {
 
 export type PluginManifestOnboardingScope = "text-inference" | "image-generation";
 
+export type ManifestLoadFailureReason = "not-found" | "unsafe-path" | "parse-error" | "invalid";
+
 export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
+  | { ok: false; error: string; reason: ManifestLoadFailureReason; manifestPath: string };
 
 function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
@@ -498,14 +500,16 @@ export function loadPluginManifest(
   });
   if (!opened.ok) {
     return matchBoundaryFileOpenFailure(opened, {
-      path: () => ({
+      path: (): PluginManifestLoadResult => ({
         ok: false,
         error: `plugin manifest not found: ${manifestPath}`,
+        reason: "not-found",
         manifestPath,
       }),
-      fallback: (failure) => ({
+      fallback: (failure): PluginManifestLoadResult => ({
         ok: false,
         error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        reason: "unsafe-path",
         manifestPath,
       }),
     });
@@ -517,21 +521,32 @@ export function loadPluginManifest(
     return {
       ok: false,
       error: `failed to parse plugin manifest: ${String(err)}`,
+      reason: "parse-error",
       manifestPath,
     };
   } finally {
     fs.closeSync(opened.fd);
   }
   if (!isRecord(raw)) {
-    return { ok: false, error: "plugin manifest must be an object", manifestPath };
+    return {
+      ok: false,
+      error: "plugin manifest must be an object",
+      reason: "invalid",
+      manifestPath,
+    };
   }
   const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
-    return { ok: false, error: "plugin manifest requires id", manifestPath };
+    return { ok: false, error: "plugin manifest requires id", reason: "invalid", manifestPath };
   }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {
-    return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
+    return {
+      ok: false,
+      error: "plugin manifest requires configSchema",
+      reason: "invalid",
+      manifestPath,
+    };
   }
 
   const kind = parsePluginKind(raw.kind);

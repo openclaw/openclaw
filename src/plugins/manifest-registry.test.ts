@@ -760,6 +760,33 @@ describe("loadPluginManifestRegistry", () => {
     expect(hasPluginIdMismatchWarning(registry)).toBe(false);
   });
 
+  it("downgrades missing manifest diagnostic to warn for workspace-origin candidates", () => {
+    const dir = makeTempDir();
+    // No manifest written, so loadPluginManifest will fail with "plugin manifest not found".
+    const registry = loadSingleCandidateRegistry({
+      idHint: "not-a-plugin",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins).toHaveLength(0);
+    expectRegistryDiagnosticContains(registry, "plugin manifest not found");
+    expect(registry.diagnostics.every((diag) => diag.level !== "error")).toBe(true);
+  });
+
+  it("keeps missing manifest diagnostic as error for non-workspace origins", () => {
+    const dir = makeTempDir();
+    const registry = loadSingleCandidateRegistry({
+      idHint: "missing-global",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins).toHaveLength(0);
+    expectRegistryDiagnosticContains(registry, "plugin manifest not found");
+    expect(registry.diagnostics.some((diag) => diag.level === "error")).toBe(true);
+  });
+
   it.each([
     {
       name: "loads Codex bundle manifests into the registry",
