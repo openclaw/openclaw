@@ -50,6 +50,33 @@ export type ResolvedFeishuGroupSession = {
   threadReply: boolean;
 };
 
+/**
+ * Resolve the effective group session scope for a Feishu chat by applying
+ * the precedence rules shared between group-session and sequential-queue
+ * routing: group-level config beats channel-level config, and the legacy
+ * `topicSessionMode=enabled` alias maps to `group_topic` for backward
+ * compatibility.
+ */
+export function resolveFeishuGroupSessionScope(params: {
+  groupConfig?: {
+    groupSessionScope?: GroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+  feishuCfg?: {
+    groupSessionScope?: GroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+}): GroupSessionScope {
+  const { groupConfig, feishuCfg } = params;
+  const legacyTopicSessionMode =
+    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+  return (
+    groupConfig?.groupSessionScope ??
+    feishuCfg?.groupSessionScope ??
+    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
+  );
+}
+
 export function resolveFeishuGroupSession(params: {
   chatId: string;
   senderOpenId: string;
@@ -74,12 +101,7 @@ export function resolveFeishuGroupSession(params: {
   const replyInThread =
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
-  const legacyTopicSessionMode =
-    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-  const groupSessionScope: GroupSessionScope =
-    groupConfig?.groupSessionScope ??
-    feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+  const groupSessionScope = resolveFeishuGroupSessionScope({ groupConfig, feishuCfg });
   const topicScope =
     groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
       ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))

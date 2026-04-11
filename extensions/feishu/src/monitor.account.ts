@@ -3,6 +3,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
+import { resolveFeishuGroupSessionScope } from "./bot-content.js";
 import {
   handleFeishuMessage,
   parseFeishuMessageEvent,
@@ -27,6 +28,7 @@ import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js"
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { resolveFeishuGroupConfig } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -405,11 +407,23 @@ function registerEventHandlers(
     }
   };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+    // Resolve the effective group session scope so the sequential-queue
+    // key stays aligned with the session-store partitioning. Without this,
+    // normal (scope="group") groups would accidentally get per-topic queue
+    // lanes for quote replies that carry `root_id`, breaking the per-chat
+    // FIFO guarantee — see the #32980 regression test in bot.test.ts.
+    const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
+    const chatId = event.message.chat_id?.trim();
+    const groupConfig = chatId
+      ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId })
+      : undefined;
+    const groupSessionScope = resolveFeishuGroupSessionScope({ groupConfig, feishuCfg });
     const sequentialKey = getFeishuSequentialKey({
       accountId,
       event,
       botOpenId: botOpenIds.get(accountId),
       botName: botNames.get(accountId),
+      groupSessionScope,
     });
     const task = () =>
       handleFeishuMessage({
