@@ -372,3 +372,27 @@ describe("models-config runtime source snapshot", () => {
     });
   });
 });
+
+it("writes lean config when called with undefined (regression: does not use bloated runtimeSource)", async () => {
+  // Arrange: set up runtime source snapshot (simulates accumulated runtime state)
+  await withTempHome(async () => {
+    await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+      unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+      const sourceConfig = createOpenAiApiKeySourceConfig();
+      const runtimeConfig = createOpenAiApiKeyRuntimeConfig();
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        // Act: call ensureOpenClawModelsJson with undefined — triggers !config branch
+        await ensureOpenClawModelsJson(undefined);
+
+        // Assert: written config reflects the lean source config (markers), not bloated runtime values
+        await expectGeneratedProviderApiKey("openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+});
