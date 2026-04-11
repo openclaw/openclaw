@@ -1416,7 +1416,7 @@ async function writeQaSuiteArtifacts(params: {
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
   transport: QaTransportAdapter;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
