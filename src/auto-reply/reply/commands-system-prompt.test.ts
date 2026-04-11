@@ -82,6 +82,7 @@ function makeParams(): HandleCommandsParams {
     agentId: "main",
     sessionEntry: {
       sessionId: "session-1",
+      updatedAt: Date.now(),
       groupId: "group-1",
       groupChannel: "#general",
       space: "guild-1",

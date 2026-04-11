@@ -669,7 +669,6 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest;
   }) => boolean;
 };
-
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }

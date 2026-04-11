@@ -6,6 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+### Fixes
+
+## 2026.4.10
+
+### Changes
+
 - Models/Codex: add the bundled Codex provider and plugin-owned app-server harness so `codex/gpt-*` models use Codex-managed auth, native threads, model discovery, and compaction while `openai/gpt-*` stays on the normal OpenAI provider path. (#64298)
 - Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging. Docs: https://docs.openclaw.ai/concepts/active-memory. (#63286) Thanks @Takhoffman.
 - macOS/Talk: add an experimental local MLX speech provider for Talk Mode, with explicit provider selection, local utterance playback, interruption handling, and system-voice fallback. (#63539) Thanks @ImLukeF.
@@ -46,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Agents/timeouts: extend the default LLM idle window to 120s and keep silent no-token idle timeouts on recovery paths, so slow models can retry or fall back before users see an error.
 - Gateway/agents: preserve configured model selection and richer `IDENTITY.md` content across agent create/update flows and workspace moves, and fail safely instead of silently overwriting unreadable identity files. (#61577) Thanks @samzong.
 - Skills/TaskFlow: restore valid frontmatter fences for the bundled `taskflow` and `taskflow-inbox-triage` skills and copy bundled `SKILL.md` files as hard dist-runtime copies so skills stay discoverable and loadable after updates. (#64166, #64469) Thanks @extrasmall0.
+- Skills: respect overridden home directories when loading personal skills so service, test, and custom launch environments read the intended user skill directory instead of the process home.
 - Windows/exec: settle supervisor waits from child exit state after stdout and stderr drain even when `close` never arrives, so CLI commands stop hanging or dying with forced `SIGKILL` on Windows. (#64072) Thanks @obviyus.
 - Browser/sandbox: prevent sandbox browser CDP startup hangs by recreating containers when the browser security hash changes and by waiting on the correct sandbox browser lifecycle. (#62873) Thanks @Syysean.
 - QQBot/streaming: make block streaming configurable per QQ bot account via `streaming.mode` (`"partial"` | `"off"`, default `"partial"`) instead of hardcoding it off, so responses can be delivered incrementally. (#63746)

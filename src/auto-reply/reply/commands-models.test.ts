@@ -18,11 +18,11 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: (params: unknown) => modelCatalogMocks.loadModelCatalog(params),
+  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: (params: unknown) => modelAuthLabelMocks.resolveModelAuthLabel(params),
+  resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -260,7 +260,7 @@ describe("handleModelsCommand", () => {
       updatedAt: Date.now(),
       providerOverride: "wrapper-provider",
       modelOverride: "wrapper-model",
-    } as HandleCommandsParams["sessionEntry"];
+    };
     params.sessionStore = {
       "agent:support:main": {
         sessionId: "target-session",
