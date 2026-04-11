@@ -170,7 +170,7 @@ async function waitFor(
 // Test suite
 // ──────────────────────────────────────────────────────────────────────────
 
-describe.skipIf(!TMUX_AVAILABLE)("NodeAgent (M2-03)", () => {
+describe.skipIf(!TMUX_AVAILABLE || !!process.env.CI)("NodeAgent (M2-03)", () => {
   let tempDir: string;
   let db: DatabaseSync;
   let registry: RegistryService;

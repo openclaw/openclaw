@@ -71,7 +71,7 @@ describe("loadOctoConfig — minimal enabled block", () => {
       DEFAULT_OCTO_CONFIG.scheduler.weights.stickiness,
     );
     expect(result.classifier.defaultMode).toBe(DEFAULT_OCTO_CONFIG.classifier.defaultMode);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
   });
 });
 
@@ -371,7 +371,7 @@ describe("loadOctoConfig — logger injection", () => {
     const logger = vi.fn();
     loadOctoConfig({ octo: { enabled: true } }, { logger });
     expect(logger).toHaveBeenCalledTimes(1);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
   });
 
   it("falls back to console.info when no logger is provided", () => {

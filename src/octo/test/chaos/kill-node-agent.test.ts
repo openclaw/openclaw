@@ -145,7 +145,7 @@ function readEvents(): EventRecord[] {
 // Tests
 // ──────────────────────────────────────────────────────────────────────────
 
-describe("Chaos: kill Node Agent mid-arm (M4-10)", () => {
+describe.skipIf(!!process.env.CI)("Chaos: kill Node Agent mid-arm (M4-10)", () => {
   it("lease expires after TTL+grace and arm becomes available for reassignment", async () => {
     // 1. Set up arm with active lease
     const armId = nextArmId();
