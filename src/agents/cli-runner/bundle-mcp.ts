@@ -259,10 +259,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
   mergedConfig: BundleMcpConfig;
+  mcpConfigHash: string;
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
   const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
-  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const mcpConfigHash = params.mcpConfigHash;
 
   if (params.mode === "codex-config-overrides") {
     return {
@@ -348,6 +349,11 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+
+  // Compute hash BEFORE merging additionalConfig (which contains ephemeral loopback server)
+  const serializedConfigForHash = `${JSON.stringify(mergedConfig, null, 2)}\n`;
+  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfigForHash).digest("hex");
+
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
@@ -356,6 +362,7 @@ export async function prepareCliBundleMcpConfig(params: {
     mode,
     backend: params.backend,
     mergedConfig,
+    mcpConfigHash,
     env: params.env,
   });
 }
