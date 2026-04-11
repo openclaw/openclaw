@@ -14,6 +14,7 @@ describe("cli-session helpers", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
+      suppressCliHistoryImport: true,
     };
 
     setCliSessionBinding(entry, "claude-cli", {
@@ -41,6 +42,7 @@ describe("cli-session helpers", () => {
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
     });
+    expect(entry.suppressCliHistoryImport).toBeUndefined();
   });
 
   it("force-reuses explicitly attached CLI sessions despite metadata drift", () => {
@@ -366,6 +368,7 @@ describe("cli-session helpers", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
+      suppressCliHistoryImport: true,
     };
     setCliSessionBinding(entry, "claude-cli", { sessionId: "claude-session" });
     setCliSessionBinding(entry, "codex-cli", { sessionId: "codex-session" });
@@ -373,8 +376,11 @@ describe("cli-session helpers", () => {
     clearCliSession(entry, "codex-cli");
     expect(getCliSessionBinding(entry, "codex-cli")).toBeUndefined();
     expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("claude-session");
+    expect(entry.suppressCliHistoryImport).toBeUndefined();
 
+    entry.suppressCliHistoryImport = true;
     clearAllCliSessions(entry);
+    expect(entry.suppressCliHistoryImport).toBeUndefined();
     expect(entry.cliSessionBindings).toBeUndefined();
     expect(entry.cliSessionIds).toBeUndefined();
     expect(entry.claudeCliSessionId).toBeUndefined();
