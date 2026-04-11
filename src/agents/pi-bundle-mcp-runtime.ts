@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logWarn } from "../logger.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -22,16 +22,105 @@ import type {
 
 type BundleMcpSession = {
   serverName: string;
+  description: string;
   client: Client;
   transport: Transport;
   transportType: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
 };
 
+/**
+ * State machine for a server's reconnect lifecycle.
+ * States: absent (first time) | inFlight (reconnecting) | healthy (connected) | dead (exhausted)
+ * Dead servers become eligible for resurrection after DEAD_RESURRECT_MS.
+ */
+type ReconnectState = {
+  inFlight: Promise<BundleMcpSession> | null;
+  dead: boolean;
+  deadAt?: number;
+};
+
+/**
+ * Default retry delays (seconds) for mid-session reconnect after connection loss.
+ * 3 retries: 30s → 60s → 120s. Configurable per-server via `retryDelays` in openclaw.json.
+ */
+const DEFAULT_RECONNECT_RETRY_DELAYS_S = [30, 60, 120];
+
+/**
+ * Default retry delays (seconds) for initial startup connection.
+ * Kept short — startup failures are usually config errors, not transient outages.
+ * Configurable per-server via `startupRetryDelays` in openclaw.json.
+ */
+const DEFAULT_STARTUP_RETRY_DELAYS_S = [2, 5];
+
+/**
+ * How long callTool waits for a reconnect before rejecting the current caller.
+ * The reconnect continues in the background; subsequent callers join or complete it.
+ */
+const CALLER_RECONNECT_WAIT_MS = 10_000;
+
+/**
+ * After a server is marked dead, it becomes eligible for a fresh reconnect attempt
+ * after this duration. Allows transient outages to self-heal in long-running sessions.
+ */
+const DEAD_RESURRECT_MS = 5 * 60_000;
+
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedPiMcpConfig>;
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
+
+/**
+ * Read per-server retry delays from the raw server config block.
+ * Values are in seconds. Example in openclaw.json:
+ *   `"retryDelays": [30, 60, 120]`       — mid-session reconnect delays
+ *   `"startupRetryDelays": [2, 5]`       — initial startup delays (shorter recommended)
+ * Set to `[]` to disable retries for that context.
+ * Returns delays in milliseconds for internal use.
+ */
+function getMcpRetryDelays(rawServer: unknown, context: "startup" | "reconnect"): number[] {
+  const defaults =
+    context === "startup" ? DEFAULT_STARTUP_RETRY_DELAYS_S : DEFAULT_RECONNECT_RETRY_DELAYS_S;
+  if (rawServer && typeof rawServer === "object") {
+    const key = context === "startup" ? "startupRetryDelays" : "retryDelays";
+    const delays = (rawServer as Record<string, unknown>)[key];
+    if (
+      Array.isArray(delays) &&
+      delays.every((d): d is number => typeof d === "number" && d >= 0)
+    ) {
+      return delays.map((d) => d * 1000);
+    }
+  }
+  return defaults.map((d) => d * 1000);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Sleep for a random duration in [0, baseMs).
+ * Spreads concurrent reconnect attempts to avoid thundering herd on shared MCP servers.
+ */
+function jitteredSleep(baseMs: number): Promise<void> {
+  return sleep(Math.floor(Math.random() * baseMs));
+}
+
+/**
+ * Returns true if the error looks like a transport/connection failure warranting a reconnect.
+ * Standard JSON-RPC error codes (-32700 to -32600) indicate the server is alive and responded —
+ * these are protocol/application errors and should NOT trigger a reconnect.
+ */
+function isLikelyTransportError(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code: unknown }).code;
+    // Standard JSON-RPC error range: server processed the request; transport is healthy.
+    if (typeof code === "number" && code >= -32700 && code <= -32600) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function connectWithTimeout(
   client: Client,
@@ -128,10 +217,155 @@ export function createSessionMcpRuntime(params: {
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const sessions = new Map<string, BundleMcpSession>();
+  const reconnectStates = new Map<string, ReconnectState>();
+
   const failIfDisposed = () => {
     if (disposed) {
       throw createDisposedError(params.sessionId);
     }
+  };
+
+  /**
+   * Create a fresh client+transport and connect. Single attempt; throws on failure.
+   * Disposes the session immediately if the runtime was disposed while connecting,
+   * preventing transport/stdio process leaks.
+   */
+  const makeSession = async (serverName: string, rawServer: unknown): Promise<BundleMcpSession> => {
+    const resolved = resolveMcpTransport(serverName, rawServer);
+    if (!resolved) {
+      throw new Error(`bundle-mcp server "${serverName}" transport could not be resolved`);
+    }
+    const client = new Client({ name: "openclaw-bundle-mcp", version: "0.0.0" }, {});
+    const session: BundleMcpSession = {
+      serverName,
+      description: resolved.description,
+      client,
+      transport: resolved.transport,
+      transportType: resolved.transportType,
+      detachStderr: resolved.detachStderr,
+    };
+    await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+    // Guard: dispose() may have been called while we were connecting.
+    // Close this session immediately to avoid leaking transports or child processes.
+    if (disposed) {
+      await disposeSession(session).catch(() => {});
+      throw createDisposedError(params.sessionId);
+    }
+    return session;
+  };
+
+  /**
+   * Attempt to connect a server, retrying on failure with jittered delays.
+   * Logs each attempt. Throws after all retries are exhausted.
+   * Jitter spreads concurrent reconnects to avoid thundering herd on shared servers.
+   */
+  const connectWithRetries = async (
+    serverName: string,
+    rawServer: unknown,
+    retryDelays: number[],
+    context: "startup" | "reconnect",
+  ): Promise<BundleMcpSession> => {
+    const maxAttempts = 1 + retryDelays.length;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        const baseMs = retryDelays[attempt - 1];
+        logWarn(
+          `bundle-mcp [${context}]: "${serverName}" retry ${attempt}/${retryDelays.length} (up to ${baseMs / 1000}s)`,
+        );
+        await jitteredSleep(baseMs);
+        failIfDisposed();
+      }
+      try {
+        const session = await makeSession(serverName, rawServer);
+        if (attempt === 0) {
+          logInfo(`bundle-mcp [${context}]: "${serverName}" connected`);
+        } else {
+          logWarn(
+            `bundle-mcp [${context}]: "${serverName}" connected after ${attempt} ${attempt === 1 ? "retry" : "retries"}`,
+          );
+        }
+        return session;
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxAttempts - 1) {
+          logError(
+            `bundle-mcp [${context}]: "${serverName}" failed after ${maxAttempts} attempt(s), marking dead: ${redactErrorUrls(error)}`,
+          );
+        } else {
+          logWarn(
+            `bundle-mcp [${context}]: "${serverName}" attempt ${attempt + 1}/${maxAttempts} failed: ${redactErrorUrls(error)}`,
+          );
+        }
+      }
+    }
+    throw lastError;
+  };
+
+  /**
+   * Reconnect a server that lost its connection mid-session.
+   *
+   * - Deduplicates: concurrent callers share one in-flight attempt.
+   * - Dead servers reject immediately, but become eligible for resurrection after DEAD_RESURRECT_MS.
+   * - On success, publishes the new session and clears in-flight state.
+   * - On exhausted retries, marks dead with timestamp for resurrection tracking.
+   * - If disposed while reconnecting, cleans up the new session immediately.
+   */
+  const reconnectSession = (serverName: string): Promise<BundleMcpSession> => {
+    let state = reconnectStates.get(serverName);
+
+    if (state?.dead) {
+      // Allow resurrection after the dead window expires.
+      if (state.deadAt != null && Date.now() - state.deadAt > DEAD_RESURRECT_MS) {
+        reconnectStates.delete(serverName);
+        state = undefined;
+      } else {
+        return Promise.reject(
+          new Error(`bundle-mcp server "${serverName}" is dead (all reconnect attempts exhausted)`),
+        );
+      }
+    }
+
+    if (state?.inFlight) {
+      return state.inFlight;
+    }
+
+    const rawServer = loaded.mcpServers[serverName];
+    if (!rawServer) {
+      return Promise.reject(new Error(`bundle-mcp server "${serverName}" config not found`));
+    }
+    const retryDelays = getMcpRetryDelays(rawServer, "reconnect");
+
+    const attempt = (async () => {
+      const existing = sessions.get(serverName);
+      if (existing) {
+        await disposeSession(existing);
+        sessions.delete(serverName);
+      }
+      try {
+        const session = await connectWithRetries(serverName, rawServer, retryDelays, "reconnect");
+        // Guard: dispose() may have fired while we were reconnecting.
+        if (disposed) {
+          await disposeSession(session).catch(() => {});
+          reconnectStates.set(serverName, { inFlight: null, dead: false });
+          throw createDisposedError(params.sessionId);
+        }
+        sessions.set(serverName, session);
+        reconnectStates.set(serverName, { inFlight: null, dead: false });
+        return session;
+      } catch (error) {
+        if (!disposed) {
+          reconnectStates.set(serverName, { inFlight: null, dead: true, deadAt: Date.now() });
+        }
+        throw error;
+      }
+    })();
+
+    // Suppress unhandled-rejection if dispose() clears reconnectStates before this settles.
+    attempt.catch(() => {});
+
+    reconnectStates.set(serverName, { inFlight: attempt, dead: false });
+    return attempt;
   };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
@@ -142,102 +376,94 @@ export function createSessionMcpRuntime(params: {
     if (catalogInFlight) {
       return catalogInFlight;
     }
+
     catalogInFlight = (async () => {
-      if (Object.keys(loaded.mcpServers).length === 0) {
-        return {
-          version: 1,
-          generatedAt: Date.now(),
-          servers: {},
-          tools: [],
-        };
+      const serverEntries = Object.entries(loaded.mcpServers);
+      if (serverEntries.length === 0) {
+        return { version: 1, generatedAt: Date.now(), servers: {}, tools: [] };
+      }
+
+      // Pre-pass: assign safe names deterministically before parallelising.
+      // sanitizeServerName mutates usedServerNames and is order-dependent.
+      const usedServerNames = new Set<string>();
+      const safeNames = new Map<string, string>();
+      for (const [serverName] of serverEntries) {
+        const safe = sanitizeServerName(serverName, usedServerNames);
+        safeNames.set(serverName, safe);
+        if (safe !== serverName) {
+          logWarn(
+            `bundle-mcp: server key "${serverName}" registered as "${safe}" for provider-safe tool names.`,
+          );
+        }
+      }
+
+      // Parallel connect: all servers connect concurrently so one dead server cannot
+      // block others. Each task cleans up its own session on error or dispose.
+      const results = await Promise.allSettled(
+        serverEntries.map(async ([serverName, rawServer]) => {
+          const retryDelays = getMcpRetryDelays(rawServer, "startup");
+          const session = await connectWithRetries(serverName, rawServer, retryDelays, "startup");
+          // session is connected. Any error from here must dispose it to prevent leaks.
+          try {
+            failIfDisposed();
+            const listedTools = await listAllTools(session.client);
+            failIfDisposed();
+            return { serverName, session, listedTools };
+          } catch (err) {
+            await disposeSession(session).catch(() => {});
+            throw err;
+          }
+        }),
+      );
+
+      // If disposed during parallel connect, clean up any sessions that did connect.
+      if (disposed) {
+        await Promise.allSettled(
+          results.flatMap((r) =>
+            r.status === "fulfilled" ? [disposeSession(r.value.session)] : [],
+          ),
+        );
+        throw createDisposedError(params.sessionId);
       }
 
       const servers: Record<string, McpServerCatalog> = {};
       const tools: McpCatalogTool[] = [];
-      const usedServerNames = new Set<string>();
 
-      try {
-        for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
-          failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
-          if (!resolved) {
-            continue;
-          }
-          const safeServerName = sanitizeServerName(serverName, usedServerNames);
-          if (safeServerName !== serverName) {
-            logWarn(
-              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
-            );
-          }
+      for (let i = 0; i < serverEntries.length; i++) {
+        const [serverName] = serverEntries[i];
+        const safeServerName = safeNames.get(serverName)!;
+        const result = results[i];
 
-          const client = new Client(
-            {
-              name: "openclaw-bundle-mcp",
-              version: "0.0.0",
-            },
-            {},
-          );
-          const session: BundleMcpSession = {
-            serverName,
-            client,
-            transport: resolved.transport,
-            transportType: resolved.transportType,
-            detachStderr: resolved.detachStderr,
-          };
+        if (result.status === "fulfilled") {
+          const { session, listedTools } = result.value;
           sessions.set(serverName, session);
-
-          try {
-            failIfDisposed();
-            await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
-            failIfDisposed();
-            const listedTools = await listAllTools(client);
-            failIfDisposed();
-            servers[serverName] = {
+          servers[serverName] = {
+            serverName,
+            launchSummary: session.description,
+            toolCount: listedTools.length,
+          };
+          for (const tool of listedTools) {
+            const toolName = tool.name.trim();
+            if (!toolName) {
+              continue;
+            }
+            tools.push({
               serverName,
-              launchSummary: resolved.description,
-              toolCount: listedTools.length,
-            };
-            for (const tool of listedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema: tool.inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
-          } catch (error) {
-            if (!disposed) {
-              logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
-              );
-            }
-            await disposeSession(session);
-            sessions.delete(serverName);
-            failIfDisposed();
+              safeServerName,
+              toolName,
+              title: tool.title,
+              description: normalizeOptionalString(tool.description),
+              inputSchema: tool.inputSchema,
+              fallbackDescription: `Provided by bundle MCP server "${serverName}" (${session.description}).`,
+            });
           }
+        } else {
+          // connectWithRetries already logged; mark dead.
+          reconnectStates.set(serverName, { inFlight: null, dead: true, deadAt: Date.now() });
         }
-
-        failIfDisposed();
-        return {
-          version: 1,
-          generatedAt: Date.now(),
-          servers,
-          tools,
-        };
-      } catch (error) {
-        await Promise.allSettled(
-          Array.from(sessions.values(), (session) => disposeSession(session)),
-        );
-        sessions.clear();
-        throw error;
       }
+
+      return { version: 1, generatedAt: Date.now(), servers, tools };
     })();
 
     try {
@@ -268,12 +494,47 @@ export function createSessionMcpRuntime(params: {
       await getCatalog();
       const session = sessions.get(serverName);
       if (!session) {
+        if (reconnectStates.get(serverName)?.dead) {
+          throw new Error(
+            `bundle-mcp server "${serverName}" is dead (all reconnect attempts exhausted)`,
+          );
+        }
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      const args = isMcpConfigRecord(input) ? input : {};
+      try {
+        return (await session.client.callTool({
+          name: toolName,
+          arguments: args,
+        })) as CallToolResult;
+      } catch (error) {
+        // Only reconnect on transport failures. Standard JSON-RPC protocol errors
+        // (bad args, unknown tool, etc.) mean the server is alive — don't reconnect.
+        if (!isLikelyTransportError(error)) {
+          throw error;
+        }
+        failIfDisposed();
+        logWarn(
+          `bundle-mcp: tool call failed for "${serverName}", attempting reconnect: ${redactErrorUrls(error)}`,
+        );
+        // Start (or join) a reconnect, but bound this caller's wait to CALLER_RECONNECT_WAIT_MS
+        // so they're not blocked for the full retry window. The reconnect continues in the background
+        // and subsequent callTool calls will join or inherit the result.
+        const reconnectPromise = reconnectSession(serverName);
+        const reconnected = await Promise.race([
+          reconnectPromise,
+          sleep(CALLER_RECONNECT_WAIT_MS).then((): never => {
+            throw new Error(
+              `bundle-mcp server "${serverName}" reconnect in progress — retry in a moment`,
+              { cause: error },
+            );
+          }),
+        ]);
+        return (await reconnected.client.callTool({
+          name: toolName,
+          arguments: args,
+        })) as CallToolResult;
+      }
     },
     async dispose() {
       if (disposed) {
@@ -282,9 +543,12 @@ export function createSessionMcpRuntime(params: {
       disposed = true;
       catalog = null;
       catalogInFlight = undefined;
+      // Clear reconnect state. In-flight reconnects will see disposed=true when they
+      // complete and will dispose their own sessions (see makeSession + reconnectSession guards).
+      reconnectStates.clear();
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();
-      await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
+      await Promise.allSettled(sessionsToClose.map(disposeSession));
     },
   };
 }
