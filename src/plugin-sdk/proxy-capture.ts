@@ -7,7 +7,11 @@ export {
   DebugProxyCaptureStore,
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
-export { captureHttpExchange, captureWsEvent } from "../proxy-capture/runtime.js";
+export {
+  captureHttpExchange,
+  captureWsEvent,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "../proxy-capture/runtime.js";
 export type {
   CaptureEventRecord,
   CaptureQueryPreset,

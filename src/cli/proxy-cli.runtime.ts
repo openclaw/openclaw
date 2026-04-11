@@ -96,20 +96,23 @@ export async function runDebugProxyRunCommand(opts: {
     blobDir: settings.blobDir,
     certDir: settings.certDir,
   });
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: "inherit",
-      env: childEnv,
-      cwd: process.cwd(),
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, args, {
+        stdio: "inherit",
+        env: childEnv,
+        cwd: process.cwd(),
+      });
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        process.exitCode = signal ? 1 : (code ?? 1);
+        resolve();
+      });
     });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      process.exitCode = signal ? 1 : (code ?? 1);
-      resolve();
-    });
-  });
-  await server.stop();
-  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(sessionId);
+  } finally {
+    await server.stop();
+    getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(sessionId);
+  }
 }
 
 export async function runDebugProxySessionsCommand(opts: { limit?: number }) {

@@ -4,7 +4,10 @@ import {
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
-import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -149,18 +152,20 @@ export async function openaiTTS(params: {
       body: requestBody,
       signal: controller.signal,
     });
-    captureHttpExchange({
-      url: `${baseUrl}/audio/speech`,
-      method: "POST",
-      requestHeaders,
-      requestBody,
-      response,
-      transport: "http",
-      meta: {
-        provider: "openai",
-        capability: "tts",
-      },
-    });
+    if (!isDebugProxyGlobalFetchPatchInstalled()) {
+      captureHttpExchange({
+        url: `${baseUrl}/audio/speech`,
+        method: "POST",
+        requestHeaders,
+        requestBody,
+        response,
+        transport: "http",
+        meta: {
+          provider: "openai",
+          capability: "tts",
+        },
+      });
+    }
 
     if (!response.ok) {
       const detail = await extractOpenAiErrorDetail(response);

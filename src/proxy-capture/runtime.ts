@@ -15,6 +15,10 @@ type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
 
+type GlobalFetchPatchTarget = typeof globalThis & {
+  [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
+};
+
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
   try {
     const url = new URL(rawUrl);
@@ -50,9 +54,7 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
   if (typeof globalThis.fetch !== "function") {
     return;
   }
-  const patched = globalThis as typeof globalThis & {
-    [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
-  };
+  const patched = globalThis as GlobalFetchPatchTarget;
   if (patched[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
@@ -121,15 +123,17 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
 }
 
 function uninstallDebugProxyGlobalFetchPatch(): void {
-  const patched = globalThis as typeof globalThis & {
-    [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
-  };
+  const patched = globalThis as GlobalFetchPatchTarget;
   const state = patched[DEBUG_PROXY_FETCH_PATCH_KEY];
   if (!state) {
     return;
   }
   globalThis.fetch = state.originalFetch;
   delete patched[DEBUG_PROXY_FETCH_PATCH_KEY];
+}
+
+export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
+  return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
 }
 
 export function initializeDebugProxyCapture(mode: string, resolved?: DebugProxySettings): void {
