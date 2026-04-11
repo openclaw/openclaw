@@ -32,6 +32,26 @@
     "target": "Tailscale"
   },
   {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "OpenShell Sandbox",
+    "target": "OpenShell Sandbox"
+  },
+  {
+    "source": "OpenShell plugin configuration",
+    "target": "OpenShell 插件配置"
+  },
+  {
+    "source": "Sandboxing overview",
+    "target": "沙箱概览"
+  },
+  {
+    "source": "Slack channel setup",
+    "target": "Slack 渠道设置"
+  },
+  {
     "source": "Getting Started",
     "target": "入门指南"
   },
