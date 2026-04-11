@@ -1,3 +1,4 @@
+import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
 import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistryVersionFromState,
@@ -31,6 +32,22 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
+function toLoadedChannelPlugin(
+  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
+): LoadedChannelPlugin | null {
+  const resolvedPlugin = plugin;
+  const id = normalizeOptionalString(resolvedPlugin?.id) ?? "";
+  if (!resolvedPlugin || !id) {
+    return null;
+  }
+  return {
+    ...resolvedPlugin,
+    id,
+    meta: resolvedPlugin.meta ?? {},
+    capabilities: resolvedPlugin.capabilities ?? undefined,
+  };
+}
+
 function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: LoadedChannelPlugin[] = [];
@@ -56,8 +73,9 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const channelPlugins: LoadedChannelPlugin[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
-      if (entry?.plugin) {
-        channelPlugins.push(entry.plugin);
+      const plugin = toLoadedChannelPlugin(entry?.plugin);
+      if (plugin) {
+        channelPlugins.push(plugin);
       }
     }
   }
