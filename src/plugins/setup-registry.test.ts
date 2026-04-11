@@ -58,6 +58,112 @@ describe("setup-registry getJiti", () => {
     );
   });
 
+  it("forwards config load paths into setup discovery", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.discoverOpenClawPlugins.mockReturnValue({
+      candidates: [],
+      diagnostics: [],
+    });
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "loadpath-provider", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    resolvePluginSetupRegistry({
+      config: {
+        plugins: {
+          load: {
+            paths: ["/external/providers"],
+          },
+        },
+      } as never,
+      env: {},
+    });
+
+    expect(mocks.discoverOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraPaths: ["/external/providers"],
+        env: {},
+        cache: true,
+      }),
+    );
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            load: {
+              paths: ["/external/providers"],
+            },
+          }),
+        }),
+        env: {},
+        cache: true,
+      }),
+    );
+  });
+
+  it("keys setup-registry cache by install overrides used during manifest resolution", () => {
+    const firstPluginRoot = makeTempDir();
+    const secondPluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(firstPluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(secondPluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockImplementation((params?: { config?: { plugins?: { installs?: Record<string, { installPath?: string }> } } }) => {
+      const installPath = params?.config?.plugins?.installs?.provider?.installPath;
+      return {
+        plugins: [{ id: "provider", rootDir: installPath === "/installs/second" ? secondPluginRoot : firstPluginRoot }],
+        diagnostics: [],
+      };
+    });
+
+    resolvePluginSetupRegistry({
+      config: {
+        plugins: {
+          installs: {
+            provider: {
+              installPath: "/installs/first",
+            },
+          },
+        },
+      } as never,
+      env: {},
+    });
+
+    resolvePluginSetupRegistry({
+      config: {
+        plugins: {
+          installs: {
+            provider: {
+              installPath: "/installs/second",
+            },
+          },
+        },
+      } as never,
+      env: {},
+    });
+
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    expect(mocks.loadPluginManifestRegistry.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: {
+            installs: {
+              provider: {
+                installPath: "/installs/second",
+              },
+            },
+          },
+        }),
+      }),
+    );
+    expect(mocks.createJiti).toHaveBeenNthCalledWith(
+      1,
+      path.join(firstPluginRoot, "setup-api.js"),
+      expect.any(Object),
+    );
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("skips setup-api loading when config has no relevant migration triggers", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");

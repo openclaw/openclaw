@@ -184,7 +184,14 @@ async function inspectNodeModulesSymlinkTarget(params: {
     );
   }
 
-  const resolvedTargetStats = await fs.stat(resolvedTargetPath);
+  const resolvedTargetStats = await fs.stat(resolvedTargetPath).catch((error) => {
+    throw new Error(
+      `manifest dependency scan could not inspect symlink target ${params.symlinkRelativePath}: ${String(error)}`,
+      {
+        cause: error,
+      },
+    );
+  });
   const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
   const blockedDirectoryFinding = findBlockedPackageDirectoryInPath({
     pathRelativeToRoot: resolvedTargetRelativePath,

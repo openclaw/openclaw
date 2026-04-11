@@ -51,6 +51,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qa-lab", "src/gateway-child.ts", 489),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
+  bundledPluginCallsite("qa-lab", "src/telegram-live.runtime.ts", 295),
   bundledPluginCallsite("qa-lab", "web/src/app.ts", 15),
   bundledPluginCallsite("qa-lab", "web/src/app.ts", 23),
   bundledPluginCallsite("qa-lab", "web/src/app.ts", 31),

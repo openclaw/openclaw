@@ -238,7 +238,7 @@ export function resolveOwningPluginIdsForProvider(params: {
     )
     .map((plugin) => plugin.id);
 
-  return pluginIds.length > 0 ? pluginIds : undefined;
+  return pluginIds.length > 0 ? dedupeSortedPluginIds(pluginIds) : undefined;
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {

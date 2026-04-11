@@ -68,6 +68,44 @@ const jitiLoaders: PluginJitiLoaderCache = new Map();
 const setupRegistryCache = new Map<string, PluginSetupRegistry>();
 const setupProviderCache = new Map<string, ProviderPlugin | null>();
 
+function resolveConfiguredPluginLoadPaths(config?: OpenClawConfig): string[] | undefined {
+  const loadPaths = config?.plugins?.load?.paths;
+  return Array.isArray(loadPaths)
+    ? loadPaths.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function resolveConfiguredPluginInstallCacheEntries(
+  config?: OpenClawConfig,
+): Array<
+  readonly [
+    string,
+    {
+      installPath?: string;
+      sourcePath?: string;
+    },
+  ]
+> | null {
+  const installs = config?.plugins?.installs;
+  if (!installs || typeof installs !== "object") {
+    return null;
+  }
+  const entries = Object.entries(installs)
+    .flatMap(([pluginId, record]) => {
+      if (!record || typeof record !== "object") {
+        return [];
+      }
+      const installPath = typeof record.installPath === "string" ? record.installPath : undefined;
+      const sourcePath = typeof record.sourcePath === "string" ? record.sourcePath : undefined;
+      if (!installPath && !sourcePath) {
+        return [];
+      }
+      return [[pluginId, { installPath, sourcePath }] as const];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? entries : null;
+}
+
 export function clearPluginSetupRegistryCache(): void {
   jitiLoaders.clear();
   setupRegistryCache.clear();
@@ -83,17 +121,20 @@ function getJiti(modulePath: string) {
 }
 
 function buildSetupRegistryCacheKey(params: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
+    loadPaths: resolveConfiguredPluginLoadPaths(params.config),
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
   return JSON.stringify({
     roots,
     loadPaths,
+    installOverrides: resolveConfiguredPluginInstallCacheEntries(params.config),
     pluginIds: params.pluginIds ? [...new Set(params.pluginIds)].toSorted() : null,
   });
 }
@@ -217,12 +258,15 @@ function matchesProvider(provider: ProviderPlugin, providerId: string): boolean 
 }
 
 export function resolvePluginSetupRegistry(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
+  const configLoadPaths = resolveConfiguredPluginLoadPaths(params?.config);
   const cacheKey = buildSetupRegistryCacheKey({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     pluginIds: params?.pluginIds,
@@ -254,11 +298,13 @@ export function resolvePluginSetupRegistry(params?: {
   const cliBackendKeys = new Set<string>();
 
   const discovery = discoverOpenClawPlugins({
+    extraPaths: configLoadPaths,
     workspaceDir: params?.workspaceDir,
     env,
     cache: true,
   });
   const manifestRegistry = loadPluginManifestRegistry({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     cache: true,
@@ -571,6 +617,7 @@ export function runPluginSetupConfigMigrations(params: {
   }
 
   for (const entry of resolvePluginSetupRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     pluginIds,
@@ -596,6 +643,7 @@ export function resolvePluginSetupAutoEnableReasons(params: {
   const seen = new Set<string>();
 
   for (const entry of resolvePluginSetupRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env,
   }).autoEnableProbes) {

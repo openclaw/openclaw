@@ -937,6 +937,7 @@ describe("memory cli", () => {
         close,
       });
 
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-04-08T10:00:00.000Z"));
       const writeJson = spyRuntimeJson(defaultRuntime);
       await runMemoryCli(["rem-harness", "--json"]);
 
