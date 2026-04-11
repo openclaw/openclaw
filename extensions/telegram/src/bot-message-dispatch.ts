@@ -489,6 +489,8 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
+  // Track message IDs sent via block reply so onToolStart can delete narration.
+  const pendingBlockReplyMessageIds: number[] = [];
   const sendPayload = async (payload: ReplyPayload) => {
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       ...deliveryBaseOptions,
@@ -496,6 +498,9 @@ export const dispatchTelegramMessage = async ({
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,
       mediaLoader: telegramDeps.loadWebMedia,
+      onMessageSent: (messageId) => {
+        pendingBlockReplyMessageIds.push(messageId);
+      },
     });
     if (result.delivered) {
       deliveryState.markDelivered();
@@ -816,11 +821,33 @@ export const dispatchTelegramMessage = async ({
                 splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
               })
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+        onToolStart: async (payload) => {
+          if (statusReactionController) {
+            await statusReactionController.setTool(payload.name);
+          }
+          // Delete block reply messages that contained intermediate narration
+          // (e.g. "Let me fetch…") before tool execution starts.
+          const blockIdsToDelete = pendingBlockReplyMessageIds.splice(0);
+          for (const msgId of blockIdsToDelete) {
+            try {
+              await bot.api.deleteMessage(chatId, msgId);
+            } catch {
+              // Message may already have been cleaned up.
             }
-          : undefined,
+          }
+          // Delete draft preview — text before a tool call is intermediate
+          // reasoning, not a user-facing answer.
+          if (answerLane.hasStreamedMessage) {
+            const previewMessageId = answerLane.stream?.messageId();
+            if (typeof previewMessageId === "number") {
+              try {
+                await bot.api.deleteMessage(chatId, previewMessageId);
+              } catch {
+                // Preview may already have been deleted.
+              }
+            }
+          }
+        },
         onCompactionStart: statusReactionController
           ? () => statusReactionController.setCompacting()
           : undefined,

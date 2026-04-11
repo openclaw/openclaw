@@ -643,6 +643,8 @@ export async function deliverReplies(params: {
   replyQuoteText?: string;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  /** Callback for each successfully sent message ID (for narration cleanup). */
+  onMessageSent?: (messageId: number) => void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -756,6 +758,10 @@ export async function deliverReplies(params: {
         runtime: params.runtime,
         firstDeliveredMessageId,
       });
+
+      if (firstDeliveredMessageId != null) {
+        params.onMessageSent?.(firstDeliveredMessageId);
+      }
 
       emitMessageSentHooks({
         hookRunner,
