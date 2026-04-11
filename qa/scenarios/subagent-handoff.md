@@ -50,10 +50,15 @@ steps:
       # require an actual sessions_spawn tool call. Without this, a model
       # could produce the three labeled sections ("Delegated task", "Result",
       # "Evidence") as free-form prose without ever delegating to a real
-      # subagent.
+      # subagent. The debug request log is fetched once and the match is
+      # narrowed to the most recent matching request so a stale prior
+      # scenario on the same mock server cannot satisfy the gate.
+      - set: subagentDebugRequests
+        value:
+          expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
       - assert:
-          expr: "!env.mock || [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].some((request) => /delegate|subagent handoff/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn')"
+          expr: "!env.mock || (subagentDebugRequests.slice().reverse().find((request) => /delegate|subagent handoff/i.test(String(request.allInputText ?? '')))?.plannedToolName === 'sessions_spawn')"
           message:
-            expr: "`expected sessions_spawn tool call during subagent handoff scenario, saw plannedToolNames=${JSON.stringify([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].map((request) => request.plannedToolName ?? null))}`"
+            expr: "`expected sessions_spawn tool call during subagent handoff scenario, saw plannedToolNames=${JSON.stringify(subagentDebugRequests.map((request) => request.plannedToolName ?? null))}`"
     detailsExpr: outbound.text
 ```
