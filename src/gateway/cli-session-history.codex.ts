@@ -8,6 +8,8 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 export const CODEX_CLI_PROVIDER = "codex-cli";
 const CODEX_SESSIONS_RELATIVE_DIR = path.join(".codex", "sessions");
 const codexCliSessionPathCache = new Map<string, string>();
+const DEFAULT_MAX_CODEX_CLI_SESSION_PATH_CACHE_ENTRIES = 256;
+let maxCodexCliSessionPathCacheEntries = DEFAULT_MAX_CODEX_CLI_SESSION_PATH_CACHE_ENTRIES;
 
 type CodexCliTranscriptEntry = {
   timestamp?: unknown;
@@ -71,6 +73,22 @@ function buildCodexCliSessionPathCacheKey(params: {
   return `${params.sessionsDir}\t${params.cliSessionId}`;
 }
 
+function pruneCodexCliSessionPathCache(): void {
+  while (codexCliSessionPathCache.size > maxCodexCliSessionPathCacheEntries) {
+    const oldestKey = codexCliSessionPathCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    codexCliSessionPathCache.delete(oldestKey);
+  }
+}
+
+function setCachedCodexCliSessionPath(cacheKey: string, filePath: string): void {
+  codexCliSessionPathCache.delete(cacheKey);
+  codexCliSessionPathCache.set(cacheKey, filePath);
+  pruneCodexCliSessionPathCache();
+}
+
 function findCodexCliSessionFile(params: {
   sessionsDir: string;
   cliSessionId: string;
@@ -78,7 +96,11 @@ function findCodexCliSessionFile(params: {
   const cacheKey = buildCodexCliSessionPathCacheKey(params);
   const cached = codexCliSessionPathCache.get(cacheKey);
   if (cached && fs.existsSync(cached)) {
+    setCachedCodexCliSessionPath(cacheKey, cached);
     return cached;
+  }
+  if (cached) {
+    codexCliSessionPathCache.delete(cacheKey);
   }
   if (!fs.existsSync(params.sessionsDir)) {
     return undefined;
@@ -105,7 +127,7 @@ function findCodexCliSessionFile(params: {
       if (!entry.isFile() || !isCodexCliHistoryFile(filePath, params.cliSessionId)) {
         continue;
       }
-      codexCliSessionPathCache.set(cacheKey, filePath);
+      setCachedCodexCliSessionPath(cacheKey, filePath);
       return filePath;
     }
   }
@@ -403,3 +425,23 @@ export function readCodexCliSessionMessages(params: {
   }
   return messages;
 }
+
+export const __testing = {
+  get codexCliSessionPathCacheSize(): number {
+    return codexCliSessionPathCache.size;
+  },
+  get maxCodexCliSessionPathCacheEntries(): number {
+    return maxCodexCliSessionPathCacheEntries;
+  },
+  resetCodexCliSessionPathCacheForTests(): void {
+    codexCliSessionPathCache.clear();
+    maxCodexCliSessionPathCacheEntries = DEFAULT_MAX_CODEX_CLI_SESSION_PATH_CACHE_ENTRIES;
+  },
+  setMaxCodexCliSessionPathCacheEntriesForTests(limit: number): void {
+    if (!Number.isFinite(limit)) {
+      return;
+    }
+    maxCodexCliSessionPathCacheEntries = Math.max(1, Math.trunc(limit));
+    pruneCodexCliSessionPathCache();
+  },
+};
