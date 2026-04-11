@@ -161,7 +161,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (result.ok && result.compacted) {
     await runtime.incrementCompactionCount({
       cfg: params.cfg,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
