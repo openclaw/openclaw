@@ -431,18 +431,56 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
-        const result = await sendTelegramWithThreadFallback({
-          operation: "sendAudio",
-          runtime: params.runtime,
-          thread: params.thread,
-          requestParams: mediaParams,
-          send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
-        });
-        if (firstDeliveredMessageId == null) {
-          firstDeliveredMessageId = result.message_id;
+        try {
+          const result = await sendTelegramWithThreadFallback({
+            operation: "sendAudio",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            shouldLog: (err) => !isVoiceMessagesForbidden(err),
+            send: (effectiveParams) =>
+              params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+          });
+          if (firstDeliveredMessageId == null) {
+            firstDeliveredMessageId = result.message_id;
+          }
+          markDelivered(params.progress);
+        } catch (audioErr) {
+          if (isVoiceMessagesForbidden(audioErr)) {
+            const fallbackText = params.reply.text;
+            if (!fallbackText || !fallbackText.trim()) {
+              throw audioErr;
+            }
+            logVerbose(
+              "telegram sendAudio forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+            );
+            const audioFallbackReplyTo = resolveReplyToForSend({
+              replyToId: params.replyToId,
+              replyToMode: params.replyToMode,
+              progress: params.progress,
+            });
+            const fallbackMessageId = await sendTelegramVoiceFallbackText({
+              bot: params.bot,
+              chatId: params.chatId,
+              runtime: params.runtime,
+              text: fallbackText,
+              chunkText: params.chunkText,
+              replyToId: audioFallbackReplyTo,
+              thread: params.thread,
+              linkPreview: params.linkPreview,
+              silent: params.silent,
+              replyMarkup: params.replyMarkup,
+              replyQuoteText: params.replyQuoteText,
+            });
+            if (firstDeliveredMessageId == null) {
+              firstDeliveredMessageId = fallbackMessageId;
+            }
+            markReplyApplied(params.progress, audioFallbackReplyTo);
+            markDelivered(params.progress);
+            continue;
+          }
+          throw audioErr;
         }
-        markDelivered(params.progress);
       }
     } else {
       const result = await sendTelegramWithThreadFallback({
