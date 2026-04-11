@@ -502,7 +502,11 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
           direction: "inbound",
           kind: "ws-frame",
           flowId: this.flowId,
-          payload: Buffer.from(rawDataToString(data)),
+          payload: Buffer.isBuffer(data)
+            ? data
+            : Array.isArray(data)
+              ? Buffer.concat(data)
+              : Buffer.from(data),
         });
         this._handleMessage(data);
       };

@@ -556,7 +556,6 @@ export function resolveTelegramTransport(
     );
     const startIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
     let err: unknown;
-
     try {
       const response = await sourceFetch(
         input,

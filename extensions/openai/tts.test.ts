@@ -294,8 +294,9 @@ describe("openai tts", () => {
         .getSessionEvents("tts-patched-session", 10)
         .filter((event) => event.host === "api.openai.com");
       expect(events).toHaveLength(2);
-      const kinds = events.map((event) => String(event.kind)).toSorted();
-      expect(kinds).toEqual(["request", "response"]);
+      expect(
+        events.map((event) => String(event.kind)).toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(["request", "response"]);
       store.close();
     });
   });

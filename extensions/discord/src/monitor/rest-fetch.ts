@@ -25,6 +25,7 @@ export function resolveDiscordRestFetch(
       ).then((response) => {
         captureHttpExchange({
           url: resolveRequestUrl(input),
+          url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
           requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
           requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
@@ -33,6 +34,7 @@ export function resolveDiscordRestFetch(
           meta: { subsystem: "discord-rest" },
         });
         return response;
+      })) as typeof fetch);
       })) as typeof fetch);
   });
   if (!fetcher) {

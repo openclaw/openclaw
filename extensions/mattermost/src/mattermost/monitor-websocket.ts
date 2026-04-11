@@ -280,7 +280,11 @@ export function createMattermostConnectOnce(
             direction: "inbound",
             kind: "ws-frame",
             flowId,
-            payload: Buffer.from(rawDataToString(data)),
+            payload: Buffer.isBuffer(data)
+              ? data
+              : Array.isArray(data)
+                ? Buffer.concat(data)
+                : Buffer.from(data),
             meta: { subsystem: "mattermost-websocket" },
           });
           const raw = rawDataToString(data);
