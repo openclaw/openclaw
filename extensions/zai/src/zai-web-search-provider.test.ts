@@ -1,8 +1,16 @@
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, createZaiWebSearchProvider } from "./zai-web-search-provider.js";
+import {
+  __testing,
+  createZaiWebSearchProvider,
+  type ZaiMcpSearchFn,
+} from "./zai-web-search-provider.js";
 
 const { resolveZaiWebSearchCredential, createZaiToolDefinition } = __testing;
+
+function mockSearchFn(results: Array<Record<string, string>> = []): ZaiMcpSearchFn {
+  return vi.fn().mockResolvedValue(results);
+}
 
 describe("zai web search credential resolution", () => {
   afterEach(() => {
@@ -59,11 +67,8 @@ describe("zai web search credential resolution", () => {
 });
 
 describe("zai web search tool execution", () => {
-  const priorFetch = global.fetch;
-
   afterEach(() => {
     vi.unstubAllEnvs();
-    global.fetch = priorFetch;
   });
 
   it("returns missing_zai_api_key error when no credential is configured", async () => {
@@ -83,7 +88,7 @@ describe("zai web search tool execution", () => {
 
   it("returns invalid_freshness error for unrecognized freshness values", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
-    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } });
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, mockSearchFn());
 
     await expect(tool.execute({ query: "OpenClaw", freshness: "hour" })).resolves.toMatchObject({
       error: "invalid_freshness",
@@ -93,23 +98,16 @@ describe("zai web search tool execution", () => {
   it("accepts valid freshness values without error", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const mockFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        search_result: [
-          {
-            title: "OpenClaw news",
-            link: "https://example.com/news",
-            content: "Summary of OpenClaw",
-            media: "example.com",
-            publish_date: "2026-04-11",
-          },
-        ],
-      }),
-    })) as unknown as typeof global.fetch;
-    global.fetch = mockFetch;
-
-    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } });
+    const searchFn = mockSearchFn([
+      {
+        title: "OpenClaw news",
+        link: "https://example.com/news",
+        content: "Summary of OpenClaw",
+        media: "example.com",
+        publish_date: "2026-04-11",
+      },
+    ]);
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
 
     for (const freshness of ["day", "week", "month", "year"] as const) {
       const result = await tool.execute({ query: "OpenClaw", freshness });
@@ -120,23 +118,16 @@ describe("zai web search tool execution", () => {
   it("returns a wrapped payload with correct externalContent metadata", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const mockFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        search_result: [
-          {
-            title: "Test Title",
-            link: "https://example.com/test",
-            content: "Test content body",
-            media: "example.com",
-            publish_date: "2026-04-11",
-          },
-        ],
-      }),
-    })) as unknown as typeof global.fetch;
-    global.fetch = mockFetch;
-
-    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } });
+    const searchFn = mockSearchFn([
+      {
+        title: "Test Title",
+        link: "https://example.com/test",
+        content: "Test content body",
+        media: "example.com",
+        publish_date: "2026-04-11",
+      },
+    ]);
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
     const result = await tool.execute({ query: "test query" });
 
     expect(result).toMatchObject({
@@ -154,23 +145,16 @@ describe("zai web search tool execution", () => {
   it("wraps all text fields in results with wrapWebContent markers", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const mockFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        search_result: [
-          {
-            title: "Injected title",
-            link: "https://example.com/result",
-            content: "Injected content",
-            media: "evil.com",
-            publish_date: "2026-04-11",
-          },
-        ],
-      }),
-    })) as unknown as typeof global.fetch;
-    global.fetch = mockFetch;
-
-    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } });
+    const searchFn = mockSearchFn([
+      {
+        title: "Injected title",
+        link: "https://example.com/result",
+        content: "Injected content",
+        media: "evil.com",
+        publish_date: "2026-04-11",
+      },
+    ]);
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
     const result = (await tool.execute({ query: "test" })) as {
       results: Array<{
         title?: string;
@@ -183,7 +167,6 @@ describe("zai web search tool execution", () => {
     expect(result.results).toHaveLength(1);
     const [r] = result.results;
 
-    // All text fields must be wrapped — markers delimit content from an untrusted source
     for (const field of [r?.title, r?.description, r?.siteName, r?.published] as const) {
       if (field !== undefined) {
         expect(field).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT/);
@@ -191,25 +174,26 @@ describe("zai web search tool execution", () => {
     }
   });
 
-  it("passes domain_filter through to the API request body", async () => {
+  it("passes domain_filter through to the MCP search call", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const mockFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ search_result: [] }),
-    })) as unknown as typeof global.fetch;
-    global.fetch = mockFetch;
-
-    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } });
+    const searchFn = mockSearchFn([]) as ReturnType<typeof vi.fn>;
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
     await tool.execute({ query: "python docs", domain_filter: "docs.python.org" });
 
-    const [, init] = mockFetch.mock.calls[0] ?? [];
-    const rawBody = (init as RequestInit | undefined)?.body;
-    const body = JSON.parse(typeof rawBody === "string" ? rawBody : "{}") as Record<
-      string,
-      unknown
-    >;
-    expect(body.search_domain_filter).toBe("docs.python.org");
+    expect(searchFn).toHaveBeenCalledWith(
+      expect.objectContaining({ domainFilter: "docs.python.org" }),
+    );
+  });
+
+  it("maps freshness values to Z.AI recency filter strings in MCP call", async () => {
+    vi.stubEnv("ZAI_API_KEY", "zai-test-key");
+
+    const searchFn = mockSearchFn([]) as ReturnType<typeof vi.fn>;
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
+    await tool.execute({ query: "news", freshness: "week" });
+
+    expect(searchFn).toHaveBeenCalledWith(expect.objectContaining({ freshness: "oneWeek" }));
   });
 });
 
@@ -226,11 +210,14 @@ describe("zai web search provider contract", () => {
     expect(provider.envVars).toContain("Z_AI_API_KEY");
   });
 
+  it("docsUrl points to the MCP server documentation", () => {
+    const provider = createZaiWebSearchProvider();
+    expect(provider.docsUrl).toBe("https://docs.z.ai/devpack/mcp/search-mcp-server");
+  });
+
   it("returns null from createTool when no api key is set (lightweight artifact contract)", () => {
     withEnv({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, () => {
       const provider = createZaiWebSearchProvider();
-      // createTool always returns a tool definition (returns missing_key error on execute).
-      // The contract-api shim (web-search-contract-api.ts) is the one that returns null.
       const tool = provider.createTool({ config: {} });
       expect(tool).not.toBeNull();
     });

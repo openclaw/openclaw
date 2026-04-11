@@ -15,7 +15,7 @@ export function createZaiWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
     placeholder: "zai-...",
     signupUrl: "https://z.ai/manage-apikey/apikey-list",
-    docsUrl: "https://docs.z.ai/guides/tools/web-search",
+    docsUrl: "https://docs.z.ai/devpack/mcp/search-mcp-server",
     autoDetectOrder: 60,
     credentialPath,
     ...createWebSearchProviderContractFields({
