@@ -622,6 +622,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
   let lastRuntimeCronRef: CronServiceLike | null = null;
+  let lastDreamingProcessedAtMs = 0;
+
+  const RUNTIME_DREAMING_THROTTLE_WINDOW_MS = 30 * 60 * 1000;
 
   const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
     [
@@ -713,10 +716,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       if (ctx.trigger !== "heartbeat") {
         return undefined;
       }
+      const now = Date.now();
+      if (now - lastDreamingProcessedAtMs < RUNTIME_DREAMING_THROTTLE_WINDOW_MS) {
+        return undefined;
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
-      return await runShortTermDreamingPromotionIfTriggered({
+      const result = await runShortTermDreamingPromotionIfTriggered({
         cleanedBody: event.cleanedBody,
         trigger: ctx.trigger,
         workspaceDir: ctx.workspaceDir,
@@ -725,6 +732,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
       });
+      if (result?.handled) {
+        lastDreamingProcessedAtMs = now;
+      }
+      return result;
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
       return undefined;
