@@ -827,31 +827,61 @@ export async function runHeartbeatOnce(opts: {
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
-    const removedSessionFiles = new Map<string, string | undefined>();
+    // Files removed because their containing session entry was deleted
+    // (suffix-collapse case). Archived as "deleted" — longer retention.
+    const deletedSessionFiles = new Map<string, string | undefined>();
+    // Files rotated away because the session at the same key rolled to a
+    // new transcript on forceNew. Archived as "reset" — shorter retention,
+    // matches the semantics of `/reset` and other session rotations.
+    const resetSessionFiles = new Map<string, string | undefined>();
     if (staleIsolatedSessionKey) {
       const staleEntry = cronSession.store[staleIsolatedSessionKey];
       if (staleEntry?.sessionId) {
-        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+        deletedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
       }
       delete cronSession.store[staleIsolatedSessionKey];
+    }
+    // When resolveCronSession rotates to a fresh session (forceNew → isNewSession),
+    // the caller has already cleared sessionFile on the returned entry so the next
+    // write lands at a new path. The transcript from the PRIOR run at the same key
+    // would otherwise be orphaned — referenced by nothing in the store, cleaned up
+    // only when the disk-budget sweeper eventually runs. Archive it immediately via
+    // the "reset" archival path: rename to <file>.reset.<ts>, then get final cleanup
+    // from cleanupArchivedSessionTranscripts after its retention window.
+    if (cronSession.isNewSession) {
+      const priorEntryAtKey = cronSession.store[isolatedSessionKey];
+      if (priorEntryAtKey?.sessionId && priorEntryAtKey.sessionFile) {
+        resetSessionFiles.set(priorEntryAtKey.sessionId, priorEntryAtKey.sessionFile);
+      }
     }
     cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
     cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    if (removedSessionFiles.size > 0) {
+    if (deletedSessionFiles.size > 0 || resetSessionFiles.size > 0) {
       try {
         const referencedSessionIds = new Set(
           Object.values(cronSession.store)
             .map((sessionEntry) => sessionEntry?.sessionId)
             .filter((sessionId): sessionId is string => Boolean(sessionId)),
         );
-        await archiveRemovedSessionTranscripts({
-          removedSessionFiles,
-          referencedSessionIds,
-          storePath: cronSession.storePath,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
+        if (deletedSessionFiles.size > 0) {
+          await archiveRemovedSessionTranscripts({
+            removedSessionFiles: deletedSessionFiles,
+            referencedSessionIds,
+            storePath: cronSession.storePath,
+            reason: "deleted",
+            restrictToStoreDir: true,
+          });
+        }
+        if (resetSessionFiles.size > 0) {
+          await archiveRemovedSessionTranscripts({
+            removedSessionFiles: resetSessionFiles,
+            referencedSessionIds,
+            storePath: cronSession.storePath,
+            reason: "reset",
+            restrictToStoreDir: true,
+          });
+        }
       } catch (err) {
         log.warn("heartbeat: failed to archive stale isolated session transcript", {
           err: String(err),

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -387,6 +388,78 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
       expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
+    });
+  });
+
+  it("archives the prior transcript file as .reset when rotating to a fresh isolated session", async () => {
+    // Regression for the orphan-file accumulation that followed from the
+    // isolatedSession file-rotation bug. Paired with the fix in
+    // src/cron/isolated-agent/session.ts that clears sessionFile on isNewSession:
+    // once the session rotates, the OLD transcript file needs to be archived so
+    // it doesn't sit on disk indefinitely referenced by nothing in the store.
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+
+      // Seed an existing isolated session entry whose sessionFile exists on disk.
+      const sessionsDir = path.dirname(storePath);
+      const priorSessionId = "prior-session-id";
+      const priorSessionFile = path.join(sessionsDir, `${priorSessionId}.jsonl`);
+      await fs.writeFile(
+        priorSessionFile,
+        '{"type":"session","version":3,"id":"prior-session-id","timestamp":"2026-04-10T22:00:00.000Z"}\n',
+        "utf-8",
+      );
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: priorSessionId,
+            updatedAt: 1,
+            sessionFile: priorSessionFile,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: baseSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      // Prior transcript was renamed to <file>.reset.<ts> by the archival path.
+      await expect(fs.stat(priorSessionFile)).rejects.toThrow();
+      const dirEntries = await fs.readdir(sessionsDir);
+      const archivedFile = dirEntries.find(
+        (name) => name.startsWith(`${priorSessionId}.jsonl.reset.`),
+      );
+      expect(archivedFile).toBeDefined();
+
+      // Store entry now references a different session. sessionId rolled, and
+      // sessionFile is either undefined (fresh clear) or a path distinct from the
+      // old one.
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const updatedEntry = store[isolatedSessionKey];
+      expect(updatedEntry).toBeDefined();
+      expect(updatedEntry?.sessionId).not.toBe(priorSessionId);
+      if (updatedEntry?.sessionFile) {
+        expect(updatedEntry.sessionFile).not.toBe(priorSessionFile);
+      }
     });
   });
 });
