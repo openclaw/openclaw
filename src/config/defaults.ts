@@ -16,6 +16,10 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   opus: "anthropic/claude-opus-4-6",
   sonnet: "anthropic/claude-sonnet-4-6",
 
+  // Venice (privacy-first access to frontier models)
+  "v-sonnet": "venice/claude-sonnet-4-6",
+  "v-opus": "venice/claude-opus-4-6",
+
   // OpenAI
   gpt: "openai/gpt-5.2",
   "gpt-mini": "openai/gpt-5-mini",

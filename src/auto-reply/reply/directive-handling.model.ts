@@ -6,9 +6,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { VENICE_TOP_MODELS } from "../../agents/top-models.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { buildBrowseProvidersButton } from "../../telegram/model-buttons.js";
+import { buildTopModelsKeyboard } from "../../telegram/model-buttons.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -248,15 +249,16 @@ export async function maybeHandleModelDirectiveInfo(params: {
       : null;
 
     if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
+      const buttons = buildTopModelsKeyboard({
+        topModels: VENICE_TOP_MODELS,
+        currentModel: current,
+      });
       return {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
           activeRuntimeLine,
           "",
-          "Tap below to browse models, or use:",
-          "/model <provider/model> to switch",
-          "/model status for details",
+          "Quick pick or tap More for all models:",
         ]
           .filter(Boolean)
           .join("\n"),

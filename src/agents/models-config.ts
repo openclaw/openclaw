@@ -119,6 +119,25 @@ export async function ensureOpenClawModelsJson(
         string,
         NonNullable<ModelsConfig["providers"]>[string]
       >;
+
+      // Preserve cached Venice models when discovery returns fewer models than
+      // what's already on disk. This prevents a timeout from overwriting a
+      // previously-successful 69-model discovery with a stale static catalog.
+      const existingVenice = existingProviders.venice;
+      const newVenice = providers.venice;
+      if (existingVenice && newVenice) {
+        const existingCount = Array.isArray(existingVenice.models)
+          ? existingVenice.models.length
+          : 0;
+        const newCount = Array.isArray(newVenice.models) ? newVenice.models.length : 0;
+        if (existingCount > 0 && newCount > 0 && newCount < existingCount) {
+          console.warn(
+            `[venice-models] Preserving ${existingCount} cached models (discovery returned only ${newCount})`,
+          );
+          delete providers.venice;
+        }
+      }
+
       mergedProviders = { ...existingProviders, ...providers };
     }
   }

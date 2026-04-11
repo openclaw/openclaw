@@ -191,6 +191,40 @@ export function buildBrowseProvidersButton(): ButtonRow[] {
 }
 
 /**
+ * Build top models quick-pick keyboard with "More models..." button.
+ *
+ * Shows curated top models as direct-select buttons, with the current
+ * model marked with ✓. The last row is "More models..." which enters
+ * the existing provider browser flow.
+ */
+export function buildTopModelsKeyboard(params: {
+  topModels: ReadonlyArray<{ ref: string; label: string }>;
+  currentModel?: string;
+}): ButtonRow[] {
+  const rows: ButtonRow[] = [];
+
+  for (const entry of params.topModels) {
+    const callbackData = `mdl_sel_${entry.ref}`;
+    // Skip if callback data exceeds Telegram's 64-byte limit
+    if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
+      continue;
+    }
+
+    const isCurrent =
+      params.currentModel === entry.ref ||
+      params.currentModel?.endsWith(`/${entry.ref.split("/").pop()}`) === true;
+    const text = isCurrent ? `${entry.label} ✓` : entry.label;
+
+    rows.push([{ text, callback_data: callbackData }]);
+  }
+
+  // "More models..." enters the existing provider browser
+  rows.push([{ text: "More models...", callback_data: "mdl_prov" }]);
+
+  return rows;
+}
+
+/**
  * Truncate model ID for display, preserving end if too long.
  */
 function truncateModelId(modelId: string, maxLen: number): string {
