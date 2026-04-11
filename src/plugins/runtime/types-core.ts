@@ -4,6 +4,7 @@ import type {
 } from "../../agents/pi-embedded-runtime.types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
+import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 
 export type { HeartbeatRunResult };
 
@@ -91,11 +92,11 @@ export type PluginRuntimeCore = {
     listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
   };
   mediaUnderstanding: {
-    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
-    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
-    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
-    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
-    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+    runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
+    describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
+    describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
+    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
   imageGeneration: {
     generate: (
