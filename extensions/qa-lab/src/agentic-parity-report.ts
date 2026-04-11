@@ -149,9 +149,10 @@ function scopeSummaryToParityPack(
   summary: QaParitySuiteSummary,
   parityTitleSet: ReadonlySet<string>,
 ): QaParitySuiteSummary {
-  // The parity verdict must only consider the declared first-wave parity scenarios.
-  // Drop `counts` so the metric helper recomputes totals from the filtered scenario
-  // list instead of inheriting the caller's full-suite counters.
+  // The parity verdict must only consider the declared parity scenarios
+  // (the full first-wave + second-wave pack from QA_AGENTIC_PARITY_SCENARIOS).
+  // Drop `counts` so the metric helper recomputes totals from the filtered
+  // scenario list instead of inheriting the caller's full-suite counters.
   return {
     scenarios: summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name)),
   };
@@ -281,8 +282,13 @@ export function buildQaAgenticParityComparison(params: {
 }
 
 export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityComparison): string {
+  // Title is parametrized from the candidate / baseline labels so reports
+  // for any candidate/baseline pair (not only gpt-5.4 vs opus 4.6) render
+  // with an accurate header. The default CLI labels are still
+  // openai/gpt-5.4 vs anthropic/claude-opus-4-6, but the helper works for
+  // any parity comparison a caller configures.
   const lines = [
-    "# OpenClaw GPT-5.4 / Opus 4.6 Agentic Parity Report",
+    `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,
     "",
     `- Compared at: ${comparison.comparedAt}`,
     `- Candidate: ${comparison.candidateLabel}`,
