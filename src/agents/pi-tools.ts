@@ -593,6 +593,7 @@ export function createOpenClawCodingTools(options?: {
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
+    groupPolicy?.allow,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
     config: options?.config,
