@@ -56,8 +56,8 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const channelPlugins: LoadedChannelPlugin[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
-      if (entry?.plugin) {
-        channelPlugins.push(entry.plugin);
+      if (entry?.plugin && typeof entry.plugin.id === "string" && entry.plugin.id) {
+        channelPlugins.push(entry.plugin as LoadedChannelPlugin);
       }
     }
   }

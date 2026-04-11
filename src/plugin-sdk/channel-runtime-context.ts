@@ -2,5 +2,6 @@ export {
   getChannelRuntimeContext,
   registerChannelRuntimeContext,
   watchChannelRuntimeContexts,
-  type ChannelRuntimeContextKey,
 } from "../infra/channel-runtime-context.js";
+
+export type { ChannelRuntimeContextKey } from "../channels/plugins/channel-runtime-surface.types.js";
