@@ -332,13 +332,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         text = buildMentionedCardContent(mentionTargets, text);
       }
       // Enrich footer with token usage from session store after run completes.
-      let finalNote = formatCardNote({ name: identity?.name?.trim() || agentId });
+      let finalNote = formatCardNote({
+        name: identity?.name?.trim() || agentId,
+        model: prefixContext.prefixContext.model,
+        provider: prefixContext.prefixContext.provider,
+      });
       if (sessionKey && sessionStorePath) {
         try {
           const { loadSessionStore } = await import("openclaw/plugin-sdk/config-runtime");
           const store = loadSessionStore(sessionStorePath, { skipCache: true });
           const entry = store[sessionKey];
-          if (entry) {
+          if (entry && entry.totalTokensFresh === true) {
             finalNote = formatCardNote({
               name: identity?.name?.trim() || agentId,
               model: prefixContext.prefixContext.model,
