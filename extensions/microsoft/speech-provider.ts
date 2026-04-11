@@ -11,7 +11,10 @@ import type {
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
@@ -137,17 +140,19 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
   const response = await fetch(url, {
     headers,
   });
-  captureHttpExchange({
-    url,
-    method: "GET",
-    requestHeaders: headers,
-    response,
-    transport: "http",
-    meta: {
-      provider: "microsoft",
-      capability: "speech-voices",
-    },
-  });
+  if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    captureHttpExchange({
+      url,
+      method: "GET",
+      requestHeaders: headers,
+      response,
+      transport: "http",
+      meta: {
+        provider: "microsoft",
+        capability: "speech-voices",
+      },
+    });
+  }
   if (!response.ok) {
     throw new Error(`Microsoft voices API error (${response.status})`);
   }

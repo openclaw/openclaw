@@ -58,14 +58,23 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
 
 function resolveModelRequestPolicy(model: Model<Api>) {
   const debugProxy = resolveDebugProxySettings();
+  const allowExplicitDebugProxy =
+    debugProxy.enabled &&
+    debugProxy.proxyUrl &&
+    (() => {
+      try {
+        return new URL(model.baseUrl).protocol === "https:";
+      } catch {
+        return false;
+      }
+    })();
   const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
-    proxy:
-      debugProxy.enabled && debugProxy.proxyUrl
-        ? {
-            mode: "explicit-proxy",
-            url: debugProxy.proxyUrl,
-          }
-        : undefined,
+    proxy: allowExplicitDebugProxy
+      ? {
+          mode: "explicit-proxy",
+          url: debugProxy.proxyUrl,
+        }
+      : undefined,
   });
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,

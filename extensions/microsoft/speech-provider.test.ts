@@ -120,6 +120,52 @@ describe("listMicrosoftVoices", () => {
       events.some((event) => event.kind === "response" && event.host === "speech.platform.bing.com"),
     ).toBe(true);
   });
+
+  it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
+    priorProxyEnv = Object.fromEntries(
+      proxyEnvKeys.map((key) => [key, process.env[key]]),
+    ) as typeof priorProxyEnv;
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+    process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
+
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 })) as unknown as typeof globalThis.fetch;
+
+    const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+    const { finalizeDebugProxyCapture, initializeDebugProxyCapture } = await import(
+      "../../src/proxy-capture/runtime.js"
+    );
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+    store.upsertSession({
+      id: "ms-voices-global-session",
+      startedAt: Date.now(),
+      mode: "test",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    });
+    initializeDebugProxyCapture("test");
+
+    try {
+      await listMicrosoftVoices();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store
+        .getSessionEvents("ms-voices-global-session", 10)
+        .filter((event) => event.host === "speech.platform.bing.com");
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.kind).sort()).toEqual(["request", "response"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      finalizeDebugProxyCapture();
+    }
+  });
 });
 
 describe("isCjkDominant", () => {

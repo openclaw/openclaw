@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "./model-types.js";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const {
+  fetchWithSsrFGuardMock,
+  mergeModelProviderRequestOverridesMock,
+  resolveProviderRequestPolicyConfigMock,
+} = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({ ...current, ...overrides })),
+  resolveProviderRequestPolicyConfigMock: vi.fn(() => ({ allowPrivateNetwork: false })),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -12,8 +18,8 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: vi.fn(() => ({ mode: "direct" })),
   getModelProviderRequestTransport: vi.fn(() => undefined),
-  mergeModelProviderRequestOverrides: vi.fn((current, overrides) => ({ ...current, ...overrides })),
-  resolveProviderRequestPolicyConfig: vi.fn(() => ({ allowPrivateNetwork: false })),
+  mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
+  resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
 }));
 
 describe("buildGuardedModelFetch", () => {
@@ -23,6 +29,8 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
+    mergeModelProviderRequestOverridesMock.mockClear();
+    resolveProviderRequestPolicyConfigMock.mockClear().mockReturnValue({ allowPrivateNetwork: false });
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_URL;
   });
@@ -55,5 +63,29 @@ describe("buildGuardedModelFetch", () => {
         },
       }),
     );
+  });
+
+  it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "kimi-k2.5:cloud",
+      provider: "ollama",
+      api: "ollama-chat",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    } as unknown as Model<"ollama-chat">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://127.0.0.1:11434/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"messages":[]}',
+    });
+
+    expect(mergeModelProviderRequestOverridesMock).toHaveBeenCalledWith(undefined, {
+      proxy: undefined,
+    });
   });
 });
