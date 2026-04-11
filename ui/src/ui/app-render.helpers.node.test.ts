@@ -23,6 +23,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
   switchChatSession,
 } from "./app-render.helpers.ts";
@@ -120,6 +121,35 @@ describe("parseSessionKey", () => {
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the explicit gateway token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("session-token");
+  });
+
+  it("falls back to the shared password when token is blank", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "   " } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("shared-password");
+  });
+
+  it("returns null when neither auth secret is available", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -336,12 +366,22 @@ describe("switchChatSession", () => {
       chatStreamSegments: [{ text: "segment", ts: 1 }],
       chatThinkingLevel: "high",
       chatStream: "stream",
+      chatSideResult: {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "draft answer",
+        isError: false,
+        ts: 1,
+      },
       lastError: "oops",
       compactionStatus: { phase: "active" },
       fallbackStatus: { phase: "active" },
       chatAvatarUrl: "/avatar/old",
       chatQueue: [{ id: "queued" }],
       chatRunId: "run-1",
+      chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
       settings,
       applySettings(next: typeof settings) {
@@ -359,6 +399,8 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultTerminalRuns.size).toBe(0);
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {

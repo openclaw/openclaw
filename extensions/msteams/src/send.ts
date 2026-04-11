@@ -16,6 +16,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
+import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
@@ -168,6 +169,9 @@ export async function sendMessageMSTeams(
         activity,
         errorPrefix: "msteams consent card send",
       });
+
+      // Store the activity ID so the accept handler can replace the consent card in-place
+      setPendingUploadActivityId(uploadId, messageId);
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 

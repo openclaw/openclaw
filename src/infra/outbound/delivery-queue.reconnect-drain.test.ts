@@ -225,8 +225,11 @@ describe("drainPendingDeliveries for WhatsApp reconnect", () => {
     // Fail it so it matches the "no listener" filter
     const pending = fs
       .readdirSync(path.join(tmpDir, "delivery-queue"))
-      .filter((f) => f.endsWith(".json"));
-    const entryPath = path.join(tmpDir, "delivery-queue", pending[0]);
+      .find((f) => f.endsWith(".json"));
+    if (!pending) {
+      throw new Error("Missing pending delivery entry");
+    }
+    const entryPath = path.join(tmpDir, "delivery-queue", pending);
     const entry = JSON.parse(fs.readFileSync(entryPath, "utf-8"));
     entry.lastError = "No active WhatsApp Web listener";
     entry.retryCount = 1;
@@ -318,18 +321,27 @@ describe("drainPendingDeliveries for WhatsApp reconnect", () => {
       }
     });
 
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValueOnce(1_000);
-    await enqueueDelivery(
+    const blockerId = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1000", payloads: [{ text: "blocker" }] },
       tmpDir,
     );
-    nowSpy.mockReturnValueOnce(2_000);
-    await enqueueDelivery(
+    const whatsappId = await enqueueDelivery(
       { channel: "whatsapp", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
-    nowSpy.mockRestore();
+    const queueDir = path.join(tmpDir, "delivery-queue");
+    const blockerPath = path.join(queueDir, `${blockerId}.json`);
+    const whatsappPath = path.join(queueDir, `${whatsappId}.json`);
+    const blockerEntry = JSON.parse(fs.readFileSync(blockerPath, "utf-8")) as {
+      enqueuedAt: number;
+    };
+    const whatsappEntry = JSON.parse(fs.readFileSync(whatsappPath, "utf-8")) as {
+      enqueuedAt: number;
+    };
+    blockerEntry.enqueuedAt = 1;
+    whatsappEntry.enqueuedAt = 2;
+    fs.writeFileSync(blockerPath, JSON.stringify(blockerEntry, null, 2));
+    fs.writeFileSync(whatsappPath, JSON.stringify(whatsappEntry, null, 2));
 
     const startupRecovery = recoverPendingDeliveries({
       cfg: stubCfg,

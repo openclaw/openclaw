@@ -15,7 +15,7 @@ export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
 export { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-export { buildSubagentSystemPrompt } from "./subagent-announce.js";
+export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,

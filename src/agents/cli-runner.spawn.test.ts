@@ -7,6 +7,7 @@ import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
+import { buildRunClaudeCliAgentParams } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -30,7 +31,11 @@ function buildPreparedCliRunContext(params: {
   runId: string;
   prompt?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  config?: PreparedCliRunContext["params"]["config"];
+  skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
+  workspaceDir?: string;
 }): PreparedCliRunContext {
+  const workspaceDir = params.workspaceDir ?? "/tmp";
   const baseBackend =
     params.provider === "claude-cli"
       ? {
@@ -63,15 +68,17 @@ function buildPreparedCliRunContext(params: {
     params: {
       sessionId: "s1",
       sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      workspaceDir,
+      config: params.config,
       prompt: params.prompt ?? "hi",
       provider: params.provider,
       model: params.model,
       timeoutMs: 1_000,
       runId: params.runId,
+      skillsSnapshot: params.skillsSnapshot,
     },
     started: Date.now(),
-    workspaceDir: "/tmp",
+    workspaceDir,
     backendResolved: {
       id: params.provider,
       config: backend,
@@ -156,6 +163,27 @@ describe("runCliAgent spawn path", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
+  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+    const systemPrompt = buildSystemPrompt({
+      workspaceDir: "/tmp",
+      modelDisplay: "claude-cli/sonnet",
+      tools: [],
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>weather</name>",
+        "    <description>Use weather tools.</description>",
+        "    <location>/tmp/skills/weather/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    });
+
+    expect(systemPrompt).toContain("## Skills (mandatory)");
+    expect(systemPrompt).toContain("<name>weather</name>");
+    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
+  });
+
   it("pipes Claude prompts over stdin instead of argv", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -210,6 +238,168 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
     expect(input.input).toContain("hi");
     expect(input.argv).not.toContain("hi");
+  });
+
+  it("passes OpenClaw skills to Claude as a session plugin", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
+    const skillDir = path.join(workspaceDir, "skills", "weather");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pluginDir = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const pluginArgIndex = input.argv?.indexOf("--plugin-dir") ?? -1;
+      expect(pluginArgIndex).toBeGreaterThanOrEqual(0);
+      pluginDir = input.argv?.[pluginArgIndex + 1] ?? "";
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
+      ) as { name?: string; skills?: string };
+      expect(manifest).toMatchObject({
+        name: "openclaw-skills",
+        skills: "./skills",
+      });
+      await expect(
+        fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
+      ).resolves.toContain("Read forecast data before replying.");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-skills-plugin",
+          workspaceDir,
+          skillsSnapshot: {
+            prompt: "",
+            skills: [{ name: "weather" }],
+            resolvedSkills: [
+              {
+                name: "weather",
+                description: "Use weather tools for forecasts.",
+                filePath: path.join(skillDir, "SKILL.md"),
+                baseDir: skillDir,
+                source: "test",
+                sourceInfo: {
+                  path: skillDir,
+                  source: "test",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: skillDir,
+                },
+                disableModelInvocation: false,
+              },
+            ],
+          },
+        }),
+      );
+      await expect(fs.access(pluginDir)).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects skill env overrides into CLI child env and restores host env", async () => {
+    const previousEnvValue = process.env.CLI_SKILL_API_KEY;
+    delete process.env.CLI_SKILL_API_KEY;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { env?: Record<string, string> };
+      expect(input.env?.CLI_SKILL_API_KEY).toBe("skill-secret");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-skill-env",
+          config: {
+            skills: {
+              entries: {
+                envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
+              },
+            },
+          },
+          skillsSnapshot: {
+            prompt: "",
+            skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
+          },
+        }),
+      );
+      expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
+    } finally {
+      if (previousEnvValue === undefined) {
+        delete process.env.CLI_SKILL_API_KEY;
+      } else {
+        process.env.CLI_SKILL_API_KEY = previousEnvValue;
+      }
+    }
+  });
+
+  it("ignores legacy claudeSessionId on the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-legacy-wrapper",
+      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
+    });
+
+    expect(params.provider).toBe("claude-cli");
+    expect(params.prompt).toBe("hi");
+    expect(params).not.toHaveProperty("cliSessionId");
+    expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
+  });
+
+  it("forwards senderIsOwner through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionKey: "agent:main:matrix:room:123",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-owner-wrapper",
+      senderIsOwner: false,
+    });
+
+    expect(params.senderIsOwner).toBe(false);
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -532,6 +722,34 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.env?.SAFE_KEEP).toBe("keep-me");
     expect(input.env?.SAFE_CLEAR).toBeUndefined();
+  });
+
+  it("can preserve selected clearEnv keys for live CLI backend probes", async () => {
+    try {
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV = '["SAFE_CLEAR"]';
+      process.env.SAFE_CLEAR = "from-base";
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          runId: "run-clear-env-preserve",
+          backend: {
+            clearEnv: ["SAFE_CLEAR", "SAFE_DROP"],
+          },
+        }),
+        "thread-123",
+      );
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.SAFE_CLEAR).toBe("from-base");
+      expect(input.env?.SAFE_DROP).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV;
+      delete process.env.SAFE_CLEAR;
+    }
   });
 
   it("keeps explicit backend env overrides even when clearEnv drops inherited values", async () => {

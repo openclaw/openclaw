@@ -29,6 +29,7 @@ import {
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { IdentityConfig } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
@@ -98,7 +99,7 @@ function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
   respond: RespondFn,
 ): {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   name: string;
@@ -377,7 +378,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   return files;
 }
 
-function resolveAgentIdOrError(agentIdRaw: string, cfg: ReturnType<typeof loadConfig>) {
+function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
   const agentId = normalizeAgentId(agentIdRaw);
   const allowed = new Set(listAgentIds(cfg));
   if (!allowed.has(agentId)) {
@@ -409,7 +410,7 @@ function respondInvalidMethodParams(
   );
 }
 
-function isConfiguredAgent(cfg: ReturnType<typeof loadConfig>, agentId: string): boolean {
+function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 
@@ -628,7 +629,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const rawName = String(params.name ?? "").trim();
+    const rawName = params.name.trim();
     const agentId = normalizeAgentId(rawName);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
@@ -648,7 +649,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const workspaceDir = resolveUserPath(String(params.workspace ?? "").trim());
+    const workspaceDir = resolveUserPath(params.workspace.trim());
 
     const safeName = sanitizeIdentityLine(rawName);
     const model = resolveOptionalStringParam(params.model);
@@ -707,7 +708,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const agentId = normalizeAgentId(String(params.agentId ?? ""));
+    const agentId = normalizeAgentId(params.agentId);
     if (!isConfiguredAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
       return;
@@ -791,7 +792,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const agentId = normalizeAgentId(String(params.agentId ?? ""));
+    const agentId = normalizeAgentId(params.agentId);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
         false,
@@ -838,7 +839,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+    const agentId = resolveAgentIdOrError(params.agentId, cfg);
     if (!agentId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
       return;
@@ -924,7 +925,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     if (!resolvedPath) {
       return;
     }
-    const content = String(params.content ?? "");
+    const content = params.content;
     const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
     if (
       !relativeWritePath ||

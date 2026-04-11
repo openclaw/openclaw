@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -11,7 +12,6 @@ import {
   sanitizeConfiguredProviderRequest,
   sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
-import type { ProviderRequestTransportOverrides } from "./provider-request-config.js";
 
 describe("provider request config", () => {
   it("merges discovered, provider, and model headers in precedence order", () => {
@@ -360,7 +360,7 @@ describe("provider request config", () => {
     expect(
       sanitizeConfiguredProviderRequest({
         allowPrivateNetwork: true,
-      } as ProviderRequestTransportOverrides),
+      } as ConfiguredProviderRequest),
     ).toBeUndefined();
   });
 

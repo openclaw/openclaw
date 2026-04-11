@@ -19,6 +19,7 @@ type MatrixLegacyCryptoPlan = {
 };
 
 type MatrixLegacyCryptoDetection = {
+  inspectorAvailable: boolean;
   plans: MatrixLegacyCryptoPlan[];
   warnings: string[];
 };

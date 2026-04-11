@@ -1,5 +1,8 @@
 import type { Command } from "commander";
+import { collectString } from "./cli-options.js";
+import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
@@ -22,7 +25,9 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
   scenarioIds?: string[];
+  concurrency?: number;
   runner?: string;
   image?: string;
   cpus?: number;
@@ -62,11 +67,6 @@ async function runQaManualLane(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaManualLaneCommand(opts);
-}
-
-function collectString(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
 }
 
 async function runQaUi(opts: {
@@ -126,6 +126,10 @@ async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
   await runtime.runQaMockOpenAiCommand(opts);
 }
 
+export function isQaLabCliAvailable(): boolean {
+  return hasQaScenarioPack();
+}
+
 export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
@@ -151,7 +155,14 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--cli-auth-mode <mode>",
+      "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      Number(value),
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
@@ -165,7 +176,9 @@ export function registerQaLabCli(program: Command) {
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
+        cliAuthMode?: string;
         scenario?: string[];
+        concurrency?: number;
         fast?: boolean;
         image?: string;
         cpus?: number;
@@ -180,7 +193,9 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          cliAuthMode: opts.cliAuthMode,
           scenarioIds: opts.scenario,
+          concurrency: opts.concurrency,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,
@@ -188,6 +203,10 @@ export function registerQaLabCli(program: Command) {
         });
       },
     );
+
+  for (const lane of LIVE_TRANSPORT_QA_CLI_REGISTRATIONS) {
+    lane.register(qa);
+  }
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

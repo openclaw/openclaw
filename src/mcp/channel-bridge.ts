@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../gateway/method-scopes.js";
@@ -159,7 +159,7 @@ export class OpenClawChannelBridge {
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
     await this.waitUntilReady();
-    const response = await this.requestGateway<SessionListResult>("sessions.list", {
+    const response: SessionListResult = await this.requestGateway("sessions.list", {
       limit: params?.limit ?? 50,
       search: params?.search,
       includeDerivedTitles: params?.includeDerivedTitles ?? true,
@@ -192,7 +192,7 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
-    const response = await this.requestGateway<ChatHistoryResult>("chat.history", {
+    const response: ChatHistoryResult = await this.requestGateway("chat.history", {
       sessionKey,
       limit,
     });

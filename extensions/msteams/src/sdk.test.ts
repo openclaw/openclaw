@@ -7,6 +7,24 @@ import {
 } from "./sdk.js";
 import type { MSTeamsCredentials } from "./token.js";
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: typeof fetch;
+    }) => ({
+      response: await (params.fetchImpl ?? fetch)(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }),
+  };
+});
+
 const clientConstructorState = vi.hoisted(() => ({
   calls: [] as Array<{ serviceUrl: string; options: unknown }>,
 }));
@@ -132,7 +150,7 @@ describe("createMSTeamsAdapter", () => {
     await adapter.continueConversation(
       creds.appId,
       {
-        serviceUrl: "https://service.example.com/",
+        serviceUrl: "https://example.com/",
         conversation: { id: "19:conversation@thread.tacv2" },
         channelId: "msteams",
       },
@@ -142,7 +160,7 @@ describe("createMSTeamsAdapter", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://service.example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
+      "https://example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
       expect.objectContaining({
         method: "DELETE",
         headers: expect.objectContaining({
