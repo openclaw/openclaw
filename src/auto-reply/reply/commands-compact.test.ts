@@ -285,6 +285,9 @@ describe("handleCompactCommand", () => {
       ok: true,
       compacted: true,
       result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 999,
         tokensAfter: 321,
       },
     });
