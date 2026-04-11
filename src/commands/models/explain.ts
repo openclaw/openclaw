@@ -1,8 +1,7 @@
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { type OutputRuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveSessionModelRef } from "../../gateway/session-utils.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, resolveKnownAgentId } from "./shared.js";
+import { resolveKnownAgentId } from "./shared.js";
 
 export async function modelsExplainCommand(
   opts: {
@@ -19,9 +18,7 @@ export async function modelsExplainCommand(
   });
   const cfg = resolvedConfig;
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const defaults = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+  const defaults = resolveSessionModelRef(cfg, undefined, agentId);
 
   const entry = {
     ...(opts.provider ? { providerOverride: opts.provider } : {}),
