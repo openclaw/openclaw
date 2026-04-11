@@ -1365,6 +1365,53 @@ function createQaSuiteReportNotes(params: {
   return params.transport.createReportNotes(params);
 }
 
+export type QaSuiteSummaryJsonParams = {
+  scenarios: QaSuiteScenarioResult[];
+  startedAt: Date;
+  finishedAt: Date;
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  concurrency: number;
+  scenarioIds?: readonly string[];
+};
+
+/**
+ * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
+ * parity gate (agentic-parity-report.ts, #64441) and any future parity
+ * runner can assert-and-trust the provider/model that produced a given
+ * summary instead of blindly accepting the caller's candidateLabel /
+ * baselineLabel. Without the `run` block, a maintainer who swaps candidate
+ * and baseline summary paths could silently produce a mislabeled verdict.
+ */
+export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): Record<string, unknown> {
+  const primarySplit = splitModelRef(params.primaryModel);
+  const alternateSplit = splitModelRef(params.alternateModel);
+  return {
+    scenarios: params.scenarios,
+    counts: {
+      total: params.scenarios.length,
+      passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
+      failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
+    },
+    run: {
+      startedAt: params.startedAt.toISOString(),
+      finishedAt: params.finishedAt.toISOString(),
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      primaryProvider: primarySplit?.provider ?? null,
+      primaryModelName: primarySplit?.model ?? null,
+      alternateModel: params.alternateModel,
+      alternateProvider: alternateSplit?.provider ?? null,
+      alternateModelName: alternateSplit?.model ?? null,
+      fastMode: params.fastMode,
+      concurrency: params.concurrency,
+      scenarioIds: params.scenarioIds ? [...params.scenarioIds] : null,
+    },
+  };
+}
+
 async function writeQaSuiteArtifacts(params: {
   outputDir: string;
   startedAt: Date;
@@ -1376,6 +1423,7 @@ async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  scenarioIds?: readonly string[];
 }) {
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -1395,18 +1443,7 @@ async function writeQaSuiteArtifacts(params: {
   await fs.writeFile(reportPath, report, "utf8");
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(
-      {
-        scenarios: params.scenarios,
-        counts: {
-          total: params.scenarios.length,
-          passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
-        },
-      },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
     "utf8",
   );
   return { report, reportPath, summaryPath };
@@ -1576,6 +1613,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         alternateModel,
         fastMode,
         concurrency,
+        scenarioIds: params?.scenarioIds,
       });
       lab.setLatestReport({
         outputPath: reportPath,
@@ -1737,6 +1775,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       alternateModel,
       fastMode,
       concurrency,
+      scenarioIds: params?.scenarioIds,
     });
     const latestReport = {
       outputPath: reportPath,
