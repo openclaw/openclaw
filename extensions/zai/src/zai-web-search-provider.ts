@@ -181,7 +181,7 @@ function createZaiToolDefinition(
         title: wrapWebContent(r.title ?? "", "web_search"),
         url: r.link ?? "",
         description: r.content ? wrapWebContent(r.content, "web_search") : undefined,
-        siteName: r.media ? r.media : undefined,
+        siteName: r.media ? wrapWebContent(r.media, "web_search") : undefined,
         published: r.publish_date ? wrapWebContent(r.publish_date, "web_search") : undefined,
       }));
 
