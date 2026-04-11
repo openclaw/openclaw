@@ -102,11 +102,25 @@ export function findCurrentAttemptAssistantMessage(params: {
     .find((message) => message.role === "assistant");
 }
 
+/**
+ * Resolve the session key for context engine calls. When a
+ * `memoryConversationKey` is available, the context engine should use it
+ * as the conversation identity rather than the runtime session key. This
+ * allows `/new` to rotate conversation identity while `/reset` preserves it.
+ */
+function resolveContextEngineSessionKey(params: {
+  sessionKey?: string;
+  memoryConversationKey?: string;
+}): string | undefined {
+  return params.memoryConversationKey ?? params.sessionKey;
+}
+
 export async function runAttemptContextEngineBootstrap(params: {
   hadSessionFile: boolean;
   contextEngine?: AttemptContextEngine;
   sessionId: string;
   sessionKey?: string;
+  memoryConversationKey?: string;
   sessionFile: string;
   sessionManager: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -127,18 +141,19 @@ export async function runAttemptContextEngineBootstrap(params: {
   ) {
     return;
   }
+  const ceSessionKey = resolveContextEngineSessionKey(params);
   try {
     if (typeof params.contextEngine?.bootstrap === "function") {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: ceSessionKey,
         sessionFile: params.sessionFile,
       });
     }
     await params.runMaintenance({
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey: ceSessionKey,
       sessionFile: params.sessionFile,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
@@ -153,6 +168,7 @@ export async function assembleAttemptContextEngine(params: {
   contextEngine?: AttemptContextEngine;
   sessionId: string;
   sessionKey?: string;
+  memoryConversationKey?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -165,7 +181,7 @@ export async function assembleAttemptContextEngine(params: {
   }
   return await params.contextEngine.assemble({
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveContextEngineSessionKey(params),
     messages: params.messages,
     tokenBudget: params.tokenBudget,
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
@@ -182,6 +198,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  memoryConversationKey?: string;
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -205,11 +222,13 @@ export async function finalizeAttemptContextEngineTurn(params: {
 
   let postTurnFinalizationSucceeded = true;
 
+  const ceSessionKey = resolveContextEngineSessionKey(params);
+
   if (typeof params.contextEngine.afterTurn === "function") {
     try {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
-        sessionKey: params.sessionKey,
+        sessionKey: ceSessionKey,
         sessionFile: params.sessionFile,
         messages: params.messagesSnapshot,
         prePromptMessageCount: params.prePromptMessageCount,
@@ -227,7 +246,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
         try {
           await params.contextEngine.ingestBatch({
             sessionId: params.sessionIdUsed,
-            sessionKey: params.sessionKey,
+            sessionKey: ceSessionKey,
             messages: newMessages,
           });
         } catch (ingestErr) {
@@ -239,7 +258,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
           try {
             await params.contextEngine.ingest?.({
               sessionId: params.sessionIdUsed,
-              sessionKey: params.sessionKey,
+              sessionKey: ceSessionKey,
               message: msg,
             });
           } catch (ingestErr) {
@@ -260,7 +279,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
     await params.runMaintenance({
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
-      sessionKey: params.sessionKey,
+      sessionKey: ceSessionKey,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,

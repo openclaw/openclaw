@@ -256,6 +256,17 @@ export type SessionEntry = {
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
   /**
+   * Separate identity key for LCM / context-engine conversation continuity.
+   *
+   * When present, context engines should resolve conversations by this key
+   * instead of `sessionKey`. `/new` generates a fresh value (new LCM
+   * conversation), while `/reset` preserves the existing value (same LCM
+   * conversation, fresh runtime session).
+   *
+   * Absent means legacy behavior: context engines fall back to `sessionKey`.
+   */
+  memoryConversationKey?: string;
+  /**
    * Runtime-owned transient failover state. Tracks auto-failover separately
    * from user-chosen model overrides so that transient provider failures do
    * not persist as sticky user selections.

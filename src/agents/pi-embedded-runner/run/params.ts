@@ -135,4 +135,11 @@ export type RunEmbeddedPiAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /**
+   * LCM / context-engine conversation identity key. When present, context
+   * engine methods receive this as `sessionKey` instead of the runtime
+   * session key, enabling `/new` to create fresh LCM conversations while
+   * `/reset` preserves continuity.
+   */
+  memoryConversationKey?: string;
 };

@@ -599,6 +599,11 @@ export async function performGatewaySessionReset(params: {
       ...resetPreservedSelection,
       // Always clear transient failover state on /new and /reset
       failoverState: undefined,
+      // `/new` creates a fresh LCM conversation; `/reset` preserves continuity
+      memoryConversationKey:
+        params.reason === "new"
+          ? randomUUID()
+          : (currentEntry?.memoryConversationKey ?? randomUUID()),
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

@@ -246,6 +246,10 @@ export async function runEmbeddedPiAgent(
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
       const resolvedSessionKey = normalizedSessionKey;
+      // Context engine calls use memoryConversationKey when present so LCM
+      // conversation identity is decoupled from runtime session identity.
+      const contextEngineSessionKey =
+        normalizeOptionalString(params.memoryConversationKey) ?? resolvedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -628,6 +632,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
+            memoryConversationKey: params.memoryConversationKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -871,7 +876,7 @@ export async function runEmbeddedPiAgent(
                 };
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
+                  sessionKey: contextEngineSessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   force: true,
@@ -1016,7 +1021,7 @@ export async function runEmbeddedPiAgent(
                 };
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
+                  sessionKey: contextEngineSessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
@@ -1030,7 +1035,7 @@ export async function runEmbeddedPiAgent(
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: params.sessionId,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     sessionFile: params.sessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,

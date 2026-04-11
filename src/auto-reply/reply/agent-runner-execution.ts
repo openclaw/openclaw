@@ -909,6 +909,7 @@ export async function runAgentTurnWithFallback(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
+                memoryConversationKey: params.getActiveSessionEntry()?.memoryConversationKey,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
