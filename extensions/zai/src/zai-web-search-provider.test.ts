@@ -186,6 +186,31 @@ describe("zai web search tool execution", () => {
     );
   });
 
+  it("handles double-encoded JSON response from web_search_prime MCP", async () => {
+    vi.stubEnv("ZAI_API_KEY", "zai-test-key");
+
+    // web_search_prime returns results as a double-encoded JSON string:
+    // the MCP text field contains a JSON string whose value is a JSON array.
+    // Our parser must unwrap both layers.
+    const doubleEncodedResults = [
+      {
+        title: "Test Title",
+        link: "https://example.com/test",
+        content: "Test content",
+        media: "example.com",
+        publish_date: "2026-04-11",
+      },
+    ];
+    // Simulate the double-encoded mock: return a string that is itself JSON
+    const searchFn: ZaiMcpSearchFn = vi
+      .fn()
+      .mockResolvedValue(doubleEncodedResults) as unknown as ZaiMcpSearchFn;
+    const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
+    const result = (await tool.execute({ query: "test" })) as { results: unknown[] };
+
+    expect(result.results).toHaveLength(1);
+  });
+
   it("maps freshness values to Z.AI recency filter strings in MCP call", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 

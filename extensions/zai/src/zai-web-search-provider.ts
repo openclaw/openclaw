@@ -95,13 +95,15 @@ async function callZaiMcpSearch(params: ZaiMcpSearchParams): Promise<ZaiSearchRe
       throw new Error(`Z.AI MCP search error: ${textContent}`);
     }
 
-    // web_search_prime silently swallows quota errors and double-encodes the empty
-    // array as a JSON string ('"[]"') instead of a JSON array ('[]'), and sets
-    // isError:false. Detect this by checking whether the parsed value is an array.
-    const parsed: unknown = JSON.parse(textContent);
+    // web_search_prime double-encodes its response: the text field contains a
+    // JSON string whose value is itself a JSON array, e.g. text = '"[{...}]"'.
+    // Parse once to unwrap the outer string, then parse again to get the array.
+    const outer: unknown = JSON.parse(textContent);
+    const parsed: unknown = typeof outer === "string" ? JSON.parse(outer) : outer;
+
     if (!Array.isArray(parsed)) {
       throw new Error(
-        "Z.AI web search returned an unexpected response. This likely indicates exhausted search quota — check your account balance at https://z.ai/manage-apikey/apikey-list",
+        `Z.AI web search returned an unexpected response format: ${JSON.stringify(parsed)}`,
       );
     }
 
