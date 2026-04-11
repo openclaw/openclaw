@@ -115,7 +115,8 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       ctx: params.ctx,
       command: params.command,
     });
-    const agentId = params.sessionKey
+    const sessionBound = Boolean(params.sessionKey);
+    const agentId = sessionBound
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
       : params.agentId;
     const threadingContext = buildThreadingToolContext({
@@ -128,7 +129,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
+      agentDir: sessionBound ? undefined : params.agentDir,
       modelProvider: params.provider,
       modelId: params.model,
       messageProvider: params.command.channel,

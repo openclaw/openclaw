@@ -346,4 +346,28 @@ describe("handleToolsCommand", () => {
       }),
     );
   });
+
+  it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
+    const { resolveSessionAgentId } = await import("../../agents/agent-scope.js");
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.agentDir = "/tmp/agents/main/agent";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+
+    const result = await handleToolsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(resolveToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        agentDir: undefined,
+        sessionKey: "agent:target:whatsapp:direct:12345",
+      }),
+    );
+  });
 });
