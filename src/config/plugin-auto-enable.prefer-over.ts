@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -96,11 +96,8 @@ function resolvePreferredOverIds(
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
 ): string[] {
-  const normalized = normalizeChatChannelId(pluginId);
-  if (normalized) {
-    return [...(getChatChannelMeta(normalized).preferOver ?? [])];
-  }
-  const installedPlugin = registry.plugins.find((record) => record.id === pluginId);
+  const normalized = normalizeChatChannelId(pluginId) ?? pluginId;
+  const installedPlugin = registry.plugins.find((record) => record.id === normalized);
   const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[pluginId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
     return [...manifestChannelPreferOver];

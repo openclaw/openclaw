@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadConfig,
-  resolveConfigPath,
-  resolveGatewayPort,
-  resolveStateDir,
-} from "../config/config.js";
-import { loadConfig as loadConfigFromIo } from "../config/io.js";
+import { loadConfig } from "../config/io.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -99,14 +93,27 @@ const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
   loadConfig,
   loadOrCreateDeviceIdentity,
-  resolveGatewayPort,
-  resolveConfigPath,
-  resolveStateDir,
+  resolveGatewayPort: resolveGatewayPortFromPaths,
+  resolveConfigPath: resolveConfigPathFromPaths,
+  resolveStateDir: resolveStateDirFromPaths,
   loadGatewayTlsRuntime,
 };
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
+
+function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
+  if (opts.clientDisplayName) {
+    return opts.clientDisplayName;
+  }
+  const clientName = opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const mode = opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  if (mode !== GATEWAY_CLIENT_MODES.BACKEND && clientName !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
+    return undefined;
+  }
+  const method = opts.method.trim();
+  return method ? `gateway:${method}` : "gateway:request";
+}
 
 function loadGatewayConfig(): OpenClawConfig {
   const loadConfigFn =
@@ -114,7 +121,7 @@ function loadGatewayConfig(): OpenClawConfig {
       ? gatewayCallDeps.loadConfig
       : typeof defaultGatewayCallDeps.loadConfig === "function"
         ? defaultGatewayCallDeps.loadConfig
-        : loadConfigFromIo;
+        : loadConfig;
   return loadConfigFn();
 }
 
@@ -745,7 +752,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       tlsFingerprint,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
+      clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,

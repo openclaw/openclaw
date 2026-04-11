@@ -49,7 +49,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";

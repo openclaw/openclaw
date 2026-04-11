@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
@@ -19,6 +19,7 @@ import {
 } from "../../config/sessions/reset.js";
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -26,6 +27,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
@@ -240,6 +242,7 @@ export async function initSessionState(params: {
       ? { ...ctx, SessionKey: targetSessionKey }
       : ctx;
   const sessionCfg = cfg.session;
+  const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
@@ -630,6 +633,7 @@ export async function initSessionState(params: {
     sessionsDir: path.dirname(storePath),
     fallbackSessionFile,
     activeSessionKey: sessionKey,
+    maintenanceConfig,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
@@ -660,6 +664,7 @@ export async function initSessionState(params: {
     },
     {
       activeSessionKey: sessionKey,
+      maintenanceConfig,
       onWarn: (warning) =>
         deliverSessionMaintenanceWarning({
           cfg,
@@ -699,6 +704,12 @@ export async function initSessionState(params: {
           error: String(error),
         },
       );
+    });
+    await resetRegisteredAgentHarnessSessions({
+      sessionId: previousSessionEntry.sessionId,
+      sessionKey,
+      sessionFile: previousSessionEntry.sessionFile,
+      reason: previousSessionEndReason ?? "unknown",
     });
   }
 

@@ -1,4 +1,4 @@
-import { extensionChannelTestRoots } from "../vitest.channel-paths.mjs";
+import { extensionChannelTestRoots } from "../test/vitest/vitest.channel-paths.mjs";
 import { runExtensionOxlint } from "./lib/run-extension-oxlint.mjs";
 
 runExtensionOxlint({

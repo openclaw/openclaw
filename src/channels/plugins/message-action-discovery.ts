@@ -1,5 +1,5 @@
 import type { TSchema } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -11,7 +11,7 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
-} from "./types.js";
+} from "./types.public.js";
 
 export type ChannelMessageActionDiscoveryInput = {
   cfg?: OpenClawConfig;
@@ -25,6 +25,7 @@ export type ChannelMessageActionDiscoveryInput = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 };
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
@@ -52,6 +53,7 @@ export function createMessageActionDiscoveryContext(
     sessionId: params.sessionId,
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
   };
 }
 
@@ -184,6 +186,7 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
@@ -227,6 +230,7 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);

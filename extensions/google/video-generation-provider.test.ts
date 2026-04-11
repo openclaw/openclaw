@@ -24,6 +24,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 describe("google video generation provider", () => {
@@ -34,6 +35,10 @@ describe("google video generation provider", () => {
     GoogleGenAIMock.mockClear();
   });
 
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildGoogleVideoGenerationProvider());
+  });
+
   it("submits generation and returns inline video bytes", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
@@ -41,10 +46,6 @@ describe("google video generation provider", () => {
       mode: "api-key",
     });
     generateVideosMock.mockResolvedValue({
-      done: false,
-      name: "operations/123",
-    });
-    getVideosOperationMock.mockResolvedValue({
       done: true,
       name: "operations/123",
       response: {
@@ -71,12 +72,13 @@ describe("google video generation provider", () => {
       audio: true,
     });
 
-    expect(generateVideosMock).toHaveBeenCalledWith(
+    expect(generateVideosMock).toHaveBeenCalledTimes(1);
+    const [request] = generateVideosMock.mock.calls[0] ?? [];
+    expect(request).toEqual(
       expect.objectContaining({
         model: "veo-3.1-fast-generate-preview",
         prompt: "A tiny robot watering a windowsill garden",
         config: expect.objectContaining({
-          numberOfVideos: 1,
           durationSeconds: 4,
           aspectRatio: "16:9",
           resolution: "720p",
@@ -84,6 +86,7 @@ describe("google video generation provider", () => {
         }),
       }),
     );
+    expect(request?.config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(GoogleGenAIMock).toHaveBeenCalledWith(

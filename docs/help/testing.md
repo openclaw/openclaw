@@ -48,6 +48,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
+  - Runs multiple selected scenarios in parallel by default with isolated
+    gateway workers, up to 64 workers or the selected scenario count. Use
+    `--concurrency <count>` to tune the worker count, or `--concurrency 1` for
+    the older serial lane.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
@@ -61,6 +65,27 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm openclaw qa matrix`
+  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
+  - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
+  - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
+  - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
+- `pnpm openclaw qa telegram`
+  - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
+  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
+  - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
+  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
+  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
+
+Live transport lanes share one standard contract so new transports do not drift:
+
+`qa-channel` remains the broad synthetic QA suite and is not part of the live
+transport coverage matrix.
+
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
 
 ## Test suites (what runs where)
 
@@ -84,7 +109,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-  - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+  - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
   - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 - Embedded runner note:
@@ -316,6 +341,7 @@ Single-provider Docker recipes:
 
 ```bash
 pnpm test:docker:live-cli-backend:claude
+pnpm test:docker:live-cli-backend:claude-subscription
 pnpm test:docker:live-cli-backend:codex
 pnpm test:docker:live-cli-backend:gemini
 ```
@@ -325,6 +351,7 @@ Notes:
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because Claude currently routes third-party app usage through extra-usage billing instead of normal subscription plan limits.
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
@@ -383,6 +410,58 @@ Docker notes:
 - Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini` to narrow the matrix.
 - It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) if missing.
 - Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
+
+## Live: Codex app-server harness smoke
+
+- Goal: validate the plugin-owned Codex harness through the normal gateway
+  `agent` method:
+  - load the bundled `codex` plugin
+  - select `OPENCLAW_AGENT_RUNTIME=codex`
+  - send a first gateway agent turn to `codex/gpt-5.4`
+  - send a second turn to the same OpenClaw session and verify the app-server
+    thread can resume
+  - run `/codex status` and `/codex models` through the same gateway command
+    path
+- Test: `src/gateway/gateway-codex-harness.live.test.ts`
+- Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
+- Default model: `codex/gpt-5.4`
+- Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
+- Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
+- The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
+  harness cannot pass by silently falling back to PI.
+- Auth: `OPENAI_API_KEY` from the shell/profile, plus optional copied
+  `~/.codex/auth.json` and `~/.codex/config.toml`
+
+Local recipe:
+
+```bash
+source ~/.profile
+OPENCLAW_LIVE_CODEX_HARNESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=codex/gpt-5.4 \
+  pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+source ~/.profile
+pnpm test:docker:live-codex-harness
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
+- It sources the mounted `~/.profile`, passes `OPENAI_API_KEY`, copies Codex CLI
+  auth files when present, installs `@openai/codex` into a writable mounted npm
+  prefix, stages the source tree, then runs only the Codex-harness live test.
+- Docker enables the image and MCP/tool probes by default. Set
+  `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
+  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
+  test config so `openai-codex/*` or PI fallback cannot hide a Codex harness
+  regression.
 
 ### Recommended live recipes
 
@@ -612,6 +691,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
+- Codex app-server harness smoke: `pnpm test:docker:live-codex-harness` (script: `scripts/test-live-codex-harness-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
@@ -669,6 +749,7 @@ Useful env vars:
   - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
+- `OPENCLAW_SKIP_DOCKER_BUILD=1` to reuse an existing `openclaw:local-live` image for reruns that do not need a rebuild
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 - `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
 - `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke

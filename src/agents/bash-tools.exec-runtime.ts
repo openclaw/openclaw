@@ -9,7 +9,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
+import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -72,7 +72,7 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
       sanitized[key] = value;
       continue;
     }
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       continue;
     }
     sanitized[key] = value;
@@ -86,7 +86,7 @@ export function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
       );
@@ -207,6 +207,8 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
+  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  disableUpdates: () => void;
 };
 
 export function renderExecHostLabel(host: ExecHost) {
@@ -226,7 +228,10 @@ export function isRequestedExecTargetAllowed(params: {
     return true;
   }
   if (params.configuredTarget === "auto") {
-    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
+    if (
+      params.sandboxAvailable &&
+      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
+    ) {
       return false;
     }
     return true;
@@ -252,9 +257,13 @@ export function resolveExecTarget(params: {
   ) {
     const allowedConfig = Array.from(
       new Set(
-        requestedTarget === "gateway" && !params.sandboxAvailable
-          ? ["gateway", "auto"]
-          : [renderExecTargetLabel(requestedTarget), "auto"],
+        configuredTarget === "auto" &&
+          params.sandboxAvailable &&
+          (requestedTarget === "gateway" || requestedTarget === "node")
+          ? [renderExecTargetLabel(requestedTarget)]
+          : requestedTarget === "gateway" && !params.sandboxAvailable
+            ? ["gateway", "auto"]
+            : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
     throw new Error(
@@ -456,6 +465,7 @@ export function formatExecFailureReason(params: {
     case "aborted":
       return "Command aborted before exit code was captured";
   }
+  throw new Error("Unsupported exec failure kind");
 }
 
 export function buildExecExitOutcome(params: {
@@ -580,15 +590,31 @@ export async function runExecProcess(opts: {
   };
   addSession(session);
 
+  // Tracks whether the exec run's promise has settled (process exited or
+  // spawn failed).  Once settled the agent-loop no longer expects
+  // tool_execution_update events, so emitUpdate must become a no-op to
+  // prevent calling into a disposed agent run (the "Agent listener invoked
+  // outside active run" crash — see #62520).
+  let updatesDisabled = false;
+
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
     }
-    if (session.backgrounded || session.exited) {
+    if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // internally pushes Promise.resolve(emit(event)) into an updateEvents
+    // array.  Because emit → processEvents is async, any failure (e.g.
+    // activeRun cleared) produces a *rejected Promise*, not a synchronous
+    // throw — so a try-catch here would be ineffective.  Instead we rely
+    // on the `updatesDisabled` flag being set proactively: by the promise
+    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
+    // signal (Layer 2) — both of which prevent this call from ever being
+    // reached after the agent run has ended.
     opts.onUpdate({
       content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
@@ -603,7 +629,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const raw = data.toString();
+    const raw = data;
     // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
@@ -619,7 +645,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const str = sanitizeBinaryOutput(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
@@ -776,6 +802,11 @@ export async function runExecProcess(opts: {
   const promise = managedRun
     .wait()
     .then(async (exit): Promise<ExecProcessOutcome> => {
+      // Disable updates *before* markExited so that any late stdout/stderr
+      // data events queued in the same event-loop tick cannot sneak through
+      // the `session.exited` guard before it flips to true.
+      updatesDisabled = true;
+
       const durationMs = Date.now() - startedAt;
       const outcome = buildExecExitOutcome({
         exit,
@@ -800,6 +831,7 @@ export async function runExecProcess(opts: {
       return outcome;
     })
     .catch((err): ExecProcessOutcome => {
+      updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
       return buildExecRuntimeErrorOutcome({
@@ -816,6 +848,9 @@ export async function runExecProcess(opts: {
     promise,
     kill: () => {
       managedRun?.cancel("manual-cancel");
+    },
+    disableUpdates: () => {
+      updatesDisabled = true;
     },
   };
 }

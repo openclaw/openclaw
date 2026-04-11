@@ -4,6 +4,7 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -58,7 +59,7 @@ async function resolveRequestedChannel(params: {
   rejectWebchatAsInternalOnly?: boolean;
 }): Promise<
   | {
-      cfg: ReturnType<typeof loadConfig>;
+      cfg: OpenClawConfig;
       channel: string;
     }
   | {
@@ -99,7 +100,7 @@ async function resolveRequestedChannel(params: {
 function resolveGatewayOutboundTarget(params: {
   channel: string;
   to: string;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   accountId?: string;
 }):
   | {

@@ -22,6 +22,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
+import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
@@ -47,12 +48,6 @@ function sanitizeTranscriptForLog(value: string): string {
   }
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
-
-export type WebhookResponsePayload = {
-  statusCode: number;
-  body: string;
-  headers?: Record<string, string>;
-};
 
 function buildRequestUrl(
   requestUrl: string | undefined,
