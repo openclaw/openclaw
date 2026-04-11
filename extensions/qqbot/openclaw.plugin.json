@@ -1,33 +1,42 @@
 {
   "id": "qqbot",
   "channels": ["qqbot"],
-  "channelEnvVars": {
-    "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"]
-  },
+  "channelEnvVars": { "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"] },
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
-    "$defs": {
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "name": { "type": "string" },
+      "appId": { "type": "string" },
+      "clientSecret": {
+        "anyOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "file", "exec"] },
+              "provider": { "type": "string" },
+              "id": { "type": "string" }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      },
+      "clientSecretFile": { "type": "string" },
+      "allowFrom": { "type": "array", "items": { "type": "string" } },
+      "systemPrompt": { "type": "string" },
+      "markdownSupport": { "type": "boolean" },
+      "voiceDirectUploadFormats": { "type": "array", "items": { "type": "string" } },
       "audioFormatPolicy": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "sttDirectFormats": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "uploadDirectFormats": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
+          "sttDirectFormats": { "type": "array", "items": { "type": "string" } },
+          "uploadDirectFormats": { "type": "array", "items": { "type": "string" } },
           "transcodeEnabled": { "type": "boolean" }
-        }
-      },
-      "speechQueryParams": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "string"
         }
       },
       "tts": {
@@ -40,11 +49,8 @@
           "apiKey": { "type": "string" },
           "model": { "type": "string" },
           "voice": { "type": "string" },
-          "authStyle": {
-            "type": "string",
-            "enum": ["bearer", "api-key"]
-          },
-          "queryParams": { "$ref": "#/$defs/speechQueryParams" },
+          "authStyle": { "type": "string", "enum": ["bearer", "api-key"] },
+          "queryParams": { "type": "object", "additionalProperties": { "type": "string" } },
           "speed": { "type": "number" }
         }
       },
@@ -59,108 +65,17 @@
           "model": { "type": "string" }
         }
       },
-      "secretRef": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "source": {
-            "type": "string",
-            "enum": ["env", "file", "exec"]
-          },
-          "provider": { "type": "string" },
-          "id": { "type": "string" }
-        },
-        "required": ["source", "provider", "id"]
-      },
-      "secretInput": {
-        "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
-      },
-      "account": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "name": { "type": "string" },
-          "appId": { "type": "string" },
-          "clientSecret": { "$ref": "#/$defs/secretInput" },
-          "clientSecretFile": { "type": "string" },
-          "allowFrom": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "systemPrompt": { "type": "string" },
-          "markdownSupport": { "type": "boolean" },
-          "voiceDirectUploadFormats": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
-          "urlDirectUpload": { "type": "boolean" },
-          "upgradeUrl": { "type": "string" },
-          "upgradeMode": {
-            "type": "string",
-            "enum": ["doc", "hot-reload"]
-          },
-          "streaming": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "object",
-                "additionalProperties": true,
-                "properties": {
-                  "mode": {
-                    "type": "string",
-                    "enum": ["off", "partial"],
-                    "default": "partial"
-                  }
-                }
-              }
-            ]
-          }
-        }
-      }
-    },
-    "properties": {
-      "enabled": { "type": "boolean" },
-      "name": { "type": "string" },
-      "appId": { "type": "string" },
-      "clientSecret": { "$ref": "#/$defs/secretInput" },
-      "clientSecretFile": { "type": "string" },
-      "allowFrom": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "systemPrompt": { "type": "string" },
-      "markdownSupport": { "type": "boolean" },
-      "voiceDirectUploadFormats": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
-      "tts": { "$ref": "#/$defs/tts" },
-      "stt": { "$ref": "#/$defs/stt" },
       "urlDirectUpload": { "type": "boolean" },
       "upgradeUrl": { "type": "string" },
-      "upgradeMode": {
-        "type": "string",
-        "enum": ["doc", "hot-reload"]
-      },
+      "upgradeMode": { "type": "string", "enum": ["doc", "hot-reload"] },
       "streaming": {
         "anyOf": [
-          {
-            "type": "boolean"
-          },
+          { "type": "boolean" },
           {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "mode": {
-                "type": "string",
-                "enum": ["off", "partial"],
-                "default": "partial"
-              }
+              "mode": { "type": "string", "enum": ["off", "partial"], "default": "partial" }
             }
           }
         ]
@@ -168,7 +83,57 @@
       "accounts": {
         "type": "object",
         "additionalProperties": {
-          "$ref": "#/$defs/account"
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "appId": { "type": "string" },
+            "clientSecret": {
+              "anyOf": [
+                { "type": "string", "minLength": 1 },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "source": { "type": "string", "enum": ["env", "file", "exec"] },
+                    "provider": { "type": "string" },
+                    "id": { "type": "string" }
+                  },
+                  "required": ["source", "provider", "id"]
+                }
+              ]
+            },
+            "clientSecretFile": { "type": "string" },
+            "allowFrom": { "type": "array", "items": { "type": "string" } },
+            "systemPrompt": { "type": "string" },
+            "markdownSupport": { "type": "boolean" },
+            "voiceDirectUploadFormats": { "type": "array", "items": { "type": "string" } },
+            "audioFormatPolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "sttDirectFormats": { "type": "array", "items": { "type": "string" } },
+                "uploadDirectFormats": { "type": "array", "items": { "type": "string" } },
+                "transcodeEnabled": { "type": "boolean" }
+              }
+            },
+            "urlDirectUpload": { "type": "boolean" },
+            "upgradeUrl": { "type": "string" },
+            "upgradeMode": { "type": "string", "enum": ["doc", "hot-reload"] },
+            "streaming": {
+              "anyOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "mode": { "type": "string", "enum": ["off", "partial"], "default": "partial" }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       "defaultAccount": { "type": "string" }
