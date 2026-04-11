@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): Array<Record<string, string>> => []));
+const listTrustedChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
+const listSetupDiscoveryChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
     ({ config }) => ({
@@ -27,6 +30,13 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
 }));
 
+vi.mock("./trusted-catalog.js", () => ({
+  listTrustedChannelPluginCatalogEntries: (_args?: unknown) =>
+    listTrustedChannelPluginCatalogEntries(),
+  listSetupDiscoveryChannelPluginCatalogEntries: (_args?: unknown) =>
+    listSetupDiscoveryChannelPluginCatalogEntries(),
+}));
+
 vi.mock("../../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
 }));
@@ -41,11 +51,18 @@ describe("listManifestInstalledChannelIds", () => {
     });
     listChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
     listChatChannels.mockReset().mockReturnValue([]);
+    listTrustedChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
+    listSetupDiscoveryChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
     applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({
       config: config as never,
       changes: [] as string[],
       autoEnabledReasons: {},
     }));
+    resetPluginRuntimeStateForTest();
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
   });
 
   it("uses the auto-enabled config snapshot for manifest discovery", () => {

@@ -39,11 +39,12 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
 
+    let root: string | undefined;
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
       const config = loadConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const root =
+      root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
           argv1: process.argv[1],
@@ -62,6 +63,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         reason: String(err),
         steps: [],
         durationMs: 0,
+        root,
       };
     }
 
