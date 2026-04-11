@@ -93,6 +93,19 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("does not handle directive tokens when enabled is false", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "voice",
+        value: "alloy",
+        policy: { allowVoice: true, allowModelId: true },
+        providerConfig: { enabled: false, apiKey: "sk-test" },
+      } as never),
+    ).toEqual({ handled: false });
+  });
+
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 
