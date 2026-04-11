@@ -23,6 +23,7 @@ import {
 } from "./cron-dispatch-checker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import configManager from "./config.js";
+import { getUserText } from "./user-text-context.js";
 
 const decisionOverrideLog = createSubsystemLogger("clarityburst-decision-override");
 
@@ -89,6 +90,14 @@ function isSideEffectfulOperation(stageId: string, context: Record<string, unkno
 function handleRouterOutageFailClosed(stageId: string, context: Record<string, unknown>): AbstainClarifyOutcome | null {
   if (!isRouterRequiredMode()) {
     // Flag not set; use existing behavior (fail-open for most)
+    // DIAGNOSTIC: Log that fail-closed mode is NOT enabled
+    const diagnosticPayload = {
+      stageId,
+      failClosedEnabled: false,
+      diagnostic: "ROUTER_OUTAGE_FAIL_OPEN_MODE",
+      description: "Router fail-closed mode is DISABLED (CLARITYBURST_ROUTER_REQUIRED not set) - router errors will be treated as fail-open (PROCEED)",
+    };
+    console.warn("[CLARITYBURST_DIAGNOSTIC] Router outage would use fail-open mode:", JSON.stringify(diagnosticPayload, null, 2));
     return null;
   }
 
@@ -128,6 +137,27 @@ export interface RouteResult {
   [key: string]: unknown;
 }
 
+/**
+ * Extract the router-originated requestId from a RouteResult.
+ * Returns undefined when the router did not supply one (Phase-A local scoring,
+ * disabled bypass, or router outage).
+ */
+function extractRequestId(routeResult: RouteResult): string | undefined {
+  const rid = routeResult.data?.requestId;
+  return typeof rid === "string" ? rid : undefined;
+}
+
+/**
+ * Stamp `requestId` onto an OverrideOutcome when present.
+ * Returns the same object reference (mutates in place for zero-alloc).
+ */
+function stampRequestId(outcome: OverrideOutcome, requestId: string | undefined): OverrideOutcome {
+  if (requestId) {
+    outcome.requestId = requestId;
+  }
+  return outcome;
+}
+
 /** Context for the dispatch decision */
 export interface DispatchContext {
   stageId?: string;
@@ -143,6 +173,8 @@ export interface AbstainConfirmOutcome {
   contractId: string;
   /** Deterministic instructions for obtaining confirmation (includes placeholder token format) */
   instructions?: string;
+  /** UUID v4 requestId from the router — propagated for cross-layer correlation */
+  requestId?: string;
 }
 
 /** Outcome when clarification is needed due to router uncertainty or incomplete pack policy */
@@ -154,12 +186,16 @@ export interface AbstainClarifyOutcome {
   stageId?: string;
   /** Deterministic instructions when pack policy is incomplete or router unavailable */
   instructions?: string;
+  /** UUID v4 requestId from the router — propagated for cross-layer correlation */
+  requestId?: string;
 }
 
 /** Outcome when proceeding normally */
 export interface ProceedOutcome {
   outcome: "PROCEED";
   contractId: string | null;
+  /** UUID v4 requestId from the router — propagated for cross-layer correlation */
+  requestId?: string;
 }
 
 /** Union of all possible override outcomes */
@@ -322,6 +358,8 @@ export function applyToolDispatchOverrides(
   routeResult: RouteResult,
   context: DispatchContext
 ): OverrideOutcome {
+  const requestId = extractRequestId(routeResult);
+
   decisionOverrideLog.info("CB_RT_SENTINEL_TOOL_DISPATCH_ENTER", {
     stageId: context.stageId ?? null,
     packId: pack?.pack_id ?? null,
@@ -337,11 +375,11 @@ export function applyToolDispatchOverrides(
   // Fail-closed: if router result is not ok, abstain with router_outage reason
   if (!routeResult.ok) {
     decisionOverrideLog.info('CB_RT_SENTINEL_TDG_RETURN_1', { reason: "router_outage", outcome: "ABSTAIN_CLARIFY" });
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "router_outage",
       contractId: null,
-    };
+    }, requestId);
   }
 
   // Extract contract ID and scores from router result
@@ -352,10 +390,10 @@ export function applyToolDispatchOverrides(
   // If no contract ID found, fail-open
   if (!contractId) {
     decisionOverrideLog.info('CB_RT_SENTINEL_TDG_RETURN_2', { outcome: "PROCEED", reason: null });
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, requestId);
   }
 
   // ===== CRON PREFLIGHT GATE CHECK =====
@@ -369,13 +407,13 @@ export function applyToolDispatchOverrides(
     
     if (!cronCheck.allowed) {
       // Fail-closed: block dispatch with ABSTAIN_CLARIFY
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "capability_denied",
         contractId,
         stageId: TOOL_DISPATCH_STAGE_ID,
         instructions: cronCheck.reason || "Cron task capability check failed",
-      };
+      }, requestId);
     }
   }
 
@@ -395,11 +433,11 @@ export function applyToolDispatchOverrides(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, requestId);
     }
   }
 
@@ -408,26 +446,26 @@ export function applyToolDispatchOverrides(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, requestId);
   }
 
   // Check if confirmation is required and not yet provided
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
-    };
+    }, requestId);
   }
 
   // Default: proceed with the dispatch
-  return {
+  return stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, requestId);
 }
 
 /** Context for shell execution decision */
@@ -472,23 +510,45 @@ export interface ShellExecContext {
  * ```
  */
 export function applyShellExecOverrides(
-   pack: OntologyPack,
-   routeResult: RouteResult,
-   context: ShellExecContext
- ): OverrideOutcome {
-   // Check if fail-closed mode applies for side-effectful operations on router outage
-   const failClosedOutcome = handleRouterOutageFailClosed(SHELL_EXEC_STAGE_ID, context);
-   if (failClosedOutcome && !routeResult.ok) {
-     return failClosedOutcome;
-   }
+    pack: OntologyPack,
+    routeResult: RouteResult,
+    context: ShellExecContext
+  ): OverrideOutcome {
+    const requestId = extractRequestId(routeResult);
 
-   // Fail-open: if router result is not ok, proceed with null contractId
-   if (!routeResult.ok) {
-     return {
-       outcome: "PROCEED",
-       contractId: null,
-     };
-   }
+    // Check if fail-closed mode applies for side-effectful operations on router outage
+    const failClosedOutcome = handleRouterOutageFailClosed(SHELL_EXEC_STAGE_ID, context);
+    if (failClosedOutcome && !routeResult.ok) {
+      // DIAGNOSTIC: Log when fail-closed would block
+      const diagnosticPayload = {
+        stageId: SHELL_EXEC_STAGE_ID,
+        routerOk: routeResult.ok,
+        failClosedTriggered: true,
+        outcome: failClosedOutcome.outcome,
+        diagnostic: "SHELL_EXEC_ROUTER_FAIL_CLOSED_BLOCKED",
+      };
+      console.warn("[CLARITYBURST_DIAGNOSTIC] Shell exec blocked by fail-closed mode:", JSON.stringify(diagnosticPayload, null, 2));
+      return stampRequestId(failClosedOutcome, requestId);
+    }
+
+    // Fail-closed: if router result is not ok, abstain with router_outage
+    if (!routeResult.ok) {
+      // DIAGNOSTIC: Log when fail-closed blocks execution after router error
+      const diagnosticPayload = {
+        stageId: SHELL_EXEC_STAGE_ID,
+        routerOk: routeResult.ok,
+        failClosedTriggered: true,
+        diagnostic: "SHELL_EXEC_ROUTER_FAIL_CLOSED_BLOCKED",
+      };
+      console.warn("[CLARITYBURST_DIAGNOSTIC] Shell exec blocked via fail-closed after router error:", JSON.stringify(diagnosticPayload, null, 2));
+      return stampRequestId({
+        outcome: "ABSTAIN_CLARIFY",
+        reason: "router_outage",
+        contractId: null,
+        stageId: "SHELL_EXEC",
+        nonRetryable: true,
+      } as OverrideOutcome, requestId);
+    }
 
   // Extract contract ID and scores from router result
   const top1 = routeResult.data?.top1;
@@ -497,10 +557,10 @@ export function applyShellExecOverrides(
   
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, requestId);
   }
 
   // Check for router uncertainty before confirmation gating
@@ -520,11 +580,11 @@ export function applyShellExecOverrides(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, requestId);
     }
   }
 
@@ -533,27 +593,27 @@ export function applyShellExecOverrides(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, requestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes without confirmation token
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
-    };
+    }, requestId);
   }
 
   // Default: proceed with the execution
-  return {
+  return stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, requestId);
 }
 
 /** Context for file system operation decision */
@@ -607,12 +667,40 @@ function applyFileSystemOverridesImpl(
   routeResult: RouteResult,
   context: FileSystemContext
 ): OverrideOutcome {
-  // Fail-open: if router result is not ok, proceed with null contractId
-  if (!routeResult.ok) {
-    return {
-      outcome: "PROCEED",
-      contractId: null,
+  const requestId = extractRequestId(routeResult);
+
+  // Check if fail-closed mode applies for side-effectful operations on router outage
+  const failClosedOutcome = handleRouterOutageFailClosed(FILE_SYSTEM_OPS_STAGE_ID, context);
+  if (failClosedOutcome && !routeResult.ok) {
+    // DIAGNOSTIC: Log when fail-closed would block
+    const diagnosticPayload = {
+      stageId: FILE_SYSTEM_OPS_STAGE_ID,
+      routerOk: routeResult.ok,
+      failClosedTriggered: true,
+      outcome: failClosedOutcome.outcome,
+      diagnostic: "FILE_SYSTEM_OPS_ROUTER_FAIL_CLOSED_BLOCKED",
     };
+    console.warn("[CLARITYBURST_DIAGNOSTIC] File system ops blocked by fail-closed mode:", JSON.stringify(diagnosticPayload, null, 2));
+    return stampRequestId(failClosedOutcome, requestId);
+  }
+
+  // Fail-closed: if router result is not ok, abstain with router_outage
+  if (!routeResult.ok) {
+    // DIAGNOSTIC: Log when fail-closed blocks execution after router error
+    const diagnosticPayload = {
+      stageId: FILE_SYSTEM_OPS_STAGE_ID,
+      routerOk: routeResult.ok,
+      failClosedTriggered: true,
+      diagnostic: "FILE_SYSTEM_OPS_ROUTER_FAIL_CLOSED_BLOCKED",
+    };
+    console.warn("[CLARITYBURST_DIAGNOSTIC] File system ops blocked via fail-closed after router error:", JSON.stringify(diagnosticPayload, null, 2));
+    return stampRequestId({
+      outcome: "ABSTAIN_CLARIFY",
+      reason: "router_outage",
+      contractId: null,
+      stageId: "FILE_SYSTEM_OPS",
+      nonRetryable: true,
+    } as OverrideOutcome, requestId);
   }
 
   // Extract contract ID and scores from router result
@@ -783,8 +871,9 @@ export async function applyFileSystemOverrides(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "",
+      userText: getUserText(),
       context: { operation: context.operation ?? "", path: context.path ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
@@ -808,13 +897,15 @@ export async function applyFileSystemOverrides(
   // Apply local overrides using the impl function
   const result = applyFileSystemOverridesImpl(pack, routeResult, context);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
-  return result;
+  return stampRequestId(result, extractRequestId(routeResult));
 }
 
 /** Context for network I/O operation decision */
 export interface NetworkIOContext {
   stageId?: string;
   userConfirmed?: boolean;
+  /** Original user text for routing (optional, falls back to ambient getUserText()) */
+  userText?: string;
   /** Network operation type (e.g., "fetch", "connect", "listen") */
   operation?: string;
   /** Target URL or host */
@@ -1095,8 +1186,9 @@ async function applyNetworkOverridesAsync(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "",
+      userText: context.userText !== undefined ? context.userText : getUserText(),
       context: { operation: context.operation ?? "", url: context.url ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
@@ -1121,7 +1213,7 @@ async function applyNetworkOverridesAsync(
   // Apply local overrides using the impl function
   const result = applyNetworkOverridesImpl(pack, routeResult, context);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
-  return result;
+  return stampRequestId(result, extractRequestId(routeResult));
 }
 
 /** Context for memory modification decision */
@@ -1247,8 +1339,9 @@ export async function applyMemoryModifyOverrides(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "",
+      userText: getUserText(),
       context,
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
@@ -1267,7 +1360,7 @@ export async function applyMemoryModifyOverrides(
   // Apply local overrides using the impl function
   const result = applyMemoryModifyOverridesImpl(pack, routeResult, context);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
-  return result;
+  return stampRequestId(result, extractRequestId(routeResult));
 }
 
 /** Context for subagent spawn decision */
@@ -1326,14 +1419,16 @@ async function applySubagentSpawnOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "",
+      userText: getUserText(),
       context: { stageId: "SUBAGENT_SPAWN" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for SUBAGENT_SPAWN
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Fail-closed: if router result is not ok, throw error
   if (!routeResult.ok) {
@@ -1358,17 +1453,17 @@ async function applySubagentSpawnOverridesImpl(
   if (routerMismatch) {
     // Router-mismatch fail-open: skip ClarityBurst override enforcement
     // and proceed with normal spawn execution path.
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed
-  return {
+  return stampRequestId({
     outcome: "PROCEED",
     contractId: null
-  };
+  }, routerRequestId);
 }
 
 /**
@@ -1571,14 +1666,16 @@ async function applyNodeInvokeOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "", // context may have userText if needed in future
+      userText: getUserText(),
       context: { functionName: context.functionName ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for NODE_INVOKE
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Defensive hard-block: if router result is not ok, abstain with router_outage
   if (!routeResult.ok) {
@@ -1590,7 +1687,7 @@ async function applyNodeInvokeOverridesImpl(
       instructions: "The router is unavailable and node invocations cannot proceed. Retry when the router service is restored.",
     };
     context.runMetrics && incOutcome(context.runMetrics, outcome.outcome);
-    return outcome;
+    return stampRequestId(outcome, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
@@ -1606,18 +1703,18 @@ async function applyNodeInvokeOverridesImpl(
 
   if (routerMismatch) {
     // fail-open on router mismatch
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // Strictly pack-driven uncertainty gating for NODE_INVOKE
@@ -1632,12 +1729,12 @@ async function applyNodeInvokeOverridesImpl(
     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `NODE_INVOKE pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-    };
+    }, routerRequestId);
   }
 
   // Apply uncertainty gating with pack-driven thresholds
@@ -1652,11 +1749,11 @@ async function applyNodeInvokeOverridesImpl(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, routerRequestId);
     }
   }
 
@@ -1665,28 +1762,28 @@ async function applyNodeInvokeOverridesImpl(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, routerRequestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
       instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed with the invocation
-  const result: OverrideOutcome = {
+  const result: OverrideOutcome = stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, routerRequestId);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
   return result;
 }
@@ -1777,14 +1874,16 @@ async function applyBrowserAutomateOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "", // context may have userText if needed in future
+      userText: getUserText(),
       context: { url: context.url ?? "", action: context.action ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for BROWSER_AUTOMATE
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Defensive hard-block: if router result is not ok, abstain with router_outage
   if (!routeResult.ok) {
@@ -1796,7 +1895,7 @@ async function applyBrowserAutomateOverridesImpl(
       instructions: "The router is unavailable and browser automation cannot proceed. Retry when the router service is restored.",
     };
     context.runMetrics && incOutcome(context.runMetrics, outcome.outcome);
-    return outcome;
+    return stampRequestId(outcome, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
@@ -1812,18 +1911,18 @@ async function applyBrowserAutomateOverridesImpl(
 
   if (routerMismatch) {
     // fail-open on router mismatch
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // Strictly pack-driven uncertainty gating for BROWSER_AUTOMATE
@@ -1838,12 +1937,12 @@ async function applyBrowserAutomateOverridesImpl(
     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `BROWSER_AUTOMATE pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-    };
+    }, routerRequestId);
   }
 
   // Apply uncertainty gating with pack-driven thresholds
@@ -1858,11 +1957,11 @@ async function applyBrowserAutomateOverridesImpl(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, routerRequestId);
     }
   }
 
@@ -1871,28 +1970,28 @@ async function applyBrowserAutomateOverridesImpl(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, routerRequestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
       instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed with the browser automation
-  const result: OverrideOutcome = {
+  const result: OverrideOutcome = stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, routerRequestId);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
   return result;
 }
@@ -1980,14 +2079,16 @@ async function applyCronScheduleOverridesImpl(
        packId: pack.pack_id,
        packVersion: pack.pack_version,
        allowedContractIds,
-       userText: "", // context may have userText if needed in future
+       userText: getUserText(),
        context: { schedule: context.schedule ?? "", taskType: context.taskType ?? "" },
+       pack,
      });
      routeResult = routerRes as unknown as RouteResult;
    } catch {
      // Router error: fail-closed for CRON_SCHEDULE
      routeResult = { ok: false, error: "router_error" };
    }
+   const routerRequestId = extractRequestId(routeResult);
 
    // Defensive hard-block: if router result is not ok, abstain with router_outage
    if (!routeResult.ok) {
@@ -1999,7 +2100,7 @@ async function applyCronScheduleOverridesImpl(
        instructions: "The router is unavailable and cron schedule operations cannot proceed. Retry when the router service is restored.",
      };
      context.runMetrics && incOutcome(context.runMetrics, outcome.outcome);
-     return outcome;
+     return stampRequestId(outcome, routerRequestId);
    }
 
    // Extract contract ID and scores from router result
@@ -2015,18 +2116,18 @@ async function applyCronScheduleOverridesImpl(
 
    if (routerMismatch) {
      // fail-open on router mismatch
-     return {
+     return stampRequestId({
        outcome: "PROCEED",
        contractId: null,
-     };
+     }, routerRequestId);
    }
 
    // If no contract ID found, fail-open
    if (!contractId) {
-     return {
+     return stampRequestId({
        outcome: "PROCEED",
        contractId: null,
-     };
+     }, routerRequestId);
    }
 
    // Strictly pack-driven uncertainty gating for CRON_SCHEDULE
@@ -2041,12 +2142,12 @@ async function applyCronScheduleOverridesImpl(
      if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
      if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
      
-     return {
+     return stampRequestId({
        outcome: "ABSTAIN_CLARIFY",
        reason: "PACK_POLICY_INCOMPLETE",
        contractId: null,
        instructions: `CRON_SCHEDULE pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-     };
+     }, routerRequestId);
    }
 
    // Apply uncertainty gating with pack-driven thresholds
@@ -2061,11 +2162,11 @@ async function applyCronScheduleOverridesImpl(
        (top1Score - top2.score) < dominanceMarginDelta;
 
      if (lowConfidence || lowDominance) {
-       return {
+       return stampRequestId({
          outcome: "ABSTAIN_CLARIFY",
          reason: "LOW_DOMINANCE_OR_CONFIDENCE",
          contractId,
-       };
+       }, routerRequestId);
      }
    }
 
@@ -2074,28 +2175,28 @@ async function applyCronScheduleOverridesImpl(
    
    // If contract not found in pack, proceed (fail-open)
    if (!contract) {
-     return {
+     return stampRequestId({
        outcome: "PROCEED",
        contractId,
-     };
+     }, routerRequestId);
    }
 
    // Check if confirmation is required and not yet provided
    // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
    if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-     return {
+     return stampRequestId({
        outcome: "ABSTAIN_CONFIRM",
        reason: "CONFIRM_REQUIRED",
        contractId,
        instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-     };
+     }, routerRequestId);
    }
 
    // Default: proceed with the cron schedule operation
-   const result: OverrideOutcome = {
+   const result: OverrideOutcome = stampRequestId({
      outcome: "PROCEED",
      contractId,
-   };
+   }, routerRequestId);
    context.runMetrics && incOutcome(context.runMetrics, result.outcome);
    return result;
 }
@@ -2183,14 +2284,16 @@ async function applyMessageEmitOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "", // context may have userText if needed in future
+      userText: getUserText(),
       context: { channel: context.channel ?? "", kind: context.kind ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for MESSAGE_EMIT
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Defensive hard-block: if router result is not ok, abstain with router_outage
   if (!routeResult.ok) {
@@ -2202,7 +2305,7 @@ async function applyMessageEmitOverridesImpl(
       instructions: "The router is unavailable and message emit operations cannot proceed. Retry when the router service is restored.",
     };
     context.runMetrics && incOutcome(context.runMetrics, outcome.outcome);
-    return outcome;
+    return stampRequestId(outcome, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
@@ -2218,18 +2321,18 @@ async function applyMessageEmitOverridesImpl(
 
   if (routerMismatch) {
     // fail-open on router mismatch
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // Strictly pack-driven uncertainty gating for MESSAGE_EMIT
@@ -2244,12 +2347,12 @@ async function applyMessageEmitOverridesImpl(
     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `MESSAGE_EMIT pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-    };
+    }, routerRequestId);
   }
 
   // Apply uncertainty gating with pack-driven thresholds
@@ -2264,11 +2367,11 @@ async function applyMessageEmitOverridesImpl(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, routerRequestId);
     }
   }
 
@@ -2277,28 +2380,28 @@ async function applyMessageEmitOverridesImpl(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, routerRequestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
       instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed with the message emit operation
-  const result: OverrideOutcome = {
+  const result: OverrideOutcome = stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, routerRequestId);
   context.runMetrics && incOutcome(context.runMetrics, result.outcome);
   return result;
 }
@@ -2385,24 +2488,26 @@ async function applyMediaGenerateOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "", // context may have userText if needed in future
+      userText: getUserText(),
       context: { mediaType: context.mediaType ?? "", model: context.model ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for MEDIA_GENERATE
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Defensive hard-block: if router result is not ok, abstain with router_outage
   if (!routeResult.ok) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "router_outage",
       stageId: "MEDIA_GENERATE",
       contractId: null,
       instructions: "The router is unavailable and media generation cannot proceed. Retry when the router service is restored.",
-    };
+    }, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
@@ -2418,18 +2523,18 @@ async function applyMediaGenerateOverridesImpl(
 
   if (routerMismatch) {
     // fail-open on router mismatch
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // Strictly pack-driven uncertainty gating for MEDIA_GENERATE
@@ -2444,12 +2549,12 @@ async function applyMediaGenerateOverridesImpl(
     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `MEDIA_GENERATE pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-    };
+    }, routerRequestId);
   }
 
   // Apply uncertainty gating with pack-driven thresholds
@@ -2464,11 +2569,11 @@ async function applyMediaGenerateOverridesImpl(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, routerRequestId);
     }
   }
 
@@ -2477,28 +2582,28 @@ async function applyMediaGenerateOverridesImpl(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, routerRequestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
       instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed with the media generation
-  return {
+  return stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, routerRequestId);
 }
 
 /**
@@ -2583,24 +2688,26 @@ async function applyCanvasUiOverridesImpl(
       packId: pack.pack_id,
       packVersion: pack.pack_version,
       allowedContractIds,
-      userText: "", // context may have userText if needed in future
+      userText: getUserText(),
       context: { componentType: context.componentType ?? "", canvasId: context.canvasId ?? "" },
+      pack,
     });
     routeResult = routerRes as unknown as RouteResult;
   } catch {
     // Router error: fail-closed for CANVAS_UI
     routeResult = { ok: false, error: "router_error" };
   }
+  const routerRequestId = extractRequestId(routeResult);
 
   // Defensive hard-block: if router result is not ok, abstain with router_outage
   if (!routeResult.ok) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "router_outage",
       stageId: "CANVAS_UI",
       contractId: null,
       instructions: "The router is unavailable and canvas UI operations cannot proceed. Retry when the router service is restored.",
-    };
+    }, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
@@ -2616,18 +2723,18 @@ async function applyCanvasUiOverridesImpl(
 
   if (routerMismatch) {
     // fail-open on router mismatch
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // If no contract ID found, fail-open
   if (!contractId) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId: null,
-    };
+    }, routerRequestId);
   }
 
   // Strictly pack-driven uncertainty gating for CANVAS_UI
@@ -2642,12 +2749,12 @@ async function applyCanvasUiOverridesImpl(
     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CLARIFY",
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `CANVAS_UI pack policy is incomplete. Missing required threshold(s): ${missingFields.join(", ")}. Update the pack configuration to include these values before proceeding.`,
-    };
+    }, routerRequestId);
   }
 
   // Apply uncertainty gating with pack-driven thresholds
@@ -2662,11 +2769,11 @@ async function applyCanvasUiOverridesImpl(
       (top1Score - top2.score) < dominanceMarginDelta;
 
     if (lowConfidence || lowDominance) {
-      return {
+      return stampRequestId({
         outcome: "ABSTAIN_CLARIFY",
         reason: "LOW_DOMINANCE_OR_CONFIDENCE",
         contractId,
-      };
+      }, routerRequestId);
     }
   }
 
@@ -2675,28 +2782,28 @@ async function applyCanvasUiOverridesImpl(
   
   // If contract not found in pack, proceed (fail-open)
   if (!contract) {
-    return {
+    return stampRequestId({
       outcome: "PROCEED",
       contractId,
-    };
+    }, routerRequestId);
   }
 
   // Check if confirmation is required and not yet provided
   // Enforce ABSTAIN_CONFIRM for HIGH/CRITICAL risk classes or needs_confirmation
   if (contractRequiresConfirmation(contract) && context.userConfirmed !== true) {
-    return {
+    return stampRequestId({
       outcome: "ABSTAIN_CONFIRM",
       reason: "CONFIRM_REQUIRED",
       contractId,
       instructions: `This operation requires user confirmation. Contract "${contractId}" has risk_class="${contract.risk_class}" or needs_confirmation=true. To proceed, the caller must set userConfirmed=true after obtaining explicit user consent.`,
-    };
+    }, routerRequestId);
   }
 
   // Default: proceed with the canvas UI operation
-  return {
+  return stampRequestId({
     outcome: "PROCEED",
     contractId,
-  };
+  }, routerRequestId);
 }
 
 /**
