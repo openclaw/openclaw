@@ -107,7 +107,7 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
       if (!isRecord(profile)) {
         continue;
       }
-      const provider = normalizeProviderId(String(profile.provider ?? ""));
+      const provider = normalizeProviderId(profile.provider ?? "");
       if (provider === normalized) {
         return true;
       }

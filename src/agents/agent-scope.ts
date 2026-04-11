@@ -68,7 +68,7 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+  return list.filter((entry): entry is AgentEntry => entry !== null && typeof entry === "object");
 }
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {
