@@ -189,23 +189,14 @@ describe("bedrock embedding provider", () => {
     resolveCredentialsMock.mockRejectedValue(new Error("no aws credentials"));
     await expect(hasAwsCredentials({} as NodeJS.ProcessEnv)).resolves.toBe(false);
   });
-  it("returns false when AWS_EC2_METADATA_DISABLED is set", async () => {
-    await expect(
-      hasAwsCredentials({ AWS_EC2_METADATA_DISABLED: "true" } as NodeJS.ProcessEnv),
-    ).resolves.toBe(false);
-    // Should not invoke the SDK at all
-    expect(defaultProviderMock).not.toHaveBeenCalled();
-  });
-  it("disables IMDS during defaultProvider call and restores env", async () => {
-    const env = {} as NodeJS.ProcessEnv;
-    resolveCredentialsMock.mockImplementation(() => {
-      // During the call, IMDS should be disabled
-      expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
-      return Promise.resolve({ accessKeyId: "AKIAEXAMPLE" });
-    });
-    await expect(hasAwsCredentials(env)).resolves.toBe(true);
-    // After the call, the env var should be cleaned up
-    expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+  it("probes SDK only once per call with custom env (memoized for process.env)", async () => {
+    resolveCredentialsMock.mockResolvedValue({ accessKeyId: "AKIAEXAMPLE" });
+    // Custom env objects bypass the cache, so each call invokes the SDK.
+    const env1 = {} as NodeJS.ProcessEnv;
+    const env2 = {} as NodeJS.ProcessEnv;
+    await expect(hasAwsCredentials(env1)).resolves.toBe(true);
+    await expect(hasAwsCredentials(env2)).resolves.toBe(true);
+    expect(defaultProviderMock).toHaveBeenCalledTimes(2);
   });
 
   // --- Titan V2 ---

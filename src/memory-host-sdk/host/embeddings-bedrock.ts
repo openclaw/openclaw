@@ -375,6 +375,12 @@ const CREDENTIAL_ENV_VARS = [
   "AWS_ROLE_ARN",
 ] as const;
 
+// Memoize the SDK credential probe so IMDS is contacted at most once per
+// process. This avoids repeated network requests in environments where
+// IMDS returns errors (e.g. 403 in sandboxed environments like NVIDIA
+// NemoClaw) while preserving correct behavior for EC2 instance roles.
+let _cachedProbeResult: Promise<boolean> | undefined;
+
 export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;
@@ -383,40 +389,28 @@ export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): P
     return true;
   }
 
-  // Respect the standard AWS SDK mechanism to disable IMDS probing.
-  // In sandboxed environments (e.g. NVIDIA NemoClaw), IMDS requests to
-  // 169.254.169.254 may be intercepted and rejected with 403, causing
-  // hundreds of unnecessary network requests across spawned processes.
-  if (env.AWS_EC2_METADATA_DISABLED && env.AWS_EC2_METADATA_DISABLED !== "false") {
-    return false;
+  // Only cache when using the real process.env (production path).
+  // Test callers passing a custom env object bypass the cache.
+  if (env === process.env) {
+    _cachedProbeResult ??= probeAwsCredentials();
+    return _cachedProbeResult;
   }
+  return probeAwsCredentials();
+}
 
+async function probeAwsCredentials(): Promise<boolean> {
   const credentialProviderSdk = await loadCredentialProviderSdk();
   if (!credentialProviderSdk) {
     return false;
   }
   try {
-    // Temporarily disable IMDS probing during auto-detection. EC2/ECS
-    // environments are already covered by CREDENTIAL_ENV_VARS above
-    // (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, AWS_EC2_METADATA_SERVICE_ENDPOINT, etc.),
-    // so the defaultProvider call here only needs file-based providers
-    // (INI profiles, SSO, process credentials).
-    const savedImdsFlag = env.AWS_EC2_METADATA_DISABLED;
-    env.AWS_EC2_METADATA_DISABLED = "true";
-    try {
-      const credentials = await credentialProviderSdk.defaultProvider({
-        timeout: 1000,
-        maxRetries: 0,
-      })();
-      return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
-    } finally {
-      if (savedImdsFlag === undefined) {
-        delete env.AWS_EC2_METADATA_DISABLED;
-      } else {
-        env.AWS_EC2_METADATA_DISABLED = savedImdsFlag;
-      }
-    }
+    const credentials = await credentialProviderSdk.defaultProvider({
+      timeout: 1000,
+      maxRetries: 0,
+    })();
+    return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
   } catch {
     return false;
   }
 }
+
