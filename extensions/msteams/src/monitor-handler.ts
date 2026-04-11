@@ -6,6 +6,7 @@ import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from ".
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -395,6 +396,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   deps: MSTeamsMessageHandlerDeps,
 ): T {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+  const handleReaction = createMSTeamsReactionHandler(deps);
 
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
@@ -594,6 +596,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       } else {
         deps.log.debug?.("member added", { member: member.id });
       }
+    }
+    await next();
+  });
+
+  handler.onReactionsAdded(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "added");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+    }
+    await next();
+  });
+
+  handler.onReactionsRemoved(async (context, next) => {
+    try {
+      await handleReaction(context as MSTeamsTurnContext, "removed");
+    } catch (err) {
+      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

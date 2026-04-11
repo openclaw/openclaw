@@ -248,9 +248,10 @@ describe("MatrixClient request hardening", () => {
   });
 
   it("injects a guarded fetchFn into matrix-js-sdk", () => {
-    new MatrixClient("https://matrix.example.org", "token", {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
+    expect(client).toBeInstanceOf(MatrixClient);
 
     expect(lastCreateClientOpts).toMatchObject({
       baseUrl: "https://matrix.example.org",
@@ -1323,10 +1324,11 @@ describe("MatrixClient crypto bootstrapping", () => {
       "utf8",
     );
 
-    new MatrixClient("https://matrix.example.org", "token", {
+    const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
       recoveryKeyPath,
     });
+    expect(client).toBeInstanceOf(MatrixClient);
 
     const callbacks = (lastCreateClientOpts?.cryptoCallbacks ?? null) as {
       getSecretStorageKey?: (
@@ -1345,7 +1347,8 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("provides a matrix-js-sdk logger to createClient", () => {
-    new MatrixClient("https://matrix.example.org", "token");
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    expect(client).toBeInstanceOf(MatrixClient);
     const logger = (lastCreateClientOpts?.logger ?? null) as {
       debug?: (...args: unknown[]) => void;
       getChild?: (namespace: string) => unknown;

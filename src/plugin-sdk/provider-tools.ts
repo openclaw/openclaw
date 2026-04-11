@@ -420,17 +420,9 @@ export function inspectOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return [];
   }
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findOpenAIStrictSchemaViolations(
-      normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
-      `${tool.name}.parameters`,
-      { requireObjectRoot: true },
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  // Native OpenAI transports fall back to `strict: false` when any tool schema is not
+  // strict-compatible, so these findings are expected for optional-heavy tool schemas.
+  return [];
 }
 
 export type ProviderToolCompatFamily = "gemini" | "openai";

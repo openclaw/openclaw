@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  __testing as sessionBindingTesting,
+  getSessionBindingService,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import { __testing, createBlueBubblesConversationBindingManager } from "./conversation-bindings.js";
 
@@ -9,6 +12,7 @@ const baseCfg = {
 
 describe("BlueBubbles conversation bindings", () => {
   beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     __testing.resetBlueBubblesConversationBindingsForTests();
   });
 

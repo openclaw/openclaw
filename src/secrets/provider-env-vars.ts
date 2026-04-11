@@ -1,5 +1,5 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {

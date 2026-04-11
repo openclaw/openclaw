@@ -3,8 +3,8 @@ import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -297,8 +297,9 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && sessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
     const shouldSkip = cutoff
       ? shouldSkipMessageByAbortCutoff({
@@ -316,7 +317,7 @@ export async function handleInlineActions(params: {
       await (
         await import("./abort-cutoff.runtime.js")
       ).clearAbortCutoffInSessionRuntime({
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
         storePath,
@@ -350,10 +351,11 @@ export async function handleInlineActions(params: {
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
+      storePath,
       provider,
       model,
       contextTokens,
@@ -388,7 +390,7 @@ export async function handleInlineActions(params: {
         allowed: elevatedAllowed,
         failures: elevatedFailures,
       },
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,

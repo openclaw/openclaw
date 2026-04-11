@@ -318,6 +318,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {

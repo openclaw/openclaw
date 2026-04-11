@@ -180,6 +180,24 @@ describe("qa suite failure reply handling", () => {
     await expect(pending).rejects.toThrow("Message failed");
   });
 
+  it("fails success-only waitForOutboundMessage calls when internal coordination text leaks", async () => {
+    const state = createQaBusState();
+    const pending = qaSuiteTesting.waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("QA_LEAK_OK"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).rejects.toThrow("checking thread context");
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = qaSuiteTesting.createScenarioWaitForCondition(state);
@@ -188,13 +206,12 @@ describe("qa suite failure reply handling", () => {
       () =>
         state
           .getSnapshot()
-          .messages.filter(
+          .messages.findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("ALPHA-7"),
-          )
-          .at(-1),
+          ),
       5_000,
       10,
     );
@@ -236,13 +253,12 @@ describe("qa suite failure reply handling", () => {
         state
           .getSnapshot()
           .messages.slice(3)
-          .filter(
+          .findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("mission"),
-          )
-          .at(-1),
+          ),
       150,
       10,
     );

@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { clearAgentHarnesses } from "../harness/registry.js";
 
 type MockResolvedModel = {
   model: { provider: string; api: string; id: string; input: unknown[] };
@@ -143,6 +144,7 @@ export function resetCompactSessionStateMocks(): void {
 }
 
 export function resetCompactHooksHarnessMocks(): void {
+  clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
   hookRunner.runBeforeCompaction.mockReset();
@@ -202,6 +204,19 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../harness/selection.js", () => ({
+    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+  }));
+
+  vi.doMock("../../plugins/provider-runtime.js", () => ({
+    prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
+    resolveProviderSystemPromptContribution: vi.fn(() => undefined),
+    resolveProviderTextTransforms: vi.fn(() => undefined),
+    transformProviderSystemPrompt: vi.fn(
+      (params: { systemPrompt?: string }) => params.systemPrompt,
+    ),
   }));
 
   vi.doMock("../provider-stream.js", () => ({
@@ -307,8 +322,11 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
   }));
 

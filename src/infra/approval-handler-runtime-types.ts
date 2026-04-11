@@ -1,18 +1,20 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import type {
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
-} from "./approval-view-model.js";
+} from "./approval-view-model.types.js";
 import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
+export type { ChannelApprovalKind } from "./approval-types.js";
+
 export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-export type ChannelApprovalKind = "exec" | "plugin";
 
 export type ChannelApprovalCapabilityHandlerContext = {
   cfg: OpenClawConfig;

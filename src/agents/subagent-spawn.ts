@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -51,11 +52,15 @@ import {
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
+import {
+  SUBAGENT_SPAWN_MODES,
+  SUBAGENT_SPAWN_SANDBOX_MODES,
+  type SpawnSubagentMode,
+  type SpawnSubagentSandboxMode,
+} from "./subagent-spawn.types.js";
 
-export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
-export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+export { SUBAGENT_SPAWN_MODES, SUBAGENT_SPAWN_SANDBOX_MODES } from "./subagent-spawn.types.js";
+export type { SpawnSubagentMode, SpawnSubagentSandboxMode } from "./subagent-spawn.types.js";
 
 export { decodeStrictBase64 };
 
@@ -169,7 +174,7 @@ function loadSubagentConfig() {
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   childSessionKey: string;
   resolvedModel?: string;
 }): Promise<string | undefined> {

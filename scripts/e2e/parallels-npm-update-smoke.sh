@@ -11,7 +11,9 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+PYTHON_BIN="${PYTHON_BIN:-}"
 PACKAGE_SPEC=""
+UPDATE_TARGET=""
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
@@ -23,6 +25,8 @@ HOST_PORT=""
 LATEST_VERSION=""
 CURRENT_HEAD=""
 CURRENT_HEAD_SHORT=""
+UPDATE_TARGET_EFFECTIVE=""
+UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
@@ -59,12 +63,44 @@ cleanup() {
 
 trap cleanup EXIT
 
+resolve_python_bin() {
+  local candidate
+
+  python_bin_usable() {
+    "$1" - <<'PY' >/dev/null 2>&1
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(1)
+_value: tuple[int, ...] | None = None
+PY
+  }
+
+  if [[ -n "$PYTHON_BIN" ]]; then
+    [[ -x "$PYTHON_BIN" ]] || die "PYTHON_BIN is not executable: $PYTHON_BIN"
+    python_bin_usable "$PYTHON_BIN" || die "PYTHON_BIN must be Python 3.10+: $PYTHON_BIN"
+    return
+  fi
+
+  for candidate in "$(command -v python3 || true)" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if python_bin_usable "$candidate"; then
+      PYTHON_BIN="$candidate"
+      return
+    fi
+  done
+
+  die "Python 3.10+ is required"
+}
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
 
 Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
+  --update-target <target>    Target passed to guest 'openclaw update --tag'.
+                             Default: host-served tgz packed from current checkout.
+                             Examples: latest, beta, 2026.4.10, http://host/openclaw.tgz
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
@@ -82,6 +118,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --package-spec)
       PACKAGE_SPEC="$2"
+      shift 2
+      ;;
+    --update-target)
+      UPDATE_TARGET="$2"
       shift 2
       ;;
     --provider)
@@ -132,12 +172,13 @@ esac
 
 API_KEY_VALUE="${!API_KEY_ENV:-}"
 [[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
+resolve_python_bin
 
 resolve_linux_vm_name() {
   local json requested
   json="$(prlctl list --all --json)"
   requested="$LINUX_VM"
-  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" python3 - <<'PY'
+  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" "$PYTHON_BIN" - <<'PY'
 import difflib
 import json
 import os
@@ -210,7 +251,7 @@ resolve_host_ip() {
 }
 
 allocate_host_port() {
-  python3 - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import socket
 
 sock = socket.socket()
@@ -232,18 +273,37 @@ pack_main_tgz() {
   ensure_current_build
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$CURRENT_HEAD_SHORT.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+}
+
+resolve_current_head() {
+  CURRENT_HEAD="$(git rev-parse HEAD)"
+  CURRENT_HEAD_SHORT="$(git rev-parse --short=7 HEAD)"
+}
+
+resolve_registry_target_version() {
+  local target="$1"
+  local spec="$target"
+  if [[ "$spec" != openclaw@* ]]; then
+    spec="openclaw@$spec"
+  fi
+  npm view "$spec" version 2>/dev/null || true
+}
+
+is_explicit_package_target() {
+  local target="$1"
+  [[ "$target" == *"://"* || "$target" == *"#"* || "$target" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
 }
 
 write_windows_update_script() {
   WINDOWS_UPDATE_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-main-update.ps1"
   cat >"$WINDOWS_UPDATE_SCRIPT_PATH" <<'EOF'
 param(
-  [Parameter(Mandatory = $true)][string]$TgzUrl,
-  [Parameter(Mandatory = $true)][string]$HeadShort,
+  [Parameter(Mandatory = $true)][string]$UpdateTarget,
+  [Parameter(Mandatory = $true)][string]$ExpectedNeedle,
   [Parameter(Mandatory = $true)][string]$SessionId,
   [Parameter(Mandatory = $true)][string]$ModelId,
   [Parameter(Mandatory = $true)][string]$ProviderKeyEnv,
@@ -373,21 +433,20 @@ function Restart-GatewayWithRecovery {
 
 try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
-  $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
-  Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Remove-Item $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
   Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
-  Write-ProgressLog 'update.download-tgz'
-  Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
-  Write-ProgressLog 'update.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Write-ProgressLog 'update.openclaw-update'
+  Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
   Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
-  if ($version -notmatch [regex]::Escape($HeadShort)) {
-    throw "version mismatch: expected substring $HeadShort"
+  if ($ExpectedNeedle -and $version -notmatch [regex]::Escape($ExpectedNeedle)) {
+    throw "version mismatch: expected substring $ExpectedNeedle"
   }
   Write-ProgressLog $version
+  Write-ProgressLog 'update.status'
+  Invoke-Logged 'openclaw update status' { & $openclaw update status --json }
   Write-ProgressLog 'update.set-model'
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
@@ -421,10 +480,10 @@ EOF
 start_server() {
   HOST_IP="$(resolve_host_ip)"
   HOST_PORT="$(allocate_host_port)"
-  say "Serve current main tgz on $HOST_IP:$HOST_PORT"
+  say "Serve update helper artifacts on $HOST_IP:$HOST_PORT"
   (
     cd "$MAIN_TGZ_DIR"
-    exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
+    exec "$PYTHON_BIN" -m http.server "$HOST_PORT" --bind 0.0.0.0
   ) >/tmp/openclaw-parallels-npm-update-http.log 2>&1 &
   SERVER_PID=$!
   sleep 1
@@ -447,7 +506,7 @@ wait_job() {
 
 extract_log_progress() {
   local log_path="$1"
-  python3 - "$log_path" <<'PY'
+  "$PYTHON_BIN" - "$log_path" <<'PY'
 import pathlib
 import sys
 
@@ -529,7 +588,7 @@ monitor_jobs_progress() {
 
 extract_last_version() {
   local log_path="$1"
-  python3 - "$log_path" <<'PY'
+  "$PYTHON_BIN" - "$log_path" <<'PY'
 import pathlib
 import re
 import sys
@@ -545,7 +604,7 @@ guest_powershell() {
   local script="$1"
   local encoded
   encoded="$(
-    SCRIPT_CONTENT="$script" python3 - <<'PY'
+    SCRIPT_CONTENT="$script" "$PYTHON_BIN" - <<'PY'
 import base64
 import os
 
@@ -560,7 +619,7 @@ PY
 host_timeout_exec() {
   local timeout_s="$1"
   shift
-  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+  HOST_TIMEOUT_S="$timeout_s" "$PYTHON_BIN" - "$@" <<'PY'
 import os
 import subprocess
 import sys
@@ -642,7 +701,7 @@ guest_powershell_poll() {
   local script="$2"
   local encoded
   encoded="$(
-    SCRIPT_CONTENT="$script" python3 - <<'PY'
+    SCRIPT_CONTENT="$script" "$PYTHON_BIN" - <<'PY'
 import base64
 import os
 
@@ -656,8 +715,8 @@ PY
 
 run_windows_script_via_log() {
   local script_url="$1"
-  local tgz_url="$2"
-  local head_short="$3"
+  local update_target="$2"
+  local expected_needle="$3"
   local session_id="$4"
   local model_id="$5"
   local provider_key_env="$6"
@@ -684,8 +743,8 @@ Start-Process powershell.exe -ArgumentList @(
   '-NoProfile',
   '-ExecutionPolicy', 'Bypass',
   '-File', \$runner,
-  '-TgzUrl', '$tgz_url',
-  '-HeadShort', '$head_short',
+  '-UpdateTarget', '$update_target',
+  '-ExpectedNeedle', '$expected_needle',
   '-SessionId', '$session_id',
   '-ModelId', '$model_id',
   '-ProviderKeyEnv', '$provider_key_env',
@@ -706,7 +765,7 @@ EOF
     if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
       return "$log_rc"
     fi
-    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+    GUEST_LOG="$guest_log" "$PYTHON_BIN" - "$log_state_path" <<'PY'
 import os
 import pathlib
 import sys
@@ -783,8 +842,8 @@ PY
 }
 
 run_macos_update() {
-  local tgz_url="$1"
-  local head_short="$2"
+  local update_target="$1"
+  local expected_needle="$2"
   cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -794,17 +853,19 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
-curl -fsSL "$tgz_url" -o /tmp/openclaw-main-update.tgz
-/opt/homebrew/bin/npm install -g /tmp/openclaw-main-update.tgz
+/opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 version="\$(/opt/homebrew/bin/openclaw --version)"
 printf '%s\n' "\$version"
-case "\$version" in
-  *"$head_short"*) ;;
-  *)
-    echo "version mismatch: expected substring $head_short" >&2
-    exit 1
-    ;;
-esac
+if [ -n "$expected_needle" ]; then
+  case "\$version" in
+    *"$expected_needle"*) ;;
+    *)
+      echo "version mismatch: expected substring $expected_needle" >&2
+      exit 1
+      ;;
+  esac
+fi
+/opt/homebrew/bin/openclaw update status --json
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 # Same-guest npm upgrades can leave launchd holding the old gateway process or
 # module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
@@ -816,58 +877,62 @@ for _ in 1 2 3 4 5 6 7 8; do
   sleep 2
 done
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
 }
 
 run_windows_update() {
-  local tgz_url="$1"
-  local head_short="$2"
+  local update_target="$1"
+  local expected_needle="$2"
   local script_url="$3"
   run_windows_script_via_log \
     "$script_url" \
-    "$tgz_url" \
-    "$head_short" \
-    "parallels-npm-update-windows-$head_short" \
+    "$update_target" \
+    "$expected_needle" \
+    "parallels-npm-update-windows-$expected_needle" \
     "$MODEL_ID" \
     "$API_KEY_ENV" \
     "$API_KEY_VALUE"
 }
 
 run_linux_update() {
-  local tgz_url="$1"
-  local head_short="$2"
+  local update_target="$1"
+  local expected_needle="$2"
   cat <<EOF | prlctl exec "$LINUX_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
-curl -fsSL "$tgz_url" -o /tmp/openclaw-main-update.tgz
-npm install -g /tmp/openclaw-main-update.tgz --no-fund --no-audit
+openclaw update --tag "$update_target" --yes --json
 version="\$(openclaw --version)"
 printf '%s\n' "\$version"
-case "\$version" in
-  *"$head_short"*) ;;
-  *)
-    echo "version mismatch: expected substring $head_short" >&2
-    exit 1
-    ;;
-esac
+if [ -n "$expected_needle" ]; then
+  case "\$version" in
+    *"$expected_needle"*) ;;
+    *)
+      echo "version mismatch: expected substring $expected_needle" >&2
+      exit 1
+      ;;
+  esac
+fi
+openclaw update status --json
 openclaw models set "$MODEL_ID"
-openclaw agent --local --agent main --session-id parallels-npm-update-linux-$head_short --message "Reply with exact ASCII text OK only." --json
+openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
 }
 
 write_summary_json() {
   local summary_path="$RUN_DIR/summary.json"
-  python3 - "$summary_path" <<'PY'
+  "$PYTHON_BIN" - "$summary_path" <<'PY'
 import json
 import os
 import sys
 
 summary = {
     "packageSpec": os.environ["SUMMARY_PACKAGE_SPEC"],
+    "updateTarget": os.environ["SUMMARY_UPDATE_TARGET"],
+    "updateExpected": os.environ["SUMMARY_UPDATE_EXPECTED"],
     "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
@@ -903,6 +968,7 @@ LATEST_VERSION="$(resolve_latest_version)"
 if [[ -z "$PACKAGE_SPEC" ]]; then
   PACKAGE_SPEC="openclaw@$LATEST_VERSION"
 fi
+resolve_current_head
 
 RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
 if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
@@ -949,19 +1015,33 @@ wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FR
 [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
 [[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
 
-pack_main_tgz
+if [[ -z "$UPDATE_TARGET" || "$UPDATE_TARGET" == "local-main" ]]; then
+  pack_main_tgz
+  UPDATE_TARGET_EFFECTIVE="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+  UPDATE_EXPECTED_NEEDLE="$CURRENT_HEAD_SHORT"
+else
+  UPDATE_TARGET_EFFECTIVE="$UPDATE_TARGET"
+  if is_explicit_package_target "$UPDATE_TARGET_EFFECTIVE"; then
+    UPDATE_EXPECTED_NEEDLE=""
+  else
+    UPDATE_EXPECTED_NEEDLE="$(resolve_registry_target_version "$UPDATE_TARGET_EFFECTIVE")"
+    [[ -n "$UPDATE_EXPECTED_NEEDLE" ]] || UPDATE_EXPECTED_NEEDLE="$UPDATE_TARGET_EFFECTIVE"
+  fi
+fi
 write_windows_update_script
 start_server
 
-tgz_url="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+if [[ -n "$MAIN_TGZ_PATH" ]]; then
+  UPDATE_TARGET_EFFECTIVE="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+fi
 windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
 
-say "Run same-guest update to current main"
-run_macos_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/macos-update.log" 2>&1 &
+say "Run same-guest openclaw update to $UPDATE_TARGET_EFFECTIVE"
+run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
 macos_update_pid=$!
-run_windows_update "$tgz_url" "$CURRENT_HEAD_SHORT" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
+run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
 windows_update_pid=$!
-run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
+run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
 
 monitor_jobs_progress "update" \
@@ -982,6 +1062,8 @@ WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
 LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
 
 SUMMARY_PACKAGE_SPEC="$PACKAGE_SPEC" \
+SUMMARY_UPDATE_TARGET="$UPDATE_TARGET_EFFECTIVE" \
+SUMMARY_UPDATE_EXPECTED="$UPDATE_EXPECTED_NEEDLE" \
 SUMMARY_PROVIDER="$PROVIDER" \
 SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
 SUMMARY_CURRENT_HEAD="$CURRENT_HEAD_SHORT" \

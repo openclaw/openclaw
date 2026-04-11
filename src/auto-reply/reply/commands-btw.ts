@@ -26,7 +26,9 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ /btw requires an active session with existing context." },
@@ -56,7 +58,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       provider: params.provider,
       model: params.model,
       question,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
