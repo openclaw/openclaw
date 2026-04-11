@@ -9,7 +9,7 @@ import {
 } from "./transport-stream-shared.js";
 
 export function createGoogleGenAiStreamFnForModel(
-  model: { id: string; provider: string; baseUrl?: string },
+  model: { id: string; provider: string; baseUrl?: string; vertexai?: { project?: string; location?: string } },
   env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
   return (rawModel: unknown, context: Context, options?: SimpleStreamOptions) => {
@@ -29,8 +29,8 @@ export function createGoogleGenAiStreamFnForModel(
 
       try {
         const apiKey = options?.apiKey ?? env.GEMINI_API_KEY;
-        const project = env.GOOGLE_CLOUD_PROJECT;
-        const location = env.GOOGLE_CLOUD_LOCATION || "global"; // Default to global, use "us-central1" if needed
+        const project = model.vertexai?.project ?? env.GOOGLE_CLOUD_PROJECT;
+        const location = model.vertexai?.location ?? (env.GOOGLE_CLOUD_LOCATION || "global"); // Default to global
 
         let ai: GoogleGenAI;
 
@@ -79,6 +79,7 @@ export function createGoogleGenAiStreamFnForModel(
         const responseStream = await ai.models.generateContentStream({
           model: model.id,
           contents: contents,
+          config: context.systemPrompt ? { systemInstruction: context.systemPrompt } : undefined,
         });
 
         let currentBlockIndex = -1;
