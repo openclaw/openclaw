@@ -1,4 +1,7 @@
-import { QA_AGENTIC_PARITY_SCENARIO_TITLES } from "./agentic-parity.js";
+import {
+  QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
+} from "./agentic-parity.js";
 
 export type QaParityReportStep = {
   name: string;
@@ -165,6 +168,7 @@ export function computeQaAgenticParityMetrics(
     ...scenario,
     status: normalizeScenarioStatus(scenario.status),
   }));
+  const toolBackedTitleSet: ReadonlySet<string> = new Set(QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES);
   const totalScenarios = summary.counts?.total ?? scenarios.length;
   const passedScenarios =
     summary.counts?.passed ?? scenarios.filter((scenario) => scenario.status === "pass").length;
@@ -197,11 +201,20 @@ export function computeQaAgenticParityMetrics(
     return false;
   }).length;
 
-  // First-wave parity scenarios are all tool-mediated tasks, so a passing scenario is our
-  // verified unit of valid tool-backed execution in this harness.
-  const validToolCallCount = passedScenarios;
+  // Count only the scenarios that are supposed to exercise a real tool,
+  // subagent, or capability invocation. Memory recall and image-only
+  // understanding lanes stay in the parity pack, but they should not inflate
+  // the tool-call metric just by passing.
+  const toolBackedScenarioCount = scenarios.filter((scenario) =>
+    toolBackedTitleSet.has(scenario.name),
+  ).length;
+  const validToolCallCount = scenarios.filter(
+    (scenario) => toolBackedTitleSet.has(scenario.name) && scenario.status === "pass",
+  ).length;
 
   const rate = (value: number) => (totalScenarios > 0 ? value / totalScenarios : 0);
+  const toolRate = (value: number) =>
+    toolBackedScenarioCount > 0 ? value / toolBackedScenarioCount : 0;
   return {
     totalScenarios,
     passedScenarios,
@@ -210,7 +223,7 @@ export function computeQaAgenticParityMetrics(
     unintendedStopCount,
     unintendedStopRate: rate(unintendedStopCount),
     validToolCallCount,
-    validToolCallRate: rate(validToolCallCount),
+    validToolCallRate: toolRate(validToolCallCount),
     fakeSuccessCount,
   };
 }
