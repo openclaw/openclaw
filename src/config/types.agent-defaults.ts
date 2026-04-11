@@ -208,6 +208,20 @@ export type AgentDefaultsConfig = {
    */
   contextInjection?: AgentContextInjection;
   /**
+   * Controls how the effective AGENTS bootstrap source is recorded in
+   * transcripts and compared on continuation-skip turns:
+   * - lenient: do not compare bootstrap signatures; markers without a
+   *   signature are accepted. Preserves behavior from before model-aware
+   *   AGENTS selection was added.
+   * - strict: always record and compare a workspace-relative bootstrap
+   *   signature. A mismatch (including a missing signature on an existing
+   *   marker) forces bootstrap re-injection on the next continuation turn.
+   * - auto (default): behave as "strict" if any agentsFile or
+   *   agentsFilesByModel key is set anywhere in the resolved agents config;
+   *   otherwise behave as "lenient".
+   */
+  bootstrapSignatureMode?: "lenient" | "strict" | "auto";
+  /**
    * Workspace-relative or absolute file path (within the workspace root)
    * injected in place of AGENTS.md for main/default runs.
    */

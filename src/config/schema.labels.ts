@@ -340,6 +340,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.contextInjection": "Context Injection",
+  "agents.defaults.bootstrapSignatureMode": "Bootstrap Signature Mode",
   "agents.defaults.agentsFile": "Main AGENTS File",
   "agents.defaults.agentsFilesByModel": "Main AGENTS Files by Model",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",

@@ -3227,6 +3227,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
+              bootstrapSignatureMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "lenient",
+                  },
+                  {
+                    type: "string",
+                    const: "strict",
+                  },
+                  {
+                    type: "string",
+                    const: "auto",
+                  },
+                ],
+                title: "Bootstrap Signature Mode",
+                description:
+                  'Controls how the effective AGENTS bootstrap source is recorded in transcripts and compared on continuation-skip turns: "lenient" skips signature comparison, "strict" always enforces it, "auto" (default) enforces it only when any agentsFile or agentsFilesByModel key is set anywhere in the resolved agents config. Use "strict" to force drift detection even when no model-aware overrides are configured; use "lenient" to preserve pre-model-aware-AGENTS behavior exactly.',
+              },
               agentsFile: {
                 type: "string",
                 title: "Main AGENTS File",
@@ -24555,6 +24574,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.bootstrapSignatureMode": {
+      label: "Bootstrap Signature Mode",
+      help: 'Controls how the effective AGENTS bootstrap source is recorded in transcripts and compared on continuation-skip turns: "lenient" skips signature comparison, "strict" always enforces it, "auto" (default) enforces it only when any agentsFile or agentsFilesByModel key is set anywhere in the resolved agents config. Use "strict" to force drift detection even when no model-aware overrides are configured; use "lenient" to preserve pre-model-aware-AGENTS behavior exactly.',
       tags: ["advanced"],
     },
     "agents.defaults.agentsFile": {

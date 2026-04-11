@@ -46,6 +46,25 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
   });
 
+  it("accepts bootstrapSignatureMode: lenient", () => {
+    const result = AgentDefaultsSchema.parse({ bootstrapSignatureMode: "lenient" })!;
+    expect(result.bootstrapSignatureMode).toBe("lenient");
+  });
+
+  it("accepts bootstrapSignatureMode: strict", () => {
+    const result = AgentDefaultsSchema.parse({ bootstrapSignatureMode: "strict" })!;
+    expect(result.bootstrapSignatureMode).toBe("strict");
+  });
+
+  it("accepts bootstrapSignatureMode: auto", () => {
+    const result = AgentDefaultsSchema.parse({ bootstrapSignatureMode: "auto" })!;
+    expect(result.bootstrapSignatureMode).toBe("auto");
+  });
+
+  it("rejects invalid bootstrapSignatureMode values", () => {
+    expect(() => AgentDefaultsSchema.parse({ bootstrapSignatureMode: "off" })).toThrow();
+  });
+
   it("accepts embeddedPi.executionContract", () => {
     const result = AgentDefaultsSchema.parse({
       embeddedPi: {

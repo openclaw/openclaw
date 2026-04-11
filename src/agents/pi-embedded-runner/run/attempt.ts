@@ -51,6 +51,7 @@ import {
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesWithSignatureForRun,
+  resolveBootstrapSignatureMode,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -427,29 +428,26 @@ export async function runEmbeddedAttempt(
           bootstrapFiles: Awaited<
             ReturnType<typeof resolveBootstrapFilesWithSignatureForRun>
           >["bootstrapFiles"];
-          contextFiles: Awaited<
-            ReturnType<typeof buildBootstrapContextFiles>
-          >;
+          contextFiles: Awaited<ReturnType<typeof buildBootstrapContextFiles>>;
           bootstrapSignature: string;
         }>
       | undefined;
     const resolveAttemptBootstrapFiles = () =>
-      (bootstrapFilesPromise ??=
-        resolveBootstrapFilesWithSignatureForRun({
-          workspaceDir: effectiveWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-          modelProviderId: params.model.provider,
-          modelId: params.model.id,
-          warn: bootstrapWarn,
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }));
+      (bootstrapFilesPromise ??= resolveBootstrapFilesWithSignatureForRun({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
+        modelProviderId: params.model.provider,
+        modelId: params.model.id,
+        warn: bootstrapWarn,
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
+      }));
     const resolveAttemptBootstrapContextValue = () =>
-      (bootstrapContextPromise ??=
-        resolveAttemptBootstrapFiles().then(({ bootstrapFiles, bootstrapSignature }) => ({
+      (bootstrapContextPromise ??= resolveAttemptBootstrapFiles().then(
+        ({ bootstrapFiles, bootstrapSignature }) => ({
           bootstrapFiles,
           contextFiles: buildBootstrapContextFiles(bootstrapFiles, {
             maxChars: resolveBootstrapMaxChars(params.config),
@@ -457,7 +455,9 @@ export async function runEmbeddedAttempt(
             warn: bootstrapWarn,
           }),
           bootstrapSignature,
-        })));
+        }),
+      ));
+    const signatureMode = resolveBootstrapSignatureMode(params.config);
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles,
@@ -468,6 +468,7 @@ export async function runEmbeddedAttempt(
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       sessionFile: params.sessionFile,
+      signatureMode,
       resolveBootstrapSignatureForRun: async () =>
         (await resolveAttemptBootstrapFiles()).bootstrapSignature,
       hasCompletedBootstrapTurn,
@@ -2242,12 +2243,25 @@ export async function runEmbeddedAttempt(
           })
         ) {
           try {
-            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+            // Omit `bootstrapSignature` from the recorded marker when the
+            // resolved mode is lenient so the custom record stays
+            // byte-identical to pre-model-aware-AGENTS behavior. Prompt-cache
+            // stability depends on this: rewriting old markers on every turn
+            // would invalidate the cached prefix.
+            const recordData: {
+              timestamp: number;
+              runId?: string;
+              sessionId: string;
+              bootstrapSignature?: string;
+            } = {
               timestamp: Date.now(),
               runId: params.runId,
               sessionId: params.sessionId,
-              bootstrapSignature,
-            });
+            };
+            if (signatureMode === "strict") {
+              recordData.bootstrapSignature = bootstrapSignature;
+            }
+            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, recordData);
           } catch (entryErr) {
             log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
           }

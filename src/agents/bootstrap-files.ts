@@ -47,6 +47,59 @@ export function resolveContextInjectionMode(config?: OpenClawConfig): AgentConte
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
+/**
+ * Effective bootstrap signature comparison mode after resolving `"auto"`.
+ *
+ * - `"lenient"`: markers without a signature are accepted; signature
+ *   comparison is skipped.
+ * - `"strict"`: markers without a signature are rejected; signature
+ *   comparison is enforced.
+ */
+export type ResolvedBootstrapSignatureMode = "lenient" | "strict";
+
+/**
+ * Resolve the effective bootstrap signature mode for a config.
+ *
+ * Returns `"strict"` when the config explicitly requests strict mode or when
+ * `"auto"` is active and any `agentsFile` / `agentsFilesByModel` override is
+ * configured anywhere in the resolved agents config. Returns `"lenient"`
+ * otherwise.
+ *
+ * Keeping this decision additive preserves pre-model-aware-AGENTS behavior
+ * byte-for-byte for configs that never set any override.
+ */
+export function resolveBootstrapSignatureMode(
+  config?: OpenClawConfig,
+): ResolvedBootstrapSignatureMode {
+  const mode = config?.agents?.defaults?.bootstrapSignatureMode ?? "auto";
+  if (mode === "strict") {
+    return "strict";
+  }
+  if (mode === "lenient") {
+    return "lenient";
+  }
+  const defaults = config?.agents?.defaults;
+  if (
+    defaults?.agentsFile !== undefined ||
+    defaults?.agentsFilesByModel !== undefined ||
+    defaults?.subagents?.agentsFile !== undefined ||
+    defaults?.subagents?.agentsFilesByModel !== undefined
+  ) {
+    return "strict";
+  }
+  for (const agent of config?.agents?.list ?? []) {
+    if (
+      agent?.agentsFile !== undefined ||
+      agent?.agentsFilesByModel !== undefined ||
+      agent?.subagents?.agentsFile !== undefined ||
+      agent?.subagents?.agentsFilesByModel !== undefined
+    ) {
+      return "strict";
+    }
+  }
+  return "lenient";
+}
+
 function normalizeBootstrapSignature(value: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed || undefined;
@@ -55,8 +108,13 @@ function normalizeBootstrapSignature(value: string | undefined | null): string |
 export async function hasCompletedBootstrapTurn(
   sessionFile: string,
   bootstrapSignature?: string,
+  options?: { signatureMode?: ResolvedBootstrapSignatureMode },
 ): Promise<boolean> {
   const expectedSignature = normalizeBootstrapSignature(bootstrapSignature);
+  // Default to strict for existing callers that do not pass options, so the
+  // previous r2 behavior is preserved when callers have not been plumbed with
+  // the resolved mode yet.
+  const signatureMode: ResolvedBootstrapSignatureMode = options?.signatureMode ?? "strict";
   try {
     const stat = await fs.lstat(sessionFile);
     if (stat.isSymbolicLink()) {
@@ -115,12 +173,14 @@ export async function hasCompletedBootstrapTurn(
           record?.type === "custom" &&
           record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
         ) {
-          const recordedSignature =
-            typeof record.data?.bootstrapSignature === "string"
-              ? normalizeBootstrapSignature(record.data.bootstrapSignature)
-              : undefined;
-          if (expectedSignature && recordedSignature !== expectedSignature) {
-            return false;
+          if (signatureMode === "strict") {
+            const recordedSignature =
+              typeof record.data?.bootstrapSignature === "string"
+                ? normalizeBootstrapSignature(record.data.bootstrapSignature)
+                : undefined;
+            if (expectedSignature && recordedSignature !== expectedSignature) {
+              return false;
+            }
           }
           return !compactedAfterLatestAssistant;
         }
