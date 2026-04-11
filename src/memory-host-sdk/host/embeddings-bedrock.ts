@@ -382,16 +382,40 @@ export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): P
   if (CREDENTIAL_ENV_VARS.some((k) => env[k]?.trim())) {
     return true;
   }
+
+  // Respect the standard AWS SDK mechanism to disable IMDS probing.
+  // In sandboxed environments (e.g. NVIDIA NemoClaw), IMDS requests to
+  // 169.254.169.254 may be intercepted and rejected with 403, causing
+  // hundreds of unnecessary network requests across spawned processes.
+  if (env.AWS_EC2_METADATA_DISABLED && env.AWS_EC2_METADATA_DISABLED !== "false") {
+    return false;
+  }
+
   const credentialProviderSdk = await loadCredentialProviderSdk();
   if (!credentialProviderSdk) {
     return false;
   }
   try {
-    const credentials = await credentialProviderSdk.defaultProvider({
-      timeout: 1000,
-      maxRetries: 0,
-    })();
-    return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
+    // Temporarily disable IMDS probing during auto-detection. EC2/ECS
+    // environments are already covered by CREDENTIAL_ENV_VARS above
+    // (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, AWS_EC2_METADATA_SERVICE_ENDPOINT, etc.),
+    // so the defaultProvider call here only needs file-based providers
+    // (INI profiles, SSO, process credentials).
+    const savedImdsFlag = env.AWS_EC2_METADATA_DISABLED;
+    env.AWS_EC2_METADATA_DISABLED = "true";
+    try {
+      const credentials = await credentialProviderSdk.defaultProvider({
+        timeout: 1000,
+        maxRetries: 0,
+      })();
+      return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
+    } finally {
+      if (savedImdsFlag === undefined) {
+        delete env.AWS_EC2_METADATA_DISABLED;
+      } else {
+        env.AWS_EC2_METADATA_DISABLED = savedImdsFlag;
+      }
+    }
   } catch {
     return false;
   }

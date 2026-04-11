@@ -189,6 +189,24 @@ describe("bedrock embedding provider", () => {
     resolveCredentialsMock.mockRejectedValue(new Error("no aws credentials"));
     await expect(hasAwsCredentials({} as NodeJS.ProcessEnv)).resolves.toBe(false);
   });
+  it("returns false when AWS_EC2_METADATA_DISABLED is set", async () => {
+    await expect(
+      hasAwsCredentials({ AWS_EC2_METADATA_DISABLED: "true" } as NodeJS.ProcessEnv),
+    ).resolves.toBe(false);
+    // Should not invoke the SDK at all
+    expect(defaultProviderMock).not.toHaveBeenCalled();
+  });
+  it("disables IMDS during defaultProvider call and restores env", async () => {
+    const env = {} as NodeJS.ProcessEnv;
+    resolveCredentialsMock.mockImplementation(() => {
+      // During the call, IMDS should be disabled
+      expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
+      return Promise.resolve({ accessKeyId: "AKIAEXAMPLE" });
+    });
+    await expect(hasAwsCredentials(env)).resolves.toBe(true);
+    // After the call, the env var should be cleaned up
+    expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+  });
 
   // --- Titan V2 ---
 
