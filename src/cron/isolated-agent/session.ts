@@ -77,12 +77,19 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
+    // sessionFile must also be cleared so resolveSessionFilePath falls through to
+    // resolveSessionTranscriptPathInDir(sessionId, …) and the new session gets a
+    // transcript file named after its new sessionId. Without this clear, the
+    // stale path inherited via `...entry` makes every forceNew run append to the
+    // same physical file forever — defeating the point of isolatedSession and
+    // poisoning each run with the in-context history of all prior runs.
     ...(isNewSession && {
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

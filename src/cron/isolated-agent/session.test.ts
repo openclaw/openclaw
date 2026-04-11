@@ -255,6 +255,64 @@ describe("resolveCronSession", () => {
       });
     });
 
+    it("clears sessionFile when forceNew is true", () => {
+      // Regression: when isolatedSession=true on heartbeats (forceNew: true),
+      // the stale sessionFile on the existing entry was preserved via the
+      // `...entry` spread, so every run kept appending to the same physical
+      // transcript file despite generating a new sessionId. That defeated the
+      // point of "fresh session per run" and poisoned each run with the
+      // in-context history of all prior runs.
+      const result = resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "old-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/agents/main/sessions/old-heartbeat-session-id.jsonl",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionId).not.toBe("old-heartbeat-session-id");
+      // sessionFile must be cleared so the caller computes a fresh path from
+      // the new sessionId instead of appending to the old transcript.
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
+    it("clears sessionFile when session is stale", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          sessionFile: "/tmp/agents/main/sessions/old-session-id.jsonl",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
+    it("preserves sessionFile when reusing fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-202",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "/tmp/agents/main/sessions/existing-session-id-202.jsonl",
+        },
+        fresh: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      // The sessionFile field must be preserved when the session is reused
+      // so subsequent writes go to the same transcript.
+      expect(result.sessionEntry.sessionFile).toBe(
+        "/tmp/agents/main/sessions/existing-session-id-202.jsonl",
+      );
+    });
+
     it("creates new sessionId when entry exists but has no sessionId", () => {
       const result = resolveWithStoredEntry({
         entry: {
