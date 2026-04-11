@@ -383,6 +383,12 @@ let _cachedProbeResult: true | undefined;
 let _lastFailureTime: number | undefined;
 const PROBE_RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+/** @internal Visible for testing – resets the memoized credential probe state. */
+export function _resetCredentialCache(): void {
+  _cachedProbeResult = undefined;
+  _lastFailureTime = undefined;
+}
+
 export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;

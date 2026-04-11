@@ -10,6 +10,7 @@ import {
   readFirstFetchRequest,
 } from "./embeddings-provider.test-support.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import { _resetCredentialCache } from "./embeddings-bedrock.js";
 import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
@@ -65,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
+  _resetCredentialCache();
 });
 
 function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
