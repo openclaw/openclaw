@@ -11,6 +11,7 @@ import {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWhatsAppAccount } from "../accounts.js";
+import { normalizeWhatsAppTarget } from "../normalize-target.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "../runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 
@@ -87,6 +88,7 @@ export async function checkInboundAccessControl(params: {
   const normalizedDmSender = normalizeE164(params.from);
   const normalizedGroupSender =
     typeof params.senderE164 === "string" ? normalizeE164(params.senderE164) : null;
+  const normalizedGroupId = params.group ? normalizeWhatsAppTarget(params.from) : null;
   const access = resolveDmGroupAccessWithLists({
     isGroup: params.group,
     dmPolicy,
@@ -102,15 +104,18 @@ export async function checkInboundAccessControl(params: {
       }
       const normalizedEntrySet = new Set(
         allowEntries
-          .map((entry) => normalizeE164(entry))
+          .map((entry) => normalizeWhatsAppTarget(String(entry)))
           .filter((entry): entry is string => Boolean(entry)),
       );
       if (!params.group && isSamePhone) {
         return true;
       }
       return params.group
-        ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
-        : normalizedEntrySet.has(normalizedDmSender);
+        ? Boolean(
+            (normalizedGroupId && normalizedEntrySet.has(normalizedGroupId)) ||
+            (normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender)),
+          )
+        : Boolean(normalizedDmSender && normalizedEntrySet.has(normalizedDmSender));
     },
   });
   if (params.group && access.decision !== "allow") {
