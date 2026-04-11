@@ -296,7 +296,7 @@ describe("registerPluginCommand", () => {
       { provider: undefined, expectedNames: ["talkvoice"] },
       { provider: "discord", expectedNames: ["discordvoice"] },
       { provider: "telegram", expectedNames: ["talkvoice"] },
-      { provider: "slack", expectedNames: [] },
+      { provider: "slack", expectedNames: ["talkvoice"] },
     ]);
   });
 

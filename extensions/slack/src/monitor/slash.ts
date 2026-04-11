@@ -9,6 +9,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getPluginCommandSpecs } from "openclaw/plugin-sdk/command-auth";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -670,6 +671,15 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
+    const existingNativeNames = new Set(
+      nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
+    );
+    for (const pluginCommand of getPluginCommandSpecs("slack")) {
+      const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
+      if (!normalizedName || existingNativeNames.has(normalizedName)) continue;
+      existingNativeNames.add(normalizedName);
+      nativeCommands.push(pluginCommand);
+    }
   }
 
   if (nativeCommands.length > 0) {
