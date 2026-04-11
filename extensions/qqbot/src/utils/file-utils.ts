@@ -1,12 +1,31 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 /** Maximum file size accepted by the QQ Bot API. */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 
 /** Threshold used to treat an upload as a large file. */
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
+
+const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
+  "*.myqcloud.com",
+  "*.qpic.cn",
+  "*.qq.com",
+  "*.tencentcos.com",
+];
+
+export const QQBOT_MEDIA_SSRF_POLICY: SsrFPolicy = {
+  hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
+  allowRfc2544BenchmarkRange: true,
+};
 
 /** Result of local file-size validation. */
 export interface FileSizeCheckResult {
@@ -33,7 +52,7 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
     return {
       ok: false,
       size: 0,
-      error: `Failed to read file metadata: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to read file metadata: ${formatErrorMessage(err)}`,
     };
   }
 }
@@ -66,14 +85,18 @@ export function isLargeFile(sizeBytes: number): boolean {
 
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   const mimeTypes: Record<string, string> = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -106,21 +129,31 @@ export async function downloadFile(
   originalFilename?: string,
 ): Promise<string | null> {
   try {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return null;
+    }
+    if (parsedUrl.protocol !== "https:") {
+      return null;
+    }
+
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
     }
 
-    const resp = await fetch(url, { redirect: "follow" });
-    if (!resp.ok || !resp.body) return null;
+    const fetched = await fetchRemoteMedia({
+      url: parsedUrl.toString(),
+      filePathHint: originalFilename,
+      ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+    });
 
-    let filename = originalFilename?.trim() || "";
+    let filename = normalizeOptionalString(originalFilename) ?? "";
     if (!filename) {
-      try {
-        const urlPath = new URL(url).pathname;
-        filename = path.basename(urlPath) || "download";
-      } catch {
-        filename = "download";
-      }
+      filename =
+        (normalizeOptionalString(fetched.fileName) ?? path.basename(parsedUrl.pathname)) ||
+        "download";
     }
 
     const ts = Date.now();
@@ -130,8 +163,7 @@ export async function downloadFile(
     const safeFilename = `${base}_${ts}_${rand}${ext}`;
 
     const destPath = path.join(destDir, safeFilename);
-    const buffer = Buffer.from(await resp.arrayBuffer());
-    await fs.promises.writeFile(destPath, buffer);
+    await fs.promises.writeFile(destPath, fetched.buffer);
     return destPath;
   } catch {
     return null;

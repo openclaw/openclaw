@@ -19,11 +19,8 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import {
-  createGatewayBroadcaster,
-  type GatewayBroadcastFn,
-  type GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
   createChatRunState,

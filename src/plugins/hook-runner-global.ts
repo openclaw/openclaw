@@ -8,7 +8,7 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./types.js";
 
 type HookRunnerGlobalState = {
@@ -40,11 +40,14 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
       error: (msg) => log.error(msg),
     },
     catchErrors: true,
+    failurePolicyByHook: {
+      before_tool_call: "fail-closed",
+    },
   });
 
   const hookCount = registry.hooks.length;
   if (hookCount > 0) {
-    log.info(`hook runner initialized with ${hookCount} registered hooks`);
+    log.debug(`hook runner initialized with ${hookCount} registered hooks`);
   }
 }
 

@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -12,6 +16,7 @@ import {
   resolveAttachmentFetchPolicy,
   resolveRequestUrl,
   safeFetchWithPolicy,
+  tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -28,21 +33,20 @@ type DownloadCandidate = {
 
 function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
-  const name = typeof att.name === "string" ? att.name.trim() : "";
+  const name = normalizeOptionalString(att.name) ?? "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
     if (!isRecord(att.content)) {
       return null;
     }
-    const downloadUrl =
-      typeof att.content.downloadUrl === "string" ? att.content.downloadUrl.trim() : "";
+    const downloadUrl = normalizeOptionalString(att.content.downloadUrl) ?? "";
     if (!downloadUrl) {
       return null;
     }
 
-    const fileType = typeof att.content.fileType === "string" ? att.content.fileType.trim() : "";
-    const uniqueId = typeof att.content.uniqueId === "string" ? att.content.uniqueId.trim() : "";
-    const fileName = typeof att.content.fileName === "string" ? att.content.fileName.trim() : "";
+    const fileType = normalizeOptionalString(att.content.fileType) ?? "";
+    const uniqueId = normalizeOptionalString(att.content.uniqueId) ?? "";
+    const fileName = normalizeOptionalString(att.content.fileName) ?? "";
 
     const fileHint = name || fileName || (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
     return {
@@ -57,22 +61,33 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     };
   }
 
-  const contentUrl = typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
+  const contentUrl = normalizeOptionalString(att.contentUrl) ?? "";
   if (!contentUrl) {
     return null;
   }
 
+  // OneDrive/SharePoint shared links (delivered in 1:1 DMs when the user
+  // picks "Attach > OneDrive") cannot be fetched directly — the URL returns
+  // an HTML landing page rather than the file bytes. Rewrite them to the
+  // Graph shares endpoint so the auth fallback attaches a Graph-scoped token
+  // and the response is the real file content.
+  const sharesUrl = tryBuildGraphSharesUrlForSharedLink(contentUrl);
+  const resolvedUrl = sharesUrl ?? contentUrl;
+  // Graph shares returns raw bytes without a declared content type we can
+  // trust for routing — let the downloader infer MIME from the buffer.
+  const resolvedContentTypeHint = sharesUrl ? undefined : contentType;
+
   return {
-    url: contentUrl,
+    url: resolvedUrl,
     fileHint: name || undefined,
-    contentTypeHint: contentType,
+    contentTypeHint: resolvedContentTypeHint,
     placeholder: inferPlaceholder({ contentType, fileName: name }),
   };
 }
 
 function scopeCandidatesForUrl(url: string): string[] {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
     const looksLikeGraph =
       host.endsWith("graph.microsoft.com") ||
       host.endsWith("sharepoint.com") ||
@@ -182,7 +197,10 @@ export async function downloadMSTeamsAttachments(params: {
     .map(resolveDownloadCandidate)
     .filter(Boolean) as DownloadCandidate[];
 
-  const inlineCandidates = extractInlineImageCandidates(list);
+  const inlineCandidates = extractInlineImageCandidates(list, {
+    maxInlineBytes: params.maxBytes,
+    maxInlineTotalBytes: params.maxBytes,
+  });
 
   const seenUrls = new Set<string>();
   for (const inline of inlineCandidates) {

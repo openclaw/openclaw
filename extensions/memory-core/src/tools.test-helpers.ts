@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../api.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
 
 export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
+  return config;
 }
 
 export function createDefaultMemoryToolConfig(): OpenClawConfig {

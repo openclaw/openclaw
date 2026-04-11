@@ -5,7 +5,7 @@ import type {
   MemorySearchConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexManager } from "./index.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
@@ -51,13 +51,16 @@ describe("memory watcher config", () => {
   let workspaceDir = "";
   let extraDir = "";
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     ({
       clearMemoryEmbeddingProviders: clearRegistry,
       registerMemoryEmbeddingProvider: registerAdapter,
     } = await import("../../../../src/plugins/memory-embedding-providers.js"));
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
@@ -76,6 +79,10 @@ describe("memory watcher config", () => {
       workspaceDir = "";
       extraDir = "";
     }
+  });
+
+  afterAll(() => {
+    vi.resetModules();
   });
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {

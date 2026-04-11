@@ -6,11 +6,13 @@ import {
   logInboundDrop,
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
+  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  resolveChannelContextVisibilityMode,
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -24,6 +26,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
+  evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -167,6 +170,7 @@ export function resolveIMessageInboundDecision(params: {
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const destinationCallerId = params.message.destination_caller_id ?? undefined;
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
@@ -200,31 +204,35 @@ export function resolveIMessageInboundDecision(params: {
     text: bodyText,
     createdAt,
   };
-  // Self-chat detection: in self-chat, sender == chat_identifier (both are the
-  // user's own handle). When is_from_me=true in self-chat, the message could be
-  // either: (a) a real user message typed by the user, or (b) an agent reply
-  // echo reflected back by iMessage. We must distinguish them.
+  const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
+  const destinationCallerIdNormalized =
+    normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
+  // Require an explicit destination handle that matches the sender. When
+  // destination_caller_id is missing, sender === chat_identifier is ambiguous:
+  // it is true for some DM SQLite rows as well as true self-chat (#63980).
+  const matchesSelfChatDestination =
+    destinationCallerIdNormalized != null && destinationCallerIdNormalized === senderNormalized;
   const isSelfChat =
     !isGroup &&
-    chatIdentifier != null &&
-    normalizeIMessageHandle(sender) === normalizeIMessageHandle(chatIdentifier);
-  // Track whether we already processed the is_from_me=true self-chat path.
-  // When true, the selfChatCache.has() check below must be skipped — we just
-  // called remember() and would immediately match our own entry.
+    chatIdentifierNormalized != null &&
+    senderNormalized === chatIdentifierNormalized &&
+    matchesSelfChatDestination;
+  const isAmbiguousSelfThread =
+    !isGroup &&
+    chatIdentifierNormalized != null &&
+    senderNormalized === chatIdentifierNormalized &&
+    destinationCallerIdNormalized == null;
   let skipSelfChatHasCheck = false;
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
 
   if (params.message.is_from_me) {
-    // Always cache in selfChatCache so the upcoming is_from_me=false reflection
-    // (which arrives 2-3s later) is correctly identified and dropped.
-    params.selfChatCache?.remember(selfChatLookup);
-
+    if (isAmbiguousSelfThread) {
+      params.selfChatCache?.remember(selfChatLookup);
+    }
     if (isSelfChat) {
-      // In self-chat, is_from_me=true could be a real user message OR an agent
-      // reply echo. Use the echo cache with skipIdShortCircuit=true to check
-      // whether this text matches a recently-sent agent reply.
+      params.selfChatCache?.remember(selfChatLookup);
       const echoScope = buildIMessageEchoScope({
         accountId: params.accountId,
         isGroup,
@@ -244,14 +252,8 @@ export function resolveIMessageInboundDecision(params: {
       ) {
         return { kind: "drop", reason: "agent echo in self-chat" };
       }
-      // Echo cache missed → this is a real user message in self-chat. Process it.
-      // Skip the selfChatCache.has() check below — we just remember()d ourselves
-      // and would immediately match our own entry.
       skipSelfChatHasCheck = true;
-      // Fall through to rest of decision logic (access control, etc.)
     } else {
-      // Normal DM or group: is_from_me=true means this is an outbound message
-      // notification that we sent. Drop it.
       return { kind: "drop", reason: "from me" };
     }
   }
@@ -377,6 +379,37 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "imessage",
+    accountId: params.accountId,
+  });
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyContext?.sender
+        ? isAllowedIMessageSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyContext.sender,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+          })
+        : false;
+  const filteredReplyContext =
+    !replyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include
+      ? replyContext
+      : null;
+  if (replyContext && !filteredReplyContext && isGroup) {
+    params.logVerbose?.(
+      `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
@@ -435,10 +468,23 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "control command (unauthorized)" };
   }
 
-  const shouldBypassMention =
-    isGroup && requireMention && !mentioned && commandAuthorized && hasControlCommandInMessage;
-  const effectiveWasMentioned = mentioned || shouldBypassMention;
-  if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned: mentioned,
+      hasAnyMention: false,
+      implicitMentionKinds: [],
+    },
+    policy: {
+      isGroup,
+      requireMention,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    },
+  });
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
     recordPendingHistoryEntryIfEnabled({
       historyMap: params.groupHistories,
@@ -469,7 +515,7 @@ export function resolveIMessageInboundDecision(params: {
     route,
     bodyText,
     createdAt,
-    replyContext,
+    replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
     effectiveDmAllowFrom,

@@ -1,6 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type {
+  CompactionStatus as CompactionIndicatorStatus,
+  FallbackStatus as FallbackIndicatorStatus,
+} from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
@@ -18,6 +23,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import { messageMatchesSearchQuery } from "../chat/search-match.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
+import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -27,6 +33,8 @@ import {
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
@@ -34,22 +42,6 @@ import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
-
-export type CompactionIndicatorStatus = {
-  active: boolean;
-  startedAt: number | null;
-  completedAt: number | null;
-};
-
-export type FallbackIndicatorStatus = {
-  phase?: "active" | "cleared";
-  selected: string;
-  active: string;
-  previous?: string;
-  reason?: string;
-  attempts: string[];
-  occurredAt: number;
-};
 
 export type ChatProps = {
   sessionKey: string;
@@ -63,6 +55,7 @@ export type ChatProps = {
   compactionStatus?: CompactionIndicatorStatus | null;
   fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
+  sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
@@ -94,6 +87,7 @@ export type ChatProps = {
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -193,7 +187,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   if (!status) {
     return nothing;
   }
-  if (status.active) {
+  if (status.phase === "active") {
     return html`
       <div
         class="compaction-indicator compaction-indicator--active"
@@ -204,7 +198,18 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
       </div>
     `;
   }
-  if (status.completedAt) {
+  if (status.phase === "retrying") {
+    return html`
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
+        ${icons.loader} Retrying after compaction...
+      </div>
+    `;
+  }
+  if (status.phase === "complete" && status.completedAt) {
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
@@ -252,6 +257,43 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
     <div class=${className} role="status" aria-live="polite" title=${details}>
       ${icon} ${message}
     </div>
+  `;
+}
+
+function renderSideResult(
+  sideResult: ChatSideResult | null | undefined,
+  onDismiss?: () => void,
+): TemplateResult | typeof nothing {
+  if (!sideResult) {
+    return nothing;
+  }
+  return html`
+    <section
+      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label="BTW side result"
+    >
+      <div class="chat-side-result__header">
+        <div class="chat-side-result__label-row">
+          <span class="chat-side-result__label">BTW</span>
+          <span class="chat-side-result__meta">Not saved to chat history</span>
+        </div>
+        <button
+          class="btn chat-side-result__dismiss"
+          type="button"
+          aria-label="Dismiss BTW result"
+          title="Dismiss"
+          @click=${() => onDismiss?.()}
+        >
+          ${icons.x}
+        </button>
+      </div>
+      <div class="chat-side-result__question">${sideResult.question}</div>
+      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
+        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
+      </div>
+    </section>
   `;
 }
 
@@ -324,8 +366,8 @@ function renderContextNotice(
     <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
       <svg
         class="context-notice__icon"
-        width="24"
-        height="24"
+        width="16"
+        height="16"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -496,12 +538,12 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
-    const cmdName = argMatch[1].toLowerCase();
-    const argFilter = argMatch[2].toLowerCase();
+    const cmdName = normalizeLowercaseStringOrEmpty(argMatch[1]);
+    const argFilter = normalizeLowercaseStringOrEmpty(argMatch[2]);
     const cmd = SLASH_COMMANDS.find((c) => c.name === cmdName);
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
-        ? cmd.argOptions.filter((opt) => opt.toLowerCase().startsWith(argFilter))
+        ? cmd.argOptions.filter((opt) => normalizeLowercaseStringOrEmpty(opt).startsWith(argFilter))
         : cmd.argOptions;
       if (filtered.length > 0) {
         vs.slashMenuMode = "args";
@@ -884,7 +926,7 @@ function renderSlashMenu(
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
-  const isBusy = props.sending || props.stream !== null;
+  const isBusy = props.sending || props.stream !== null || props.canAbort;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
@@ -1101,6 +1143,12 @@ export function renderChat(props: ChatProps) {
       }
     }
 
+    if (e.key === "Escape" && props.sideResult && !vs.searchOpen) {
+      e.preventDefault();
+      props.onDismissSideResult?.();
+      return;
+    }
+
     // Input history (only when input is empty)
     if (!props.draft.trim()) {
       if (e.key === "ArrowUp") {
@@ -1237,6 +1285,7 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
@@ -1422,13 +1471,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      normalizeLowercaseStringOrEmpty(role) === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (normalizeLowercaseStringOrEmpty(role) === "user" && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -1487,7 +1537,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    if (!props.showToolCalls && normalizeLowercaseStringOrEmpty(normalized.role) === "toolresult") {
       continue;
     }
 

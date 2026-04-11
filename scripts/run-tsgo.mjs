@@ -1,37 +1,49 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+import {
+  acquireLocalHeavyCheckLockSync,
+  applyLocalTsgoPolicy,
+} from "./lib/local-heavy-check-runtime.mjs";
 
-const isLocalCheckEnabled = (env) => {
-  const raw = env.OPENCLAW_LOCAL_CHECK?.trim().toLowerCase();
-  return raw !== "0" && raw !== "false";
-};
-
-const args = process.argv.slice(2);
-const env = { ...process.env };
-const finalArgs = [...args];
-const separatorIndex = finalArgs.indexOf("--");
-
-const insertBeforeSeparator = (...items) => {
-  const index = separatorIndex === -1 ? finalArgs.length : separatorIndex;
-  finalArgs.splice(index, 0, ...items);
-};
-
-if (isLocalCheckEnabled(env) && !finalArgs.includes("--singleThreaded")) {
-  insertBeforeSeparator("--singleThreaded");
-  if (!env.GOGC) {
-    env.GOGC = "30";
-  }
-}
+const { args: finalArgs, env } = applyLocalTsgoPolicy(process.argv.slice(2), process.env);
 
 const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
-const result = spawnSync(tsgoPath, finalArgs, {
-  stdio: "inherit",
+const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
+if (tsBuildInfoFile) {
+  fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
+}
+const releaseLock = acquireLocalHeavyCheckLockSync({
+  cwd: process.cwd(),
   env,
-  shell: process.platform === "win32",
+  toolName: "tsgo",
 });
 
-if (result.error) {
-  throw result.error;
+try {
+  const result = spawnSync(tsgoPath, finalArgs, {
+    stdio: "inherit",
+    env,
+    shell: process.platform === "win32",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  process.exitCode = result.status ?? 1;
+} finally {
+  releaseLock();
 }
 
-process.exit(result.status ?? 1);
+function readFlagValue(args, name) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === name) {
+      return args[index + 1];
+    }
+    if (arg.startsWith(`${name}=`)) {
+      return arg.slice(name.length + 1);
+    }
+  }
+  return undefined;
+}

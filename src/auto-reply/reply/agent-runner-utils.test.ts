@@ -3,7 +3,9 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const getChannelPluginMock = vi.fn();
+  const isReasoningTagProviderMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock, isReasoningTagProviderMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -11,11 +13,20 @@ vi.mock("../../agents/agent-scope.js", () => ({
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
+}));
+
+vi.mock("../../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
+}));
+
 const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
+  resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
@@ -46,6 +57,9 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.getChannelPluginMock.mockReset();
+    hoisted.isReasoningTagProviderMock.mockReset();
+    hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   it("resolves model fallback options from run context", () => {
@@ -121,6 +135,17 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("does not force final-tag enforcement for minimax providers", () => {
+    const run = makeRun();
+
+    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(false);
+    expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalledWith("minimax", {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: "MiniMax-M2.7",
+    });
+  });
+
   it("builds embedded contexts and scopes auth profile by provider", () => {
     const run = makeRun({
       authProfileId: "profile-openai",
@@ -175,7 +200,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("uses OriginatingTo for telegram native command tool context without implicit thread state", () => {
+  it("uses telegram plugin threading context for native commands", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+          hasRepliedRef,
+        }: {
+          context: { To?: string; MessageThreadId?: string | number };
+          hasRepliedRef?: { value: boolean };
+        }) => ({
+          currentChannelId: context.To?.trim() || undefined,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+          hasRepliedRef,
+        }),
+      },
+    });
+
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "telegram",
@@ -191,9 +233,9 @@ describe("agent-runner-utils", () => {
 
     expect(context).toMatchObject({
       currentChannelId: "telegram:-1003841603622",
+      currentThreadTs: "928",
       currentMessageId: "2284",
     });
-    expect(context.currentThreadTs).toBeUndefined();
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {

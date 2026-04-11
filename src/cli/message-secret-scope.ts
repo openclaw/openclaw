@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 
 function resolveScopedChannelCandidate(value: unknown): string | undefined {
@@ -13,10 +14,7 @@ function resolveScopedChannelCandidate(value: unknown): string | undefined {
 }
 
 function resolveChannelFromTargetValue(target: unknown): string | undefined {
-  if (typeof target !== "string") {
-    return undefined;
-  }
-  const trimmed = target.trim();
+  const trimmed = normalizeOptionalString(target);
   if (!trimmed) {
     return undefined;
   }
@@ -45,10 +43,7 @@ function resolveChannelFromTargets(targets: unknown): string | undefined {
 }
 
 function resolveScopedAccountId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

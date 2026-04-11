@@ -16,7 +16,14 @@ import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boo
 
 export const readBooleanParam = readBooleanParamShared;
 
-const SANDBOX_MEDIA_PARAM_KEYS = ["media", "path", "filePath", "mediaUrl", "fileUrl"] as const;
+const SANDBOX_MEDIA_PARAM_KEYS = [
+  "media",
+  "path",
+  "filePath",
+  "mediaUrl",
+  "fileUrl",
+  "image",
+] as const;
 
 function readMediaParam(
   args: Record<string, unknown>,
@@ -311,12 +318,11 @@ export async function hydrateAttachmentParamsForAction(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const shouldHydrateBlueBubblesUploadFile =
-    params.action === "upload-file" && params.channel === "bluebubbles";
+  const shouldHydrateUploadFile = params.action === "upload-file";
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
-    !shouldHydrateBlueBubblesUploadFile
+    !shouldHydrateUploadFile
   ) {
     return;
   }
@@ -327,8 +333,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
-    allowMessageCaptionFallback:
-      params.action === "sendAttachment" || shouldHydrateBlueBubblesUploadFile,
+    allowMessageCaptionFallback: params.action === "sendAttachment" || shouldHydrateUploadFile,
   });
 }
 

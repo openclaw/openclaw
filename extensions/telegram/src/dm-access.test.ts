@@ -1,5 +1,5 @@
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
 const upsertChannelPairingRequestMock = vi.hoisted(() =>
@@ -52,10 +52,12 @@ function createDmMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe("enforceTelegramDmAccess", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ enforceTelegramDmAccess } = await import("./dm-access.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("allows DMs when policy is open", async () => {
@@ -140,7 +142,7 @@ describe("enforceTelegramDmAccess", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [firstCall] = sendMessage.mock.calls as Array<unknown[]>;
     expect(firstCall?.[0]).toBe(42);
-    const sentText = String(firstCall?.[1] ?? "");
+    const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
     expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
     expect(logger.info).toHaveBeenCalledWith(

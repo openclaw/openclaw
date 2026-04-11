@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
   resolveConfigPathMock as resolveConfigPath,
@@ -9,6 +9,25 @@ import {
   resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+
+vi.mock("../config/config.js", async () => {
+  const mocks = await import("../gateway/gateway-connection.test-mocks.js");
+  return {
+    loadConfig: mocks.loadConfigMock,
+    resolveConfigPath: mocks.resolveConfigPathMock,
+    resolveGatewayPort: mocks.resolveGatewayPortMock,
+    resolveStateDir: mocks.resolveStateDirMock,
+  };
+});
+
+vi.mock("../gateway/net.js", async () => {
+  const mocks = await import("../gateway/gateway-connection.test-mocks.js");
+  return {
+    isLoopbackHost: mocks.isLoopbackHostMock,
+    isSecureWebSocketUrl: mocks.isSecureWebSocketUrlMock,
+    pickPrimaryLanIPv4: mocks.pickPrimaryLanIPv4Mock,
+  };
+});
 
 const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 

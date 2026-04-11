@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-support.js";
+import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+  const snapshot = new Map<string, string | undefined>();
+  for (const [key] of Object.entries(env)) {
+    snapshot.set(key, process.env[key]);
+  }
+
+  try {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    return fn();
+  } finally {
+    for (const [key, value] of snapshot) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -273,7 +299,7 @@ describe("browser config", () => {
         allowedHostnames: [" localhost ", ""],
         hostnameAllowlist: [" *.trusted.example ", " "],
       },
-    });
+    } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["localhost"],
@@ -281,11 +307,9 @@ describe("browser config", () => {
     });
   });
 
-  it("defaults browser SSRF policy to trusted-network mode", () => {
+  it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
@@ -295,6 +319,19 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  it("keeps allowlist-only browser SSRF policy strict by default", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+        hostnameAllowlist: ["*.example.com"],
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({
+      allowedHostnames: ["example.com"],
+      hostnameAllowlist: ["*.example.com"],
+    });
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

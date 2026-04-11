@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
@@ -13,6 +14,10 @@ async function createTempWorkspaceDir() {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
+}
+
+function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
 afterEach(async () => {
@@ -59,10 +64,12 @@ describe("loadWorkspaceSkillEntries", () => {
     const managedDir = path.join(workspaceDir, ".managed");
     await fs.mkdir(managedDir, { recursive: true });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const entries = withWorkspaceHome(workspaceDir, () =>
+      loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
 
     expect(entries).toEqual([]);
   });
@@ -147,6 +154,120 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
+  });
+
+  it("marks disable-model-invocation skills as hidden in exposure metadata for newly loaded entries", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "hidden-skill"),
+      name: "hidden-skill",
+      description: "Hidden prompt entry",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
+
+    expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
+    expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
+  });
+
+  it("inherits agents.defaults.skills when an agent omits skills", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "github"),
+      name: "github",
+      description: "GitHub",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "weather"),
+      name: "weather",
+      description: "Weather",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        agents: {
+          defaults: {
+            skills: ["github"],
+          },
+          list: [{ id: "writer" }],
+        },
+      },
+      agentId: "writer",
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["github"]);
+  });
+
+  it("uses agents.list[].skills as a full replacement for defaults", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "github"),
+      name: "github",
+      description: "GitHub",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "docs-search"),
+      name: "docs-search",
+      description: "Docs",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        agents: {
+          defaults: {
+            skills: ["github"],
+          },
+          list: [{ id: "writer", skills: ["docs-search"] }],
+        },
+      },
+      agentId: "writer",
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
+  });
+
+  it("keeps remote-eligible skills when agent filtering is active", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Needs a remote bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        agents: {
+          defaults: {
+            skills: ["remote-only"],
+          },
+          list: [{ id: "writer" }],
+        },
+      },
+      agentId: "writer",
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
+          note: "sandbox",
+        },
+      },
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
   });
 
   it.runIf(process.platform !== "win32")(

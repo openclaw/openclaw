@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../../src/infra/retry.js", () => ({
   retryAsync: vi.fn(async (run: () => Promise<unknown>) => await run()),
@@ -15,15 +15,16 @@ describe("postJsonWithRetry", () => {
   let postJsonMock: ReturnType<typeof vi.mocked<typeof import("./post-json.js").postJson>>;
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.resetModules();
+  beforeAll(async () => {
     ({ postJsonWithRetry } = await import("./batch-http.js"));
     const retryModule = await import("../../../../src/infra/retry.js");
     const postJsonModule = await import("./post-json.js");
     retryAsyncMock = vi.mocked(retryModule.retryAsync);
     postJsonMock = vi.mocked(postJsonModule.postJson);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("posts JSON and returns parsed response payload", async () => {

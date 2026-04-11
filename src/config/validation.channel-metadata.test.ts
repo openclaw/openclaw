@@ -1,17 +1,39 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+type MockPluginRegistry = {
+  diagnostics: Array<Record<string, unknown>>;
+  plugins: Array<Record<string, unknown>>;
+};
 
-let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
-let validateConfigObjectRawWithPlugins: typeof import("./validation.js").validateConfigObjectRawWithPlugins;
+function createEmptyPluginRegistry(): MockPluginRegistry {
+  return { diagnostics: [], plugins: [] };
+}
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
-}));
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => MockPluginRegistry>(() => createEmptyPluginRegistry()),
+);
 
-beforeAll(async () => {
-  ({ validateConfigObjectWithPlugins, validateConfigObjectRawWithPlugins } =
-    await import("./validation.js"));
+vi.mock("../plugins/manifest-registry.js", () => {
+  return {
+    loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+    resolveManifestContractPluginIds: () => [],
+  };
+});
+
+vi.mock("../plugins/doctor-contract-registry.js", () => {
+  return {
+    collectRelevantDoctorPluginIds: () => [],
+    listPluginDoctorLegacyConfigRules: () => [],
+  };
+});
+
+afterEach(() => {
+  mockLoadPluginManifestRegistry.mockReset();
+  mockLoadPluginManifestRegistry.mockImplementation(createEmptyPluginRegistry);
 });
 
 function setupTelegramSchemaWithDefault() {
@@ -38,10 +60,40 @@ function setupTelegramSchemaWithDefault() {
                   default: "pairing",
                 },
               },
-              additionalProperties: false,
+              // validateConfigObjectWithPlugins starts from the core validated
+              // config, which can already include bundled runtime defaults for
+              // the channel. Keep this mock schema focused on the plugin-owned
+              // default under test instead of rejecting unrelated core fields.
+              additionalProperties: true,
             },
             uiHints: {},
           },
+        },
+      },
+    ],
+  });
+}
+
+function setupPluginSchemaWithRequiredDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "opik",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        kind: ["tool"],
+        configSchema: {
+          type: "object",
+          properties: {
+            workspace: {
+              type: "string",
+              default: "default-workspace",
+            },
+          },
+          required: ["workspace"],
+          additionalProperties: true,
         },
       },
     ],
@@ -91,6 +143,27 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       expect(result.config.channels?.telegram).toEqual(
         expect.objectContaining({ dmPolicy: "pairing" }),
       );
+    }
+  });
+});
+
+describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
+    setupPluginSchemaWithRequiredDefault();
+
+    const result = validateConfigObjectRawWithPlugins({
+      plugins: {
+        entries: {
+          opik: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
   });
 });

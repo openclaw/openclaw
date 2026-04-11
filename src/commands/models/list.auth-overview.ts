@@ -13,6 +13,10 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -28,7 +32,7 @@ function formatProfileSecretLabel(params: {
   ref: { source: string; id: string } | undefined;
   kind: "api-key" | "token";
 }): string {
-  const value = typeof params.value === "string" ? params.value.trim() : "";
+  const value = normalizeOptionalString(params.value) ?? "";
   if (value) {
     const display = formatMarkerOrSecret(value);
     return params.kind === "token" ? `token:${display}` : display;
@@ -113,8 +117,9 @@ export function resolveProviderAuthOverview(params: {
       };
     }
     if (envKey) {
+      const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
       const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth");
+        envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth");
       return {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
@@ -139,10 +144,12 @@ export function resolveProviderAuthOverview(params: {
     ...(envKey
       ? {
           env: {
-            value:
-              envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth")
+            value: (() => {
+              const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
+              return envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth")
                 ? "OAuth (env)"
-                : maskApiKey(envKey.apiKey),
+                : maskApiKey(envKey.apiKey);
+            })(),
             source: envKey.source,
           },
         }

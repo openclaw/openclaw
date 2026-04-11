@@ -82,7 +82,7 @@ async function dockerImageExists(image: string): Promise<boolean> {
       (error as { stderr: string } | undefined)?.stderr ||
       (error as { message: string } | undefined)?.message ||
       "";
-    if (String(stderr).includes("No such image")) {
+    if (stderr.includes("No such image")) {
       return false;
     }
     throw error;
@@ -276,7 +276,6 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
 
     const scope = resolveSandboxScope({
       scope: agentSandbox.scope ?? globalSandbox?.scope,
-      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
 
     if (scope !== "shared") {

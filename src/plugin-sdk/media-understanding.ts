@@ -17,4 +17,10 @@ export {
   describeImageWithModel,
   describeImagesWithModel,
 } from "../media-understanding/image-runtime.js";
+export {
+  buildOpenAiCompatibleVideoRequestBody,
+  coerceOpenAiCompatibleVideoText,
+  resolveMediaUnderstandingString,
+  type OpenAiCompatibleVideoPayload,
+} from "../media-understanding/openai-compatible-video.ts";
 export { transcribeOpenAiCompatibleAudio } from "../media-understanding/openai-compatible-audio.js";

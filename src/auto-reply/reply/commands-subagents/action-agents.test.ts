@@ -1,7 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listBySessionMock } = vi.hoisted(() => ({
+const THREAD_CHANNEL = "thread-chat";
+const ROOM_CHANNEL = "room-chat";
+
+const { listBySessionMock, getChannelPluginMock, normalizeChannelIdMock } = vi.hoisted(() => ({
   listBySessionMock: vi.fn(),
+  getChannelPluginMock: vi.fn((channel: string) =>
+    channel === "thread-chat" || channel === "room-chat"
+      ? {
+          config: {
+            hasPersistedAuthState: () => false,
+          },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        }
+      : null,
+  ),
+  normalizeChannelIdMock: vi.fn((channel: string) => channel),
 }));
 
 vi.mock("../../../infra/outbound/session-binding-service.js", () => ({
@@ -10,13 +26,22 @@ vi.mock("../../../infra/outbound/session-binding-service.js", () => ({
   }),
 }));
 
+vi.mock("../../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+  normalizeChannelId: normalizeChannelIdMock,
+}));
+
 let handleSubagentsAgentsAction: typeof import("./action-agents.js").handleSubagentsAgentsAction;
 
 describe("handleSubagentsAgentsAction", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ handleSubagentsAgentsAction } = await import("./action-agents.js"));
+  });
+
+  beforeEach(() => {
     listBySessionMock.mockReset();
+    getChannelPluginMock.mockClear();
+    normalizeChannelIdMock.mockClear();
   });
 
   it("dedupes stale bound rows for the same child session", () => {
@@ -29,7 +54,7 @@ describe("handleSubagentsAgentsAction", () => {
               targetSessionKey: childSessionKey,
               targetKind: "subagent",
               conversation: {
-                channel: "discord",
+                channel: THREAD_CHANNEL,
                 accountId: "default",
                 conversationId: "thread-1",
               },
@@ -43,11 +68,11 @@ describe("handleSubagentsAgentsAction", () => {
     const result = handleSubagentsAgentsAction({
       params: {
         ctx: {
-          Provider: "discord",
-          Surface: "discord",
+          Provider: THREAD_CHANNEL,
+          Surface: THREAD_CHANNEL,
         },
         command: {
-          channel: "discord",
+          channel: THREAD_CHANNEL,
         },
       },
       requesterKey: "agent:main:main",
@@ -93,7 +118,7 @@ describe("handleSubagentsAgentsAction", () => {
               targetSessionKey: visibleSessionKey,
               targetKind: "subagent",
               conversation: {
-                channel: "discord",
+                channel: THREAD_CHANNEL,
                 accountId: "default",
                 conversationId: "thread-visible",
               },
@@ -107,11 +132,11 @@ describe("handleSubagentsAgentsAction", () => {
     const result = handleSubagentsAgentsAction({
       params: {
         ctx: {
-          Provider: "discord",
-          Surface: "discord",
+          Provider: THREAD_CHANNEL,
+          Surface: THREAD_CHANNEL,
         },
         command: {
-          channel: "discord",
+          channel: THREAD_CHANNEL,
         },
       },
       requesterKey: "agent:main:main",
@@ -149,27 +174,27 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).not.toContain("hidden recent worker");
   });
 
-  it("shows matrix runs as unbound instead of claiming only discord/telegram bindings", () => {
+  it("shows room-channel runs as unbound when the plugin supports conversation bindings", () => {
     listBySessionMock.mockReturnValue([]);
 
     const result = handleSubagentsAgentsAction({
       params: {
         ctx: {
-          Provider: "matrix",
-          Surface: "matrix",
+          Provider: ROOM_CHANNEL,
+          Surface: ROOM_CHANNEL,
         },
         command: {
-          channel: "matrix",
+          channel: ROOM_CHANNEL,
         },
       },
       requesterKey: "agent:main:main",
       runs: [
         {
-          runId: "run-matrix-worker",
-          childSessionKey: "agent:main:subagent:matrix-worker",
+          runId: "run-room-worker",
+          childSessionKey: "agent:main:subagent:room-worker",
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
-          task: "matrix worker",
+          task: "room worker",
           cleanup: "keep",
           createdAt: Date.now() - 20_000,
           startedAt: Date.now() - 20_000,
@@ -178,21 +203,21 @@ describe("handleSubagentsAgentsAction", () => {
       restTokens: [],
     } as never);
 
-    expect(result.reply?.text).toContain("matrix worker (unbound)");
-    expect(result.reply?.text).not.toContain("bindings available on discord/telegram");
+    expect(result.reply?.text).toContain("room worker (unbound)");
+    expect(result.reply?.text).not.toContain("bindings unavailable");
   });
 
-  it("formats matrix bindings as threads", () => {
-    const childSessionKey = "agent:main:subagent:matrix-bound";
+  it("formats bindings generically", () => {
+    const childSessionKey = "agent:main:subagent:room-bound";
     listBySessionMock.mockImplementation((sessionKey: string) =>
       sessionKey === childSessionKey
         ? [
             {
-              bindingId: "binding-matrix",
+              bindingId: "binding-room",
               targetSessionKey: childSessionKey,
               targetKind: "subagent",
               conversation: {
-                channel: "matrix",
+                channel: ROOM_CHANNEL,
                 accountId: "default",
                 conversationId: "room-thread-1",
               },
@@ -206,21 +231,21 @@ describe("handleSubagentsAgentsAction", () => {
     const result = handleSubagentsAgentsAction({
       params: {
         ctx: {
-          Provider: "matrix",
-          Surface: "matrix",
+          Provider: ROOM_CHANNEL,
+          Surface: ROOM_CHANNEL,
         },
         command: {
-          channel: "matrix",
+          channel: ROOM_CHANNEL,
         },
       },
       requesterKey: "agent:main:main",
       runs: [
         {
-          runId: "run-matrix-bound",
+          runId: "run-room-bound",
           childSessionKey,
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
-          task: "matrix bound worker",
+          task: "room bound worker",
           cleanup: "keep",
           createdAt: Date.now() - 20_000,
           startedAt: Date.now() - 20_000,
@@ -229,7 +254,39 @@ describe("handleSubagentsAgentsAction", () => {
       restTokens: [],
     } as never);
 
-    expect(result.reply?.text).toContain("matrix bound worker (thread:room-thread-1)");
-    expect(result.reply?.text).not.toContain("binding:room-thread-1");
+    expect(result.reply?.text).toContain("room bound worker (binding:room-thread-1)");
+  });
+
+  it("shows bindings unavailable for channels without conversation binding support", () => {
+    getChannelPluginMock.mockReturnValueOnce(null);
+    listBySessionMock.mockReturnValue([]);
+
+    const result = handleSubagentsAgentsAction({
+      params: {
+        ctx: {
+          Provider: "irc",
+          Surface: "irc",
+        },
+        command: {
+          channel: "irc",
+        },
+      },
+      requesterKey: "agent:main:main",
+      runs: [
+        {
+          runId: "run-irc-worker",
+          childSessionKey: "agent:main:subagent:irc-worker",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "irc worker",
+          cleanup: "keep",
+          createdAt: Date.now() - 20_000,
+          startedAt: Date.now() - 20_000,
+        },
+      ],
+      restTokens: [],
+    } as never);
+
+    expect(result.reply?.text).toContain("irc worker (bindings unavailable)");
   });
 });

@@ -1,30 +1,44 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
+
+type EnsureBrowserControlAuthResult = {
+  auth: {
+    token?: string;
+    password?: string;
+  };
+  generatedToken?: string;
+};
 
 const mocks = vi.hoisted(() => ({
   controlPort: 0,
-  ensureBrowserControlAuth: vi.fn(async () => {
+  gatewayAuthMode: undefined as "password" | undefined,
+  ensureBrowserControlAuth: vi.fn<() => Promise<EnsureBrowserControlAuthResult>>(async () => {
     throw new Error("read-only config");
   }),
   resolveBrowserControlAuth: vi.fn(() => ({})),
+  shouldAutoGenerateBrowserAuth: vi.fn(() => true),
   ensureExtensionRelayForProfiles: vi.fn(async () => {}),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const browserConfig = {
     enabled: true,
   };
   return {
     ...actual,
-    loadConfig: () => ({
-      browser: browserConfig,
-    }),
+    loadConfig: () => {
+      return {
+        browser: browserConfig,
+        ...(mocks.gatewayAuthMode ? { gateway: { auth: { mode: mocks.gatewayAuthMode } } } : {}),
+      };
+    },
   };
 });
 
-vi.mock("./config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config.js")>();
+vi.mock("./config.js", async () => {
+  const actual = await vi.importActual<typeof import("./config.js")>("./config.js");
   return {
     ...actual,
     resolveBrowserConfig: vi.fn(() => ({
@@ -37,6 +51,7 @@ vi.mock("./config.js", async (importOriginal) => {
 vi.mock("./control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
+  shouldAutoGenerateBrowserAuth: mocks.shouldAutoGenerateBrowserAuth,
 }));
 
 vi.mock("./routes/index.js", () => ({
@@ -56,23 +71,18 @@ vi.mock("./pw-ai-state.js", () => ({
   isPwAiLoaded: vi.fn(() => false),
 }));
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
-
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {
     mocks.controlPort = await getFreePort();
+    mocks.gatewayAuthMode = undefined;
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.resolveBrowserControlAuth.mockClear();
+    mocks.shouldAutoGenerateBrowserAuth.mockClear();
     mocks.ensureExtensionRelayForProfiles.mockClear();
-    vi.resetModules();
-    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
   });
 
   afterEach(async () => {
     await stopBrowserControlServer();
-    vi.resetModules();
   });
 
   it("fails closed when auth bootstrap throws and no auth is configured", async () => {
@@ -82,5 +92,29 @@ describe("browser control auth bootstrap failures", () => {
     expect(mocks.ensureBrowserControlAuth).toHaveBeenCalledTimes(1);
     expect(mocks.resolveBrowserControlAuth).toHaveBeenCalledTimes(1);
     expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when auth bootstrap resolves empty auth in production-like mode", async () => {
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: {} });
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({});
+    mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(true);
+
+    const started = await startBrowserControlServerFromConfig();
+
+    expect(started).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveBrowserControlAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy password-mode startup when password is not configured", async () => {
+    mocks.gatewayAuthMode = "password";
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: {} });
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({});
+    mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(true);
+
+    const started = await startBrowserControlServerFromConfig();
+
+    expect(started).not.toBeNull();
   });
 });

@@ -13,8 +13,10 @@ const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+vi.mock("../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
+    "../agents/auth-profiles.js",
+  );
   return {
     ...actual,
     loadAuthProfileStore: authMocks.loadAuthProfileStore,
@@ -167,10 +169,11 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
           return [];
         }
         const issues: ChannelStatusIssue[] = [];
+        const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
         if (account.allowUnmentionedGroups === true) {
           issues.push({
             channel: "telegram",
-            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+            accountId: issueAccountId,
             kind: "config",
             message:
               "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
@@ -185,7 +188,7 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
         if (audit?.hasWildcardUnmentionedGroups === true) {
           issues.push({
             channel: "telegram",
-            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+            accountId: issueAccountId,
             kind: "config",
             message:
               'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
@@ -197,7 +200,7 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
           }
           issues.push({
             channel: "telegram",
-            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+            accountId: issueAccountId,
             kind: "runtime",
             message: `Group ${group.chatId} not reachable by bot.${group.status ? ` status=${group.status}` : ""}${group.error ? `: ${group.error}` : ""}`,
           });
@@ -238,13 +241,14 @@ function setMinimalChannelsCommandRegistryForTests(): void {
                 return [];
               }
               const issues: ChannelStatusIssue[] = [];
+              const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
               const messageContent = (
                 account.application as { intents?: { messageContent?: string } } | undefined
               )?.intents?.messageContent;
               if (messageContent === "disabled") {
                 issues.push({
                   channel: "discord",
-                  accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+                  accountId: issueAccountId,
                   kind: "intent",
                   message:
                     "Message Content Intent is disabled. Bot may not see normal channel messages.",
@@ -266,7 +270,7 @@ function setMinimalChannelsCommandRegistryForTests(): void {
                 }
                 issues.push({
                   channel: "discord",
-                  accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+                  accountId: issueAccountId,
                   kind: "permissions",
                   message: `Channel ${channel.channelId} permission audit failed.${channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : ""}${channel.error ? `: ${channel.error}` : ""}`,
                 });
