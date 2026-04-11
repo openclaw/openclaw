@@ -297,6 +297,69 @@ export async function stageQaLiveAnthropicSetupToken(params: {
   });
 }
 
+/** Providers the mock-openai harness stages placeholder credentials for. */
+export const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
+
+/** Agent IDs the mock-openai harness stages credentials under. */
+export const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+
+export function buildQaMockProfileId(provider: string): string {
+  return `qa-mock-${provider}`;
+}
+
+/**
+ * In mock-openai mode the qa suite runs against the embedded mock server
+ * instead of a real provider API. The mock does not validate credentials, but
+ * the agent auth layer still needs a matching `api_key` auth profile in
+ * `auth-profiles.json` before it will route the request through
+ * `providerBaseUrl`. Without this staging step, every scenario fails with
+ * `FailoverError: No API key found for provider "openai"` before the mock
+ * server ever sees a request.
+ *
+ * Stages a placeholder `api_key` profile per provider in each of the agent
+ * dirs the qa suite uses (`main` for the runtime config, `qa` for scenario
+ * runs) and returns a config with matching `auth.profiles` entries so the
+ * runtime accepts the profile on the first lookup.
+ *
+ * The placeholder value `sk-qa-mock` is intentionally not a real API key
+ * shape. It has to be non-empty to pass the credential serializer; anything
+ * beyond that is ignored by the mock.
+ */
+export async function stageQaMockAuthProfiles(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  agentIds?: readonly string[];
+  providers?: readonly string[];
+}): Promise<OpenClawConfig> {
+  const agentIds = params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS;
+  const providers = params.providers ?? QA_MOCK_AUTH_PROVIDERS;
+  let next = params.cfg;
+  for (const agentId of agentIds) {
+    const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    for (const provider of providers) {
+      const profileId = buildQaMockProfileId(provider);
+      upsertAuthProfile({
+        profileId,
+        credential: {
+          type: "api_key",
+          provider,
+          key: "sk-qa-mock",
+          displayName: `QA mock ${provider} credential`,
+        },
+        agentDir,
+      });
+      next = applyAuthProfileConfig(next, {
+        profileId,
+        provider,
+        mode: "api_key",
+        displayName: `QA mock ${provider} credential`,
+      });
+    }
+  }
+  return next;
+}
+
 function isRetryableGatewayCallError(details: string): boolean {
   return (
     details.includes("handshake timeout") ||
@@ -334,6 +397,7 @@ export const __testing = {
   readQaLiveProviderConfigOverrides,
   resolveQaLiveAnthropicSetupToken,
   stageQaLiveAnthropicSetupToken,
+  stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginsSourceRoot,
@@ -801,6 +865,17 @@ export async function startQaGatewayChild(params: {
     cfg,
     stateDir,
   });
+  // Mock-openai mode never sees a real API key (the env stripper above
+  // removes every provider credential). Stage a placeholder `api_key`
+  // profile per provider in each agent dir so the auth resolver finds a
+  // match before routing the request through `providerBaseUrl` to the
+  // embedded mock server.
+  if (params.providerMode === "mock-openai") {
+    cfg = await stageQaMockAuthProfiles({
+      cfg,
+      stateDir,
+    });
+  }
   cfg = params.mutateConfig ? params.mutateConfig(cfg) : cfg;
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
     encoding: "utf8",
