@@ -506,6 +506,11 @@ export async function sendMessageBlueBubbles(
   };
   if (privateApiDecision.canUsePrivateApi) {
     payload.method = "private-api";
+  } else {
+    // Without Private API, BlueBubbles requires an explicit send method.
+    // "apple-script" is the standard fallback that works on all macOS setups
+    // (including those with SIP enabled / no Private API helper).
+    payload.method = "apple-script";
   }
 
   // Add reply threading support
