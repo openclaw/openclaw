@@ -14,7 +14,8 @@ import {
   normalizeChatChannelId,
   type ChatChannelId,
 } from "./ids.js";
-import type { ChannelId, ChannelMeta } from "./plugins/types.public.js";
+import type { ChannelId } from "./plugins/channel-id.types.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
 export { getChatChannelMeta, listChatChannels } from "./chat-meta.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";

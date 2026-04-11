@@ -1,4 +1,4 @@
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
