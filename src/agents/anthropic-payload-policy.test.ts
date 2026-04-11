@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
@@ -223,5 +224,60 @@ describe("anthropic payload policy", () => {
         text: "Stable prefix\nDynamic lab suffix",
       },
     ]);
+  });
+});
+
+describe("applyAnthropicEphemeralCacheControlMarkers", () => {
+  it("marks the last user message with ephemeral cache_control", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "hi" }] },
+        { role: "user", content: [{ type: "text", text: "world" }] },
+      ],
+    };
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+    const lastUser = payload.messages[2] as { content: Array<Record<string, unknown>> };
+    expect(lastUser.content[0].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("skips when the last message is assistant", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      ],
+    };
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+    const lastAssistant = payload.messages[1] as { content: Array<Record<string, unknown>> };
+    expect(lastAssistant.content[0].cache_control).toBeUndefined();
+  });
+
+  it("marks system/developer content with ephemeral cache_control", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "you are helpful" },
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+      ],
+    };
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "you are helpful", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("strips cache_control from thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "thinking", text: "hmm", cache_control: { type: "ephemeral" } }],
+        },
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+      ],
+    };
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+    const assistant = payload.messages[0] as { content: Array<Record<string, unknown>> };
+    expect(assistant.content[0].cache_control).toBeUndefined();
   });
 });
