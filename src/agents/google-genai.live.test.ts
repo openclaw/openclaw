@@ -1,7 +1,4 @@
-// Polyfill window to avoid gaxios node-fetch dynamic import bug
-(global as any).window = globalThis;
-
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { createGoogleGenAiStreamFnForModel } from "./google-genai-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 
@@ -15,6 +12,21 @@ const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
 
 describeLive("google-genai live tests", () => {
+  let originalWindow: any;
+
+  beforeAll(() => {
+    originalWindow = (global as any).window;
+    (global as any).window = globalThis;
+  });
+
+  afterAll(() => {
+    if (originalWindow === undefined) {
+      delete (global as any).window;
+    } else {
+      (global as any).window = originalWindow;
+    }
+  });
+
   const describeApiKey = GEMINI_KEY ? describe : describe.skip;
   describeApiKey("API Key Access", () => {
     it("can stream responses using API Key", async () => {
