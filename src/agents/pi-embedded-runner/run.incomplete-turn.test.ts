@@ -104,7 +104,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ]);
   });
 
-  it("emits explicit replayInvalid + abandoned liveness state at the strict-agentic blocked exit", async () => {
+  it("emits explicit replayInvalid + blocked liveness state at the strict-agentic blocked exit", async () => {
     // Criterion 4 of the GPT-5.4 parity gate requires every terminal exit path
     // to emit explicit replayInvalid + livenessState. The strict-agentic
     // blocked exit is the exact place where strict-agentic is supposed to be
