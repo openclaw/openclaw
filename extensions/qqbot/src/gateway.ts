@@ -17,7 +17,7 @@ import {
   startBackgroundTokenRefresh,
   stopBackgroundTokenRefresh,
 } from "./api.js";
-import { qqbotPlugin } from "./channel.js";
+import { formatQQBotAllowFrom } from "./channel-config-shared.js";
 import { formatVoiceText, processAttachments } from "./inbound-attachments.js";
 import { flushKnownUsers, recordKnownUser } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
@@ -748,13 +748,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const toAddress = fromAddress;
 
         const rawAllowFrom = account.config?.allowFrom ?? [];
-        const normalizedAllowFrom = qqbotPlugin.config?.formatAllowFrom
-          ? qqbotPlugin.config.formatAllowFrom({
-              cfg: cfg,
-              accountId: account.accountId,
-              allowFrom: rawAllowFrom,
-            })
-          : rawAllowFrom.map((e: string) => e.replace(/^qqbot:/i, "").toUpperCase());
+        const normalizedAllowFrom = formatQQBotAllowFrom({
+          allowFrom: rawAllowFrom,
+        });
         const normalizedSenderId = event.senderId.replace(/^qqbot:/i, "").toUpperCase();
         const allowAll =
           normalizedAllowFrom.length === 0 || normalizedAllowFrom.some((e) => e === "*");
@@ -1151,7 +1147,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 },
               },
               replyOptions: {
-                disableBlockStreaming: true,
+                disableBlockStreaming: account.config.streaming?.mode === "off",
               },
             });
 

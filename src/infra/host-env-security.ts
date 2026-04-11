@@ -10,6 +10,12 @@ export const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze([
 export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedPrefixes,
 ]);
+export const HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+  ...HOST_ENV_SECURITY_POLICY.blockedInheritedKeys,
+]);
+export const HOST_DANGEROUS_INHERITED_ENV_PREFIXES: readonly string[] = Object.freeze([
+  ...HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes,
+]);
 export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedOverrideKeys,
 ]);
@@ -27,6 +33,9 @@ export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string
   "FORCE_COLOR",
 ]);
 export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
+export const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set<string>(
+  HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES,
+);
 export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES,
 );
@@ -80,6 +89,18 @@ export function isDangerousHostEnvVarName(rawKey: string): boolean {
     return true;
   }
   return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
+export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return false;
+  }
+  const upper = key.toUpperCase();
+  if (HOST_DANGEROUS_INHERITED_ENV_KEYS.has(upper)) {
+    return true;
+  }
+  return HOST_DANGEROUS_INHERITED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
 export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
@@ -178,7 +199,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
-    if (isDangerousHostEnvVarName(key)) {
+    if (isDangerousHostInheritedEnvVarName(key)) {
       continue;
     }
     merged[key] = value;

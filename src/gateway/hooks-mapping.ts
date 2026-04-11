@@ -3,7 +3,7 @@ import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
-import type { HookMessageChannel } from "./hooks.js";
+import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
   id: string;

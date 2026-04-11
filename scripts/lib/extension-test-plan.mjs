@@ -1,21 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-import { channelTestRoots } from "../../vitest.channel-paths.mjs";
-import { isAcpxExtensionRoot } from "../../vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../../vitest.extension-bluebubbles-paths.mjs";
-import { isDiffsExtensionRoot } from "../../vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../../vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../../vitest.extension-irc-paths.mjs";
-import { isMatrixExtensionRoot } from "../../vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../../vitest.extension-mattermost-paths.mjs";
-import { isMemoryExtensionRoot } from "../../vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../../vitest.extension-messaging-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../../vitest.extension-msteams-paths.mjs";
-import { isProviderExtensionRoot } from "../../vitest.extension-provider-paths.mjs";
-import { isTelegramExtensionRoot } from "../../vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../../vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../../vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../../vitest.extension-zalo-paths.mjs";
+import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
+import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isBlueBubblesExtensionRoot } from "../../test/vitest/vitest.extension-bluebubbles-paths.mjs";
+import { isDiffsExtensionRoot } from "../../test/vitest/vitest.extension-diffs-paths.mjs";
+import { isFeishuExtensionRoot } from "../../test/vitest/vitest.extension-feishu-paths.mjs";
+import { isIrcExtensionRoot } from "../../test/vitest/vitest.extension-irc-paths.mjs";
+import { isMatrixExtensionRoot } from "../../test/vitest/vitest.extension-matrix-paths.mjs";
+import { isMattermostExtensionRoot } from "../../test/vitest/vitest.extension-mattermost-paths.mjs";
+import { isMemoryExtensionRoot } from "../../test/vitest/vitest.extension-memory-paths.mjs";
+import { isMessagingExtensionRoot } from "../../test/vitest/vitest.extension-messaging-paths.mjs";
+import { isMsTeamsExtensionRoot } from "../../test/vitest/vitest.extension-msteams-paths.mjs";
+import { isProviderExtensionRoot } from "../../test/vitest/vitest.extension-provider-paths.mjs";
+import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-telegram-paths.mjs";
+import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
+import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
+import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
@@ -116,38 +116,38 @@ export function resolveExtensionTestPlan(params = {}) {
   const usesMessagingConfig = roots.some((root) => isMessagingExtensionRoot(root));
   const usesProviderConfig = roots.some((root) => isProviderExtensionRoot(root));
   const config = usesChannelConfig
-    ? "vitest.extension-channels.config.ts"
+    ? "test/vitest/vitest.extension-channels.config.ts"
     : usesAcpxConfig
-      ? "vitest.extension-acpx.config.ts"
+      ? "test/vitest/vitest.extension-acpx.config.ts"
       : usesDiffsConfig
-        ? "vitest.extension-diffs.config.ts"
+        ? "test/vitest/vitest.extension-diffs.config.ts"
         : usesBlueBubblesConfig
-          ? "vitest.extension-bluebubbles.config.ts"
+          ? "test/vitest/vitest.extension-bluebubbles.config.ts"
           : usesFeishuConfig
-            ? "vitest.extension-feishu.config.ts"
+            ? "test/vitest/vitest.extension-feishu.config.ts"
             : usesIrcConfig
-              ? "vitest.extension-irc.config.ts"
+              ? "test/vitest/vitest.extension-irc.config.ts"
               : usesMattermostConfig
-                ? "vitest.extension-mattermost.config.ts"
+                ? "test/vitest/vitest.extension-mattermost.config.ts"
                 : usesMatrixConfig
-                  ? "vitest.extension-matrix.config.ts"
+                  ? "test/vitest/vitest.extension-matrix.config.ts"
                   : usesTelegramConfig
-                    ? "vitest.extension-telegram.config.ts"
+                    ? "test/vitest/vitest.extension-telegram.config.ts"
                     : usesVoiceCallConfig
-                      ? "vitest.extension-voice-call.config.ts"
+                      ? "test/vitest/vitest.extension-voice-call.config.ts"
                       : usesWhatsAppConfig
-                        ? "vitest.extension-whatsapp.config.ts"
+                        ? "test/vitest/vitest.extension-whatsapp.config.ts"
                         : usesZaloConfig
-                          ? "vitest.extension-zalo.config.ts"
+                          ? "test/vitest/vitest.extension-zalo.config.ts"
                           : usesMemoryConfig
-                            ? "vitest.extension-memory.config.ts"
+                            ? "test/vitest/vitest.extension-memory.config.ts"
                             : usesMsTeamsConfig
-                              ? "vitest.extension-msteams.config.ts"
+                              ? "test/vitest/vitest.extension-msteams.config.ts"
                               : usesMessagingConfig
-                                ? "vitest.extension-messaging.config.ts"
+                                ? "test/vitest/vitest.extension-messaging.config.ts"
                                 : usesProviderConfig
-                                  ? "vitest.extension-providers.config.ts"
-                                  : "vitest.extensions.config.ts";
+                                  ? "test/vitest/vitest.extension-providers.config.ts"
+                                  : "test/vitest/vitest.extensions.config.ts";
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
@@ -254,7 +254,7 @@ export function createExtensionTestShards(params = {}) {
   return shards
     .map((shard, index) => ({
       index,
-      checkName: `checks-fast-extensions-shard-${index + 1}`,
+      checkName: `checks-node-extensions-shard-${index + 1}`,
       ...mergeTestPlans(shard.plans),
     }))
     .filter((shard) => shard.hasTests);

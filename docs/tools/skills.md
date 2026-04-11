@@ -303,6 +303,13 @@ When an agent run starts, OpenClaw:
 
 This is **scoped to the agent run**, not a global shell environment.
 
+For the bundled `claude-cli` backend, OpenClaw also materializes the same
+eligible snapshot as a temporary Claude Code plugin and passes it with
+`--plugin-dir`. Claude Code can then use its native skill resolver while
+OpenClaw still owns precedence, per-agent allowlists, gating, and
+`skills.entries.*` env/API key injection. Other CLI backends use the prompt
+catalog only.
+
 ## Session snapshot (performance)
 
 OpenClaw snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.

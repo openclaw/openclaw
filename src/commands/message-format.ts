@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
@@ -10,8 +10,38 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { shortenText } from "./text-format.js";
 
+const FALLBACK_CHANNEL_LABELS: Partial<Record<ChannelId, string>> = {
+  acp: "ACP",
+  discord: "Discord",
+  email: "Email",
+  imessage: "iMessage",
+  irc: "IRC",
+  matrix: "Matrix",
+  mattermost: "Mattermost",
+  signal: "Signal",
+  slack: "Slack",
+  sms: "SMS",
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+  xmpp: "XMPP",
+};
+
+function humanizeChannelId(channel: string): string {
+  return channel
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((segment) =>
+      segment.length <= 3
+        ? segment.toUpperCase()
+        : `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`,
+    )
+    .join(" ");
+}
+
 const resolveChannelLabel = (channel: ChannelId) =>
-  getChannelPlugin(channel)?.meta.label ?? channel;
+  getLoadedChannelPlugin(channel)?.meta.label ??
+  FALLBACK_CHANNEL_LABELS[channel] ??
+  humanizeChannelId(channel);
 
 function extractMessageId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
