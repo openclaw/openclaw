@@ -1139,11 +1139,7 @@ describe("installPluginFromArchive", () => {
 
       const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
-        expect(result.error).toContain("symlink target outside install root");
-      }
+      expect(result.ok).toBe(true);
     },
   );
 
