@@ -111,7 +111,7 @@ async function postSlackMessageBestEffort(params: {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
-    reply_broadcast: params.replyBroadcast,
+    ...(params.replyBroadcast !== undefined ? { reply_broadcast: params.replyBroadcast } : {}),
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
   try {
