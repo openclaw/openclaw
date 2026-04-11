@@ -7,6 +7,62 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
+/**
+ * Mirrors auth override source inference in `resolveSessionAuthProfileOverride`
+ * (`src/agents/auth-profiles/session-override.ts`) so cleanup stays consistent.
+ */
+function inferredAuthProfileOverrideSource(entry: SessionEntry): "auto" | "user" | undefined {
+  const current = normalizeOptionalString(entry.authProfileOverride);
+  return (
+    entry.authProfileOverrideSource ??
+    (typeof entry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined)
+  );
+}
+
+/**
+ * Clears failover-persisted session model state (`modelOverrideSource: "auto"`) plus
+ * sticky runtime `model` / `modelProvider` fields so the next inbound turn re-resolves
+ * the agent primary from config instead of staying pinned on the last fallback model.
+ *
+ * Clears `authProfileOverride*` only when auth is not user-attributed (explicit `"user"`,
+ * or legacy undefined source with a profile id and no compaction counter — inferred user).
+ */
+export function clearAutoFailoverSessionModelStickyState(entry: SessionEntry): boolean {
+  if (entry.modelOverrideSource !== "auto") {
+    return false;
+  }
+  const shouldClearAuthProfileFields = inferredAuthProfileOverrideSource(entry) !== "user";
+  let updated = false;
+  const del = (key: keyof SessionEntry) => {
+    if (Object.hasOwn(entry, key)) {
+      delete entry[key];
+      updated = true;
+    }
+  };
+  del("providerOverride");
+  del("modelOverride");
+  del("modelOverrideSource");
+  if (shouldClearAuthProfileFields) {
+    del("authProfileOverride");
+    del("authProfileOverrideSource");
+    del("authProfileOverrideCompactionCount");
+  }
+  del("model");
+  del("modelProvider");
+  del("contextTokens");
+  del("fallbackNoticeSelectedModel");
+  del("fallbackNoticeActiveModel");
+  del("fallbackNoticeReason");
+  if (updated) {
+    entry.updatedAt = Date.now();
+  }
+  return updated;
+}
+
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;

@@ -490,6 +490,49 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
+  it("clears auto failover sticky session state so the configured primary model is used", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "github-copilot/claude-sonnet-4.6" },
+          models: {
+            "github-copilot/claude-sonnet-4.6": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:monica:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      modelOverrideSource: "auto",
+      providerOverride: "azure",
+      modelOverride: "kimi-k2.5-thinking",
+      modelProvider: "azure",
+      model: "kimi-k2.5-thinking",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentId: "monica",
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "github-copilot",
+      defaultModel: "claude-sonnet-4.6",
+      provider: "github-copilot",
+      model: "claude-sonnet-4.6",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("github-copilot");
+    expect(state.model).toBe("claude-sonnet-4.6");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.model).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+  });
+
   it("keeps allowed legacy combined session overrides after normalization", async () => {
     const cfg = {
       agents: {

@@ -17,7 +17,10 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  clearAutoFailoverSessionModelStickyState,
+} from "../../sessions/model-overrides.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ThinkLevel } from "./directives.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
@@ -92,6 +95,12 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
+
+const UNSAFE_SESSION_STORE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isUnsafeSessionStoreKey(sessionKey: string): boolean {
+  return UNSAFE_SESSION_STORE_KEYS.has(normalizeLowercaseStringOrEmpty(sessionKey.trim()));
+}
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
   if (a === b) {
@@ -299,6 +308,49 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    clearAutoFailoverSessionModelStickyState(sessionEntry)
+  ) {
+    if (!isUnsafeSessionStoreKey(sessionKey)) {
+      sessionStore[sessionKey] = sessionEntry;
+    }
+    if (storePath) {
+      const { updateSessionStore } = await loadSessionStoreRuntime();
+      await updateSessionStore(storePath, (store) => {
+        const requestedSessionKey = sessionKey.trim();
+        if (!requestedSessionKey || isUnsafeSessionStoreKey(requestedSessionKey)) {
+          return;
+        }
+        const normalizedRequestedKey = normalizeLowercaseStringOrEmpty(requestedSessionKey);
+        const matchedStoreKey =
+          (Object.prototype.hasOwnProperty.call(store, requestedSessionKey)
+            ? requestedSessionKey
+            : undefined) ??
+          (Object.prototype.hasOwnProperty.call(store, normalizedRequestedKey)
+            ? normalizedRequestedKey
+            : undefined) ??
+          Object.keys(store).find(
+            (key) => normalizeLowercaseStringOrEmpty(key) === normalizedRequestedKey,
+          );
+        if (!matchedStoreKey || isUnsafeSessionStoreKey(matchedStoreKey)) {
+          return;
+        }
+        const latestEntry = store[matchedStoreKey];
+        if (!latestEntry || !clearAutoFailoverSessionModelStickyState(latestEntry)) {
+          return;
+        }
+        store[matchedStoreKey] = latestEntry;
+      });
+    }
+    // Do not set `resetModelOverride` here: that flag is reserved for allowlist/disallowed
+    // override recovery and triggers `Model override not allowed...` system events
+    // (`get-reply-directives-apply.ts`). Auto-failover cleanup only retries the primary.
+  }
+
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
