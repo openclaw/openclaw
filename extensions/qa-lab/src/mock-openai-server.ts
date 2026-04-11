@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { closeQaHttpServer } from "./bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -319,22 +320,30 @@ function extractOrbitCode(text: string) {
   return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
-function extractExactReplyDirective(text: string) {
-  const colonMatch = /reply(?: with)? exactly:\s*([^\n]+)/i.exec(text);
-  if (colonMatch?.[1]) {
-    return colonMatch[1].trim();
+function extractLastCapture(text: string, pattern: RegExp) {
+  let lastMatch: RegExpExecArray | null = null;
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
+    lastMatch = match;
   }
-  const backtickedMatch = /reply(?: with)? exactly\s+`([^`]+)`/i.exec(text);
-  return backtickedMatch?.[1]?.trim() || null;
+  return lastMatch?.[1]?.trim() || null;
+}
+
+function extractExactReplyDirective(text: string) {
+  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  if (colonMatch) {
+    return colonMatch;
+  }
+  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
 }
 
 function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = /exact marker:\s*`([^`]+)`/i.exec(text);
-  if (backtickedMatch?.[1]) {
-    return backtickedMatch[1].trim();
+  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
   }
-  const plainMatch = /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i.exec(text);
-  return plainMatch?.[1]?.trim() || null;
+  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 function isHeartbeatPrompt(text: string) {
@@ -443,6 +452,17 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
+  if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
+    if (
+      toolOutput.includes("Replay safety: unsafe after write.") ||
+      /compaction-retry-summary\.txt/i.test(toolOutput) ||
+      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
+      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
+    ) {
+      return "Protocol note: replay unsafe after write.";
+    }
+    return "";
+  }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
@@ -529,6 +549,17 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   <head><meta charset="utf-8" /><title>Lobster Invaders</title></head>
   <body><h1>Lobster Invaders</h1><p>Tiny playable stub.</p></body>
 </html>`,
+      });
+    }
+  }
+  if (/compaction retry mutating tool check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
+    }
+    if (toolOutput.includes("compaction retry evidence")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "compaction-retry-summary.txt",
+        content: "Replay safety: unsafe after write.\n",
       });
     }
   }
@@ -805,9 +836,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }

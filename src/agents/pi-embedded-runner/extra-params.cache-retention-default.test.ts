@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
@@ -35,6 +35,17 @@ vi.mock("./logger.js", () => ({
     warn: vi.fn(),
   },
 }));
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: () => undefined,
+    wrapProviderStreamFn: () => undefined,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
 
 describe("cacheRetention default behavior", () => {
   it("returns 'short' for Anthropic when not configured", () => {

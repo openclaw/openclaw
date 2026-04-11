@@ -297,6 +297,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+"extensions: codex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

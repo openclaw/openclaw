@@ -8,7 +8,8 @@ import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
 import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
-import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
+import { LegacyContextEngine } from "./legacy.js";
+import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   registerContextEngine,
   registerContextEngineForOwner,
@@ -342,7 +343,7 @@ describe("Engine contract tests", () => {
   });
 
   it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {
-    const compactRuntimeSpy = await installCompactRuntimeSpy();
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const engine = new LegacyContextEngine();
 
     await engine.compact({
@@ -362,7 +363,7 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
-    const compactRuntimeSpy = await installCompactRuntimeSpy();
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionFile: "/tmp/session.json",

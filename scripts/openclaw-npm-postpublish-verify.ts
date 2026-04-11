@@ -20,6 +20,7 @@ import {
   collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./lib/npm-update-compat-sidecars.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
 type InstalledPackageJson = {
@@ -40,6 +41,13 @@ type InstalledBundledExtensionManifestRecord = {
 };
 
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
+const NPM_UPDATE_COMPAT_EXTENSION_DIRS = new Set(
+  [...NPM_UPDATE_COMPAT_SIDECAR_PATHS].map((relativePath) => {
+    const pathParts = relativePath.split("/");
+    pathParts.pop();
+    return pathParts.join("/");
+  }),
+);
 
 export type PublishedInstallScenario = {
   name: string;
@@ -129,6 +137,20 @@ function collectExpectedBundledExtensionPackageIds(
   return ids;
 }
 
+function isNpmUpdateCompatOnlyExtensionDir(params: {
+  extensionId: string;
+  packageRoot: string;
+}): boolean {
+  const relativeExtensionDir = `dist/extensions/${params.extensionId}`;
+  if (!NPM_UPDATE_COMPAT_EXTENSION_DIRS.has(relativeExtensionDir)) {
+    return false;
+  }
+
+  return [...NPM_UPDATE_COMPAT_SIDECAR_PATHS]
+    .filter((relativePath) => relativePath.startsWith(`${relativeExtensionDir}/`))
+    .every((relativePath) => existsSync(join(params.packageRoot, relativePath)));
+}
+
 function readBundledExtensionPackageJsons(packageRoot: string): {
   manifests: InstalledBundledExtensionManifestRecord[];
   errors: string[];
@@ -150,6 +172,9 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
+      if (isNpmUpdateCompatOnlyExtensionDir({ extensionId: entry.name, packageRoot })) {
+        continue;
+      }
       if (expectedPackageIds === null || expectedPackageIds.has(entry.name)) {
         errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
       }

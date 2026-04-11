@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -6,8 +6,16 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  applyAuthProfileConfig,
+  upsertAuthProfile,
+  validateAnthropicSetupToken,
+} from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
@@ -66,7 +74,15 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
 ]);
 
 const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
+const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
 const QA_OPENAI_PLUGIN_ID = "openai";
+const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
+const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
+
+export type QaCliBackendAuthMode = "auto" | "api-key" | "subscription";
 
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
@@ -112,17 +128,73 @@ export function normalizeQaProviderModeEnv(
   return env;
 }
 
-function resolveQaLiveCliAuthEnv(baseEnv: NodeJS.ProcessEnv) {
+function resolveQaLiveCliAuthEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  opts?: {
+    forwardHostHomeForClaudeCli?: boolean;
+    claudeCliAuthMode?: QaCliBackendAuthMode;
+  },
+) {
+  const parsePreservedCliEnv = () => {
+    const raw = baseEnv[QA_LIVE_CLI_BACKEND_PRESERVE_ENV]?.trim();
+    if (raw?.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        return Array.isArray(parsed)
+          ? parsed.filter((entry): entry is string => typeof entry === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    return (raw ?? "").split(/[,\s]+/).filter((entry) => entry.length > 0);
+  };
+  const renderPreservedCliEnv = (values: string[]) => JSON.stringify([...new Set(values)]);
+  const authMode = opts?.claudeCliAuthMode ?? "auto";
+  const hasAnthropicKey = Boolean(
+    baseEnv.ANTHROPIC_API_KEY?.trim() || baseEnv.OPENCLAW_LIVE_ANTHROPIC_KEY?.trim(),
+  );
+  if (opts?.forwardHostHomeForClaudeCli && authMode === "api-key" && !hasAnthropicKey) {
+    throw new Error(
+      "Claude CLI API-key QA mode requires ANTHROPIC_API_KEY or OPENCLAW_LIVE_ANTHROPIC_KEY",
+    );
+  }
+  const preserveEnvValues = (() => {
+    if (!opts?.forwardHostHomeForClaudeCli) {
+      return undefined;
+    }
+    const values = parsePreservedCliEnv().filter((entry) => entry !== "ANTHROPIC_API_KEY");
+    if (authMode === "api-key" || (authMode === "auto" && hasAnthropicKey)) {
+      values.push("ANTHROPIC_API_KEY");
+    }
+    return renderPreservedCliEnv(values);
+  })();
+  const claudeCliEnv = opts?.forwardHostHomeForClaudeCli
+    ? {
+        [QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV]: authMode,
+        ...(preserveEnvValues ? { [QA_LIVE_CLI_BACKEND_PRESERVE_ENV]: preserveEnvValues } : {}),
+      }
+    : {};
   const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
   if (configuredCodexHome) {
-    return { CODEX_HOME: configuredCodexHome };
+    return {
+      CODEX_HOME: configuredCodexHome,
+      ...claudeCliEnv,
+      ...(opts?.forwardHostHomeForClaudeCli && baseEnv.HOME?.trim()
+        ? { HOME: baseEnv.HOME.trim() }
+        : {}),
+    };
   }
   const hostHome = baseEnv.HOME?.trim();
   if (!hostHome) {
     return {};
   }
   const codexHome = path.join(hostHome, ".codex");
-  return existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
+  return {
+    ...(existsSync(codexHome) ? { CODEX_HOME: codexHome } : {}),
+    ...claudeCliEnv,
+    ...(opts?.forwardHostHomeForClaudeCli ? { HOME: hostHome } : {}),
+  };
 }
 
 export function buildQaRuntimeEnv(params: {
@@ -137,12 +209,19 @@ export function buildQaRuntimeEnv(params: {
   compatibilityHostVersion?: string;
   providerMode?: "mock-openai" | "live-frontier";
   baseEnv?: NodeJS.ProcessEnv;
+  forwardHostHomeForClaudeCli?: boolean;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const baseEnv = params.baseEnv ?? process.env;
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOME: params.homeDir,
-    ...(params.providerMode === "live-frontier" ? resolveQaLiveCliAuthEnv(baseEnv) : {}),
+    ...(params.providerMode === "live-frontier"
+      ? resolveQaLiveCliAuthEnv(baseEnv, {
+          forwardHostHomeForClaudeCli: params.forwardHostHomeForClaudeCli,
+          claudeCliAuthMode: params.claudeCliAuthMode,
+        })
+      : {}),
     OPENCLAW_HOME: params.homeDir,
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -165,7 +244,57 @@ export function buildQaRuntimeEnv(params: {
       ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion }
       : {}),
   };
-  return normalizeQaProviderModeEnv(env, params.providerMode);
+  const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
+  delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
+  delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
+  return normalizedEnv;
+}
+
+function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) {
+  const token = (
+    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV]?.trim() ||
+    env[QA_LIVE_SETUP_TOKEN_VALUE_ENV]?.trim() ||
+    ""
+  ).replaceAll(/\s+/g, "");
+  if (!token) {
+    return null;
+  }
+  const tokenError = validateAnthropicSetupToken(token);
+  if (tokenError) {
+    throw new Error(`Invalid QA Anthropic setup-token: ${tokenError}`);
+  }
+  const profileId =
+    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV]?.trim() ||
+    QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID;
+  return { token, profileId };
+}
+
+export async function stageQaLiveAnthropicSetupToken(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const resolved = resolveQaLiveAnthropicSetupToken(params.env);
+  if (!resolved) {
+    return params.cfg;
+  }
+  const agentDir = path.join(params.stateDir, "agents", "main", "agent");
+  await fs.mkdir(agentDir, { recursive: true });
+  upsertAuthProfile({
+    profileId: resolved.profileId,
+    credential: {
+      type: "token",
+      provider: "anthropic",
+      token: resolved.token,
+    },
+    agentDir,
+  });
+  return applyAuthProfileConfig(params.cfg, {
+    profileId: resolved.profileId,
+    provider: "anthropic",
+    mode: "token",
+    displayName: "QA setup-token",
+  });
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -179,16 +308,87 @@ function isRetryableGatewayCallError(details: string): boolean {
   );
 }
 
+async function fetchLocalGatewayHealth(params: {
+  baseUrl: string;
+  healthPath: "/readyz" | "/healthz";
+}): Promise<boolean> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${params.baseUrl}${params.healthPath}`,
+    init: {
+      signal: AbortSignal.timeout(2_000),
+    },
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-gateway-child-health",
+  });
+  try {
+    return response.ok;
+  } finally {
+    await release();
+  }
+}
+
 export const __testing = {
   buildQaRuntimeEnv,
+  fetchLocalGatewayHealth,
   isRetryableGatewayCallError,
   readQaLiveProviderConfigOverrides,
+  resolveQaLiveAnthropicSetupToken,
+  stageQaLiveAnthropicSetupToken,
   resolveQaLiveCliAuthEnv,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginsSourceRoot,
   resolveQaRuntimeHostVersion,
   createQaBundledPluginsDir,
+  stopQaGatewayChildProcessTree,
 };
+
+function hasChildExited(child: ChildProcess) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (!child.pid) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+      return;
+    }
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The child already exited.
+    }
+  }
+}
+
+async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number) {
+  if (hasChildExited(child)) {
+    return true;
+  }
+  return await Promise.race([
+    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    sleep(timeoutMs).then(() => false),
+  ]);
+}
+
+async function stopQaGatewayChildProcessTree(
+  child: ChildProcess,
+  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+) {
+  if (hasChildExited(child)) {
+    return;
+  }
+  signalQaGatewayChildProcessTree(child, "SIGTERM");
+  if (await waitForQaGatewayChildExit(child, opts?.gracefulTimeoutMs ?? 5_000)) {
+    return;
+  }
+  signalQaGatewayChildProcessTree(child, "SIGKILL");
+  await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+}
 
 function resolveQaBundledPluginsSourceRoot(repoRoot: string) {
   const candidates = [
@@ -483,12 +683,9 @@ async function waitForGatewayReady(params: {
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
-    for (const healthPath of ["/readyz", "/healthz"]) {
+    for (const healthPath of ["/readyz", "/healthz"] as const) {
       try {
-        const response = await fetch(`${params.baseUrl}${healthPath}`, {
-          signal: AbortSignal.timeout(2_000),
-        });
-        if (response.ok) {
+        if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath })) {
           return;
         }
       } catch {
@@ -523,15 +720,20 @@ export async function startQaGatewayChild(params: {
   repoRoot: string;
   providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  includeQaChannel?: boolean;
   controlUiAllowedOrigins?: string[];
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
+  );
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
   const workspaceDir = path.join(tempRoot, "workspace");
@@ -573,12 +775,13 @@ export async function startQaGatewayChild(params: {
           providerConfigs: liveProviderConfigs,
         })
       : undefined;
-  const cfg = buildQaGatewayConfig({
+  let cfg = buildQaGatewayConfig({
     bind: "loopback",
     gatewayPort,
     gatewayToken,
     providerBaseUrl: params.providerBaseUrl,
     qaBusBaseUrl: params.qaBusBaseUrl,
+    includeQaChannel: params.includeQaChannel,
     workspaceDir,
     controlUiRoot: resolveQaControlUiRoot({
       repoRoot: params.repoRoot,
@@ -594,7 +797,15 @@ export async function startQaGatewayChild(params: {
     thinkingDefault: params.thinkingDefault,
     controlUiEnabled: params.controlUiEnabled,
   });
-  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  cfg = await stageQaLiveAnthropicSetupToken({
+    cfg,
+    stateDir,
+  });
+  cfg = params.mutateConfig ? params.mutateConfig(cfg) : cfg;
+  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   const allowedPluginIds = [...(cfg.plugins?.allow ?? []), "openai"].filter(
     (pluginId, index, array): pluginId is string => {
       return (
@@ -632,6 +843,8 @@ export async function startQaGatewayChild(params: {
     bundledPluginsDir,
     compatibilityHostVersion: runtimeHostVersion,
     providerMode: params.providerMode,
+    forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
+    claudeCliAuthMode: params.claudeCliAuthMode,
   });
 
   const child = spawn(
@@ -649,6 +862,7 @@ export async function startQaGatewayChild(params: {
     {
       cwd: runtimeCwd,
       env,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -706,7 +920,7 @@ export async function startQaGatewayChild(params: {
   } catch (error) {
     stdoutLog.end();
     stderrLog.end();
-    child.kill("SIGTERM");
+    await stopQaGatewayChildProcessTree(child, { gracefulTimeoutMs: 1_000 }).catch(() => {});
     if (!keepTemp && stagedBundledPluginsRoot) {
       await fs.rm(stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
     }
@@ -733,9 +947,10 @@ export async function startQaGatewayChild(params: {
     async call(
       method: string,
       rpcParams?: unknown,
-      opts?: { expectFinal?: boolean; timeoutMs?: number },
+      opts?: { expectFinal?: boolean; timeoutMs?: number; retryOnRestart?: boolean },
     ) {
       const timeoutMs = opts?.timeoutMs ?? 20_000;
+      const retryOnRestart = opts?.retryOnRestart !== false;
       let lastDetails = "";
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
@@ -746,7 +961,7 @@ export async function startQaGatewayChild(params: {
         } catch (error) {
           const details = formatErrorMessage(error);
           lastDetails = details;
-          if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
+          if (attempt >= 3 || !retryOnRestart || !isRetryableGatewayCallError(details)) {
             throw new Error(`${details}\nGateway logs:\n${logs()}`, { cause: error });
           }
           await waitForGatewayReady({
@@ -763,17 +978,7 @@ export async function startQaGatewayChild(params: {
       await rpcClient.stop().catch(() => {});
       stdoutLog.end();
       stderrLog.end();
-      if (!child.killed) {
-        child.kill("SIGTERM");
-        await Promise.race([
-          new Promise<void>((resolve) => child.once("exit", () => resolve())),
-          sleep(5_000).then(() => {
-            if (!child.killed) {
-              child.kill("SIGKILL");
-            }
-          }),
-        ]);
-      }
+      await stopQaGatewayChildProcessTree(child);
       if (!(opts?.keepTemp ?? keepTemp)) {
         await fs.rm(tempRoot, { recursive: true, force: true });
         if (stagedBundledPluginsRoot) {

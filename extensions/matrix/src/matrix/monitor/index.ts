@@ -1,5 +1,6 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
@@ -45,7 +46,7 @@ import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
-  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   initialSyncLimit?: number;

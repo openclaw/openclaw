@@ -160,6 +160,7 @@ const cjkAutoLinkExtension = {
         ],
       };
     }
+    return undefined;
   },
 };
 

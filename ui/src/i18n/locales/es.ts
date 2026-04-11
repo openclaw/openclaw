@@ -281,6 +281,7 @@ export const es: TranslationMap = {
     tabs: {
       scene: "Escena",
       diary: "Diario",
+      advanced: "Avanzado",
     },
     header: {
       refresh: "Actualizar",
@@ -299,6 +300,38 @@ export const es: TranslationMap = {
       reset: "Restablecer",
       clearGrounded: "Borrar Grounded",
       working: "Trabajando…",
+    },
+    phase: {
+      light: "Ligero",
+      deep: "Profundo",
+      rem: "Rem",
+      off: "apagado",
+    },
+    advanced: {
+      eyebrow: "Revisión",
+      title: "Revisión del registro diario",
+      description:
+        "Revisa lo que proviene del registro diario, lo que está esperando promoción y lo que fue promovido recientemente.",
+      summaryFromDailyLog: "del registro diario",
+      summaryWaiting: "en espera",
+      summaryPromotedToday: "promovido hoy",
+      stagedTitle: "Del registro diario",
+      stagedDescription:
+        "Volver a reproducir candidatos extraídos de entradas anteriores del registro diario.",
+      shortTermTitle: "Esperando promoción",
+      shortTermDescription:
+        "Candidatos actuales a corto plazo que esperan ascender a memoria real.",
+      sortRecent: "Más reciente",
+      sortSignals: "Mayor respaldo",
+      originDailyLog: "reproducido",
+      originLive: "en vivo",
+      originMixed: "mixto",
+      promotedTitle: "Promociones recientes",
+      promotedDescription: "Elementos que ya pasaron por la promoción.",
+      emptyGrounded: "No hay entradas de reproducción fundamentada preparadas en este momento.",
+      emptyShortTerm: "No hay entradas a corto plazo para inspeccionar.",
+      emptyPromoted: "No hay promociones recientes para inspeccionar.",
+      updatedPrefix: "actualizado",
     },
     stats: {
       shortTerm: "Corto plazo",
