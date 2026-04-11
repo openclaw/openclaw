@@ -21,7 +21,7 @@ jobs:
   parity-gate:
     name: Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock
     if: ${{ github.event.pull_request.draft != true }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 20
     env:
       # Fence the gate off from any real provider credentials. The qa-lab
