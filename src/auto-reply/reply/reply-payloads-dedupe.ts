@@ -143,6 +143,12 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (targetProvider !== provider) {
       return false;
     }
+    // When target.to is empty, the agent sent to the implicit current channel
+    // (e.g. Telegram DM where message() infers the target from currentChannelId).
+    // Treat this as matching the origin target.
+    if (!target.to) {
+      return true;
+    }
     const targetKey = normalizeTargetForProvider(targetProvider, target.to);
     if (!targetKey) {
       return false;

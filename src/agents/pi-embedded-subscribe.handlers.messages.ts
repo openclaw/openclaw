@@ -440,6 +440,17 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  // When the assistant message contains tool calls, the text content is
+  // intermediate reasoning (e.g. "Let me check...") that should NOT be
+  // forwarded to the user. Real user-facing replies go through the
+  // messaging tool explicitly.
+  const hasToolCall =
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some(
+      (block) =>
+        (block as { type?: string })?.type === "toolCall" ||
+        (block as { type?: string })?.type === "tool_use",
+    );
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput =
     ctx.state.deterministicApprovalPromptPending || ctx.state.deterministicApprovalPromptSent;
@@ -594,6 +605,7 @@ export function handleMessageEnd(
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !hasToolCall &&
     text &&
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
@@ -642,7 +654,7 @@ export function handleMessageEnd(
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (!hasToolCall && !ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 

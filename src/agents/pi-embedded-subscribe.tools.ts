@@ -396,16 +396,19 @@ export function extractMessagingToolSend(
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
-      return undefined;
-    }
     const providerRaw = normalizeOptionalString(args.provider) ?? "";
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
+    if (!toRaw) {
+      // No explicit target — the message was sent to the implicit current
+      // channel (e.g. Telegram DM). Return with empty `to` so the caller
+      // can still track that a send happened.
+      return { tool: toolName, provider, accountId, to: "" };
+    }
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    return to ? { tool: toolName, provider, accountId, to } : { tool: toolName, provider, accountId, to: "" };
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
