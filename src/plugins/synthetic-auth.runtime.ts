@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 const BUNDLED_SYNTHETIC_AUTH_PROVIDER_REFS = ["claude-cli", "ollama", "xai"] as const;
 
@@ -19,7 +18,7 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
 }
 
 export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
-  const registry = getPluginRegistryState()?.activeRegistry as PluginRegistry | null | undefined;
+  const registry = getPluginRegistryState()?.activeRegistry;
   if (registry) {
     return uniqueProviderRefs([
       ...(registry.providers ?? [])
