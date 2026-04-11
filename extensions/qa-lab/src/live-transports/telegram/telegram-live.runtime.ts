@@ -37,6 +37,7 @@ type TelegramQaScenarioId =
   | "telegram-tools-compact-command"
   | "telegram-whoami-command"
   | "telegram-context-command"
+  | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
 
 type TelegramQaScenarioRun = {
@@ -223,6 +224,20 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       input: `/context@${sutUsername}`,
       expectedTextIncludes: ["/context list", "Inline shortcut"],
     }),
+  },
+  {
+    id: "telegram-mentioned-message-reply",
+    title: "Telegram mentioned message gets a reply",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => {
+      const token = `TELEGRAM_QA_REPLY_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: `@${sutUsername} reply with only this exact marker: ${token}`,
+        expectedTextIncludes: [token],
+        matchText: token,
+      };
+    },
   },
   {
     id: "telegram-mention-gating",
