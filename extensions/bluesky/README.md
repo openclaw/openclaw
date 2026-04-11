@@ -19,6 +19,20 @@ openclaw plugins install @openclaw/bluesky
 
 ## Quick Setup
 
+### Interactive setup (recommended)
+
+After installing the plugin, run the interactive setup wizard:
+
+```bash
+openclaw configure bluesky
+```
+
+This prompts for your handle and app password, detects existing env vars, and
+writes the config for you. You can also reach it via `openclaw onboard` if
+Bluesky has not been configured yet.
+
+### Manual setup
+
 1. Create a Bluesky App Password at **Settings → Privacy and Security → App Passwords**
    (do **not** use your main account password)
 

@@ -12,6 +12,7 @@ import { dispatchBlueskyInboundTurn } from "./inbound-turn.js";
 import { runBlueSkyPollLoop } from "./poll.js";
 import { setBlueskyRuntime } from "./runtime.js";
 import { sendBlueskyMessage } from "./send.js";
+import { blueskySetupAdapter, blueskySetupWizard } from "./setup-surface.js";
 import type { ResolvedBlueskyAccount } from "./types.js";
 
 export { setBlueskyRuntime };
@@ -41,6 +42,9 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
     chatTypes: ["direct"],
     media: false,
   },
+
+  setupWizard: blueskySetupWizard,
+  setup: blueskySetupAdapter,
 
   reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
 
