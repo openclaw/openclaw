@@ -17319,10 +17319,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "RubberBand Enabled",
+                    description:
+                      "Enable RubberBand static command pattern detection (default: true).",
                   },
                   mode: {
                     type: "string",
                     enum: ["block", "alert", "log", "off", "shadow"],
+                    title: "RubberBand Mode",
+                    description: "RubberBand enforcement mode: block, alert, log, shadow, or off.",
                   },
                   thresholds: {
                     type: "object",
@@ -17331,11 +17336,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "integer",
                         minimum: 0,
                         maximum: 100,
+                        title: "RubberBand Alert Threshold",
+                        description: "Score threshold to trigger an alert (default: 40).",
                       },
                       block: {
                         type: "integer",
                         minimum: 0,
                         maximum: 100,
+                        title: "RubberBand Block Threshold",
+                        description: "Score threshold to block execution (default: 60).",
                       },
                     },
                     additionalProperties: false,
@@ -17345,9 +17354,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     items: {
                       type: "string",
                     },
+                    title: "RubberBand Allowed Destinations",
+                    description:
+                      "Hostnames/IPs allowed for network commands (e.g. localhost, 127.0.0.1). Destinations not on this list raise the exfil score.",
                   },
                   notifyChannel: {
                     type: "boolean",
+                    title: "RubberBand Notify User Channel",
+                    description:
+                      "When true, RubberBand alerts/blocks are sent to the user's messaging channel.",
                   },
                 },
                 additionalProperties: false,

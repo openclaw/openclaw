@@ -573,17 +573,19 @@ export async function dispatchReplyFromConfig(
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {
-          queuedFinal = result.ok;
-          if (result.ok) {
-            routedFinalCount += 1;
-          }
           if (!result.ok) {
             logVerbose(
               `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
             );
           }
+          queuedFinal = result.ok;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
         } else {
           queuedFinal = dispatcher.sendFinalReply(payload);
+        }
+      } else {
         }
       } else {
         logVerbose(
