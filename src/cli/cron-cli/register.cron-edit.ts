@@ -51,23 +51,12 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
-      .option("--command <command>", "Set command payload command")
-      .option(
-        "--arg <value>",
-        "Repeatable command arg",
-        (value, list: string[] = []) => {
-          list.push(value);
-          return list;
-        },
-        [],
-      )
-      .option("--clear-args", "Remove command args", false)
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
-      .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
+      .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
@@ -99,9 +88,9 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
-          if (opts.session === "main" && (opts.message || opts.command)) {
+          if (opts.session === "main" && opts.message) {
             throw new Error(
-              "Main jobs cannot use --message/--command; use --system-event or a non-main session target.",
+              "Main jobs cannot use --message; use --system-event or --session isolated.",
             );
           }
           if (opts.session === "isolated" && opts.systemEvent) {
@@ -184,11 +173,6 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
-          const hasCommandArgs =
-            Array.isArray(opts.arg) &&
-            opts.arg.some((value: unknown) => String(value).trim().length > 0);
-          const hasCommandPayload =
-            typeof opts.command === "string" || hasCommandArgs || opts.clearArgs;
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const timeoutSeconds = opts.timeoutSeconds
@@ -203,40 +187,23 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
+            hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
-            opts.clearTools;
-          const needsExistingPayloadForTimeout =
-            hasTimeoutSeconds && !hasSystemEventPatch && !hasAgentTurnPatch && !hasCommandPayload;
-          const payloadChangeKinds = [
-            hasSystemEventPatch,
-            hasAgentTurnPatch,
-            hasCommandPayload,
-          ].filter(Boolean).length;
-          if (payloadChangeKinds > 1) {
+            opts.clearTools ||
+            hasDeliveryModeFlag ||
+            hasDeliveryTarget ||
+            hasDeliveryAccount ||
+            hasBestEffort;
+          if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
-          }
-
-          let existingPayloadKind: CronJob["payload"]["kind"] | undefined;
-          if (needsExistingPayloadForTimeout) {
-            const listed = (await callGatewayFromCli("cron.list", opts, {
-              includeDisabled: true,
-            })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
-            if (!existing) {
-              throw new Error(`unknown cron job id: ${id}`);
-            }
-            existingPayloadKind = existing.payload.kind;
-            if (existingPayloadKind === "systemEvent") {
-              throw new Error("--timeout-seconds only applies to agentTurn or command jobs");
-            }
           }
           if (hasSystemEventPatch) {
             patch.payload = {
               kind: "systemEvent",
               text: String(opts.systemEvent),
             };
-          } else if (hasAgentTurnPatch || existingPayloadKind === "agentTurn") {
+          } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
             assignIf(payload, "model", model, Boolean(model));
@@ -255,30 +222,6 @@ export function registerCronEditCommand(cron: Command) {
                 .split(",")
                 .map((t: string) => t.trim())
                 .filter(Boolean);
-            }
-            patch.payload = payload;
-          } else if (hasCommandPayload || existingPayloadKind === "command") {
-            if (
-              model ||
-              thinking ||
-              typeof opts.lightContext === "boolean" ||
-              opts.tools ||
-              opts.clearTools
-            ) {
-              throw new Error(
-                "--model, --thinking, --light-context, and --tools only apply to agentTurn payloads",
-              );
-            }
-            const payload: Record<string, unknown> = { kind: "command" };
-            assignIf(payload, "command", String(opts.command), typeof opts.command === "string");
-            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            if (opts.clearArgs) {
-              payload.args = null;
-            } else if (Array.isArray(opts.arg)) {
-              const args = opts.arg.map((value: unknown) => String(value).trim()).filter(Boolean);
-              if (args.length > 0) {
-                payload.args = args;
-              }
             }
             patch.payload = payload;
           }
