@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
@@ -264,12 +265,15 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+    const sessionAgentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const sessionSummary = await loadSessionCostSummary({
       sessionId: params.sessionEntry?.sessionId,
       sessionEntry: params.sessionEntry,
       sessionFile: params.sessionEntry?.sessionFile,
       config: params.cfg,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
     });
     const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
 
