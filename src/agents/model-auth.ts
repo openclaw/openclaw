@@ -345,6 +345,7 @@ function shouldDeferSyntheticProfileAuth(params: {
 
 export async function resolveApiKeyForProvider(params: {
   provider: string;
+  modelId?: string;
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
@@ -356,6 +357,38 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+
+  // ── Plugin runtime auth overrides ──
+  // Registered via api.registerProviderRuntimeAuthOverride() in plugins.
+  // First non-null result wins. Throwing fails the request (no implicit fallback).
+  {
+    const { getGlobalPluginRegistry } = await import("../plugins/hook-runner-global.js");
+    const pluginRegistry = getGlobalPluginRegistry();
+    if (pluginRegistry) {
+      for (const reg of pluginRegistry.providerRuntimeAuthOverrides) {
+        if (!reg.override.providers.includes(provider)) {
+          continue;
+        }
+        const result = await reg.override.run({
+          provider,
+          modelId: params.modelId ?? "",
+          profileId: params.profileId,
+        });
+        if (result != null) {
+          log.info(
+            `[runtime-auth-override] provider "${provider}" overridden by plugin "${reg.pluginId}"`,
+          );
+          return {
+            apiKey: result.apiKey,
+            source: result.source ?? `plugin-override:${reg.pluginId}`,
+            mode: (result.mode as ResolvedProviderAuth["mode"]) ?? "api-key",
+            baseUrl: result.baseUrl,
+            providerRequestHeaders: result.providerRequestHeaders,
+          };
+        }
+      }
+    }
+  }
 
   if (profileId) {
     const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -659,6 +692,7 @@ export async function getApiKeyForModel(params: {
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
+    modelId: params.model.id,
     cfg: params.cfg,
     profileId: params.profileId,
     preferredProfile: params.preferredProfile,
@@ -673,20 +707,32 @@ export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
 ): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
-    return model;
+  // Apply plugin runtime auth override fields (baseUrl, providerRequestHeaders)
+  let effective = model;
+  if (auth?.providerRequestHeaders || auth?.baseUrl) {
+    effective = {
+      ...effective,
+      ...(auth.baseUrl ? { baseUrl: auth.baseUrl } : {}),
+      ...(auth.providerRequestHeaders
+        ? { headers: { ...effective.headers, ...auth.providerRequestHeaders } }
+        : {}),
+    };
+  }
+
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || effective.api !== "openai-completions") {
+    return effective;
   }
 
   // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
   // placeholder so construction succeeds, then clear the header at request build
   // time for local servers that intentionally do not require auth.
   const headers = {
-    ...model.headers,
+    ...effective.headers,
     Authorization: null,
   } as unknown as Record<string, string>;
 
   return {
-    ...model,
+    ...effective,
     headers,
   };
 }

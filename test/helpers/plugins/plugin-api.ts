@@ -52,6 +52,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
       return input;
     },
     on() {},
+    registerProviderRuntimeAuthOverride() {},
     ...api,
   };
 }

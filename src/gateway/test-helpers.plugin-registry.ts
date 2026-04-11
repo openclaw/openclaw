@@ -31,6 +31,7 @@ function createStubPluginRegistry(): PluginRegistry {
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
+    providerRuntimeAuthOverrides: [],
     diagnostics: [],
   };
 }

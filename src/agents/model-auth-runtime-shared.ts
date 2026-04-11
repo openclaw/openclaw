@@ -10,6 +10,10 @@ export type ResolvedProviderAuth = {
   profileId?: string;
   source: string;
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  /** Optional base URL override for the provider (applies to this call only). */
+  baseUrl?: string;
+  /** Optional extra headers to merge into the outbound provider request. */
+  providerRequestHeaders?: Record<string, string>;
 };
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
