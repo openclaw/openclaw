@@ -1326,6 +1326,13 @@ function ensureListener() {
           patch.endedAt = endedAt ?? now;
           patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
         }
+      } else if (evt.stream === "approval") {
+        const approvalPhase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
+        const approvalStatus = typeof evt.data?.status === "string" ? evt.data.status : undefined;
+        if (approvalPhase === "requested" && approvalStatus === "pending") {
+          patch.status = "awaiting_approval";
+          patch.progressSummary = "Awaiting approval before command can run.";
+        }
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
       }

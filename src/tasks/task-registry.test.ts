@@ -308,6 +308,8 @@ describe("task-registry", () => {
         failures: 1,
         byStatus: {
           queued: 1,
+          awaiting_approval: 0,
+          waiting_external: 0,
           running: 1,
           succeeded: 0,
           failed: 0,
@@ -1762,6 +1764,41 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
       relay.dispose();
       vi.useRealTimers();
+    });
+  });
+
+  it("projects approval-pending events as awaiting_approval task state", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const created = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-await-approval",
+        task: "Run guarded command",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      emitAgentEvent({
+        runId: "run-await-approval",
+        stream: "approval",
+        data: {
+          phase: "requested",
+          kind: "exec",
+          status: "pending",
+          title: "Command approval requested",
+        },
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "awaiting_approval",
+        progressSummary: "Awaiting approval before command can run.",
+      });
     });
   });
 
