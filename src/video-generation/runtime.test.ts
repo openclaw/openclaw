@@ -327,6 +327,196 @@ describe("video-generation runtime", () => {
     expect(result.attempts[0]?.error).toMatch(/does not accept providerOptions/);
   });
 
+  it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {
+    mocks.getVideoGenerationProvider.mockImplementation((providerId: string) => {
+      if (providerId === "openai") {
+        return {
+          id: "openai",
+          defaultModel: "sora-2",
+          capabilities: {},
+          isConfigured: () => true,
+          async generateVideo() {
+            throw new Error("should not be called");
+          },
+        };
+      }
+      if (providerId === "byteplus") {
+        return {
+          id: "byteplus",
+          defaultModel: "seedance-1-0-pro-250528",
+          capabilities: {
+            maxInputAudios: 1,
+          },
+          isConfigured: () => true,
+          async generateVideo(req) {
+            expect(req.inputAudios).toEqual([
+              { url: "https://example.com/reference-audio.mp3", role: "reference_audio" },
+            ]);
+            return {
+              videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+              model: "seedance-1-0-pro-250528",
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+    mocks.listVideoGenerationProviders.mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "sora-2",
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+      {
+        id: "byteplus",
+        defaultModel: "seedance-1-0-pro-250528",
+        capabilities: { maxInputAudios: 1 },
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+    ]);
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openai/sora-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      inputAudios: [{ url: "https://example.com/reference-audio.mp3", role: "reference_audio" }],
+    });
+
+    expect(result.provider).toBe("byteplus");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.provider).toBe("openai");
+    expect(result.attempts[0]?.error).toMatch(/does not support reference audio inputs/);
+  });
+
+  it("fails when every candidate is skipped for unsupported reference audio inputs", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/sora-2");
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {},
+      async generateVideo() {
+        throw new Error("should not be called");
+      },
+    });
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: { defaults: { videoGenerationModel: { primary: "openai/sora-2" } } },
+        } as OpenClawConfig,
+        prompt: "animate a cat",
+        inputAudios: [{ url: "https://example.com/reference-audio.mp3" }],
+      }),
+    ).rejects.toThrow(/does not support reference audio inputs/);
+  });
+
+  it("skips providers whose hard duration cap is below the request and falls back", async () => {
+    let seenDurationSeconds: number | undefined;
+    mocks.getVideoGenerationProvider.mockImplementation((providerId: string) => {
+      if (providerId === "openai") {
+        return {
+          id: "openai",
+          defaultModel: "sora-2",
+          capabilities: {
+            generate: {
+              maxDurationSeconds: 4,
+            },
+          },
+          isConfigured: () => true,
+          async generateVideo() {
+            throw new Error("should not be called");
+          },
+        };
+      }
+      if (providerId === "runway") {
+        return {
+          id: "runway",
+          defaultModel: "gen4.5",
+          capabilities: {
+            generate: {
+              maxDurationSeconds: 8,
+            },
+          },
+          isConfigured: () => true,
+          async generateVideo(req) {
+            seenDurationSeconds = req.durationSeconds;
+            return {
+              videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+              model: "gen4.5",
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+    mocks.listVideoGenerationProviders.mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "sora-2",
+        capabilities: { generate: { maxDurationSeconds: 4 } },
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+      {
+        id: "runway",
+        defaultModel: "gen4.5",
+        capabilities: { generate: { maxDurationSeconds: 8 } },
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+    ]);
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openai/sora-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      durationSeconds: 6,
+    });
+
+    expect(result.provider).toBe("runway");
+    expect(seenDurationSeconds).toBe(6);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.provider).toBe("openai");
+    expect(result.attempts[0]?.error).toMatch(/supports at most 4s per video, 6s requested/);
+  });
+
+  it("fails when every candidate is skipped for exceeding hard duration caps", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/sora-2");
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {
+          maxDurationSeconds: 4,
+        },
+      },
+      async generateVideo() {
+        throw new Error("should not be called");
+      },
+    });
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: { defaults: { videoGenerationModel: { primary: "openai/sora-2" } } },
+        } as OpenClawConfig,
+        prompt: "animate a cat",
+        durationSeconds: 6,
+      }),
+    ).rejects.toThrow(/supports at most 4s per video, 6s requested/);
+  });
+
   it("lists runtime video-generation providers through the provider registry", () => {
     const providers: VideoGenerationProvider[] = [
       {
