@@ -1649,13 +1649,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         alternateModel,
         fastMode,
         concurrency,
-        // Record the scenario ids that actually ran (post-selectQaSuiteScenarios
-        // normalization) so the summary metadata matches the executed selection,
-        // not the raw caller input. selectQaSuiteScenarios dedupes via Set and
-        // reorders to catalog order, so passing params.scenarioIds directly
-        // would mislabel runs that repeated --scenario flags or used
-        // non-catalog order.
-        scenarioIds: selectedCatalogScenarios.map((scenario) => scenario.id),
+        // When the caller supplied an explicit non-empty --scenario filter,
+        // record the executed (post-selectQaSuiteScenarios-normalized) ids
+        // so the summary matches what actually ran. When the caller passed
+        // nothing or an empty array ("no filter, full lane catalog"),
+        // preserve the unfiltered = null semantic so the summary stays
+        // distinguishable from an explicit all-scenarios selection.
+        scenarioIds:
+          params?.scenarioIds && params.scenarioIds.length > 0
+            ? selectedCatalogScenarios.map((scenario) => scenario.id)
+            : undefined,
       });
       lab.setLatestReport({
         outputPath: reportPath,
@@ -1817,9 +1820,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       alternateModel,
       fastMode,
       concurrency,
-      // Record the post-selection scenario ids (see the sibling
-      // writeQaSuiteArtifacts call above for the full reasoning).
-      scenarioIds: selectedCatalogScenarios.map((scenario) => scenario.id),
+      // Same "filtered → executed list, unfiltered → null" convention as
+      // the concurrent-path writeQaSuiteArtifacts call above.
+      scenarioIds:
+        params?.scenarioIds && params.scenarioIds.length > 0
+          ? selectedCatalogScenarios.map((scenario) => scenario.id)
+          : undefined,
     });
     const latestReport = {
       outputPath: reportPath,
