@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -89,6 +90,62 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         expect(result.reason).toBe("requests-in-flight");
       }
       expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns requests-in-flight when a reply run is still active for the session", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "30m" },
+            model: { primary: "test/model" },
+          },
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            token: "fake",
+            allowFrom: ["123"],
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+      });
+
+      enqueueSystemEvent("Exec completed (test-id, code 0) :: test output", {
+        sessionKey,
+      });
+
+      const op = createReplyOperation({
+        sessionKey,
+        sessionId: "session-active-reply",
+        resetTriggered: false,
+      });
+      op.setPhase("running");
+
+      try {
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: {
+            getQueueSize: () => 0,
+            nowMs: () => Date.now(),
+            getReplyFromConfig: replySpy,
+          } as HeartbeatDeps,
+        });
+
+        expect(result.status).toBe("skipped");
+        if (result.status === "skipped") {
+          expect(result.reason).toBe("requests-in-flight");
+        }
+        expect(replySpy).not.toHaveBeenCalled();
+      } finally {
+        op.complete();
+      }
     });
   });
 
