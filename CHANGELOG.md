@@ -180,6 +180,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat/scheduling: spread interval heartbeats across stable per-agent phases derived from gateway identity, so provider traffic is distributed more uniformly across the configured interval instead of clustering around startup-relative times. (#64560) Thanks @odysseus0.
 - Config/media: accept `tools.media.asyncCompletion.directSend` in strict config validation so gateways no longer reject the generated-schema-backed async media completion setting at startup. (#63618) Thanks @qiziAI.
 - Telegram/exec: preserve delayed exec completion routing for forum topics by pinning background exec completions to the topic where the run started even if the session route later drifts. (#64580) thanks @jalehman.
+- Gateway/chat history: import bound `codex-cli` session transcripts into `chat.history`, so refreshing a Codex-backed chat restores prior turns from the Codex session store instead of showing an empty history when only the external CLI transcript exists.
 
 ## 2026.4.9
 

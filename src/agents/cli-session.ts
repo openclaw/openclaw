@@ -89,6 +89,7 @@ export function setCliSessionBinding(
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = trimmed;
   }
+  delete entry.suppressCliHistoryImport;
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
@@ -106,9 +107,11 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     delete entry.claudeCliSessionId;
   }
+  delete entry.suppressCliHistoryImport;
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
+  delete entry.suppressCliHistoryImport;
   delete entry.cliSessionBindings;
   delete entry.cliSessionIds;
   delete entry.claudeCliSessionId;

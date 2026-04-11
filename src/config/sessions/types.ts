@@ -231,6 +231,11 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  /**
+   * Blocks CLI transcript backfill for fresh sessions created by reset while
+   * their previous external CLI bindings are still preserved.
+   */
+  suppressCliHistoryImport?: boolean;
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;

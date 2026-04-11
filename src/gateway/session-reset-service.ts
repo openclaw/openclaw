@@ -627,6 +627,12 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
+      suppressCliHistoryImport:
+        currentEntry?.cliSessionBindings ||
+        currentEntry?.cliSessionIds ||
+        currentEntry?.claudeCliSessionId
+          ? true
+          : undefined,
       cliSessionBindings: currentEntry?.cliSessionBindings,
       cliSessionIds: currentEntry?.cliSessionIds,
       claudeCliSessionId: currentEntry?.claudeCliSessionId,
