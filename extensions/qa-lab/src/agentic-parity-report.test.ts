@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildQaAgenticParityComparison,
   computeQaAgenticParityMetrics,
+  QaParityLabelMismatchError,
   renderQaAgenticParityMarkdownReport,
   type QaParitySuiteSummary,
 } from "./agentic-parity-report.js";
@@ -374,6 +375,190 @@ Follow-up:
     };
 
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
+  });
+
+  it("flags positive-tone fake success when the scenario has no tool-call evidence", () => {
+    // A prose-only pass that says "Successfully completed the delegation"
+    // without any recorded `plannedToolName` or tool-call evidence is
+    // exactly the fake-success shape the old failure-tone-only regex set
+    // missed. This regression pins the positive-tone branch.
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Subagent handoff",
+          status: "pass",
+          details: "Successfully completed the delegation. The subagent returned its result.",
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
+  });
+
+  it("flags a bare `Done.` prose pass as fake success", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Approval turn tool followthrough",
+          status: "pass",
+          details: "Done.",
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
+  });
+
+  it("does not flag positive-tone passes when the scenario shows real tool-call evidence", () => {
+    // A legitimate tool-mediated pass that happens to include
+    // "successfully" in its prose must not be flagged. The
+    // `plannedToolName` evidence (or any of the other tool-call
+    // evidence patterns) exempts the scenario from positive-tone
+    // detection. Without this exemption, real tool-backed passes with
+    // self-congratulatory prose would count as fake successes and break
+    // the gate.
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Source and docs discovery report",
+          status: "pass",
+          details:
+            "Successfully completed the report. plannedToolName=read recorded via /debug/requests.",
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
+  });
+
+  it("flags positive-tone passes alongside failure-tone passes when both occur", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Approval turn tool followthrough",
+          status: "pass",
+          details: "Task executed successfully without errors.",
+        },
+        {
+          name: "Subagent handoff",
+          status: "pass",
+          details: "Tool call completed, but an error occurred mid-turn.",
+        },
+      ],
+    };
+
+    // Both scenarios should count: one is positive-tone (evasive fake
+    // success), the other is failure-tone (classic fake success).
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(2);
+  });
+
+  it("throws QaParityLabelMismatchError when the candidate run.primaryProvider does not match the label", () => {
+    // Regression for the gate footgun: if an operator swaps the
+    // --candidate-summary and --baseline-summary paths, the gate would
+    // silently produce a reversed verdict. PR L #64789 ships the `run`
+    // block on every summary so the parity report can verify it against
+    // the caller-supplied label; this test pins the precondition check.
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+    ];
+
+    expect(() =>
+      buildQaAgenticParityComparison({
+        candidateLabel: "openai/gpt-5.4",
+        baselineLabel: "anthropic/claude-opus-4-6",
+        candidateSummary: {
+          scenarios: parityPassScenarios,
+          run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        },
+        baselineSummary: {
+          scenarios: parityPassScenarios,
+          run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        },
+        comparedAt: "2026-04-11T00:00:00.000Z",
+      }),
+    ).toThrow(QaParityLabelMismatchError);
+  });
+
+  it("throws QaParityLabelMismatchError when the baseline run.primaryProvider does not match the label", () => {
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+    ];
+
+    expect(() =>
+      buildQaAgenticParityComparison({
+        candidateLabel: "openai/gpt-5.4",
+        baselineLabel: "anthropic/claude-opus-4-6",
+        candidateSummary: {
+          scenarios: parityPassScenarios,
+          run: { primaryProvider: "openai" },
+        },
+        baselineSummary: {
+          scenarios: parityPassScenarios,
+          run: { primaryProvider: "openai" },
+        },
+        comparedAt: "2026-04-11T00:00:00.000Z",
+      }),
+    ).toThrow(/baseline summary run.primaryProvider=openai does not match --baseline-label/);
+  });
+
+  it("accepts matching run.primaryProvider labels without throwing", () => {
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+      { name: "Subagent handoff", status: "pass" as const },
+      { name: "Subagent fanout synthesis", status: "pass" as const },
+      { name: "Memory recall after context switch", status: "pass" as const },
+      { name: "Thread memory isolation", status: "pass" as const },
+      { name: "Config restart capability flip", status: "pass" as const },
+    ];
+
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: {
+        scenarios: parityPassScenarios,
+        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+      },
+      baselineSummary: {
+        scenarios: parityPassScenarios,
+        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+    expect(comparison.pass).toBe(true);
+  });
+
+  it("skips run.primaryProvider verification when the summary is missing a run block (legacy summaries)", () => {
+    // Pre-PR-L summaries don't carry a `run` block. The gate must still
+    // work against those, trusting the caller-supplied label.
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+      { name: "Subagent handoff", status: "pass" as const },
+      { name: "Subagent fanout synthesis", status: "pass" as const },
+      { name: "Memory recall after context switch", status: "pass" as const },
+      { name: "Thread memory isolation", status: "pass" as const },
+      { name: "Config restart capability flip", status: "pass" as const },
+    ];
+
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: { scenarios: parityPassScenarios },
+      baselineSummary: { scenarios: parityPassScenarios },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+    expect(comparison.pass).toBe(true);
   });
 
   it("renders a readable markdown parity report", () => {
