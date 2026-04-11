@@ -175,4 +175,31 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTargets: [],
     });
   });
+
+  it("fails closed when prepareArguments is present but not callable", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "should not run" }],
+    }));
+    const tool = {
+      ...createTool({ execute }),
+      prepareArguments: "polluted",
+    } as unknown as AnyAgentTool;
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.contentItems?.[0]?.text).toContain("Invalid tool.prepareArguments");
+    expect(result.contentItems?.[0]?.text).toContain("string");
+    expect(execute).not.toHaveBeenCalled();
+  });
 });
