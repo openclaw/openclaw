@@ -2941,7 +2941,7 @@ module.exports = {
         (entry) =>
           entry.level === "error" &&
           entry.pluginId === "setup-runtime-bundled-error-test" &&
-          String(entry.message).includes("failed to load setup entry: Error: setup entry exploded"),
+          entry.message.includes("failed to load setup entry: Error: setup entry exploded"),
       ),
     ).toBe(true);
   });
