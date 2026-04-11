@@ -8,14 +8,29 @@ import { firstDefined } from "./bot-access.js";
 export function resolveTelegramGroupPromptSettings(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
 }): {
   skillFilter: string[] | undefined;
   groupSystemPrompt: string | undefined;
 } {
-  const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
+  const groupPrompt = firstDefined(
+    params.groupConfig?.systemPrompt?.trim() || undefined,
+    params.promptGroupConfig?.systemPrompt?.trim() || undefined,
+  );
+  const topicPrompt = firstDefined(
+    params.topicConfig?.systemPrompt?.trim() || undefined,
+    params.promptTopicConfig?.systemPrompt?.trim() || undefined,
+  );
+  const skillFilter = firstDefined(
+    params.topicConfig?.skills,
+    params.promptTopicConfig?.skills,
+    params.groupConfig?.skills,
+    params.promptGroupConfig?.skills,
+  );
   const systemPromptParts = [
-    params.groupConfig?.systemPrompt?.trim() || null,
-    params.topicConfig?.systemPrompt?.trim() || null,
+    groupPrompt ?? null,
+    topicPrompt ?? null,
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;

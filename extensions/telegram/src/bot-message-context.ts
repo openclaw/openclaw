@@ -141,7 +141,8 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  const { groupConfig, topicConfig, promptGroupConfig, promptTopicConfig } =
+    resolveTelegramGroupConfig(chatId, threadIdForConfig);
   // Use direct config dmPolicy override if available for DMs
   const effectiveDmPolicy =
     !isGroup && groupConfig && "dmPolicy" in groupConfig
@@ -498,6 +499,8 @@ export const buildTelegramMessageContext = async ({
     groupHistories,
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
     stickerCacheHit: bodyResult.stickerCacheHit,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
     locationData: bodyResult.locationData,

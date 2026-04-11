@@ -33,6 +33,8 @@ export type ResolveTelegramGroupConfig = (
 ) => {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
 };
 
 export type ResolveGroupActivation = (params: {

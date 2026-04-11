@@ -98,6 +98,8 @@ export async function buildTelegramInboundContextPayload(params: {
   groupHistories: Map<string, HistoryEntry[]>;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
@@ -132,6 +134,8 @@ export async function buildTelegramInboundContextPayload(params: {
     groupHistories,
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
     commandAuthorized,
@@ -275,6 +279,8 @@ export async function buildTelegramInboundContextPayload(params: {
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
   });
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),

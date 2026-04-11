@@ -100,6 +100,8 @@ type TelegramCommandAuthResult = {
   senderUsername: string;
   groupConfig?: TelegramGroupConfig;
   topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
   commandAuthorized: boolean;
 };
 
@@ -187,7 +189,12 @@ export type RegisterTelegramHandlerParams = {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  ) => {
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    promptTopicConfig?: TelegramTopicConfig;
+  };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   processMessage: (
     ctx: TelegramContext,
@@ -240,7 +247,12 @@ export type RegisterTelegramNativeCommandsParams = {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  ) => {
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    promptTopicConfig?: TelegramTopicConfig;
+  };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   telegramDeps?: TelegramNativeCommandDeps;
   opts: { token: string };
@@ -260,7 +272,12 @@ async function resolveTelegramCommandAuth(params: {
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  ) => {
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    promptTopicConfig?: TelegramTopicConfig;
+  };
   requireAuth: boolean;
 }): Promise<TelegramCommandAuthResult | null> {
   const {
@@ -313,6 +330,8 @@ async function resolveTelegramCommandAuth(params: {
     storeAllowFrom,
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
     hasGroupAllowOverride,
@@ -457,6 +476,8 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
     commandAuthorized,
   };
 }
@@ -750,6 +771,8 @@ export const registerTelegramNativeCommands = ({
           senderUsername,
           groupConfig,
           topicConfig,
+          promptGroupConfig,
+          promptTopicConfig,
           commandAuthorized,
         } = auth;
         const runtimeContext = await resolveCommandRuntimeContext({
@@ -842,6 +865,8 @@ export const registerTelegramNativeCommands = ({
         const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
           groupConfig,
           topicConfig,
+          promptGroupConfig,
+          promptTopicConfig,
         });
         const { sessionKey: commandSessionKey, commandTargetSessionKey } =
           resolveNativeCommandSessionTargets({

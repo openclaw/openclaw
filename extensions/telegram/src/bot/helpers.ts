@@ -103,6 +103,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
+    promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    promptTopicConfig?: TelegramTopicConfig;
   };
 }): Promise<{
   resolvedThreadId?: number;
@@ -110,6 +112,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   storeAllowFrom: string[];
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  promptGroupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  promptTopicConfig?: TelegramTopicConfig;
   groupAllowOverride?: Array<string | number>;
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
@@ -129,7 +133,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     process.env,
     accountId,
   ).catch(() => []);
-  const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+  const { groupConfig, topicConfig, promptGroupConfig, promptTopicConfig } =
+    params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
   );
@@ -144,6 +149,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     storeAllowFrom,
     groupConfig,
     topicConfig,
+    promptGroupConfig,
+    promptTopicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
     hasGroupAllowOverride,
