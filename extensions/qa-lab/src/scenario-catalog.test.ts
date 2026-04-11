@@ -94,7 +94,6 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
   });
 
-<<<<<<< HEAD
   it("includes the codex leak scenario in the markdown pack", () => {
     const pack = readQaScenarioPack();
     const scenario = pack.scenarios.find(
