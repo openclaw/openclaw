@@ -152,4 +152,53 @@ describe("subagents info", () => {
     expect(text).not.toContain("OpenClaw runtime context (internal):");
     expect(text).not.toContain("Internal task completion event");
   });
+
+  it("uses the requester key for task ownership lookup", () => {
+    const now = Date.now();
+    const runId = "commands-subagents-info-routed-run";
+    const childSessionKey = "agent:main:subagent:commands-info-routed";
+    const run = {
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:target",
+      requesterDisplayKey: "target",
+      task: "do routed thing",
+      cleanup: "keep",
+      createdAt: now - 20_000,
+      startedAt: now - 20_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:target",
+      childSessionKey,
+      runId,
+      task: "do routed thing",
+      status: "succeeded",
+      terminalSummary: "Resolved via routed owner key",
+      deliveryStatus: "delivered",
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const result = handleSubagentsInfoAction({
+      params: {
+        cfg,
+        sessionKey: "agent:main:slash-session",
+      },
+      handledPrefix: "/subagents",
+      requesterKey: "agent:main:target",
+      runs: [run],
+      restTokens: ["1"],
+    } as Parameters<typeof handleSubagentsInfoAction>[0]);
+    const text = requireReplyText(result.reply);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(text).toContain("TaskStatus: succeeded");
+    expect(text).toContain("Task summary: Resolved via routed owner key");
+  });
 });
