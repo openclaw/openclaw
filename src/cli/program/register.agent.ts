@@ -42,6 +42,11 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "Run the embedded agent locally (requires model provider API keys in your shell)",
       false,
     )
+    .option(
+      "--spawn",
+      "Create an isolated subagent session instead of reusing the agent main session",
+      false,
+    )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
     .option("--json", "Output result as JSON", false)
     .option(
@@ -68,6 +73,10 @@ ${formatHelpExamples([
   [
     'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
+  ],
+  [
+    'openclaw agent --spawn --message "Search memory for deploy history"',
+    "Isolated subagent session — no context bleed with main session.",
   ],
 ])}
 
