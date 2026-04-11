@@ -163,10 +163,13 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
+  // m.mentions.user_ids is the authoritative mention source per MSC3952.
+  // Previously this also required a visible text or formatted_body mention,
+  // which caused messages from non-OpenClaw clients that send proper
+  // m.mentions metadata without an @-mention in the body to be silently
+  // ignored when requireMention was enabled (#64785).
   const metadataBackedUserMention = Boolean(
-    params.userId &&
-    mentionedUsers.has(params.userId) &&
-    (mentionedInFormattedBody || textMentioned),
+    params.userId && mentionedUsers.has(params.userId),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =

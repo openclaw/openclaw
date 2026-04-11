@@ -34,19 +34,22 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
-    it("does not trust forged m.mentions.user_ids without a visible mention", () => {
+    it("detects mention via m.mentions.user_ids even without visible text mention (#64785)", () => {
+      // MSC3952: m.mentions.user_ids is the authoritative mention source.
+      // Non-OpenClaw Matrix clients (Element, standalone bots) may set
+      // m.mentions without including @bot in the visible message body.
       const result = resolveMentions({
         content: {
           msgtype: "m.text",
-          body: "hello",
+          body: "please reply",
           "m.mentions": { user_ids: ["@bot:matrix.org"] },
         },
         userId,
-        text: "hello",
+        text: "please reply",
         mentionRegexes,
       });
-      expect(result.wasMentioned).toBe(false);
-      expect(result.hasExplicitMention).toBe(false);
+      expect(result.wasMentioned).toBe(true);
+      expect(result.hasExplicitMention).toBe(true);
     });
 
     it("detects room mention via visible @room text", () => {
