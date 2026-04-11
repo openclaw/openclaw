@@ -283,7 +283,7 @@ function activeBranchMessages(conversation: Record<string, unknown>): ChatGptMes
     }
     currentNode = typeof node.parent === "string" ? node.parent : undefined;
   }
-  return chain.reverse();
+  return chain.toReversed();
 }
 
 function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {

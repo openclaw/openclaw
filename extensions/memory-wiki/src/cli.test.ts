@@ -220,7 +220,7 @@ cli note
       (entry) => entry !== "index.md",
     );
     expect(sourceFiles).toHaveLength(1);
-    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFiles[0]!), "utf8");
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFiles[0]), "utf8");
     expect(pageContent).toContain("ChatGPT Export: Travel preference check");
     expect(pageContent).toContain("I prefer aisle seats");
     expect(pageContent).toContain("Preference signals:");

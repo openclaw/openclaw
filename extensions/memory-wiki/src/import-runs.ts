@@ -43,6 +43,9 @@ function asStringArray(value: unknown): string[] {
 
 function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | null {
   const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
   const runId = typeof record?.runId === "string" ? record.runId.trim() : "";
   const importType = typeof record?.importType === "string" ? record.importType.trim() : "";
   const appliedAt = typeof record?.appliedAt === "string" ? record.appliedAt.trim() : "";

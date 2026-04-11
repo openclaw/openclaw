@@ -469,7 +469,7 @@ function formatCompactDateTime(value: string): string {
 
 function basename(value: string): string {
   const normalized = value.replace(/\\/g, "/");
-  return normalized.split("/").filter(Boolean).at(-1) ?? value;
+  return normalized.split("/").findLast(Boolean) ?? value;
 }
 
 function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
@@ -485,6 +485,7 @@ function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "
     case "report":
       return "report";
   }
+  return kind;
 }
 
 function formatImportBadge(item: {
@@ -504,6 +505,7 @@ function formatImportBadge(item: {
     case "unknown":
       return "unknown risk";
   }
+  return "unknown risk";
 }
 
 function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: () => void): void {
@@ -633,6 +635,7 @@ function renderDiarySubtabExplainer() {
         </p>
       `;
   }
+  return nothing;
 }
 
 function parseSortableTimestamp(value?: string): number {
