@@ -17,12 +17,11 @@ import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
-import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -45,8 +44,10 @@ import {
   type OffloadedRef,
   parseMessageWithAttachments,
 } from "../chat-attachments.js";
+import { MediaOffloadError } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -83,7 +84,6 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
-import { MediaOffloadError } from "../chat-attachments.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -411,13 +411,18 @@ async function persistChatSendImages(params: {
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
 }): Promise<SavedMedia[]> {
-  if ((params.images.length === 0 && params.offloadedRefs.length === 0) || isAcpBridgeClient(params.client)) {
+  if (
+    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
+    isAcpBridgeClient(params.client)
+  ) {
     return [];
   }
   const inlineSaved: SavedMedia[] = [];
   for (const img of params.images) {
     try {
-      inlineSaved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
+      inlineSaved.push(
+        await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"),
+      );
     } catch (err) {
       params.logGateway.warn(
         `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
@@ -2158,8 +2163,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             } else {
               const combinedReply = buildTranscriptReplyText(
                 deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload)
+                  .filter((entry) => entry.kind === "final")
+                  .map((entry) => entry.payload),
               );
               let message: Record<string, unknown> | undefined;
               if (combinedReply) {
