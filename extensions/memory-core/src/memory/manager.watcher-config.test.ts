@@ -139,7 +139,7 @@ describe("memory watcher config", () => {
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory.md"),
         path.join(workspaceDir, "memory", "**", "*.md"),
-        path.join(extraDir, "**", "*.md"),
+        path.join(extraDir, "**", "**", "*.md"),
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
@@ -172,8 +172,11 @@ describe("memory watcher config", () => {
     ];
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
-        path.join(extraDir, "**", "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "**", "*.[wW][aA][vV]"),
+        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "memory.md"),
+        path.join(workspaceDir, "memory", "**", "*.md"),
+        path.join(extraDir, "**", "*.[pP][nN][gG]"),
+        path.join(extraDir, "**", "*.[wW][aA][vV]"),
       ]),
     );
   });
