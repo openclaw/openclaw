@@ -1286,7 +1286,19 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     }
     if (req.method === "POST" && url.pathname === "/v1/messages") {
       const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+      let body: AnthropicMessagesRequest = {};
+      try {
+        body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+      } catch {
+        writeJson(res, 400, {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "Malformed JSON body for Anthropic Messages request.",
+          },
+        });
+        return;
+      }
       // Anthropic Messages supports SSE streaming in the real API, but the
       // QA suite runner always runs mock provider mode with streaming off.
       // Reject explicit streaming requests with an Anthropic-shaped 400 so
