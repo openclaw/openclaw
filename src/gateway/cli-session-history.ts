@@ -71,16 +71,14 @@ export function augmentChatHistoryWithCliSessionImports(params: {
   if (availableImports.length === 0) {
     return params.localMessages;
   }
+  if (params.entry?.suppressCliHistoryImport) {
+    return params.localMessages;
+  }
 
   const matchingImports = normalizedProvider
     ? availableImports.filter((entry) => normalizedProvider === entry.provider)
     : [];
-  const importsToMerge =
-    params.localMessages.length === 0
-      ? params.entry?.suppressCliHistoryImport
-        ? []
-        : availableImports
-      : matchingImports;
+  const importsToMerge = params.localMessages.length === 0 ? availableImports : matchingImports;
   if (importsToMerge.length === 0) {
     return params.localMessages;
   }

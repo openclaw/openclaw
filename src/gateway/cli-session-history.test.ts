@@ -429,6 +429,39 @@ describe("cli session history", () => {
     });
   });
 
+  it("does not merge stale CLI history into reset sessions with local transcript entries", async () => {
+    await withCodexSessionsDir(async ({ homeDir, sessionId }) => {
+      const localMessages = [
+        {
+          role: "user",
+          content: "fresh local question",
+          timestamp: Date.parse("2026-04-11T08:00:00.000Z"),
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "fresh local answer" }],
+          timestamp: Date.parse("2026-04-11T08:00:01.000Z"),
+        },
+      ];
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "fresh-session",
+          updatedAt: Date.now(),
+          suppressCliHistoryImport: true,
+          cliSessionBindings: {
+            "codex-cli": {
+              sessionId,
+            },
+          },
+        },
+        provider: "codex-cli",
+        localMessages,
+        homeDir,
+      });
+      expect(messages).toEqual(localMessages);
+    });
+  });
+
   it("imports codex user content from text elements and attachments", async () => {
     await withCodexSessionsDir(
       async ({ homeDir, sessionId }) => {
