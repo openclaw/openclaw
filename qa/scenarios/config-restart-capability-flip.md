@@ -151,6 +151,19 @@ steps:
                     ref: imageStartedAtMs
                   timeoutMs:
                     expr: liveTurnTimeoutMs(env, 45000)
+            # Tool-call assertion (criterion 2 of the parity completion
+            # gate in #64227): the restored `image_generate` capability
+            # must have actually fired as a real tool call. Without this
+            # assertion, a prose reply that just mentions a MEDIA path
+            # could satisfy the scenario, so strengthen it by requiring
+            # the mock to have recorded `plannedToolName: "image_generate"`
+            # against a post-restart request. Scoped to `!env.mock` so
+            # live-frontier runs (which don't expose `/debug/requests`)
+            # still pass the rest of the scenario.
+            - assert:
+                expr: "!env.mock || [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].some((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check') && request.plannedToolName === 'image_generate')"
+                message:
+                  expr: "`expected image_generate tool call during capability flip scenario, saw plannedToolNames=${JSON.stringify([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check')).map((request) => request.plannedToolName ?? null))}`"
           finally:
             - call: patchConfig
               args:
