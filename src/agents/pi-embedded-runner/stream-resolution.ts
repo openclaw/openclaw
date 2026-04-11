@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
+import { createGoogleGenAiStreamFnForModel } from "../google-genai-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
@@ -115,6 +116,10 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (params.model.provider === "anthropic-vertex") {
     return createAnthropicVertexStreamFnForModel(params.model);
+  }
+
+  if (params.model.provider === "google-genai") {
+    return createGoogleGenAiStreamFnForModel(params.model);
   }
 
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {

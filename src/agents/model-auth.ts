@@ -137,7 +137,13 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "google-genai-sdk"
+  ) {
     return auth;
   }
   return undefined;
@@ -323,6 +329,21 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
+function resolveGoogleGenAiSdkAuthInfo(): { mode: "google-genai-sdk"; source: string } {
+  const applied = new Set(getShellEnvAppliedKeys());
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) {
+    return {
+      mode: "google-genai-sdk",
+      source: resolveEnvSourceLabel({
+        applied,
+        envVars: ["GOOGLE_APPLICATION_CREDENTIALS"],
+        label: "GOOGLE_APPLICATION_CREDENTIALS",
+      }),
+    };
+  }
+  return { mode: "google-genai-sdk", source: "google-genai-sdk default chain" };
+}
+
 function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -397,6 +418,9 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+  if (authOverride === "google-genai-sdk") {
+    return resolveGoogleGenAiSdkAuthInfo();
   }
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
@@ -535,7 +559,14 @@ export async function resolveApiKeyForProvider(params: {
   );
 }
 
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "unknown"
+  | "google-genai-sdk";
 
 export { resolveEnvApiKey } from "./model-auth-env.js";
 export type { EnvApiKeyResult } from "./model-auth-env.js";
@@ -553,6 +584,9 @@ export function resolveModelAuthMode(
   const authOverride = resolveProviderAuthOverride(cfg, resolved);
   if (authOverride === "aws-sdk") {
     return "aws-sdk";
+  }
+  if (authOverride === "google-genai-sdk") {
+    return "google-genai-sdk";
   }
 
   const authStore = store ?? ensureAuthProfileStore();
@@ -607,6 +641,9 @@ export async function hasAvailableAuthForProvider(params: {
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
+    return true;
+  }
+  if (authOverride === "google-genai-sdk") {
     return true;
   }
   if (resolveEnvApiKey(provider)) {

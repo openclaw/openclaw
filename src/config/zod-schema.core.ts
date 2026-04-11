@@ -327,10 +327,22 @@ export const ModelDefinitionSchema = z
 
 export const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
-      .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+      .union([
+        z.literal("api-key"),
+        z.literal("aws-sdk"),
+        z.literal("oauth"),
+        z.literal("token"),
+        z.literal("google-genai-sdk"),
+      ])
+      .optional(),
+    vertexai: z
+      .object({
+        project: z.string().optional(),
+        location: z.string().optional(),
+      })
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),

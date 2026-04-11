@@ -349,7 +349,7 @@ export function createEmbeddedRunAuthController(params: {
     params.setApiKeyInfo(apiKeyInfo);
     const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
     if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
+      if (apiKeyInfo.mode !== "aws-sdk" && apiKeyInfo.mode !== "google-genai-sdk") {
         const runtimeModel = params.getRuntimeModel();
         throw new Error(
           `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
