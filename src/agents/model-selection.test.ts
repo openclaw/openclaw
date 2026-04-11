@@ -539,7 +539,7 @@ describe("model-selection", () => {
           defaults: {
             models: {
               "anthropic/claude-3-5-sonnet": { alias: "fast" },
-              "openai/gpt-4o": { alias: "smart" },
+              "openai/gpt-4o": { alias: "smart", aliasAuthProfile: "openai:work" },
             },
           },
         },
@@ -555,6 +555,7 @@ describe("model-selection", () => {
         model: "claude-3-5-sonnet",
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
+      expect(index.byAlias.get("smart")?.authProfile).toBe("openai:work");
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
     });
   });

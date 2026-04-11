@@ -148,14 +148,23 @@ function createDateAuthProfiles(provider: string, id = OPENAI_DATE_PROFILE_ID) {
   } satisfies Record<string, ApiKeyProfile>;
 }
 
-function createGptAliasIndex(): ModelAliasIndex {
+function createGptAliasIndex(authProfile?: string): ModelAliasIndex {
   return {
-    byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
+    byAlias: new Map([
+      [
+        "gpt",
+        {
+          alias: "gpt",
+          ref: { provider: "openai", model: "gpt-4o" },
+          ...(authProfile ? { authProfile } : {}),
+        },
+      ],
+    ]),
     byKey: new Map([["openai/gpt-4o", ["gpt"]]]),
   };
 }
 
-function createOpusAliasIndex(): ModelAliasIndex {
+function createOpusAliasIndex(authProfile?: string): ModelAliasIndex {
   return {
     byAlias: new Map([
       [
@@ -163,6 +172,7 @@ function createOpusAliasIndex(): ModelAliasIndex {
         {
           alias: "Opus",
           ref: { provider: "anthropic", model: "claude-opus-4-6" },
+          ...(authProfile ? { authProfile } : {}),
         },
       ],
     ]),
@@ -460,6 +470,67 @@ describe("/model chat UX", () => {
     expect(resolved.profileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
+  it("applies configured alias auth-profile overrides when no explicit profile is provided", () => {
+    setAuthProfiles({
+      "openai:work": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    });
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives: parseInlineDirectives("/model gpt"),
+      cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+      agentDir: TEST_AGENT_DIR,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: createGptAliasIndex("openai:work"),
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      isDefault: false,
+      alias: "gpt",
+    });
+    expect(resolved.profileOverride).toBe("openai:work");
+  });
+
+  it("prefers explicit auth-profile overrides over configured alias auth-profile defaults", () => {
+    setAuthProfiles({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-default",
+      },
+      "openai:work": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-work",
+      },
+    });
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives: parseInlineDirectives("/model gpt@openai:work"),
+      cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+      agentDir: TEST_AGENT_DIR,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: createGptAliasIndex("openai:default"),
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.profileOverride).toBe("openai:work");
+  });
+
   it("supports providerless allowlist selections with numeric auth-profile overrides", () => {
     setAuthProfiles(createDateAuthProfiles("openai"));
 
@@ -531,6 +602,25 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  });
+
+  it("persists configured alias auth-profile overrides for mixed-content messages", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model gpt hello",
+      profiles: {
+        "openai:work": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+      aliasIndex: createGptAliasIndex("openai:work"),
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("openai:work");
   });
 
   it("resolves agentDir from the target session agent before wrapper agentDir", async () => {
@@ -731,6 +821,46 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         contextKey: "model:anthropic/claude-opus-4-6",
       },
     );
+  });
+
+  it("applies configured alias auth-profile defaults in directive-only handling", async () => {
+    setAuthProfiles({
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+    });
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model Opus"),
+        aliasIndex: createOpusAliasIndex("anthropic:work"),
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o",
+        initialModelLabel: "openai/gpt-4o",
+        sessionEntry,
+        sessionStore,
+        formatModelSwitchEvent: (label, alias) =>
+          alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to Opus (anthropic/claude-opus-4-6).");
+    expect(result?.text).toContain("Auth profile set to anthropic:work.");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
+      key: sessionKey,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextAuthProfileId: "anthropic:work",
+      nextAuthProfileIdSource: "user",
+    });
   });
 
   it("shows no model message when no /model directive", async () => {

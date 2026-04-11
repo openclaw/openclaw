@@ -45,7 +45,7 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
 export type ModelAliasIndex = {
-  byAlias: Map<string, { alias: string; ref: ModelRef }>;
+  byAlias: Map<string, { alias: string; ref: ModelRef; authProfile?: string }>;
   byKey: Map<string, string[]>;
 };
 
@@ -288,7 +288,7 @@ export function buildModelAliasIndex(params: {
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): ModelAliasIndex {
-  const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byAlias = new Map<string, { alias: string; ref: ModelRef; authProfile?: string }>();
   const byKey = new Map<string, string[]>();
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
@@ -304,8 +304,12 @@ export function buildModelAliasIndex(params: {
     if (!alias) {
       continue;
     }
+    const authProfile =
+      normalizeOptionalString(
+        (entryRaw as { aliasAuthProfile?: string } | undefined)?.aliasAuthProfile,
+      ) ?? undefined;
     const aliasKey = normalizeLowercaseStringOrEmpty(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
+    byAlias.set(aliasKey, { alias, ref: parsed, authProfile });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
     existing.push(alias);
@@ -398,7 +402,7 @@ export function resolveModelRefFromString(params: {
   defaultProvider: string;
   aliasIndex?: ModelAliasIndex;
   allowPluginNormalization?: boolean;
-}): { ref: ModelRef; alias?: string } | null {
+}): { ref: ModelRef; alias?: string; authProfile?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
     return null;
@@ -407,7 +411,11 @@ export function resolveModelRefFromString(params: {
     const aliasKey = normalizeLowercaseStringOrEmpty(model);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
-      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+      return {
+        ref: aliasMatch.ref,
+        alias: aliasMatch.alias,
+        authProfile: aliasMatch.authProfile,
+      };
     }
   }
   const parsed = parseModelRef(model, params.defaultProvider, {

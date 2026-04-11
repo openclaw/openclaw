@@ -16,6 +16,8 @@ export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type AgentModelEntryConfig = {
   alias?: string;
+  /** Default auth profile override to apply when selecting this model through its alias in chat. */
+  aliasAuthProfile?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */

@@ -32,6 +32,21 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts aliasAuthProfile on model aliases", () => {
+    const result = AgentDefaultsSchema.parse({
+      models: {
+        "openai-codex/gpt-5.4": {
+          alias: "codex",
+          aliasAuthProfile: "openai-codex:codex-cli",
+        },
+      },
+    })!;
+
+    expect(result.models?.["openai-codex/gpt-5.4"]?.aliasAuthProfile).toBe(
+      "openai-codex:codex-cli",
+    );
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

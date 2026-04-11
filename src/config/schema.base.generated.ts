@@ -3169,6 +3169,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     alias: {
                       type: "string",
                     },
+                    aliasAuthProfile: {
+                      description:
+                        "Default auth profile override to apply when selecting this model through its alias in chat.",
+                      type: "string",
+                    },
                     params: {
                       type: "object",
                       propertyNames: {

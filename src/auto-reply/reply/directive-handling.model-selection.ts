@@ -110,6 +110,7 @@ export function resolveModelSelectionFromDirective(params: {
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,
   });
+  const aliasAuthProfile = explicit?.authProfile;
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
     if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
@@ -146,9 +147,10 @@ export function resolveModelSelectionFromDirective(params: {
   const rawProfile =
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
-  if (modelSelection && rawProfile) {
+  const requestedProfile = rawProfile ?? (modelSelection ? aliasAuthProfile : undefined);
+  if (modelSelection && requestedProfile) {
     const profileResolved = resolveProfileOverride({
-      rawProfile,
+      rawProfile: requestedProfile,
       provider: modelSelection.provider,
       cfg: params.cfg,
       agentDir: params.agentDir,
