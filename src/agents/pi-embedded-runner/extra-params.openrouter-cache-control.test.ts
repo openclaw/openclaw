@@ -43,7 +43,9 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(payload.messages[0].content).toEqual([
       { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
     ]);
-    expect(payload.messages[1].content).toBe("Hello");
+    expect(payload.messages[1].content).toEqual([
+      { type: "text", text: "Hello", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("adds cache_control to last content block when system message is already array", () => {
@@ -80,14 +82,16 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(payload.messages[0].content).toBe("You are a helpful assistant.");
   });
 
-  it("leaves payload unchanged when no system message exists", () => {
+  it("marks last user message with ephemeral cache_control when no system message exists", () => {
     const payload = {
       messages: [{ role: "user", content: "Hello" }],
     };
 
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
-    expect(payload.messages[0].content).toBe("Hello");
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "Hello", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("does not inject cache_control into thinking blocks", () => {
