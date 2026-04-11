@@ -46,7 +46,10 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
-function countCaptureDimension(events: UiState["captureEvents"], pick: (event: UiState["captureEvents"][number]) => string | undefined) {
+function countCaptureDimension(
+  events: UiState["captureEvents"],
+  pick: (event: UiState["captureEvents"][number]) => string | undefined,
+) {
   const counts = new Map<string, number>();
   for (const event of events) {
     const value = pick(event)?.trim();
@@ -57,7 +60,7 @@ function countCaptureDimension(events: UiState["captureEvents"], pick: (event: U
   }
   return [...counts.entries()]
     .map(([value, count]) => ({ value, count }))
-    .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+    .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
 function summarizeCaptureCoverageFromEvents(
@@ -361,7 +364,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
     try {
       const sessions = await getJson<CaptureSessionsEnvelope>("/api/capture/sessions");
-      const startupStatusPromise = getJson<CaptureStartupStatusEnvelope>("/api/capture/startup-status");
+      const startupStatusPromise = getJson<CaptureStartupStatusEnvelope>(
+        "/api/capture/startup-status",
+      );
       state.captureSessions = sessions.sessions;
       const availableSessionIds = new Set(sessions.sessions.map((session) => session.id));
       state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter((id) =>
@@ -375,12 +380,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
         startupStatusResult[0]?.status === "fulfilled" ? startupStatusResult[0].value.status : null;
       if (state.selectedCaptureSessionIds.length > 0) {
         const eventsPromises = state.selectedCaptureSessionIds.map((sessionId) =>
-          getJson<CaptureEventsEnvelope>(`/api/capture/events?sessionId=${encodeURIComponent(sessionId)}`),
+          getJson<CaptureEventsEnvelope>(
+            `/api/capture/events?sessionId=${encodeURIComponent(sessionId)}`,
+          ),
         );
         const singleSessionId =
           state.selectedCaptureSessionIds.length === 1 ? state.selectedCaptureSessionIds[0] : null;
         const coveragePromise = singleSessionId
-          ? getJson<CaptureCoverageEnvelope>(`/api/capture/coverage?sessionId=${encodeURIComponent(singleSessionId)}`)
+          ? getJson<CaptureCoverageEnvelope>(
+              `/api/capture/coverage?sessionId=${encodeURIComponent(singleSessionId)}`,
+            )
           : Promise.resolve<CaptureCoverageEnvelope | null>(null);
         const queryPromise =
           state.captureQueryPreset === "none"
@@ -402,11 +411,17 @@ export async function createQaLabApp(root: HTMLDivElement) {
         }
         state.captureEvents = eventsResult.value
           .flatMap((envelope) => envelope.events)
-          .sort((left, right) => right.ts - left.ts || String(right.id ?? "").localeCompare(String(left.id ?? "")));
+          .toSorted(
+            (left, right) =>
+              right.ts - left.ts || String(right.id ?? "").localeCompare(String(left.id ?? "")),
+          );
         state.captureCoverage =
           coverageResult.status === "fulfilled" && coverageResult.value
             ? coverageResult.value.coverage
-            : summarizeCaptureCoverageFromEvents(state.selectedCaptureSessionIds, state.captureEvents);
+            : summarizeCaptureCoverageFromEvents(
+                state.selectedCaptureSessionIds,
+                state.captureEvents,
+              );
         state.captureQueryRows = queryResult.status === "fulfilled" ? queryResult.value.rows : [];
         if (
           !state.selectedCaptureEventKey ||
@@ -674,7 +689,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function buildCaptureSavedView(name: string): CaptureSavedView {
     return {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: crypto.randomUUID(),
       name,
       sessionIds: [...state.selectedCaptureSessionIds],
       kindFilter: [...state.captureKindFilter],
@@ -888,19 +903,24 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (!trimmed) {
         return;
       }
-      state.captureSavedViews = [buildCaptureSavedView(trimmed), ...state.captureSavedViews].slice(0, 12);
+      state.captureSavedViews = [buildCaptureSavedView(trimmed), ...state.captureSavedViews].slice(
+        0,
+        12,
+      );
       persistCaptureSavedViews(state.captureSavedViews);
       render();
     });
-    root.querySelector<HTMLSelectElement>("#capture-saved-view")?.addEventListener("change", (e) => {
-      const id = (e.currentTarget as HTMLSelectElement).value;
-      const view = state.captureSavedViews.find((candidate) => candidate.id === id);
-      if (!view) {
-        return;
-      }
-      applyCaptureSavedView(view);
-      void refresh();
-    });
+    root
+      .querySelector<HTMLSelectElement>("#capture-saved-view")
+      ?.addEventListener("change", (e) => {
+        const id = (e.currentTarget as HTMLSelectElement).value;
+        const view = state.captureSavedViews.find((candidate) => candidate.id === id);
+        if (!view) {
+          return;
+        }
+        applyCaptureSavedView(view);
+        void refresh();
+      });
     root.querySelector<HTMLButtonElement>("#capture-delete-view")?.addEventListener("click", () => {
       const select = root.querySelector<HTMLSelectElement>("#capture-saved-view");
       const id = select?.value?.trim();
@@ -917,70 +937,90 @@ export async function createQaLabApp(root: HTMLDivElement) {
         if (!sessionId) {
           return;
         }
-        state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter((id) => id !== sessionId);
+        state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter(
+          (id) => id !== sessionId,
+        );
         state.selectedCaptureEventKey = null;
         void refresh();
       });
     });
-    root.querySelector<HTMLButtonElement>("#capture-toggle-selected-sessions")?.addEventListener("click", () => {
-      state.captureSelectedSessionsExpanded = !state.captureSelectedSessionsExpanded;
-      render();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")?.addEventListener("click", async () => {
-      if (state.selectedCaptureSessionIds.length === 0) {
-        return;
-      }
-      const confirmed = window.confirm(
-        `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
-          state.selectedCaptureSessionIds.length === 1 ? "" : "s"
-        }?`,
-      );
-      if (!confirmed) {
-        return;
-      }
-      await postJson("/api/capture/delete-sessions", { sessionIds: state.selectedCaptureSessionIds });
-      state.selectedCaptureSessionIds = [];
-      state.selectedCaptureEventKey = null;
-      await refresh();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", async () => {
-      const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
-      if (!confirmed) {
-        return;
-      }
-      await postJson("/api/capture/purge", {});
-      state.selectedCaptureSessionIds = [];
-      state.selectedCaptureEventKey = null;
-      await refresh();
-    });
+    root
+      .querySelector<HTMLButtonElement>("#capture-toggle-selected-sessions")
+      ?.addEventListener("click", () => {
+        state.captureSelectedSessionsExpanded = !state.captureSelectedSessionsExpanded;
+        render();
+      });
+    root
+      .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
+      ?.addEventListener("click", async () => {
+        if (state.selectedCaptureSessionIds.length === 0) {
+          return;
+        }
+        const confirmed = window.confirm(
+          `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
+            state.selectedCaptureSessionIds.length === 1 ? "" : "s"
+          }?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+        await postJson("/api/capture/delete-sessions", {
+          sessionIds: state.selectedCaptureSessionIds,
+        });
+        state.selectedCaptureSessionIds = [];
+        state.selectedCaptureEventKey = null;
+        await refresh();
+      });
+    root
+      .querySelector<HTMLButtonElement>("#capture-purge-all")
+      ?.addEventListener("click", async () => {
+        const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
+        if (!confirmed) {
+          return;
+        }
+        await postJson("/api/capture/purge", {});
+        state.selectedCaptureSessionIds = [];
+        state.selectedCaptureEventKey = null;
+        await refresh();
+      });
     root.querySelector<HTMLSelectElement>("#capture-preset")?.addEventListener("change", (e) => {
-      state.captureQueryPreset = (e.currentTarget as HTMLSelectElement).value as UiState["captureQueryPreset"];
+      state.captureQueryPreset = (e.currentTarget as HTMLSelectElement)
+        .value as UiState["captureQueryPreset"];
       void refresh();
     });
     const readMultiSelect = (select: HTMLSelectElement) =>
       [...select.selectedOptions].map((option) => option.value).filter(Boolean);
-    root.querySelector<HTMLSelectElement>("#capture-kind-filter")?.addEventListener("change", (e) => {
-      state.captureKindFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-provider-filter")?.addEventListener("change", (e) => {
-      state.captureProviderFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-host-filter")?.addEventListener("change", (e) => {
-      state.captureHostFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-header-mode")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      state.captureHeaderMode = value === "all" || value === "hidden" ? value : "key";
-      render();
-    });
+    root
+      .querySelector<HTMLSelectElement>("#capture-kind-filter")
+      ?.addEventListener("change", (e) => {
+        state.captureKindFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
+        state.selectedCaptureEventKey = null;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-provider-filter")
+      ?.addEventListener("change", (e) => {
+        state.captureProviderFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
+        state.selectedCaptureEventKey = null;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-host-filter")
+      ?.addEventListener("change", (e) => {
+        state.captureHostFilter = readMultiSelect(e.currentTarget as HTMLSelectElement);
+        state.selectedCaptureEventKey = null;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-header-mode")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.captureHeaderMode = value === "all" || value === "hidden" ? value : "key";
+        render();
+      });
     root.querySelector<HTMLSelectElement>("#capture-view-mode")?.addEventListener("change", (e) => {
-      state.captureViewMode = (e.currentTarget as HTMLSelectElement).value === "timeline" ? "timeline" : "list";
+      state.captureViewMode =
+        (e.currentTarget as HTMLSelectElement).value === "timeline" ? "timeline" : "list";
       state.captureCollapsedLaneIds = [];
       state.capturePinnedLaneIds = [];
       state.captureTimelineWindowStartPct = null;
@@ -990,117 +1030,142 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.selectedCaptureEventKey = null;
       render();
     });
-    root.querySelector<HTMLSelectElement>("#capture-group-mode")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      state.captureGroupMode = value === "flow" || value === "host-path" || value === "burst" ? value : "none";
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-lane-mode")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      state.captureTimelineLaneMode =
-        value === "provider" || value === "flow" ? value : "domain";
-      state.captureTimelinePreviousLaneSort = null;
-      state.captureCollapsedLaneIds = [];
-      state.capturePinnedLaneIds = [];
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-lane-sort")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      const nextSort =
-        value === "most-errors" || value === "severity" || value === "alphabetical"
-          ? value
-          : "most-events";
-      if (nextSort !== state.captureTimelineLaneSort) {
-        state.captureTimelinePreviousLaneSort = state.captureTimelineLaneSort;
-      }
-      state.captureTimelineLaneSort =
-        nextSort;
-      render();
-    });
-    root.querySelector<HTMLInputElement>("#capture-timeline-lane-search")?.addEventListener("input", (e) => {
-      state.captureTimelineLaneSearch = (e.currentTarget as HTMLInputElement).value ?? "";
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-zoom")?.addEventListener("change", (e) => {
-      const value = Number((e.currentTarget as HTMLSelectElement).value);
-      state.captureTimelineZoom =
-        value === 75 || value === 150 || value === 200 || value === 300 ? value : 100;
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-sparkline-mode")?.addEventListener("change", (e) => {
-      state.captureTimelineSparklineMode =
-        (e.currentTarget as HTMLSelectElement).value === "lane-relative"
-          ? "lane-relative"
-          : "session-relative";
-      render();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-timeline-clear-window")?.addEventListener("click", () => {
-      state.captureTimelineWindowStartPct = null;
-      state.captureTimelineWindowEndPct = null;
-      state.captureTimelineBrushAnchorPct = null;
-      state.captureTimelineBrushCurrentPct = null;
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLInputElement>("#capture-timeline-focus-flow")?.addEventListener("change", (e) => {
-      state.captureTimelineFocusSelectedFlow = (e.currentTarget as HTMLInputElement).checked;
-      if (!state.captureTimelineFocusSelectedFlow) {
-        state.captureTimelineFocusedLaneMode = "all";
-        state.captureTimelineFocusedLaneThreshold = "any";
-      }
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-mode")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      state.captureTimelineFocusedLaneMode =
-        value === "only-matching" || value === "collapse-background" ? value : "all";
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-threshold")?.addEventListener("change", (e) => {
-      const value = (e.currentTarget as HTMLSelectElement).value;
-      state.captureTimelineFocusedLaneThreshold =
-        value === "events-2" || value === "percent-10" || value === "percent-25" ? value : "any";
-      render();
-    });
-    root.querySelector<HTMLSelectElement>("#capture-detail-placement")?.addEventListener("change", (e) => {
-      state.captureDetailPlacement =
-        (e.currentTarget as HTMLSelectElement).value === "bottom" ? "bottom" : "right";
-      render();
-    });
-    root.querySelector<HTMLElement>("[data-capture-detail-splitter]")?.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || state.captureDetailPlacement !== "right") {
-        return;
-      }
-      const splitRoot = root.querySelector<HTMLElement>("[data-capture-detail-split-root]");
-      if (!splitRoot) {
-        return;
-      }
-      const rect = splitRoot.getBoundingClientRect();
-      state.captureDetailSplitDragging = true;
-      render();
-      const handleMove = (moveEvent: MouseEvent) => {
-        const localX = moveEvent.clientX - rect.left;
-        const nextPct = ((rect.width - localX) / rect.width) * 100;
-        state.captureDetailSplitPct = Math.max(22, Math.min(55, Number(nextPct.toFixed(2))));
+    root
+      .querySelector<HTMLSelectElement>("#capture-group-mode")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.captureGroupMode =
+          value === "flow" || value === "host-path" || value === "burst" ? value : "none";
+        state.selectedCaptureEventKey = null;
         render();
-      };
-      const handleUp = () => {
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-lane-mode")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.captureTimelineLaneMode = value === "provider" || value === "flow" ? value : "domain";
+        state.captureTimelinePreviousLaneSort = null;
+        state.captureCollapsedLaneIds = [];
+        state.capturePinnedLaneIds = [];
+        state.selectedCaptureEventKey = null;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-lane-sort")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        const nextSort =
+          value === "most-errors" || value === "severity" || value === "alphabetical"
+            ? value
+            : "most-events";
+        if (nextSort !== state.captureTimelineLaneSort) {
+          state.captureTimelinePreviousLaneSort = state.captureTimelineLaneSort;
+        }
+        state.captureTimelineLaneSort = nextSort;
+        render();
+      });
+    root
+      .querySelector<HTMLInputElement>("#capture-timeline-lane-search")
+      ?.addEventListener("input", (e) => {
+        state.captureTimelineLaneSearch = (e.currentTarget as HTMLInputElement).value ?? "";
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-zoom")
+      ?.addEventListener("change", (e) => {
+        const value = Number((e.currentTarget as HTMLSelectElement).value);
+        state.captureTimelineZoom =
+          value === 75 || value === 150 || value === 200 || value === 300 ? value : 100;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-sparkline-mode")
+      ?.addEventListener("change", (e) => {
+        state.captureTimelineSparklineMode =
+          (e.currentTarget as HTMLSelectElement).value === "lane-relative"
+            ? "lane-relative"
+            : "session-relative";
+        render();
+      });
+    root
+      .querySelector<HTMLButtonElement>("#capture-timeline-clear-window")
+      ?.addEventListener("click", () => {
+        state.captureTimelineWindowStartPct = null;
+        state.captureTimelineWindowEndPct = null;
+        state.captureTimelineBrushAnchorPct = null;
+        state.captureTimelineBrushCurrentPct = null;
+        state.selectedCaptureEventKey = null;
+        render();
+      });
+    root
+      .querySelector<HTMLInputElement>("#capture-timeline-focus-flow")
+      ?.addEventListener("change", (e) => {
+        state.captureTimelineFocusSelectedFlow = (e.currentTarget as HTMLInputElement).checked;
+        if (!state.captureTimelineFocusSelectedFlow) {
+          state.captureTimelineFocusedLaneMode = "all";
+          state.captureTimelineFocusedLaneThreshold = "any";
+        }
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-mode")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.captureTimelineFocusedLaneMode =
+          value === "only-matching" || value === "collapse-background" ? value : "all";
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-timeline-focused-lane-threshold")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.captureTimelineFocusedLaneThreshold =
+          value === "events-2" || value === "percent-10" || value === "percent-25" ? value : "any";
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#capture-detail-placement")
+      ?.addEventListener("change", (e) => {
+        state.captureDetailPlacement =
+          (e.currentTarget as HTMLSelectElement).value === "bottom" ? "bottom" : "right";
+        render();
+      });
+    root
+      .querySelector<HTMLElement>("[data-capture-detail-splitter]")
+      ?.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || state.captureDetailPlacement !== "right") {
+          return;
+        }
+        const splitRoot = root.querySelector<HTMLElement>("[data-capture-detail-split-root]");
+        if (!splitRoot) {
+          return;
+        }
+        const rect = splitRoot.getBoundingClientRect();
+        state.captureDetailSplitDragging = true;
+        render();
+        const handleMove = (moveEvent: MouseEvent) => {
+          const localX = moveEvent.clientX - rect.left;
+          const nextPct = ((rect.width - localX) / rect.width) * 100;
+          state.captureDetailSplitPct = Math.max(22, Math.min(55, Number(nextPct.toFixed(2))));
+          render();
+        };
+        const handleUp = () => {
+          state.captureDetailSplitDragging = false;
+          window.removeEventListener("mousemove", handleMove);
+          window.removeEventListener("mouseup", handleUp);
+          render();
+        };
+        window.addEventListener("mousemove", handleMove);
+        window.addEventListener("mouseup", handleUp);
+        event.preventDefault();
+      });
+    root
+      .querySelector<HTMLElement>("[data-capture-detail-splitter]")
+      ?.addEventListener("dblclick", () => {
+        state.captureDetailSplitPct = 34;
         state.captureDetailSplitDragging = false;
-        window.removeEventListener("mousemove", handleMove);
-        window.removeEventListener("mouseup", handleUp);
         render();
-      };
-      window.addEventListener("mousemove", handleMove);
-      window.addEventListener("mouseup", handleUp);
-      event.preventDefault();
-    });
-    root.querySelector<HTMLElement>("[data-capture-detail-splitter]")?.addEventListener("dblclick", () => {
-      state.captureDetailSplitPct = 34;
-      state.captureDetailSplitDragging = false;
-      render();
-    });
+      });
     root.querySelectorAll<HTMLInputElement>('input[name="capture-detail-view"]').forEach((node) => {
       node.addEventListener("change", () => {
         if (!node.checked) {
@@ -1122,83 +1187,101 @@ export async function createQaLabApp(root: HTMLDivElement) {
         render();
       });
     });
-    root.querySelectorAll<HTMLInputElement>('input[name="capture-payload-layout"]').forEach((node) => {
-      node.addEventListener("change", () => {
-        if (!node.checked) {
-          return;
-        }
-        state.capturePayloadDetailLayout = node.value === "raw" ? "raw" : "formatted";
+    root
+      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-layout"]')
+      .forEach((node) => {
+        node.addEventListener("change", () => {
+          if (!node.checked) {
+            return;
+          }
+          state.capturePayloadDetailLayout = node.value === "raw" ? "raw" : "formatted";
+          render();
+        });
+      });
+    root
+      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-extent"]')
+      .forEach((node) => {
+        node.addEventListener("change", () => {
+          if (!node.checked) {
+            return;
+          }
+          state.capturePayloadExtent = node.value === "full" ? "full" : "preview";
+          render();
+        });
+      });
+    root
+      .querySelectorAll<HTMLInputElement>('input[name="capture-payload-event-sort"]')
+      .forEach((node) => {
+        node.addEventListener("change", () => {
+          if (!node.checked) {
+            return;
+          }
+          state.capturePayloadEventSort =
+            node.value === "name" || node.value === "size" ? node.value : "stream";
+          render();
+        });
+      });
+    root
+      .querySelector<HTMLInputElement>("#capture-payload-event-filter")
+      ?.addEventListener("input", (e) => {
+        state.capturePayloadEventFilter = (e.currentTarget as HTMLInputElement).value ?? "";
         render();
       });
-    });
-    root.querySelectorAll<HTMLInputElement>('input[name="capture-payload-extent"]').forEach((node) => {
-      node.addEventListener("change", () => {
-        if (!node.checked) {
-          return;
-        }
-        state.capturePayloadExtent = node.value === "full" ? "full" : "preview";
+    root
+      .querySelector<HTMLInputElement>("#capture-search-filter")
+      ?.addEventListener("input", (e) => {
+        state.captureSearchText = (e.currentTarget as HTMLInputElement).value ?? "";
+        state.selectedCaptureEventKey = null;
         render();
       });
-    });
-    root.querySelectorAll<HTMLInputElement>('input[name="capture-payload-event-sort"]').forEach((node) => {
-      node.addEventListener("change", () => {
-        if (!node.checked) {
-          return;
-        }
-        state.capturePayloadEventSort =
-          node.value === "name" || node.value === "size" ? node.value : "stream";
+    root
+      .querySelector<HTMLInputElement>("#capture-errors-only")
+      ?.addEventListener("change", (e) => {
+        state.captureErrorsOnly = (e.currentTarget as HTMLInputElement).checked;
+        state.selectedCaptureEventKey = null;
         render();
       });
-    });
-    root.querySelector<HTMLInputElement>("#capture-payload-event-filter")?.addEventListener("input", (e) => {
-      state.capturePayloadEventFilter = (e.currentTarget as HTMLInputElement).value ?? "";
-      render();
-    });
-    root.querySelector<HTMLInputElement>("#capture-search-filter")?.addEventListener("input", (e) => {
-      state.captureSearchText = (e.currentTarget as HTMLInputElement).value ?? "";
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLInputElement>("#capture-errors-only")?.addEventListener("change", (e) => {
-      state.captureErrorsOnly = (e.currentTarget as HTMLInputElement).checked;
-      state.selectedCaptureEventKey = null;
-      render();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-summary-toggle")?.addEventListener("click", () => {
-      state.captureSummaryExpanded = !state.captureSummaryExpanded;
-      render();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-controls-toggle")?.addEventListener("click", () => {
-      state.captureControlsExpanded = !state.captureControlsExpanded;
-      render();
-    });
-    root.querySelector<HTMLButtonElement>("#capture-clear-filters")?.addEventListener("click", () => {
-      state.captureKindFilter = [];
-      state.captureProviderFilter = [];
-      state.captureHostFilter = [];
-      state.captureSearchText = "";
-      state.captureHeaderMode = "key";
-      state.captureViewMode = "list";
-      state.captureGroupMode = "none";
-      state.captureTimelineLaneMode = "domain";
-      state.captureTimelineLaneSort = "most-events";
-      state.captureTimelinePreviousLaneSort = null;
-      state.captureTimelineLaneSearch = "";
-      state.captureTimelineZoom = 100;
-      state.captureTimelineSparklineMode = "session-relative";
-      state.captureTimelineWindowStartPct = null;
-      state.captureTimelineWindowEndPct = null;
-      state.captureTimelineBrushAnchorPct = null;
-      state.captureTimelineBrushCurrentPct = null;
-      state.captureTimelineFocusSelectedFlow = false;
-      state.captureTimelineFocusedLaneMode = "all";
-      state.captureTimelineFocusedLaneThreshold = "any";
-      state.captureErrorsOnly = false;
-      state.captureCollapsedLaneIds = [];
-      state.capturePinnedLaneIds = [];
-      state.selectedCaptureEventKey = null;
-      render();
-    });
+    root
+      .querySelector<HTMLButtonElement>("#capture-summary-toggle")
+      ?.addEventListener("click", () => {
+        state.captureSummaryExpanded = !state.captureSummaryExpanded;
+        render();
+      });
+    root
+      .querySelector<HTMLButtonElement>("#capture-controls-toggle")
+      ?.addEventListener("click", () => {
+        state.captureControlsExpanded = !state.captureControlsExpanded;
+        render();
+      });
+    root
+      .querySelector<HTMLButtonElement>("#capture-clear-filters")
+      ?.addEventListener("click", () => {
+        state.captureKindFilter = [];
+        state.captureProviderFilter = [];
+        state.captureHostFilter = [];
+        state.captureSearchText = "";
+        state.captureHeaderMode = "key";
+        state.captureViewMode = "list";
+        state.captureGroupMode = "none";
+        state.captureTimelineLaneMode = "domain";
+        state.captureTimelineLaneSort = "most-events";
+        state.captureTimelinePreviousLaneSort = null;
+        state.captureTimelineLaneSearch = "";
+        state.captureTimelineZoom = 100;
+        state.captureTimelineSparklineMode = "session-relative";
+        state.captureTimelineWindowStartPct = null;
+        state.captureTimelineWindowEndPct = null;
+        state.captureTimelineBrushAnchorPct = null;
+        state.captureTimelineBrushCurrentPct = null;
+        state.captureTimelineFocusSelectedFlow = false;
+        state.captureTimelineFocusedLaneMode = "all";
+        state.captureTimelineFocusedLaneThreshold = "any";
+        state.captureErrorsOnly = false;
+        state.captureCollapsedLaneIds = [];
+        state.capturePinnedLaneIds = [];
+        state.selectedCaptureEventKey = null;
+        render();
+      });
     root.querySelectorAll<HTMLElement>("[data-capture-lane-toggle]").forEach((node) => {
       node.addEventListener("click", () => {
         const laneId = node.dataset.captureLaneToggle;
@@ -1283,10 +1366,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
           sparklineSweepAnchorStartPct ?? windowRange.start,
           windowRange.start,
         );
-        const previewEnd = Math.max(
-          sparklineSweepAnchorEndPct ?? windowRange.end,
-          windowRange.end,
-        );
+        const previewEnd = Math.max(sparklineSweepAnchorEndPct ?? windowRange.end, windowRange.end);
         state.captureTimelineBrushAnchorPct = previewStart;
         state.captureTimelineBrushCurrentPct = previewEnd;
         render();
@@ -1428,7 +1508,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
           return;
         }
         if (event.key === "Escape") {
-          if (state.captureTimelineWindowStartPct != null || state.captureTimelineBrushAnchorPct != null) {
+          if (
+            state.captureTimelineWindowStartPct != null ||
+            state.captureTimelineBrushAnchorPct != null
+          ) {
             event.preventDefault();
             state.captureTimelineWindowStartPct = null;
             state.captureTimelineWindowEndPct = null;
@@ -1530,7 +1613,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
       }
     }
 
-    if (state.activeTab === "capture" && state.captureViewMode === "timeline" && state.selectedCaptureEventKey) {
+    if (
+      state.activeTab === "capture" &&
+      state.captureViewMode === "timeline" &&
+      state.selectedCaptureEventKey
+    ) {
       const selectedTimelineMarker = root.querySelector<HTMLElement>(
         `.capture-timeline [data-capture-event="${CSS.escape(state.selectedCaptureEventKey)}"]`,
       );

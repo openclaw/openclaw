@@ -1,5 +1,5 @@
-import * as carbonGateway from "@buape/carbon/gateway";
 import { randomUUID } from "node:crypto";
+import * as carbonGateway from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";

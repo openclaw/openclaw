@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * OpenAI WebSocket Connection Manager
  *
@@ -13,8 +14,8 @@
  * @see https://developers.openai.com/api/docs/guides/websocket-mode
  */
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
 import WebSocket, { type ClientOptions } from "ws";
+import { rawDataToString } from "../infra/ws.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEvent } from "../proxy-capture/runtime.js";
 import { buildOpenAIWebSocketWarmUpPayload } from "./openai-ws-request.js";
@@ -501,7 +502,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
           direction: "inbound",
           kind: "ws-frame",
           flowId: this.flowId,
-          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+          payload: Buffer.from(rawDataToString(data)),
         });
         this._handleMessage(data);
       };
