@@ -1,10 +1,13 @@
 import type { Command } from "commander";
 import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
+  loadPluginCliMetadataRegistryWithContext,
   loadPluginCliRegistrationEntriesWithDefaults,
   type PluginCliLoaderOptions,
+  resolvePluginCliLoadContext,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
@@ -33,6 +36,32 @@ export async function getPluginCliCommandDescriptors(
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<OpenClawPluginCliCommandDescriptor[]> {
   return loadPluginCliDescriptors({ cfg, env, loaderOptions });
+}
+
+export async function getPluginCliCommandRoots(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+): Promise<string[]> {
+  try {
+    const logger = createPluginCliLogger();
+    const context = resolvePluginCliLoadContext({
+      cfg,
+      env,
+      logger,
+    });
+    const { registry } = await loadPluginCliMetadataRegistryWithContext(context, loaderOptions);
+    return [
+      ...new Set(
+        registry.cliRegistrars
+          .flatMap((entry) => entry.commands)
+          .map((command) => normalizeOptionalLowercaseString(command))
+          .filter((command): command is string => Boolean(command)),
+      ),
+    ];
+  } catch {
+    return [];
+  }
 }
 
 export async function registerPluginCliCommands(

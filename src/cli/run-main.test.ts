@@ -74,35 +74,75 @@ describe("shouldUseRootHelpFastPath", () => {
 describe("resolveMissingPluginCommandMessage", () => {
   it("explains plugins.allow misses for a bundled plugin command", () => {
     expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          allow: ["telegram"],
+      resolveMissingPluginCommandMessage(
+        "browser",
+        {
+          plugins: {
+            allow: ["telegram"],
+          },
         },
-      }),
+        ["browser"],
+      ),
     ).toContain('`plugins.allow` excludes "browser"');
   });
 
   it("explains explicit bundled plugin disablement", () => {
     expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          entries: {
-            browser: {
-              enabled: false,
+      resolveMissingPluginCommandMessage(
+        "browser",
+        {
+          plugins: {
+            entries: {
+              browser: {
+                enabled: false,
+              },
             },
           },
         },
-      }),
+        ["browser"],
+      ),
     ).toContain("plugins.entries.browser.enabled=false");
   });
 
   it("returns null when the bundled plugin command is already allowed", () => {
     expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          allow: ["browser"],
+      resolveMissingPluginCommandMessage(
+        "browser",
+        {
+          plugins: {
+            allow: ["browser"],
+          },
         },
-      }),
+        ["browser"],
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for unknown primary tokens that are not plugin CLI roots", () => {
+    expect(
+      resolveMissingPluginCommandMessage(
+        "lossless",
+        {
+          plugins: {
+            allow: ["telegram"],
+          },
+        },
+        ["browser"],
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for slash-prefixed tokens", () => {
+    expect(
+      resolveMissingPluginCommandMessage(
+        "/lcm",
+        {
+          plugins: {
+            allow: ["telegram"],
+          },
+        },
+        ["browser"],
+      ),
     ).toBeNull();
   });
 
