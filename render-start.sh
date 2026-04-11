@@ -1,13 +1,14 @@
 #!/bin/sh
 # Render start script - binds to all interfaces for external access
 
-# Create config file with Control UI fallback enabled
+# Create config file with Control UI fallback enabled and pairing disabled
 mkdir -p "${OPENCLAW_STATE_DIR:-/tmp/.openclaw}"
 cat > "${OPENCLAW_STATE_DIR:-/tmp/.openclaw}/openclaw.json" << 'EOF'
 {
   "gateway": {
     "bind": "lan",
     "port": 10000,
+    "dangerouslyDisablePairingRequirement": true,
     "controlUi": {
       "dangerouslyAllowHostHeaderOriginFallback": true
     }
