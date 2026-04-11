@@ -23,8 +23,8 @@ required because some OpenClaw code paths still assume direct network egress.
 
 **Why OpenShell?**
 
-- Every outbound connection is matched against a YAML policy (binary + host
-  + port), with `audit` and `enforce` modes.
+- Every outbound connection is matched against a YAML policy keyed on the
+  `(binary, host, port)` tuple, with `audit` and `enforce` modes.
 - Filesystem is split into read-only and read/write trees. `/usr` and `/lib`
   are read-only, so `sudo` does not help you install software at runtime.
 - Policy is hot-reloadable: edit the YAML, run `openshell policy set`, no
@@ -41,12 +41,12 @@ required because some OpenClaw code paths still assume direct network egress.
 
 ## Prerequisites
 
-| Requirement   | Version         | Notes                                         |
-| ------------- | --------------- | --------------------------------------------- |
-| OpenShell CLI | 0.0.25+         | `openshell --version`                         |
-| Docker        | 24+             | Required by OpenShell's K3s cluster container |
-| Node.js       | 22.16+          | Required inside the sandbox (bundled in OpenShell's OpenClaw base image) |
-| A proxy CA    | PEM file        | The sandbox proxy performs TLS interception; Go binaries need this in `SSL_CERT_FILE` |
+| Requirement   | Version  | Notes                                                                                 |
+| ------------- | -------- | ------------------------------------------------------------------------------------- |
+| OpenShell CLI | 0.0.25+  | `openshell --version`                                                                 |
+| Docker        | 24+      | Required by OpenShell's K3s cluster container                                         |
+| Node.js       | 22.16+   | Required inside the sandbox (bundled in OpenShell's OpenClaw base image)              |
+| A proxy CA    | PEM file | The sandbox proxy performs TLS interception; Go binaries need this in `SSL_CERT_FILE` |
 
 <Note>
 OpenShell v0.0.26 rejects TLD-level wildcards like `*.com` in policy YAML.
@@ -185,7 +185,7 @@ can reach which hosts and ports.
 version: 1
 
 filesystem_policy:
-  read_only:  [/usr, /lib, /etc, /opt]
+  read_only: [/usr, /lib, /etc, /opt]
   read_write: [/sandbox, /tmp]
 
 # Reusable binary list — referenced via YAML anchor so every network rule
@@ -197,25 +197,25 @@ binaries: &binaries
 network_policies:
   llm_providers:
     endpoints:
-      - { host: api.openai.com,     port: 443, enforcement: enforce }
-      - { host: api.anthropic.com,  port: 443, enforcement: enforce }
-      - { host: api.example.com,    port: 443, enforcement: enforce }
+      - { host: api.openai.com, port: 443, enforcement: enforce }
+      - { host: api.anthropic.com, port: 443, enforcement: enforce }
+      - { host: api.example.com, port: 443, enforcement: enforce }
     binaries: *binaries
 
   slack_rest:
     endpoints:
-      - { host: slack.com,              port: 443, enforcement: enforce }
-      - { host: api.slack.com,          port: 443, enforcement: enforce }
-      - { host: files.slack.com,        port: 443, enforcement: enforce }
-      - { host: hooks.slack.com,        port: 443, enforcement: enforce }
-      - { host: edgeapi.slack.com,      port: 443, enforcement: enforce }
+      - { host: slack.com, port: 443, enforcement: enforce }
+      - { host: api.slack.com, port: 443, enforcement: enforce }
+      - { host: files.slack.com, port: 443, enforcement: enforce }
+      - { host: hooks.slack.com, port: 443, enforcement: enforce }
+      - { host: edgeapi.slack.com, port: 443, enforcement: enforce }
     binaries: *binaries
 
   slack_websocket:
     endpoints:
       # Raw TCP passthrough — do NOT let the L7 proxy intercept the upgrade.
       - { host: wss-primary.slack.com, port: 443, tls: skip, enforcement: enforce }
-      - { host: wss-backup.slack.com,  port: 443, tls: skip, enforcement: enforce }
+      - { host: wss-backup.slack.com, port: 443, tls: skip, enforcement: enforce }
     binaries: *binaries
 ```
 
