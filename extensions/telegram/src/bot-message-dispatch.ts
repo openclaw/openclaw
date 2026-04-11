@@ -187,6 +187,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    triggerSource,
   } = context;
 
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -760,6 +761,7 @@ export const dispatchTelegramMessage = async ({
         },
       },
       replyOptions: {
+        triggerSource,
         skillFilter,
         disableBlockStreaming,
         onPartialReply:

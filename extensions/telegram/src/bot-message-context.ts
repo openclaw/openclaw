@@ -110,6 +110,9 @@ export const buildTelegramMessageContext = async ({
   upsertPairingRequest,
   sendChatActionHandler,
 }: BuildTelegramMessageContextParams): Promise<TelegramMessageContext | null> => {
+  const triggerSource = (primaryCtx.message as unknown as Record<string, unknown>)
+    ?._triggerSource as string | undefined;
+
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -520,5 +523,6 @@ export const buildTelegramMessageContext = async ({
     removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
+    triggerSource,
   };
 };
