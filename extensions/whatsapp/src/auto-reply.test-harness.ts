@@ -4,9 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
@@ -41,35 +39,6 @@ type WebAutoReplyMonitorHarness = {
 };
 
 export const TEST_NET_IP = "93.184.216.34";
-
-function mockPinnedHostnameResolution(addresses: string[] = [TEST_NET_IP]) {
-  const resolvePinnedHostname = ssrfRuntime.resolvePinnedHostname;
-  const resolvePinnedHostnameWithPolicy = ssrfRuntime.resolvePinnedHostnameWithPolicy;
-  const lookupFn = (async (hostname: string, options?: { all?: boolean }) => {
-    const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
-    const resolved = addresses.map((address) => ({
-      address,
-      family: address.includes(":") ? 6 : 4,
-      hostname: normalized,
-    }));
-    return options?.all === true ? resolved : resolved[0];
-  }) as LookupFn;
-  // Keep the extension harness on public SDK seams; contract tests reject core test-helper imports.
-  const pinned = vi
-    .spyOn(ssrfRuntime, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupFn));
-  const pinnedWithPolicy = vi
-    .spyOn(ssrfRuntime, "resolvePinnedHostnameWithPolicy")
-    .mockImplementation((hostname, params) =>
-      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn }),
-    );
-  return {
-    mockRestore: () => {
-      pinned.mockRestore();
-      pinnedWithPolicy.mockRestore();
-    },
-  };
-}
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
