@@ -13,6 +13,7 @@ export function createYouWebSearchProvider(): WebSearchProviderPlugin {
     label: "You.com Search",
     hint: "Web search, deep research, and content extraction",
     credentialLabel: "You.com API key",
+    requiresCredential: false,
     envVars: ["YDC_API_KEY"],
     placeholder: "ydc-...",
     signupUrl: "https://you.com/platform",

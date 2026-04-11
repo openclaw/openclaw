@@ -8,7 +8,7 @@ describe("you plugin", () => {
     expect(typeof plugin.register).toBe("function");
   });
 
-  it("registers web search provider and two tools", () => {
+  it("registers web search provider and two tools", async () => {
     const registrations: {
       webSearchProviders: unknown[];
       tools: unknown[];
@@ -24,7 +24,7 @@ describe("you plugin", () => {
       config: {},
     };
 
-    plugin.register(mockApi as never);
+    await plugin.register(mockApi as never);
 
     expect(registrations.webSearchProviders).toHaveLength(1);
     expect(registrations.tools).toHaveLength(2);
@@ -33,7 +33,7 @@ describe("you plugin", () => {
     expect(provider.id).toBe("you");
     expect(provider.autoDetectOrder).toBe(80);
     expect(provider.envVars).toEqual(["YDC_API_KEY"]);
-    expect(provider.requiresCredential).toBeUndefined();
+    expect(provider.requiresCredential).toBe(false);
 
     const toolNames = registrations.tools.map((t) => (t as Record<string, unknown>).name);
     expect(toolNames).toContain("web_research");

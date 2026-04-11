@@ -1,9 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { isValidResearchEffort, runYouResearch, type ResearchEffort } from "./you-client.js";
-
-const RESEARCH_EFFORTS = ["lite", "standard", "deep", "exhaustive"] as const;
+import {
+  isValidResearchEffort,
+  runYouResearch,
+  type ResearchEffort,
+  RESEARCH_EFFORTS,
+} from "./you-client.js";
 
 function optionalStringEnum<const T extends readonly string[]>(
   values: T,

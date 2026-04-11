@@ -32,7 +32,7 @@ const CONTENTS_CACHE = new Map<
 >();
 
 const DEFAULT_SEARCH_COUNT = 10;
-const RESEARCH_EFFORTS = ["lite", "standard", "deep", "exhaustive"] as const;
+export const RESEARCH_EFFORTS = ["lite", "standard", "deep", "exhaustive"] as const;
 export type ResearchEffort = (typeof RESEARCH_EFFORTS)[number];
 
 export function isValidResearchEffort(value: string): value is ResearchEffort {
