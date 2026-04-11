@@ -26,14 +26,8 @@ export function sanitizeTransportPayloadText(text: string): string {
   );
 }
 
-export function coerceTransportToolCallArguments(
-  argumentsValue: unknown,
-): Record<string, unknown> {
-  if (
-    argumentsValue &&
-    typeof argumentsValue === "object" &&
-    !Array.isArray(argumentsValue)
-  ) {
+export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
+  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
     return argumentsValue as Record<string, unknown>;
   }
   if (typeof argumentsValue === "string") {

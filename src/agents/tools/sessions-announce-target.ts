@@ -60,10 +60,7 @@ export async function resolveAnnounceTarget(params: {
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
       (typeof origin?.accountId === "string" ? origin.accountId : undefined);
     const threadId = normalizeOptionalStringifiedId(
-      deliveryContext?.threadId ??
-        match?.lastThreadId ??
-        origin?.threadId ??
-        fallbackThreadId,
+      deliveryContext?.threadId ?? match?.lastThreadId ?? origin?.threadId ?? fallbackThreadId,
     );
     if (channel && to) {
       return { channel, to, accountId, threadId };

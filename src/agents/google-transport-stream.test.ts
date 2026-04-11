@@ -231,29 +231,26 @@ describe("google transport stream", () => {
       maxTokens: 8192,
     } satisfies Model<"google-generative-ai">;
 
-    const params = buildGoogleGenerativeAiParams(
-      model,
-      {
-        messages: [
-          {
-            role: "assistant",
-            provider: "openai",
-            api: "openai-responses",
-            model: "gpt-5.4",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [
-              {
-                type: "toolCall",
-                id: "call_1",
-                name: "lookup",
-                arguments: "{not valid json",
-              },
-            ],
-          },
-        ],
-      } as never,
-    );
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: "{not valid json",
+            },
+          ],
+        },
+      ],
+    } as never);
 
     expect(params.contents[0]).toMatchObject({
       role: "model",
