@@ -3,6 +3,38 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";
 
 /**
+ * Strip any leading `provider/` or `provider:` prefix from a model id so the
+ * bare-name regex matching below works against `openai/gpt-5.4` and
+ * `openai:gpt-5.4` the same way it does against `gpt-5.4`. Returns the bare
+ * model id lowercased for comparison.
+ *
+ * Without this, auto-activation silently failed on prefixed model ids — a
+ * user who configured `model: "openai/gpt-5.4"` in their agent config would
+ * get the pre-PR-H looser default behavior because the regex only matched
+ * bare names. The adversarial review in #64227 flagged this as a quality
+ * gap on completion-gate criterion 1.
+ */
+function stripProviderPrefix(modelId: string): string {
+  const match = /^([^/:]+)[/:](.+)$/.exec(modelId);
+  return (match?.[2] ?? modelId).trim().toLowerCase();
+}
+
+/**
+ * Regex that matches the full set of GPT-5 variants the strict-agentic
+ * contract should auto-activate for. Intentionally permissive: every
+ * model id in the gpt-5 family should opt in by default, not just the
+ * canonical `gpt-5.4`.
+ *
+ * Covers:
+ * - `gpt-5`, `gpt-5o`, `gpt-5o-mini` (no separator after `5`)
+ * - `gpt-5.4`, `gpt-5.4-alt`, `gpt-5.0` (dot separator)
+ * - `gpt-5-preview`, `gpt-5-turbo`, `gpt-5-2025-03` (dash separator)
+ *
+ * Does NOT cover `gpt-4.5`, `gpt-6`, or any non-gpt-5 family member.
+ */
+const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.\-o]|$)/;
+
+/**
  * Supported provider + model combinations where strict-agentic is the intended
  * runtime contract. Kept as a narrow helper so both the execution-contract
  * resolver and the `update_plan` auto-enable gate converge on the same
@@ -16,7 +48,9 @@ function isStrictAgenticSupportedProviderModel(params: {
   if (provider !== "openai" && provider !== "openai-codex") {
     return false;
   }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId?.trim() ?? "");
+  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  const bareModelId = stripProviderPrefix(modelId);
+  return STRICT_AGENTIC_MODEL_ID_PATTERN.test(bareModelId);
 }
 
 /**
