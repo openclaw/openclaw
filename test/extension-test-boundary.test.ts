@@ -17,6 +17,7 @@ const allowedNonExtensionTests = new Set<string>([
   "src/channels/plugins/contracts/group-policy.contract.test.ts",
   "src/commands/channels.surfaces-signal-runtime-errors-channels-status-output.test.ts",
   "src/commands/onboard-channels.e2e.test.ts",
+  "src/config/config.pruning-defaults.test.ts",
   "src/gateway/hooks.test.ts",
   "src/infra/outbound/deliver.test.ts",
   "src/media-generation/provider-capabilities.contract.test.ts",
