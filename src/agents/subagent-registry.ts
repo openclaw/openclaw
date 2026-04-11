@@ -486,7 +486,10 @@ async function sweepSubagentRuns() {
     // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
     // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
     if (!entry.archiveAtMs) {
-      if (typeof entry.cleanupCompletedAt === "number" && now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS) {
+      if (
+        typeof entry.cleanupCompletedAt === "number" &&
+        now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
+      ) {
         clearPendingLifecycleError(runId);
         void notifyContextEngineSubagentEnded({
           childSessionKey: entry.childSessionKey,
@@ -504,16 +507,6 @@ async function sweepSubagentRuns() {
     if (entry.archiveAtMs > now) {
       continue;
     }
-    clearPendingLifecycleError(runId);
-    void notifyContextEngineSubagentEnded({
-      childSessionKey: entry.childSessionKey,
-      reason: "swept",
-      workspaceDir: entry.workspaceDir,
-    });
-    subagentRuns.delete(runId);
-    mutated = true;
-    // Archive/purge is terminal for the run record; remove any retained attachments too.
-    await safeRemoveAttachmentsDir(entry);
     try {
       await subagentRegistryDeps.callGateway({
         method: "sessions.delete",
@@ -525,8 +518,18 @@ async function sweepSubagentRuns() {
         timeoutMs: resolveGatewayRpcTimeoutMs(loadConfig()),
       });
     } catch {
-      // ignore
+      continue;
     }
+    clearPendingLifecycleError(runId);
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "swept",
+      workspaceDir: entry.workspaceDir,
+    });
+    subagentRuns.delete(runId);
+    mutated = true;
+    // Archive/purge is terminal for the run record; remove any retained attachments too.
+    await safeRemoveAttachmentsDir(entry);
   }
   // Sweep orphaned pendingLifecycleError entries (absolute TTL).
   for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {

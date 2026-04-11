@@ -8,16 +8,17 @@ let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
 };
 const loadConfigMock = vi.fn(() => currentConfig);
+const callGatewayMock = vi.fn(async (request: unknown) => {
+  const method = (request as { method?: string }).method;
+  if (method === "agent.wait") {
+    // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
+    return { status: "pending" };
+  }
+  return {};
+});
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: unknown) => {
-    const method = (request as { method?: string }).method;
-    if (method === "agent.wait") {
-      // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
-      return { status: "pending" };
-    }
-    return {};
-  }),
+  callGateway: (request: unknown) => callGatewayMock(request),
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -58,6 +59,14 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
     loadConfigMock.mockClear();
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
@@ -104,6 +113,45 @@ describe("subagent registry archive behavior", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
 
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("retries archive delete on the next sweep when sessions.delete fails transiently", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    let deleteAttempts = 0;
+    callGatewayMock.mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error("UNAVAILABLE: transient gateway failure");
+        }
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-retry",
+      childSessionKey: "agent:main:subagent:delete-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry archive delete",
+      cleanup: "delete",
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deleteAttempts).toBe(1);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deleteAttempts).toBe(2);
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 

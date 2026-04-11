@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -27,6 +28,23 @@ const log = createSubsystemLogger("agents/subagent-registry");
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+function normalizeSubagentWaitTransportError(error: unknown): {
+  outcome: SubagentRunOutcome;
+  reason: SubagentLifecycleEndedReason;
+} {
+  const message = formatErrorMessage(error);
+  if (message.includes("gateway timeout")) {
+    return {
+      outcome: { status: "timeout" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    };
+  }
+  return {
+    outcome: { status: "error", error: message },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+  };
 }
 
 export function createSubagentRunManager(params: {
@@ -128,8 +146,34 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
-    } catch {
-      // ignore
+    } catch (error) {
+      const entry = params.runs.get(runId);
+      if (!entry) {
+        return;
+      }
+      const { outcome, reason } = normalizeSubagentWaitTransportError(error);
+      const endedAt = Date.now();
+      let mutated = false;
+      if (typeof entry.endedAt !== "number") {
+        entry.endedAt = endedAt;
+        mutated = true;
+      }
+      if (!runOutcomesEqual(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (mutated) {
+        params.persist();
+      }
+      await params.completeSubagentRun({
+        runId,
+        endedAt: entry.endedAt,
+        outcome,
+        reason,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
     }
   };
 
