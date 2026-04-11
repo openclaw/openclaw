@@ -107,13 +107,24 @@ async function postSlackMessageBestEffort(params: {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 }) {
-  const basePayload = {
+  const basePayload: {
+    channel: string;
+    text: string;
+    thread_ts: string | undefined;
+    reply_broadcast: boolean;
+    blocks?: (Block | KnownBlock)[];
+    username?: string;
+    icon_url?: string;
+    icon_emoji?: string;
+  } = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
-    ...(params.replyBroadcast !== undefined ? { reply_broadcast: params.replyBroadcast } : {}),
-    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    reply_broadcast: params.replyBroadcast === true,
   };
+  if (params.blocks?.length) {
+    basePayload.blocks = params.blocks;
+  }
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
