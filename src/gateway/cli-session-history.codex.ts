@@ -122,11 +122,14 @@ function findCodexCliSessionFile(params: {
 }): string | undefined {
   const cacheKey = buildCodexCliSessionPathCacheKey(params);
   const cached = codexCliSessionPathCache.get(cacheKey);
-  if (cached && fs.existsSync(cached)) {
-    setCachedCodexCliSessionPath(cacheKey, cached);
-    return cached;
-  }
-  if (cached) {
+  const cachedCandidate =
+    cached && fs.existsSync(cached)
+      ? {
+          filePath: cached,
+          mtimeMs: resolveCodexCliSessionFileCandidateMtime(cached),
+        }
+      : undefined;
+  if (cached && !cachedCandidate) {
     codexCliSessionPathCache.delete(cacheKey);
   }
   if (!fs.existsSync(params.sessionsDir)) {
@@ -134,7 +137,7 @@ function findCodexCliSessionFile(params: {
   }
 
   const stack = [params.sessionsDir];
-  let bestMatch: { filePath: string; mtimeMs: number } | undefined;
+  let bestMatch: { filePath: string; mtimeMs: number } | undefined = cachedCandidate;
   while (stack.length > 0) {
     const currentDir = stack.pop();
     if (!currentDir) {

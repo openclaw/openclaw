@@ -628,6 +628,67 @@ describe("cli session history", () => {
     }
   });
 
+  it("re-scans matching codex transcript files before reusing a cached path", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-history-cache-refresh-"));
+    const homeDir = path.join(root, "home");
+    const sessionId = "same-session-id";
+    const sessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+    const olderFile = path.join(sessionsDir, `rollout-2026-04-11T15-38-33-${sessionId}.jsonl`);
+    const newerFile = path.join(sessionsDir, `rollout-2026-04-11T15-38-34-${sessionId}.jsonl`);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      olderFile,
+      createCodexHistoryLines(sessionId, [
+        {
+          timestamp: "2026-04-11T07:38:34.000Z",
+          payload: {
+            type: "user_message",
+            message: "Loaded from the older transcript",
+          },
+        },
+      ]),
+      "utf-8",
+    );
+    await fs.utimes(
+      olderFile,
+      new Date("2026-04-11T07:38:33.000Z"),
+      new Date("2026-04-11T07:38:33.000Z"),
+    );
+
+    try {
+      expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(olderFile);
+
+      await fs.writeFile(
+        newerFile,
+        createCodexHistoryLines(sessionId, [
+          {
+            timestamp: "2026-04-11T07:38:34.000Z",
+            payload: {
+              type: "user_message",
+              message: "Loaded from the newer transcript",
+            },
+          },
+        ]),
+        "utf-8",
+      );
+      await fs.utimes(
+        newerFile,
+        new Date("2026-04-11T07:38:34.000Z"),
+        new Date("2026-04-11T07:38:34.000Z"),
+      );
+
+      expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(newerFile);
+      const messages = readCodexCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "Loaded from the newer transcript",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores non-event Codex transcript records while importing event messages", async () => {
     const sessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
     await withCodexSessionsDir(
