@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LINE Sticker Catalog Editor</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fff;--bg2:#f5f5f4;--bg3:#efefed;
+  --text:#1a1a1a;--text2:#6b6b6b;--text3:#999;
+  --border:#e0deda;--border2:#ccc;
+  --info-bg:#e6f1fb;--info-text:#0c447c;--info-border:#b5d4f4;
+  --success-bg:#eaf3de;--success-text:#27500a;--success-border:#c0dd97;
+  --warn-bg:#faeeda;--warn-text:#633806;--warn-border:#fac775;
+  --scene-bg:#eeedfe;--scene-text:#3c3489;
+  --guide-bg:#f0f7ff;--guide-border:#b5d4f4;--guide-text:#0c447c;
+  --edited-border:#378add;--edited-bg:#e6f1fb;
+  --r:8px;--rl:12px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1e1e1e;--bg2:#2a2a2a;--bg3:#333;
+  --text:#e8e8e8;--text2:#aaa;--text3:#666;
+  --border:#3a3a3a;--border2:#555;
+  --info-bg:#0c2240;--info-text:#85b7eb;--info-border:#185fa5;
+  --success-bg:#172d08;--success-text:#97c459;--success-border:#3b6d11;
+  --warn-bg:#2a1e08;--warn-text:#fac775;--warn-border:#854f0b;
+  --scene-bg:#1e1c3a;--scene-text:#afa9ec;
+  --guide-bg:#0c2240;--guide-border:#185fa5;--guide-text:#85b7eb;
+  --edited-border:#85b7eb;--edited-bg:#0c2240;
+}}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:var(--text);background:var(--bg);min-height:100vh;padding:16px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.screen{display:none}.screen.active{display:block}
+
+/* controls */
+input[type=search],input[type=text],input[type=number]{height:34px;padding:0 10px;font-size:13px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg);color:var(--text);outline:none}
+input[type=search]:focus,input[type=text]:focus,input[type=number]:focus{border-color:var(--info-text)}
+select{height:34px;padding:0 8px;font-size:13px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg);color:var(--text);outline:none;width:100%}
+button{height:34px;padding:0 14px;font-size:13px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg);color:var(--text);cursor:pointer;white-space:nowrap;transition:background .1s}
+button:hover{background:var(--bg2)}
+button:disabled{opacity:.4;cursor:default}
+.btn-primary{background:var(--info-bg);color:var(--info-text);border-color:var(--info-border)}
+.btn-primary:hover{filter:brightness(.95)}
+.btn-success{background:var(--success-bg);color:var(--success-text);border-color:var(--success-border)}
+.btn-success:hover{filter:brightness(.95)}
+.btn-warn{background:var(--warn-bg);color:var(--warn-text);border-color:var(--warn-border)}
+.btn-warn:hover{filter:brightness(.95)}
+
+/* field group */
+.fgroup{margin-bottom:14px}
+.fgroup:last-child{margin-bottom:0}
+.flabel-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.flabel-row label{font-size:12px;color:var(--text2);font-weight:500;margin:0}
+.ftag{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600}
+.ftag-char{background:var(--bg3);color:var(--text2)}
+.ftag-scene{background:var(--scene-bg);color:var(--scene-text)}
+.ftag-text{background:var(--warn-bg);color:var(--warn-text)}
+.field{width:100%;border:1px solid var(--border2);border-radius:var(--r);padding:8px 10px;font-size:14px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;transition:border-color .1s}
+.field:focus{border-color:var(--info-text)}
+.field[readonly]{color:var(--text2);background:var(--bg2);cursor:default}
+textarea.field{resize:vertical;line-height:1.6}
+.field-note{font-size:11px;color:var(--text3);margin-top:4px;line-height:1.5}
+
+.divider{height:1px;background:var(--border);margin:16px 0}
+.empty{text-align:center;padding:56px;color:var(--text2);font-size:14px}
+
+/* badge */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.b-ja{background:#faeeda;color:#633806}
+.b-en{background:#e6f1fb;color:#0c447c}
+.b-zh{background:#eaf3de;color:#27500a}
+.b-th{background:#fbeaf0;color:#72243e}
+.b-uni{background:#f1efe8;color:#444441}
+
+/* breadcrumb */
+.bc{display:flex;align-items:center;gap:6px;padding:4px 0 16px;font-size:13px;color:var(--text2);flex-wrap:wrap}
+.bc-item{cursor:pointer;color:var(--info-text)}.bc-item:hover{text-decoration:underline}
+.bc-sep{color:var(--text3)}
+.bc-current{color:var(--text);font-weight:600}
+
+/* toolbar */
+.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.toolbar-r{margin-left:auto;display:flex;gap:8px;align-items:center}
+.stats{font-size:12px;color:var(--text2)}
+
+/* drop zone */
+.dropzone{border:1.5px dashed var(--border2);border-radius:var(--rl);padding:56px 40px;text-align:center;cursor:pointer;transition:background .15s;max-width:540px;margin:32px auto}
+.dropzone:hover,.dropzone.over{background:var(--bg2)}
+.dz-icon{font-size:40px;margin-bottom:14px}
+.dz-title{font-size:17px;font-weight:600;margin-bottom:8px}
+.dz-sub{font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.7}
+.dz-sub code{background:var(--bg2);padding:1px 5px;border-radius:4px;font-family:monospace;font-size:12px}
+.dz-btn{display:inline-block;padding:9px 22px;border:1px solid var(--border2);border-radius:var(--r);font-size:14px;cursor:pointer;background:var(--bg);color:var(--text)}
+.dz-btn:hover{background:var(--bg2)}
+.dz-note{margin-top:12px;font-size:12px;color:var(--text2)}
+.dz-link{cursor:pointer;color:var(--info-text);text-decoration:underline}
+
+/* package grid */
+.pkg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.pkg-card{border:1.5px solid var(--border);border-radius:var(--rl);overflow:hidden;transition:border-color .15s}
+.pkg-card:hover{border-color:var(--border2)}
+.pkg-card.has-edit{border-color:var(--edited-border);background:var(--edited-bg)}
+.pkg-thumb{width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;cursor:pointer}
+.pkg-thumb img{width:96px;height:96px;object-fit:contain}
+.anim-badge{position:absolute;top:6px;right:6px;font-size:10px;font-weight:700;background:var(--info-bg);color:var(--info-text);padding:2px 6px;border-radius:4px}
+.pkg-body{padding:12px 14px 14px}
+.pkg-name{font-size:13px;font-weight:600;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.pkg-name:hover{text-decoration:underline}
+.pkg-sub{font-size:11px;color:var(--text2);margin-bottom:6px}
+.pkg-meta{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.pkg-actions{display:flex;gap:6px}
+.pkg-actions button{height:26px;padding:0 10px;font-size:11px;flex:1}
+
+/* view toggle */
+.view-toggle{display:flex;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden}
+.vt{padding:5px 12px;font-size:13px;cursor:pointer;background:var(--bg);color:var(--text2);border:none;transition:background .1s}
+.vt.on{background:var(--bg3);color:var(--text);font-weight:600}
+.vt:hover{background:var(--bg2)}
+
+/* sticker tile */
+.tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.sticker-tile{border:1.5px solid var(--border);border-radius:var(--r);padding:10px 8px;cursor:pointer;text-align:center;transition:background .1s,border-color .15s;position:relative}
+.sticker-tile:hover{background:var(--bg2);border-color:var(--border2)}
+.sticker-tile.has-edit{border-color:var(--edited-border);background:var(--edited-bg)}
+.sticker-tile img{width:96px;height:96px;object-fit:contain;display:block;margin:0 auto}
+.tile-img-ph{width:96px;height:96px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto}
+.st-id{font-size:10px;color:var(--text3);margin-top:6px}
+.st-scene{font-size:10px;color:var(--scene-text);background:var(--scene-bg);padding:1px 5px;border-radius:3px;margin:3px auto 0;display:inline-block;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-text-badge{position:absolute;top:5px;right:5px;background:var(--warn-bg);color:var(--warn-text);font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* list table */
+.list-wrap{overflow-x:auto}
+.list-wrap table{width:100%;border-collapse:collapse}
+.list-wrap th{font-size:12px;color:var(--text2);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--bg2);white-space:nowrap}
+.list-wrap td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px}
+.list-wrap tbody tr:last-child td{border-bottom:none}
+.list-wrap tbody tr:hover td{background:var(--bg2);cursor:pointer}
+.list-wrap tbody tr.has-edit td{background:var(--edited-bg)}
+.list-wrap td img{width:48px;height:48px;object-fit:contain}
+.td-desc{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2);font-size:12px}
+.td-scene{font-size:11px;color:var(--scene-text);background:var(--scene-bg);padding:1px 6px;border-radius:3px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;display:inline-block}
+.td-text{font-size:11px;color:var(--warn-text);background:var(--warn-bg);padding:1px 5px;border-radius:3px;white-space:nowrap}
+
+/* ══ FULLSCREEN EDITOR ══ */
+#s-edit{
+  position:fixed;inset:0;background:var(--bg);z-index:300;
+  display:none;flex-direction:column;overflow:hidden;
+}
+#s-edit.active{display:flex}
+
+/* top bar */
+.edit-topbar{
+  display:flex;align-items:center;gap:12px;
+  padding:8px 16px;border-bottom:1px solid var(--border);
+  background:var(--bg);flex-shrink:0;min-height:48px;
+}
+.edit-topbar-info{flex:1;min-width:0}
+.edit-topbar-save{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.autosave-note{font-size:11px;color:var(--text3)}
+.edit-topbar-title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.edit-topbar-sub{font-size:11px;color:var(--text2)}
+.edit-nav-btns{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.edit-nav-btns button{height:30px;padding:0 12px;font-size:12px}
+.edit-counter{font-size:12px;color:var(--text2);min-width:52px;text-align:center}
+
+/* resizable two-pane body */
+.edit-body{
+  display:flex;flex:1;overflow:hidden;min-height:0;
+  --left-w: 280px;
+}
+
+/* left: preview pane */
+.edit-preview{
+  width:var(--left-w);
+  min-width:160px;
+  max-width:60%;
+  flex-shrink:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;padding:20px 16px;
+  background:var(--bg2);overflow-y:auto;
+  position:relative;
+}
+.preview-img-wrap{
+  width:100%;display:flex;align-items:center;justify-content:center;
+}
+.preview-img{
+  /* size to fill available width, max 200px */
+  width:min(100%,200px);height:min(100%,200px);
+  object-fit:contain;border-radius:var(--rl);background:var(--bg);
+}
+.preview-img-ph{
+  width:min(100%,200px);height:min(100%,200px);
+  background:var(--bg);border-radius:var(--rl);
+  display:flex;align-items:center;justify-content:center;font-size:48px;
+}
+.replay-btn{height:28px;padding:0 12px;font-size:12px}
+.preview-meta{font-size:11px;color:var(--text2);text-align:center;line-height:1.6;word-break:break-all}
+
+/* drag handle */
+.drag-handle{
+  width:6px;flex-shrink:0;cursor:col-resize;
+  background:var(--border);
+  transition:background .15s;
+  position:relative;
+}
+.drag-handle:hover,.drag-handle.dragging{background:var(--info-text)}
+.drag-handle::after{
+  content:'';position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:2px;height:32px;border-radius:1px;
+  background:var(--border2);
+}
+
+/* right: form pane — KEY: overflow-y:auto makes it scrollable */
+.edit-form{
+  flex:1;min-width:0;min-height:0;
+  overflow-y:auto;
+  /* Force scrollbar to always show so users know it's scrollable */
+  scrollbar-width:thin;          /* Firefox */
+  scrollbar-color:var(--border2) transparent;
+  padding:20px 24px 24px;
+  display:flex;flex-direction:column;
+}
+/* WebKit: always show scrollbar track */
+.edit-form::-webkit-scrollbar{width:8px}
+.edit-form::-webkit-scrollbar-track{background:var(--bg2)}
+.edit-form::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+.edit-form::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+
+/* guide */
+.guide-box{background:var(--guide-bg);border:1px solid var(--guide-border);border-radius:var(--r);padding:10px 14px;margin-bottom:18px;font-size:12px;color:var(--guide-text);line-height:1.7}
+.guide-box summary{cursor:pointer;font-weight:600;font-size:12px;list-style:none;display:flex;align-items:center;gap:6px;color:var(--guide-text);user-select:none}
+.guide-box summary::-webkit-details-marker{display:none}
+.guide-arrow{font-size:10px;transition:transform .15s;display:inline-block}
+details[open] .guide-arrow{transform:rotate(90deg)}
+.guide-body{margin-top:10px}
+.guide-body table{width:100%;border-collapse:collapse;font-size:11px}
+.guide-body table th{text-align:left;padding:4px 8px;border-bottom:1px solid var(--guide-border);font-weight:600;color:var(--guide-text);background:transparent}
+.guide-body table td{padding:5px 8px;border-bottom:1px solid var(--guide-border);vertical-align:top;color:var(--guide-text);background:transparent}
+.guide-body table tr:last-child td{border-bottom:none}
+.gtag{display:inline-block;padding:1px 5px;border-radius:3px;font-weight:600;font-size:10px;margin-right:3px}
+.gtag-char{background:var(--bg3);color:var(--text2)}
+.gtag-scene{background:var(--scene-bg);color:var(--scene-text)}
+.gtag-text{background:var(--warn-bg);color:var(--warn-text)}
+.guide-notes{margin-top:8px;font-size:11px;color:var(--guide-text)}
+
+/* action bar removed */
+
+/* package edit overlay */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:400;padding:16px}
+.panel{background:var(--bg);border-radius:var(--rl);padding:24px;width:min(480px,100%);max-height:92vh;overflow-y:auto;border:1px solid var(--border)}
+.panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.panel-title{font-size:15px;font-weight:600}
+.close-btn{width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center;font-size:16px;border-radius:50%}
+.panel-footer{display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--border);flex-wrap:wrap}
+.panel-footer button{flex:1;min-width:90px}
+.pkg-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.pkg-form-grid .fgroup{margin-bottom:0}
+
+@media(max-width:600px){
+  .edit-body{flex-direction:column}
+  .edit-preview{width:100%!important;max-width:100%;min-width:0;flex-direction:row;flex-wrap:wrap;justify-content:center;padding:12px;gap:8px}
+  .drag-handle{display:none}
+  .edit-form{padding:16px}
+}
+</style>
+</head>
+<body>
+<h1 class="sr-only">LINE Sticker Catalog Editor</h1>
+<input type="file" id="fileInput" multiple accept=".json" style="display:none" onchange="loadFiles(this.files)">
+<input type="file" id="folderInput" accept=".json" style="display:none" webkitdirectory onchange="loadFiles(this.files)">
+
+<!-- SCREEN 0: drop -->
+<div class="screen active" id="s-drop">
+  <div class="dropzone"
+    onclick="document.getElementById('folderInput').click()"
+    ondragover="event.preventDefault();this.classList.add('over')"
+    ondragleave="this.classList.remove('over')"
+    ondrop="event.preventDefault();this.classList.remove('over');loadFiles(event.dataTransfer.files)">
+    <div class="dz-icon">📂</div>
+    <div class="dz-title">LINE Sticker Catalog Editor</div>
+    <div class="dz-sub">Drop the <code>skill-data-v3</code> folder here, or click to select.<br>Each <code>package-*.json</code> contains one package with its stickers.</div>
+    <div class="dz-btn">Select folder</div>
+    <div class="dz-note">or <span class="dz-link" onclick="event.stopPropagation();document.getElementById('fileInput').click()">select individual files</span></div>
+  </div>
+</div>
+
+<!-- SCREEN 1: packages -->
+<div class="screen" id="s-pkgs">
+  <div class="bc"><span class="bc-current">Packages</span></div>
+  <div class="toolbar">
+    <input type="search" id="pkg-search" placeholder="Search packages…" oninput="renderPkgs()" style="min-width:180px">
+    <span class="stats" id="pkg-stats"></span>
+    <div class="toolbar-r">
+      <button onclick="openPkgEdit(null)">+ New package</button>
+      <button onclick="document.getElementById('folderInput').click()">⟳ Reload</button>
+      <button class="btn-success" onclick="downloadAll()">⬇ Save all (Download all JSON)</button>
+    </div>
+  </div>
+  <div class="pkg-grid" id="pkgGrid"></div>
+</div>
+
+<!-- SCREEN 2: sticker list -->
+<div class="screen" id="s-stickers">
+  <div class="bc">
+    <span class="bc-item" onclick="goTo('pkgs')">Packages</span>
+    <span class="bc-sep">/</span>
+    <span class="bc-current" id="bc-pkg-name"></span>
+  </div>
+  <div class="toolbar">
+    <input type="search" id="stk-search" placeholder="Search stickers…" oninput="renderStickers()" style="min-width:180px">
+    <span class="stats" id="stk-stats"></span>
+    <div class="toolbar-r">
+      <div class="view-toggle">
+        <button class="vt on" id="vt-tile" onclick="setView('tile')">⊞ Tile</button>
+        <button class="vt" id="vt-list" onclick="setView('list')">☰ List</button>
+      </div>
+      <button class="btn-success" onclick="downloadCurrent()">⬇ Save (Download JSON)</button>
+    </div>
+  </div>
+  <div id="stickerArea"></div>
+</div>
+
+<!-- SCREEN 3: fullscreen sticker editor -->
+<div id="s-edit">
+  <div class="edit-topbar">
+    <button onclick="closeEdit()" style="height:30px;padding:0 12px;font-size:13px;flex-shrink:0">← Back</button>
+    <div class="edit-topbar-info">
+      <div class="edit-topbar-title" id="edit-pkg-title"></div>
+      <div class="edit-topbar-sub" id="edit-pkg-sub"></div>
+    </div>
+    <div class="edit-nav-btns">
+      <button id="btn-prev" onclick="navEdit(-1)">← Prev</button>
+      <span class="edit-counter" id="edit-counter"></span>
+      <button id="btn-next" onclick="navEdit(1)">Next →</button>
+    </div>
+    <div class="edit-topbar-save">
+      <button class="btn-success" onclick="downloadCurrent()">⬇ Save (Download JSON)</button>
+      <span class="autosave-note">Auto-saved as you type</span>
+    </div>
+  </div>
+
+  <div class="edit-body" id="edit-body">
+    <!-- left: preview -->
+    <div class="edit-preview" id="edit-preview">
+      <div class="preview-img-wrap">
+        <div id="edit-img-wrap"></div>
+      </div>
+      <button class="replay-btn" id="replay-btn" style="display:none" onclick="replayAnim()">▶ Replay</button>
+      <div class="preview-meta" id="preview-meta"></div>
+    </div>
+
+    <!-- drag handle -->
+    <div class="drag-handle" id="drag-handle" title="Drag to resize"></div>
+
+    <!-- right: form (scrollable) -->
+    <div class="edit-form" id="edit-form">
+      <details class="guide-box">
+        <summary><span class="guide-arrow">▸</span> How the AI uses each field to select a sticker</summary>
+        <div class="guide-body">
+          <p style="margin-bottom:8px">
+            The AI reads conversation context, emotion, and language, then narrows down candidates using the fields below.<br>
+            <span style="font-size:10px">AIは会話の文脈・感情・言語を判断し、以下フィールドを参照してスタンプを選びます。</span>
+          </p>
+          <table>
+            <tr><th style="width:95px">Field</th><th>How AI uses it / 入力のコツ</th></tr>
+            <tr>
+              <td><span class="gtag gtag-char">char</span>Characters</td>
+              <td>Write character names in English (e.g. <code>yellow chick</code>). Catalog consistency, not directly for selection.<br><span style="font-size:10px">英語でキャラ名。選択への直接影響は小さい。</span></td>
+            </tr>
+            <tr>
+              <td><span class="gtag">desc</span>Description</td>
+              <td>Describe pose, expression, and action. Include both emotion and action words.<br><span style="font-size:10px">ポーズ・表情・動作を具体的に。感情語＋動作語で精度UP。</span></td>
+            </tr>
+            <tr>
+              <td><span class="gtag gtag-scene">scene</span>Scene</td>
+              <td><strong>Most important.</strong> "When …" form. Separate multiple with <code>/</code>.<br><span style="font-size:10px">AIが最重視。「〇〇する時」形式で。複数は / で区切る。<strong>空欄だとほぼ選ばれない。</strong></span></td>
+            </tr>
+            <tr>
+              <td><span class="gtag gtag-text">text</span>Text</td>
+              <td>Copy printed text exactly, including emoji. Leave blank if none.<br><span style="font-size:10px">印字文字を絵文字ごとそのまま転記。なければ空欄。</span></td>
+            </tr>
+          </table>
+          <p class="guide-notes">⚠ <strong>Empty Scene = AI will almost never choose this sticker.</strong><br>✓ Multiple: <code>when greeting / when parting</code></p>
+        </div>
+      </details>
+
+      <div class="fgroup">
+        <div class="flabel-row"><label>Sticker ID</label></div>
+        <input class="field" id="edit-id" readonly>
+      </div>
+      <div class="divider"></div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Characters</label><span class="ftag ftag-char">char</span></div>
+        <input class="field" id="edit-char" placeholder="e.g. yellow chick / brown bear, white rabbit" oninput="autoSave()">
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Description</label></div>
+        <textarea class="field" id="edit-desc" rows="4"
+          placeholder="e.g. Raises both arms joyfully / 両手を上げて嬉しそうに飛び跳ねている"
+          oninput="autoSave()"></textarea>
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Scene / use case</label><span class="ftag ftag-scene">scene</span></div>
+        <textarea class="field" id="edit-scene" rows="2"
+          placeholder="e.g. when agreeing / when celebrating — 承諾する時 / お祝いの時"
+          oninput="autoSave()"></textarea>
+        <div class="field-note">Most important for AI. "When …" form. Separate with /. / AIが最重視。「〇〇する時」で。複数は / で区切る。</div>
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Text on sticker</label><span class="ftag ftag-text">text</span></div>
+        <input class="field" id="edit-text"
+          placeholder='e.g. OKAY! / Good night❤ / ♪ — blank if none / なければ空欄'
+          oninput="autoSave()">
+        <div class="field-note">Copy printed text exactly, including emoji. / 印字文字をそのまま転記。</div>
+      </div>
+    </div><!-- /edit-form -->
+  </div><!-- /edit-body -->
+
+
+</div>
+
+<!-- OVERLAY: package edit -->
+<div class="overlay" id="overlay-pkg" style="display:none" onclick="if(event.target===this)closePkgEdit()">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title" id="pkg-edit-title">Package</span>
+      <button class="close-btn" onclick="closePkgEdit()">✕</button>
+    </div>
+    <div class="pkg-form-grid">
+      <div class="fgroup">
+        <div class="flabel-row"><label>Package ID</label></div>
+        <input class="field" id="pe-id" type="number" placeholder="e.g. 789" style="width:100%">
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Language</label></div>
+        <select id="pe-lang">
+          <option value="universal">universal</option>
+          <option value="ja">ja</option>
+          <option value="en">en</option>
+          <option value="zh-tw">zh-tw</option>
+          <option value="th">th</option>
+        </select>
+      </div>
+      <div class="fgroup" style="grid-column:span 2">
+        <div class="flabel-row"><label>Name</label></div>
+        <input class="field" id="pe-name" placeholder="e.g. Sally Special / サリー スペシャル" style="width:100%">
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Character</label></div>
+        <input class="field" id="pe-char" placeholder="e.g. sally / mixed" style="width:100%">
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Register</label></div>
+        <select id="pe-register">
+          <option value="casual">casual</option>
+          <option value="business">business</option>
+          <option value="formal">formal</option>
+        </select>
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Expression style</label></div>
+        <select id="pe-expr">
+          <option value="subtle">subtle</option>
+          <option value="expressive">expressive</option>
+          <option value="text-heavy">text-heavy</option>
+        </select>
+      </div>
+      <div class="fgroup">
+        <div class="flabel-row"><label>Animated</label></div>
+        <select id="pe-anim">
+          <option value="false">false</option>
+          <option value="true">true</option>
+        </select>
+      </div>
+    </div>
+    <div class="fgroup" id="pe-count-wrap">
+      <div class="flabel-row"><label>Number of stickers <span style="font-weight:400;color:var(--text3)">(new package only)</span></label></div>
+      <input class="field" id="pe-count" type="number" min="1" max="200" placeholder="e.g. 40" style="width:100%">
+      <div class="field-note">Sticker slots will be created with empty descriptions.</div>
+    </div>
+    <div class="divider"></div>
+    <div class="panel-footer">
+      <button class="btn-primary" onclick="savePkgEdit()">Save</button>
+      <button id="pe-delete-btn" class="btn-warn" onclick="deletePkg()" style="display:none">Delete package</button>
+      <button onclick="closePkgEdit()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── state ── */
+let packages       = {};
+let selectedPkgKey = null;
+let viewMode       = 'tile';
+let editIdx        = null;
+let editList       = [];
+let editedPkgs     = new Set();
+let currentPkgAnim = false;
+let editingPkgKey  = null;
+let animUrl        = '';
+
+/* ── helpers ── */
+function stickerNumId(id){
+  if(!id)return null;
+  const p=String(id).split(':');
+  return p.length===2?p[1]:p[0];
+}
+function imgUrl(id,animated){
+  const sid=stickerNumId(id);
+  if(!sid)return '';
+  return animated
+    ?`https://stickershop.line-scdn.net/stickershop/v1/sticker/${sid}/android/sticker_animation.png`
+    :`https://stickershop.line-scdn.net/stickershop/v1/sticker/${sid}/android/sticker.png`;
+}
+function langClass(lang){return{ja:'b-ja',en:'b-en','zh-tw':'b-zh',zh:'b-zh',th:'b-th'}[lang]||'b-uni';}
+function langLabel(lang){return lang==='universal'?'uni':lang;}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+/* ── desc parse / build ── */
+function parseDesc(raw){
+  if(!raw)return{char:'',desc:'',scene:'',text:''};
+  let s=raw,char='',desc='',scene='',text='';
+  const tm=s.match(/,\s*text:"([^"]*)"$/);
+  if(tm){text=tm[1];s=s.slice(0,s.length-tm[0].length);}
+  const si=s.lastIndexOf(', scene:');
+  if(si!==-1){scene=s.slice(si+8).trim();s=s.slice(0,si);}
+  const fc=s.indexOf(', ');
+  if(fc!==-1&&s.slice(0,fc).length<50){char=s.slice(0,fc).trim();desc=s.slice(fc+2).trim();}
+  else{desc=s.trim();}
+  return{char,desc,scene,text};
+}
+function buildDesc(char,desc,scene,text){
+  let r=[char,desc].filter(Boolean).join(', ');
+  if(scene)r+=`, scene:${scene}`;
+  if(text)r+=`, text:"${text}"`;
+  return r;
+}
+
+/* ── file loading ── */
+function loadFiles(files){
+  const arr=[...files].filter(f=>f.name.endsWith('.json'));
+  if(!arr.length)return;
+  let loaded=0;const tmp={};
+  arr.forEach(f=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        const data=JSON.parse(e.target.result);
+        if(data?.stickers&&Array.isArray(data.stickers)){
+          tmp[String(data.packageId||f.name.replace(/\.json$/,''))]=data;
+        }else if(Array.isArray(data)&&data[0]?.packageId!==undefined){
+          data.forEach(p=>{const k=String(p.packageId);tmp[k]=tmp[k]?Object.assign(tmp[k],p):{...p,stickers:[]};});
+        }
+      }catch(_){}
+      if(++loaded===arr.length){packages=tmp;editedPkgs=new Set();goTo('pkgs');}
+    };
+    reader.readAsText(f);
+  });
+}
+
+/* ── screen navigation ── */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('s-edit').classList.remove('active');
+  if(id==='s-edit'){document.getElementById('s-edit').classList.add('active');}
+  else{const el=document.getElementById(id);if(el)el.classList.add('active');}
+}
+function goTo(screen,pkgKey){
+  if(screen==='pkgs'){showScreen('s-pkgs');renderPkgs();}
+  else if(screen==='stickers'){
+    selectedPkgKey=pkgKey;
+    const pkg=packages[pkgKey];
+    currentPkgAnim=!!(pkg?.animated);
+    showScreen('s-stickers');
+    document.getElementById('bc-pkg-name').textContent=pkg?.name||`#${pkgKey}`;
+    renderStickers();
+  }
+}
+
+/* ── package list ── */
+function renderPkgs(){
+  const q=(document.getElementById('pkg-search').value||'').toLowerCase();
+  const keys=Object.keys(packages);
+  const filtered=keys.filter(k=>{
+    const p=packages[k];
+    return !q||(p.name||'').toLowerCase().includes(q)||String(p.packageId||k).includes(q)||
+           (p.lang||'').includes(q)||(p.character||'').includes(q);
+  });
+  const total=keys.reduce((a,k)=>a+(packages[k].stickers||[]).length,0);
+  document.getElementById('pkg-stats').textContent=`${keys.length} packages · ${total} stickers`;
+  const grid=document.getElementById('pkgGrid');
+  if(!filtered.length){grid.innerHTML='<div class="empty">No packages found</div>';return;}
+  grid.innerHTML=filtered.map(k=>{
+    const p=packages[k];
+    const stickers=p.stickers||[];
+    const firstId=stickers[0]?.id;
+    const url=firstId?imgUrl(firstId,p.animated):'';
+    const edited=editedPkgs.has(k);
+    return`<div class="pkg-card ${edited?'has-edit':''}">
+      <div class="pkg-thumb" onclick="goTo('stickers','${esc(k)}')">
+        ${url?`<img src="${esc(url)}" onerror="this.style.display='none'" loading="lazy" alt="">`:'<span style="font-size:36px">📦</span>'}
+        ${p.animated?'<div class="anim-badge">anim</div>':''}
+      </div>
+      <div class="pkg-body">
+        <div class="pkg-name" onclick="goTo('stickers','${esc(k)}')">${esc(p.name||k)}</div>
+        <div class="pkg-sub">#${esc(String(p.packageId||k))} · ${stickers.length} stickers${edited?' · <strong style="color:var(--info-text)">edited</strong>':''}</div>
+        <div class="pkg-meta">
+          ${p.lang?`<span class="badge ${langClass(p.lang)}">${langLabel(p.lang)}</span>`:''}
+          ${p.character?`<span class="badge b-uni">${esc(p.character)}</span>`:''}
+          ${p.register?`<span class="badge b-uni">${esc(p.register)}</span>`:''}
+        </div>
+        <div class="pkg-actions">
+          <button onclick="goTo('stickers','${esc(k)}')">Open</button>
+          <button onclick="openPkgEdit('${esc(k)}')">Edit info</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── sticker list ── */
+function setView(v){
+  viewMode=v;
+  document.getElementById('vt-tile').classList.toggle('on',v==='tile');
+  document.getElementById('vt-list').classList.toggle('on',v==='list');
+  renderStickers();
+}
+function renderStickers(){
+  const pkg=packages[selectedPkgKey];if(!pkg)return;
+  const q=(document.getElementById('stk-search').value||'').toLowerCase();
+  const all=pkg.stickers||[];
+  const list=all.filter(s=>!q||String(s.id).includes(q)||(s.desc||'').toLowerCase().includes(q)||(s.text||'').toLowerCase().includes(q));
+  editList=list;
+  document.getElementById('stk-stats').textContent=`${all.length} stickers`;
+  const area=document.getElementById('stickerArea');
+  if(!list.length){area.innerHTML='<div class="empty">No stickers found</div>';return;}
+  if(viewMode==='tile'){
+    area.innerHTML=`<div class="tile-grid">${list.map((s,i)=>{
+      const url=imgUrl(s.id,currentPkgAnim);
+      const sid=stickerNumId(s.id);
+      const parsed=parseDesc(s.desc);
+      const textStr=s.text!==undefined?s.text:parsed.text;
+      return`<div class="sticker-tile ${s._edited?'has-edit':''}" onclick="openEdit(${i})">
+        ${textStr?`<div class="st-text-badge">${esc(textStr)}</div>`:''}
+        ${url?`<img src="${esc(url)}" onerror="this.outerHTML='<div class=tile-img-ph>🖼</div>'" loading="lazy" alt="">`:'<div class="tile-img-ph">🖼</div>'}
+        <div class="st-id">#${esc(String(sid))}</div>
+        ${parsed.scene?`<div class="st-scene">${esc(parsed.scene)}</div>`:''}
+      </div>`;
+    }).join('')}</div>`;
+  }else{
+    area.innerHTML=`<div class="list-wrap"><table>
+      <thead><tr><th>Preview</th><th>ID</th><th>Description</th><th>Scene</th><th>Text</th></tr></thead>
+      <tbody>${list.map((s,i)=>{
+        const url=imgUrl(s.id,currentPkgAnim);
+        const sid=stickerNumId(s.id);
+        const parsed=parseDesc(s.desc);
+        const textStr=s.text!==undefined?s.text:parsed.text;
+        return`<tr class="${s._edited?'has-edit':''}" onclick="openEdit(${i})">
+          <td>${url?`<img src="${esc(url)}" onerror="this.style.display='none'" loading="lazy" alt="">`:'🖼'}</td>
+          <td>#${esc(String(sid))}</td>
+          <td class="td-desc">${esc(parsed.desc||'—')}</td>
+          <td>${parsed.scene?`<span class="td-scene">${esc(parsed.scene)}</span>`:'—'}</td>
+          <td>${textStr?`<span class="td-text">${esc(textStr)}</span>`:'—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  }
+}
+
+/* ── sticker editor ── */
+function openEdit(idx){
+  editIdx=idx;
+  const pkg=packages[selectedPkgKey];
+  const s=editList[idx];
+  const sid=stickerNumId(s.id);
+  const parsed=parseDesc(s.desc);
+  document.getElementById('edit-pkg-title').textContent=pkg?.name||`#${selectedPkgKey}`;
+  document.getElementById('edit-pkg-sub').textContent=`Sticker #${sid}`;
+  document.getElementById('edit-counter').textContent=`${idx+1} / ${editList.length}`;
+  document.getElementById('edit-id').value=s.id;
+  document.getElementById('edit-char').value=parsed.char;
+  document.getElementById('edit-desc').value=parsed.desc;
+  document.getElementById('edit-scene').value=parsed.scene;
+  document.getElementById('edit-text').value=s.text!==undefined?s.text:parsed.text;
+  animUrl=imgUrl(s.id,currentPkgAnim);
+  document.getElementById('edit-img-wrap').innerHTML=animUrl
+    ?`<img class="preview-img" src="${esc(animUrl)}" onerror="this.outerHTML='<div class=preview-img-ph>🖼</div>'" alt="">`
+    :'<div class="preview-img-ph">🖼</div>';
+  document.getElementById('replay-btn').style.display=currentPkgAnim?'':'none';
+  document.getElementById('preview-meta').textContent=`ID: ${s.id}`;
+  document.getElementById('btn-prev').disabled=idx===0;
+  document.getElementById('btn-next').disabled=idx===editList.length-1;
+  showScreen('s-edit');
+  setTimeout(()=>document.getElementById('edit-desc').focus(),80);
+}
+
+function replayAnim(){
+  if(!animUrl)return;
+  document.getElementById('edit-img-wrap').innerHTML=
+    `<img class="preview-img" src="${esc(animUrl)}?t=${Date.now()}" onerror="this.outerHTML='<div class=preview-img-ph>🖼</div>'" alt="">`;
+}
+
+function autoSave(){
+  if(editIdx===null)return;
+  const s=editList[editIdx];
+  const char=document.getElementById('edit-char').value.trim();
+  const desc=document.getElementById('edit-desc').value.trim();
+  const scene=document.getElementById('edit-scene').value.trim();
+  const text=document.getElementById('edit-text').value.trim();
+  s.desc=buildDesc(char,desc,scene,text);
+  if(text)s.text=text;else delete s.text;
+  s._edited=true;
+  editedPkgs.add(selectedPkgKey);
+}
+
+function navEdit(dir){
+  const n=editIdx+dir;
+  if(n>=0&&n<editList.length)openEdit(n);
+}
+
+function closeEdit(){
+  renderStickers();renderPkgs();
+  showScreen('s-stickers');
+}
+
+/* ── drag-to-resize ── */
+(function(){
+  const handle=document.getElementById('drag-handle');
+  const body=document.getElementById('edit-body');
+  const preview=document.getElementById('edit-preview');
+  let dragging=false,startX=0,startW=0;
+
+  handle.addEventListener('mousedown',e=>{
+    dragging=true;startX=e.clientX;
+    startW=preview.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    document.body.style.userSelect='none';
+    document.body.style.cursor='col-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const bodyW=body.getBoundingClientRect().width;
+    const newW=Math.min(Math.max(startW+(e.clientX-startX),160),bodyW*0.7);
+    preview.style.width=newW+'px';
+    body.style.setProperty('--left-w',newW+'px');
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!dragging)return;
+    dragging=false;
+    handle.classList.remove('dragging');
+    document.body.style.userSelect='';
+    document.body.style.cursor='';
+  });
+
+  // touch support
+  handle.addEventListener('touchstart',e=>{
+    dragging=true;startX=e.touches[0].clientX;
+    startW=preview.getBoundingClientRect().width;
+    e.preventDefault();
+  },{passive:false});
+  document.addEventListener('touchmove',e=>{
+    if(!dragging)return;
+    const bodyW=body.getBoundingClientRect().width;
+    const newW=Math.min(Math.max(startW+(e.touches[0].clientX-startX),160),bodyW*0.7);
+    preview.style.width=newW+'px';
+    body.style.setProperty('--left-w',newW+'px');
+  },{passive:true});
+  document.addEventListener('touchend',()=>{dragging=false;});
+})();
+
+/* ── package edit ── */
+function openPkgEdit(key){
+  editingPkgKey=key;
+  const isNew=key===null;
+  const p=isNew?{}:(packages[key]||{});
+  document.getElementById('pkg-edit-title').textContent=isNew?'New package':`Edit: ${p.name||key}`;
+  document.getElementById('pe-id').value=isNew?'':(p.packageId||key);
+  document.getElementById('pe-id').readOnly=!isNew;
+  document.getElementById('pe-name').value=p.name||'';
+  document.getElementById('pe-lang').value=p.lang||'universal';
+  document.getElementById('pe-char').value=p.character||'';
+  document.getElementById('pe-register').value=p.register||'casual';
+  document.getElementById('pe-expr').value=p.expression_style||'subtle';
+  document.getElementById('pe-anim').value=p.animated?'true':'false';
+  document.getElementById('pe-count-wrap').style.display=isNew?'':'none';
+  document.getElementById('pe-count').value='';
+  document.getElementById('pe-delete-btn').style.display=isNew?'none':'';
+  document.getElementById('overlay-pkg').style.display='flex';
+  setTimeout(()=>document.getElementById('pe-name').focus(),50);
+}
+function closePkgEdit(){document.getElementById('overlay-pkg').style.display='none';}
+function savePkgEdit(){
+  const isNew=editingPkgKey===null;
+  const id=document.getElementById('pe-id').value.trim();
+  const name=document.getElementById('pe-name').value.trim();
+  if(!id||!name){alert('Package ID and name are required.');return;}
+  const key=String(id);
+  if(isNew&&packages[key]){alert(`Package ID ${key} already exists.`);return;}
+  const meta={
+    packageId:isNaN(Number(id))?id:Number(id),name,
+    lang:document.getElementById('pe-lang').value,
+    register:document.getElementById('pe-register').value,
+    character:document.getElementById('pe-char').value.trim(),
+    expression_style:document.getElementById('pe-expr').value,
+    animated:document.getElementById('pe-anim').value==='true',
+  };
+  if(isNew){
+    const count=parseInt(document.getElementById('pe-count').value)||0;
+    packages[key]={...meta,stickers:count>0?Array.from({length:count},(_,i)=>({id:`${key}:${i+1}`,desc:''})):[]};
+  }else{packages[editingPkgKey]={...packages[editingPkgKey],...meta};}
+  editedPkgs.add(key);closePkgEdit();renderPkgs();
+}
+function deletePkg(){
+  const p=packages[editingPkgKey];
+  if(!confirm(`Delete package "${p?.name||editingPkgKey}"?\nThis cannot be undone.`))return;
+  delete packages[editingPkgKey];editedPkgs.delete(editingPkgKey);closePkgEdit();renderPkgs();
+}
+
+/* ── download ── */
+function cleanPkg(pkg){
+  const{stickers,...meta}=pkg;
+  return{...meta,stickers:(stickers||[]).map(({_edited,...s})=>s)};
+}
+function downloadCurrent(){if(selectedPkgKey)dl(`package-${selectedPkgKey}.json`,cleanPkg(packages[selectedPkgKey]));}
+function downloadAll(){Object.keys(packages).forEach(k=>dl(`package-${k}.json`,cleanPkg(packages[k])));}
+function dl(name,data){
+  const a=document.createElement('a');
+  a.href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(data,null,2));
+  a.download=name;a.click();
+}
+
+/* ── keyboard ── */
+document.addEventListener('keydown',e=>{
+  const editOpen=document.getElementById('s-edit').classList.contains('active');
+  const pkgOpen=document.getElementById('overlay-pkg').style.display==='flex';
+  if(pkgOpen){if(e.key==='Escape')closePkgEdit();return;}
+  if(editOpen){
+    if(e.key==='Escape'){closeEdit();return;}
+    const tag=document.activeElement?.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA')return;
+    if(e.key==='ArrowRight'&&editIdx<editList.length-1)navEdit(1);
+    if(e.key==='ArrowLeft'&&editIdx>0)navEdit(-1);
+  }
+});
+</script>
+</body>
+</html>
