@@ -7,6 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -41,6 +42,18 @@ function isAllowedAbsoluteReplyMediaPath(params: {
 }): boolean {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
     return true;
+  }
+  // Allow media generated under the managed OpenClaw tmp dir (e.g. TTS audio
+  // written to /tmp/openclaw/tts-*/voice-*.mp3). This is consistent with
+  // buildMediaLocalRoots() which includes the same preferredTmpDir.
+  try {
+    const tmpDir = resolvePreferredOpenClawTmpDir();
+    if (isPathInside(tmpDir, params.candidate)) {
+      return true;
+    }
+  } catch {
+    // Tmp dir resolution can fail in exotic environments; proceed to
+    // workspace / sandbox checks below.
   }
   const volatileRoots = [params.workspaceDir, params.sandboxRoot]
     .filter((root): root is string => Boolean(root))
