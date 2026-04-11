@@ -8,7 +8,7 @@ OpenClaw already worked well with tool-using frontier models, but GPT-5.4 and Co
 - they could lose long-running task state during replay or compaction
 - parity claims against Claude Opus 4.6 were based on anecdotes instead of repeatable scenarios
 
-This parity program fixes those gaps in five reviewable slices: three merged runtime contracts, a proof-harness base, and a second-wave proof expansion.
+This parity program fixes those gaps in two waves: three merged runtime contracts, a merged proof-harness base, and a second-wave proof expansion that broadens the merged-main parity evidence.
 
 ## What changed
 

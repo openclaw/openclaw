@@ -1,6 +1,6 @@
 # GPT-5.4 / Codex Parity Maintainer Notes
 
-This note explains how to review the GPT-5.4 / Codex parity program as five merge units without losing the original six-contract architecture.
+This note explains how to review the GPT-5.4 / Codex parity program as a two-wave closeout without losing the original six-contract architecture.
 
 ## Merge units
 

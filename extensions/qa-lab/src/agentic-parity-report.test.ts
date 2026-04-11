@@ -7,6 +7,28 @@ import {
   type QaParitySuiteSummary,
 } from "./agentic-parity-report.js";
 
+const FULL_PARITY_PASS_SCENARIOS = [
+  { name: "Approval turn tool followthrough", status: "pass" as const },
+  { name: "Compaction retry after mutating tool", status: "pass" as const },
+  { name: "Model switch with tool continuity", status: "pass" as const },
+  { name: "Source and docs discovery report", status: "pass" as const },
+  { name: "Image understanding from attachment", status: "pass" as const },
+  { name: "Subagent handoff", status: "pass" as const },
+  { name: "Subagent fanout synthesis", status: "pass" as const },
+  { name: "Memory recall after context switch", status: "pass" as const },
+  { name: "Thread memory isolation", status: "pass" as const },
+  { name: "Config restart capability flip", status: "pass" as const },
+];
+
+function withScenarioOverride(
+  name: string,
+  override: Partial<(typeof FULL_PARITY_PASS_SCENARIOS)[number]>,
+) {
+  return FULL_PARITY_PASS_SCENARIOS.map((scenario) =>
+    scenario.name === name ? { ...scenario, ...override } : scenario,
+  );
+}
+
 describe("qa agentic parity report", () => {
   it("computes first-wave parity metrics from suite summaries", () => {
     const summary: QaParitySuiteSummary = {
@@ -216,21 +238,9 @@ describe("qa agentic parity report", () => {
     // whole parity pack as pass on both sides except the one scenario we
     // deliberately fail on both sides, so the assertion can pin the
     // isolated gate failure under test.
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
-    const scenariosWithBothFail = parityPassScenarios.map((scenario, index) =>
-      index === 0 ? { ...scenario, status: "fail" as const } : scenario,
-    );
+    const scenariosWithBothFail = withScenarioOverride("Approval turn tool followthrough", {
+      status: "fail",
+    });
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
@@ -254,26 +264,14 @@ describe("qa agentic parity report", () => {
     // by the relative completion-rate comparison, but surface it as a
     // named required-scenario failure too so operators see a concrete
     // scenario name alongside the rate differential.
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
-    const candidateWithOneFail = parityPassScenarios.map((scenario, index) =>
-      index === 0 ? { ...scenario, status: "fail" as const } : scenario,
-    );
+    const candidateWithOneFail = withScenarioOverride("Approval turn tool followthrough", {
+      status: "fail",
+    });
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
       candidateSummary: { scenarios: candidateWithOneFail },
-      baselineSummary: { scenarios: parityPassScenarios },
+      baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
 
@@ -286,28 +284,16 @@ describe("qa agentic parity report", () => {
   it("fails the parity gate when the baseline contains suspicious pass results", () => {
     // Cover the full second-wave pack on both sides so the suspicious-pass assertion
     // below is the isolated gate failure under test (no coverage-gap noise).
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
       candidateSummary: {
-        scenarios: parityPassScenarios,
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
       },
       baselineSummary: {
-        scenarios: parityPassScenarios.map((scenario, index) =>
-          index === 0 ? { ...scenario, details: "timed out before it continued" } : scenario,
-        ),
+        scenarios: withScenarioOverride("Approval turn tool followthrough", {
+          details: "timed out before it continued",
+        }),
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
@@ -506,28 +492,15 @@ Follow-up:
   });
 
   it("accepts matching run.primaryProvider labels without throwing", () => {
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
-
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
       candidateSummary: {
-        scenarios: parityPassScenarios,
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
       },
       baselineSummary: {
-        scenarios: parityPassScenarios,
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
@@ -538,26 +511,31 @@ Follow-up:
   it("skips run.primaryProvider verification when the summary is missing a run block (legacy summaries)", () => {
     // Pre-PR-L summaries don't carry a `run` block. The gate must still
     // work against those, trusting the caller-supplied label.
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
-
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
-      candidateSummary: { scenarios: parityPassScenarios },
-      baselineSummary: { scenarios: parityPassScenarios },
+      candidateSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
+      baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
+    expect(comparison.pass).toBe(true);
+  });
+
+  it("skips provider verification for arbitrary display labels when run metadata is present", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "GPT-5.4 candidate",
+      baselineLabel: "Opus 4.6 baseline",
+      candidateSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+      },
+      baselineSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
     expect(comparison.pass).toBe(true);
   });
 
@@ -565,23 +543,11 @@ Follow-up:
     // Cover the full 10-scenario parity pack on both sides so the pass
     // verdict is not disrupted by required-scenario coverage failures
     // added by the second-wave expansion.
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Subagent handoff", status: "pass" as const },
-      { name: "Subagent fanout synthesis", status: "pass" as const },
-      { name: "Memory recall after context switch", status: "pass" as const },
-      { name: "Thread memory isolation", status: "pass" as const },
-      { name: "Config restart capability flip", status: "pass" as const },
-    ];
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
-      candidateSummary: { scenarios: parityPassScenarios },
-      baselineSummary: { scenarios: parityPassScenarios },
+      candidateSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
+      baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
 
