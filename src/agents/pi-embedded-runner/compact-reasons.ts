@@ -57,5 +57,6 @@ export function classifyCompactionReason(reason?: string): string {
   ) {
     return "provider_error_5xx";
   }
-  return "unknown";
+  // Preserve original error message for unknown errors instead of masking it
+  return `unknown:${reason}`;
 }
