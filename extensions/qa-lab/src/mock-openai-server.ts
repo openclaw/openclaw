@@ -155,6 +155,23 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
   res.end(body);
 }
 
+type AnthropicStreamEvent = Record<string, unknown> & {
+  type: string;
+};
+
+function writeAnthropicSse(res: ServerResponse, events: AnthropicStreamEvent[]) {
+  const body = events
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
 function countApproxTokens(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -419,11 +436,11 @@ function extractLastCapture(text: string, pattern: RegExp) {
 }
 
 function extractExactReplyDirective(text: string) {
-  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
-  if (colonMatch) {
-    return colonMatch;
+  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
   }
-  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+  return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
 function extractExactMarkerDirective(text: string) {
@@ -435,7 +452,11 @@ function extractExactMarkerDirective(text: string) {
 }
 
 function isHeartbeatPrompt(text: string) {
-  return /Read HEARTBEAT\.md if it exists/i.test(text);
+  const trimmed = text.trim();
+  if (!trimmed || /remember this fact/i.test(trimmed)) {
+    return false;
+  }
+  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
 }
 
 function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
@@ -454,8 +475,10 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
         : toolOutput;
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
-  const exactReplyDirective = extractExactReplyDirective(allInputText);
-  const exactMarkerDirective = extractExactMarkerDirective(allInputText);
+  const exactReplyDirective =
+    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
@@ -622,6 +645,9 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   const allInputText = extractAllInputTexts(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
+  if (/remember this fact/i.test(prompt)) {
+    return buildAssistantEvents(buildAssistantText(input, body));
+  }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
   }
@@ -818,10 +844,9 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
 // baseline lane that exercises the same scenario logic without requiring
 // real Anthropic API keys.
 //
-// Scope: handles non-streaming Anthropic Messages requests with text and
-// tool_result content blocks, which is what the QA suite runner actually
-// sends. Streaming is intentionally out of scope for this mock because the
-// suite runner supports non-streaming fallback.
+// Scope: handles Anthropic Messages requests with text and tool_result
+// content blocks, including SSE streaming, which is what the QA suite uses
+// for the structural parity lane.
 
 function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
@@ -1044,11 +1069,107 @@ function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStreamEvents(params: {
+  model: string;
+  extracted: ExtractedAssistantOutput;
+}): AnthropicStreamEvent[] {
+  const approxInputTokens = 64;
+  const approxOutputTokens = Math.max(
+    16,
+    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
+  );
+  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+  const events: AnthropicStreamEvent[] = [
+    {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model: params.model || "claude-opus-4-6",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: approxInputTokens,
+          output_tokens: 0,
+        },
+      },
+    },
+  ];
+  let index = 0;
+  if (params.extracted.text || params.extracted.toolCalls.length === 0) {
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: {
+        type: "text",
+        text: "",
+      },
+    });
+    if (params.extracted.text) {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "text_delta",
+          text: params.extracted.text,
+        },
+      });
+    }
+    events.push({
+      type: "content_block_stop",
+      index,
+    });
+    index += 1;
+  }
+  for (const call of params.extracted.toolCalls) {
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: {
+        type: "tool_use",
+        id: call.id,
+        name: call.name,
+        input: {},
+      },
+    });
+    events.push({
+      type: "content_block_delta",
+      index,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify(call.input ?? {}),
+      },
+    });
+    events.push({
+      type: "content_block_stop",
+      index,
+    });
+    index += 1;
+  }
+  events.push({
+    type: "message_delta",
+    delta: {
+      stop_reason: params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn",
+    },
+    usage: {
+      input_tokens: approxInputTokens,
+      output_tokens: approxOutputTokens,
+    },
+  });
+  events.push({
+    type: "message_stop",
+  });
+  return events;
+}
+
 async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
   events: StreamEvent[];
   input: ResponsesInputItem[];
   extracted: ExtractedAssistantOutput;
   responseBody: Record<string, unknown>;
+  streamEvents: AnthropicStreamEvent[];
   model: string;
 }> {
   const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -1076,7 +1197,11 @@ async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
     model: normalizedModel,
     extracted,
   });
-  return { events, input, extracted, responseBody, model: normalizedModel };
+  const streamEvents = buildAnthropicMessageStreamEvents({
+    model: normalizedModel,
+    extracted,
+  });
+  return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
 }
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
@@ -1203,25 +1328,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         });
         return;
       }
-      // Anthropic Messages supports SSE streaming in the real API, but the
-      // QA suite runner always runs mock provider mode with streaming off.
-      // Reject explicit streaming requests with an Anthropic-shaped 400 so
-      // the failure mode is obvious instead of silently returning a
-      // non-streaming JSON response that the caller never asked for.
-      if (body.stream === true) {
-        writeJson(res, 400, {
-          type: "error",
-          error: {
-            type: "invalid_request_error",
-            message: "Anthropic Messages streaming is not supported by the qa-lab mock server.",
-          },
-        });
-        return;
-      }
       const {
         events,
         input,
         responseBody,
+        streamEvents,
         model: normalizedModel,
       } = await buildMessagesPayload(body);
       // Record the adapted request snapshot so /debug/requests gives the QA
@@ -1244,6 +1355,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       requests.push(lastRequest);
       if (requests.length > 50) {
         requests.splice(0, requests.length - 50);
+      }
+      if (body.stream === true) {
+        writeAnthropicSse(res, streamEvents);
+        return;
       }
       writeJson(res, 200, responseBody);
       return;
