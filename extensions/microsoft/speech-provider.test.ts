@@ -165,8 +165,9 @@ describe("listMicrosoftVoices", () => {
         .getSessionEvents("ms-voices-global-session", 10)
         .filter((event) => event.host === "speech.platform.bing.com");
       expect(events).toHaveLength(2);
-      const kinds = events.map((event) => String(event.kind)).toSorted();
-      expect(kinds).toEqual(["request", "response"]);
+      expect(
+        events.map((event) => String(event.kind)).toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(["request", "response"]);
     } finally {
       globalThis.fetch = originalFetch;
       finalizeDebugProxyCapture();
