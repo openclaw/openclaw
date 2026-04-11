@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   parity-gate:
-    name: Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock
+    name: Run the mock structural GPT-5.4 / Opus 4.6 parity gate
     if: ${{ github.event.pull_request.draft != true }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -51,16 +51,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run GPT-5.4 lane
+      - name: Run GPT-5.4 mock lane
         run: |
           pnpm openclaw qa suite \
+            --provider-mode mock-openai \
             --parity-pack agentic \
             --model openai/gpt-5.4 \
             --output-dir .artifacts/qa-e2e/gpt54
 
-      - name: Run Opus 4.6 lane
+      - name: Run Opus 4.6 mock lane
         run: |
           pnpm openclaw qa suite \
+            --provider-mode mock-openai \
             --parity-pack agentic \
             --model anthropic/claude-opus-4-6 \
             --output-dir .artifacts/qa-e2e/opus46

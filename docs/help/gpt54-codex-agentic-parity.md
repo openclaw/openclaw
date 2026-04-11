@@ -189,15 +189,26 @@ The pack is `QA_AGENTIC_PARITY_SCENARIOS` in `extensions/qa-lab/src/agentic-pari
 
 ## Running the harness end-to-end
 
-The harness is three commands. The CLI flags are `--model` / `--alt-model` on `openclaw qa suite` and `--candidate-summary` / `--baseline-summary` on `openclaw qa parity-report`. The baseline lane only runs fully offline once PR K lands the Anthropic mock route — until then it needs real Anthropic credentials.
+There are two distinct parity runs:
+
+- the **mock structural gate**, which is CI-safe and proves the harness wiring, scenario registration, artifact generation, and pass/fail semantics
+- the **live-frontier proof run**, which is the release-evidence lane for the real GPT-5.4 vs Opus 4.6 claim
+
+Treat them differently. The mock gate is necessary, but it is not the final product claim by itself.
+
+### Mock structural gate
+
+Use this lane in CI and in reproducible local smoke runs:
 
 ```bash
 pnpm openclaw qa suite \
+  --provider-mode mock-openai \
   --model openai/gpt-5.4 \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/gpt54
 
 pnpm openclaw qa suite \
+  --provider-mode mock-openai \
   --model anthropic/claude-opus-4-6 \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/opus46
@@ -207,6 +218,32 @@ pnpm openclaw qa parity-report \
   --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
   --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
   --output-dir .artifacts/qa-e2e/parity
+```
+
+This is what the parity-gate workflow should run. It keeps the job fenced away from real provider credentials and proves the harness structure is sound.
+
+### Live-frontier proof run
+
+Use this lane only when you want the release-evidence comparison against real frontier providers:
+
+```bash
+pnpm openclaw qa suite \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --parity-pack agentic \
+  --output-dir .artifacts/qa-e2e/gpt54-live
+
+pnpm openclaw qa suite \
+  --provider-mode live-frontier \
+  --model anthropic/claude-opus-4-6 \
+  --parity-pack agentic \
+  --output-dir .artifacts/qa-e2e/opus46-live
+
+pnpm openclaw qa parity-report \
+  --repo-root . \
+  --candidate-summary .artifacts/qa-e2e/gpt54-live/qa-suite-summary.json \
+  --baseline-summary .artifacts/qa-e2e/opus46-live/qa-suite-summary.json \
+  --output-dir .artifacts/qa-e2e/parity-live
 ```
 
 `openclaw qa parity-report` writes the Markdown report and a JSON verdict, and exits nonzero on a gate failure so CI can block the release. After PR L lands, `qa-suite-summary.json` carries the `run` block that the parity report uses to label each input; until then, the report still works but trusts the caller's `--candidate-label` / `--baseline-label`.
