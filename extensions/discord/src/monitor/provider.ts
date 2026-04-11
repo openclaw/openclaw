@@ -1070,7 +1070,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
     if (!botUserId) {
       // fetchUser succeeded but returned no id and applicationId is also missing —
-      // this should not happen in practice.
+      // this should not happen in practice. Disconnect the pre-start gateway
+      // before throwing so startup retries do not leave duplicate sessions.
+      try {
+        client.getPlugin<GatewayPlugin>("gateway")?.disconnect();
+      } catch {
+        // Best effort: preserve the original startup failure below.
+      }
       throw new Error("discord: fetchUser('@me') returned no user id");
     }
 

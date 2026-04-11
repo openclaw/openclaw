@@ -772,7 +772,11 @@ describe("monitorDiscordProvider", () => {
   it("throws when fetchUser('@me') returns no user id", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     const runtime = baseRuntime();
+    const disconnectMock = vi.fn();
 
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? { disconnect: disconnectMock } : undefined,
+    );
     clientFetchUserMock.mockResolvedValueOnce({ id: undefined as unknown as string });
 
     await expect(
@@ -781,5 +785,7 @@ describe("monitorDiscordProvider", () => {
         runtime,
       }),
     ).rejects.toThrow("discord: fetchUser('@me') returned no user id");
+
+    expect(disconnectMock).toHaveBeenCalledTimes(1);
   });
 });
