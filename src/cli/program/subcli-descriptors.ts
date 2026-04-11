@@ -89,6 +89,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "proxy",
+    description: "Run the OpenClaw debug proxy and inspect captured traffic",
+    hasSubcommands: true,
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,

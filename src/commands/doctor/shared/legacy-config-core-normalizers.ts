@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "../../../agents/model-selection-normalize.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";

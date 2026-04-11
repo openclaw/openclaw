@@ -38,7 +38,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,

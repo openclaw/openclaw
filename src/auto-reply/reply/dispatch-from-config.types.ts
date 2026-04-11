@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
