@@ -208,9 +208,7 @@ export function resolveConversationBindingContext(
       channel,
       accountId,
       conversationId: focusedConversationId,
-      ...(focusedParentConversationId
-        ? { parentConversationId: focusedParentConversationId }
-        : {}),
+      ...(focusedParentConversationId ? { parentConversationId: focusedParentConversationId } : {}),
       ...(threadId ? { threadId } : {}),
     };
   }

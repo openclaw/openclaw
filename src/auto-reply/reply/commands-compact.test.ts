@@ -29,9 +29,8 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, resolveSessionFilePathOptions } = await import(
-  "./commands-compact.runtime.js"
-);
+const { compactEmbeddedPiSession, resolveSessionFilePathOptions } =
+  await import("./commands-compact.runtime.js");
 
 function buildCompactParams(
   commandBodyNormalized: string,

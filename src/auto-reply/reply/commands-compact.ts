@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -5,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
