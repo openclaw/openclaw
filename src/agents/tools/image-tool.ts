@@ -486,6 +486,7 @@ export function createImageTool(options?: {
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
+                ssrfPolicy: { allowRfc2544BenchmarkRange: true },
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
