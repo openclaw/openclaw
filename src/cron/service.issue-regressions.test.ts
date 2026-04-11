@@ -6,6 +6,7 @@ import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
   createAbortAwareIsolatedRunner,
+  createDefaultIsolatedRunner,
   createDeferred,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
@@ -17,7 +18,6 @@ import {
   writeCronJobs,
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
-import { createDefaultIsolatedRunner } from "./service.regression-fixtures.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";

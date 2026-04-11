@@ -21,6 +21,7 @@ export const setupCronIssueRegressionFixtures = () =>
 
 export {
   createAbortAwareIsolatedRunner,
+  createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
   createRunningCronServiceState,
