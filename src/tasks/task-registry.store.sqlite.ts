@@ -9,6 +9,7 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 type TaskRegistryRow = {
   task_id: string;
   runtime: TaskRecord["runtime"];
+  task_kind: string | null;
   source_id: string | null;
   requester_session_key: string | null;
   owner_key: string;
@@ -98,6 +99,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   return {
     taskId: row.task_id,
     runtime: row.runtime,
+    ...(row.task_kind ? { taskKind: row.task_kind } : {}),
     ...(row.source_id ? { sourceId: row.source_id } : {}),
     requesterSessionKey,
     ownerKey: row.owner_key,
@@ -138,6 +140,7 @@ function bindTaskRecordBase(record: TaskRecord) {
   return {
     task_id: record.taskId,
     runtime: record.runtime,
+    task_kind: record.taskKind ?? null,
     source_id: record.sourceId ?? null,
     requester_session_key: record.scopeKind === "system" ? "" : record.requesterSessionKey,
     owner_key: record.ownerKey,
@@ -178,6 +181,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       SELECT
         task_id,
         runtime,
+        task_kind,
         source_id,
         requester_session_key,
         owner_key,
@@ -216,6 +220,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       INSERT INTO task_runs (
         task_id,
         runtime,
+        task_kind,
         source_id,
         requester_session_key,
         owner_key,
@@ -242,6 +247,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       ) VALUES (
         @task_id,
         @runtime,
+        @task_kind,
         @source_id,
         @requester_session_key,
         @owner_key,
@@ -268,6 +274,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       )
       ON CONFLICT(task_id) DO UPDATE SET
         runtime = excluded.runtime,
+        task_kind = excluded.task_kind,
         source_id = excluded.source_id,
         requester_session_key = excluded.requester_session_key,
         owner_key = excluded.owner_key,
@@ -362,6 +369,7 @@ function ensureSchema(db: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS task_runs (
       task_id TEXT PRIMARY KEY,
       runtime TEXT NOT NULL,
+      task_kind TEXT,
       source_id TEXT,
       requester_session_key TEXT,
       owner_key TEXT NOT NULL,
@@ -388,6 +396,9 @@ function ensureSchema(db: DatabaseSync) {
     );
   `);
   migrateLegacyOwnerColumns(db);
+  if (!hasTaskRunsColumn(db, "task_kind")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN task_kind TEXT;`);
+  }
   if (!hasTaskRunsColumn(db, "parent_flow_id")) {
     db.exec(`ALTER TABLE task_runs ADD COLUMN parent_flow_id TEXT;`);
   }

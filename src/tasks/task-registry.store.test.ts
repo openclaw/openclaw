@@ -250,6 +250,29 @@ describe("task-registry store runtime", () => {
     });
   });
 
+  it("preserves taskKind across sqlite restore", () => {
+    const created = createTaskRecord({
+      runtime: "acp",
+      taskKind: "video_generation",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:video",
+      runId: "run-task-kind-restore",
+      task: "Render a short clip",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-task-kind-restore")).toMatchObject({
+      taskId: created.taskId,
+      taskKind: "video_generation",
+      runId: "run-task-kind-restore",
+    });
+  });
+
   it("hardens the sqlite task store directory and file modes", () => {
     if (process.platform === "win32") {
       return;
