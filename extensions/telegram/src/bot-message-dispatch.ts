@@ -693,6 +693,14 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
+            // Flush any buffered final answer that was held while waiting for
+            // reasoning delivery. This can happen when the final payload
+            // contains both reasoning and answer text but reasoning delivery
+            // is skipped (e.g., lifecycle already "complete"), leaving the
+            // answer buffered but never flushed before the early return.
+            if (info.kind === "final") {
+              await flushBufferedFinalAnswer();
+            }
             return;
           }
           if (split.suppressedReasoningOnly) {
