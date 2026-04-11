@@ -1859,6 +1859,77 @@ describe("task-registry", () => {
     });
   });
 
+  it("returns awaiting_approval tasks to running when approval resolves positively", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const created = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-approval-approved",
+        task: "Run guarded command",
+        status: "awaiting_approval",
+        deliveryStatus: "pending",
+        progressSummary: "Awaiting approval before command can run.",
+      });
+
+      emitAgentEvent({
+        runId: "run-approval-approved",
+        stream: "approval",
+        data: {
+          phase: "resolved",
+          kind: "exec",
+          status: "approved",
+          title: "Command approval resolved",
+        },
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "running",
+      });
+    });
+  });
+
+  it("projects denied approval resolution as failed task state", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const created = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-approval-denied",
+        task: "Run guarded command",
+        status: "awaiting_approval",
+        deliveryStatus: "pending",
+      });
+
+      emitAgentEvent({
+        runId: "run-approval-denied",
+        stream: "approval",
+        data: {
+          phase: "resolved",
+          kind: "exec",
+          status: "denied",
+          title: "Command approval resolved",
+          message: "Command did not run: approval timed out.",
+        },
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "failed",
+        error: "Command did not run: approval timed out.",
+      });
+    });
+  });
+
   it("projects no-output assistant events as waiting_external task state", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
