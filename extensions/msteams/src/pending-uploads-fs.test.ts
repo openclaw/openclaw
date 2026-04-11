@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prepareFileConsentActivityFs } from "./file-consent-helpers.js";
 import {
   getPendingUploadFs,
@@ -13,18 +13,39 @@ import { clearPendingUploads } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 
+// Track temp dirs created by each test so afterEach can clean them up.
+const createdTempDirs: string[] = [];
+
 async function makeTempStateDir(): Promise<string> {
-  return await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-pending-"));
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-pending-"));
+  createdTempDirs.push(dir);
+  return dir;
 }
 
 function makeEnv(stateDir: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
+async function cleanupTempDirs(): Promise<void> {
+  while (createdTempDirs.length > 0) {
+    const dir = createdTempDirs.pop();
+    if (!dir) continue;
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    } catch {
+      // tmp dir may already be gone
+    }
+  }
+}
+
 describe("msteams pending uploads (fs-backed)", () => {
   beforeEach(() => {
     setMSTeamsRuntime(msteamsRuntimeStub);
     clearPendingUploads();
+  });
+
+  afterEach(async () => {
+    await cleanupTempDirs();
   });
 
   it("stores and retrieves a pending upload by id", async () => {
@@ -175,6 +196,10 @@ describe("prepareFileConsentActivityFs end-to-end", () => {
   beforeEach(() => {
     setMSTeamsRuntime(msteamsRuntimeStub);
     clearPendingUploads();
+  });
+
+  afterEach(async () => {
+    await cleanupTempDirs();
   });
 
   it("writes the pending upload to the fs store with the same id as the card", async () => {
