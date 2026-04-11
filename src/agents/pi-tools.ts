@@ -2,8 +2,9 @@ import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-a
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { initGuardrailsFromConfig } from "../guardrails/init.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
-import { logWarn } from "../logger.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import {
@@ -275,6 +276,13 @@ export function createOpenClawCodingTools(options?: {
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
+  }
+  if (options?.config) {
+    initGuardrailsFromConfig(options.config.guardrails, {
+      info: logInfo,
+      warn: logWarn,
+      error: logError,
+    });
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
   const {

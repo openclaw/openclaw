@@ -2,11 +2,25 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+const { initGuardrailsFromConfigMock } = vi.hoisted(() => ({
+  initGuardrailsFromConfigMock: vi.fn(),
+}));
+
+vi.mock("../guardrails/init.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../guardrails/init.js")>("../guardrails/init.js");
+  return {
+    ...actual,
+    initGuardrailsFromConfig: initGuardrailsFromConfigMock,
+  };
+});
+
 import { createPluginToolsMcpServer } from "./plugin-tools-serve.js";
 
 async function connectPluginToolsServer(tools: AnyAgentTool[]) {
@@ -26,6 +40,7 @@ async function connectPluginToolsServer(tools: AnyAgentTool[]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  initGuardrailsFromConfigMock.mockReset();
   resetGlobalHookRunner();
 });
 
@@ -165,6 +180,38 @@ describe("plugin tools MCP server", () => {
     } finally {
       await session.close();
     }
+  });
+
+  it("initializes guardrails for the MCP bridge before wrapping tools", () => {
+    const tool = {
+      name: "memory_store",
+      description: "Store memory",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    } as unknown as AnyAgentTool;
+    const config = {
+      guardrails: {
+        enabled: true,
+        failClosed: true,
+        provider: {
+          use: "builtin:allowlist",
+          config: {
+            allowedTools: ["memory_store"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    createPluginToolsMcpServer({ config, tools: [tool] });
+
+    expect(initGuardrailsFromConfigMock).toHaveBeenCalledWith(
+      config.guardrails,
+      expect.objectContaining({
+        info: expect.any(Function),
+        warn: expect.any(Function),
+        error: expect.any(Function),
+      }),
+    );
   });
 
   it("still executes plugin tools on the MCP bridge when no before_tool_call hook is registered", async () => {

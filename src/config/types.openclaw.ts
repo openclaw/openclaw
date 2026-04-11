@@ -1,3 +1,4 @@
+import type { GuardrailsConfig } from "../guardrails/types.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -111,6 +112,7 @@ export type OpenClawConfig = {
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   approvals?: ApprovalsConfig;
+  guardrails?: GuardrailsConfig;
   session?: SessionConfig;
   web?: WebConfig;
   channels?: ChannelsConfig;

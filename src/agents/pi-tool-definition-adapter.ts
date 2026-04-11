@@ -6,7 +6,6 @@ import type {
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
-import { isPlainObject } from "../utils.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -14,6 +13,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
+import { coerceToolParamsRecord } from "./tool-params.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult } from "./tools/common.js";
 
@@ -231,38 +231,6 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   });
 }
 
-/**
- * Coerce tool-call params into a plain object.
- *
- * Some providers (e.g. Gemini) stream tool-call arguments as incremental
- * string deltas.  By the time the framework invokes the tool's `execute`
- * callback the accumulated value may still be a JSON **string** rather than
- * a parsed object.  `isPlainObject()` returns `false` for strings, which
- * caused the params to be silently replaced with `{}`.
- *
- * This helper tries `JSON.parse` when the value is a string and falls back
- * to an empty object only when parsing genuinely fails.
- */
-function coerceParamsRecord(value: unknown): Record<string, unknown> {
-  if (isPlainObject(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.length > 0) {
-      try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (isPlainObject(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // not valid JSON – fall through to empty object
-      }
-    }
-  }
-  return {};
-}
-
 // Convert client tools (OpenResponses hosted tools) to ToolDefinition format
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
@@ -289,7 +257,7 @@ export function toClientToolDefinitions(
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
-        const paramsRecord = coerceParamsRecord(adjustedParams);
+        const paramsRecord = coerceToolParamsRecord(adjustedParams);
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);

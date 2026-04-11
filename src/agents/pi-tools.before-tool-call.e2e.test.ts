@@ -7,6 +7,7 @@ import {
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
+  configureGuardrails,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
@@ -343,6 +344,7 @@ describe("before_tool_call requireApproval handling", () => {
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
+    configureGuardrails(undefined);
     hookRunner = {
       hasHooks: vi.fn().mockReturnValue(true),
       runBeforeToolCall: vi.fn(),
@@ -817,5 +819,117 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("re-runs guardrails on hook-adjusted params before allowing execution", async () => {
+    configureGuardrails({
+      name: "command-guardrail",
+      evaluate: vi.fn(async (request) => ({
+        allow: request.toolInput.command !== "rm -rf /",
+        reasons:
+          request.toolInput.command === "rm -rf /"
+            ? [{ code: "dangerous_command", message: "dangerous command blocked" }]
+            : [{ code: "allowed" }],
+      })),
+    });
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { command: "rm -rf /" },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo ok" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Guardrail (command-guardrail): dangerous command blocked",
+    );
+  });
+
+  it("re-runs guardrails on approval-adjusted params before allowing execution", async () => {
+    configureGuardrails({
+      name: "command-guardrail",
+      evaluate: vi.fn(async (request) => ({
+        allow: request.toolInput.command !== "rm -rf /",
+        reasons:
+          request.toolInput.command === "rm -rf /"
+            ? [{ code: "dangerous_command", message: "dangerous command blocked" }]
+            : [{ code: "allowed" }],
+      })),
+    });
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { command: "rm -rf /" },
+      requireApproval: {
+        title: "Needs approval",
+        description: "Check this",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-guardrail", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-guardrail",
+      decision: "allow-once",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo ok" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Guardrail (command-guardrail): dangerous command blocked",
+    );
+  });
+});
+
+describe("before_tool_call input normalization", () => {
+  let hookRunner: {
+    hasHooks: ReturnType<typeof vi.fn>;
+    runBeforeToolCall: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    configureGuardrails(undefined);
+    hookRunner = {
+      hasHooks: vi.fn(),
+      runBeforeToolCall: vi.fn(),
+    };
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+  });
+
+  it("parses JSON-string params before guardrail and hook evaluation", async () => {
+    const evaluate = vi.fn(async () => ({ allow: true, reasons: [{ code: "allowed" }] }));
+    configureGuardrails({ name: "json-guardrail", evaluate });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: ' { "command": "rm -rf /" } ',
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: ' { "command": "rm -rf /" } ' });
+    expect(evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolInput: { command: "rm -rf /" },
+      }),
+    );
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { command: "rm -rf /" },
+      }),
+      expect.objectContaining({
+        toolName: "bash",
+      }),
+    );
   });
 });

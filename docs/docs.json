@@ -1200,6 +1200,7 @@
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/guardrails",
                   "tools/image-generation",
                   "tools/music-generation",
                   "tools/llm-task",

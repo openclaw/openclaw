@@ -1,4 +1,6 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { evaluateGuardrail } from "../guardrails/index.js";
+import { configureGuardrails, getConfiguredGuardrails } from "../guardrails/runtime.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -7,9 +9,12 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { coerceToolParamsRecord } from "./tool-params.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+export { configureGuardrails } from "../guardrails/runtime.js";
 
 export type HookContext = {
   agentId?: string;
@@ -125,6 +130,35 @@ async function recordLoopOutcome(args: {
   }
 }
 
+async function evaluateConfiguredGuardrailsForParams(args: {
+  toolName: string;
+  params: unknown;
+  ctx?: HookContext;
+  toolCallId?: string;
+}): Promise<HookOutcome | null> {
+  const { provider: guardrailProvider, failClosed: guardrailFailClosed } =
+    getConfiguredGuardrails();
+  if (!guardrailProvider) {
+    return null;
+  }
+  const result = await evaluateGuardrail(
+    guardrailProvider,
+    {
+      toolName: args.toolName,
+      params: coerceToolParamsRecord(args.params),
+      agentId: args.ctx?.agentId,
+      sessionId: args.ctx?.sessionId,
+      runId: args.ctx?.runId,
+      toolCallId: args.toolCallId,
+    },
+    guardrailFailClosed,
+  );
+  if (result.block) {
+    return { blocked: true, reason: result.blockReason || "Blocked by guardrail policy" };
+  }
+  return null;
+}
+
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
@@ -185,13 +219,23 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
 
+  const normalizedParams = coerceToolParamsRecord(params);
+  const initialGuardrailOutcome = await evaluateConfiguredGuardrailsForParams({
+    toolName,
+    params: normalizedParams,
+    ctx: args.ctx,
+    toolCallId: args.toolCallId,
+  });
+  if (initialGuardrailOutcome) {
+    return initialGuardrailOutcome;
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };
   }
 
   try {
-    const normalizedParams = isPlainObject(params) ? params : {};
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -325,9 +369,21 @@ export async function runBeforeToolCallHook(args: {
           decision === PluginApprovalResolutions.ALLOW_ONCE ||
           decision === PluginApprovalResolutions.ALLOW_ALWAYS
         ) {
+          const mergedParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+          if (mergedParams !== params) {
+            const adjustedGuardrailOutcome = await evaluateConfiguredGuardrailsForParams({
+              toolName,
+              params: mergedParams,
+              ctx: args.ctx,
+              toolCallId: args.toolCallId,
+            });
+            if (adjustedGuardrailOutcome) {
+              return adjustedGuardrailOutcome;
+            }
+          }
           return {
             blocked: false,
-            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+            params: mergedParams,
           };
         }
         if (decision === PluginApprovalResolutions.DENY) {
@@ -335,9 +391,21 @@ export async function runBeforeToolCallHook(args: {
         }
         const timeoutBehavior = approval.timeoutBehavior ?? "deny";
         if (timeoutBehavior === "allow") {
+          const mergedParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+          if (mergedParams !== params) {
+            const adjustedGuardrailOutcome = await evaluateConfiguredGuardrailsForParams({
+              toolName,
+              params: mergedParams,
+              ctx: args.ctx,
+              toolCallId: args.toolCallId,
+            });
+            if (adjustedGuardrailOutcome) {
+              return adjustedGuardrailOutcome;
+            }
+          }
           return {
             blocked: false,
-            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+            params: mergedParams,
           };
         }
         return { blocked: true, reason: "Approval timed out" };
@@ -359,9 +427,19 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
+      const mergedParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+      const adjustedGuardrailOutcome = await evaluateConfiguredGuardrailsForParams({
+        toolName,
+        params: mergedParams,
+        ctx: args.ctx,
+        toolCallId: args.toolCallId,
+      });
+      if (adjustedGuardrailOutcome) {
+        return adjustedGuardrailOutcome;
+      }
       return {
         blocked: false,
-        params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+        params: mergedParams,
       };
     }
   } catch (err) {
@@ -459,5 +537,5 @@ export const __testing = {
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
-  isPlainObject,
+  coerceToolParamsRecord,
 };

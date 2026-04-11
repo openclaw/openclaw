@@ -1,6 +1,7 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { initGuardrailsFromConfig } from "../guardrails/init.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -67,6 +68,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   });
   const resolvedConfig = autoEnabled.config;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
+  initGuardrailsFromConfig(resolvedConfig.guardrails, params.log);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
     activationSourceConfig,

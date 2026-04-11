@@ -14,6 +14,7 @@ import {
   SecretInputSchema,
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
+import { GuardrailsSchema } from "./zod-schema.guardrails.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
@@ -520,6 +521,7 @@ export const OpenClawSchema = z
     messages: MessagesSchema,
     commands: CommandsSchema,
     approvals: ApprovalsSchema,
+    guardrails: GuardrailsSchema,
     session: SessionSchema,
     cron: z
       .object({

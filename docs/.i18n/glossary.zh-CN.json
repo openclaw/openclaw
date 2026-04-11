@@ -8,6 +8,10 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Guardrails",
+    "target": "护栏"
+  },
+  {
     "source": "Pi",
     "target": "Pi"
   },

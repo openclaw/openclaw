@@ -18822,6 +18822,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       },
+      guardrails: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          failClosed: {
+            type: "boolean",
+          },
+          provider: {
+            type: "object",
+            properties: {
+              use: {
+                type: "string",
+                minLength: 1,
+              },
+              config: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+            },
+            required: ["use"],
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
       session: {
         type: "object",
         properties: {

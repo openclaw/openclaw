@@ -17,7 +17,9 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { initGuardrailsFromConfig } from "../guardrails/init.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
@@ -45,6 +47,11 @@ export function createPluginToolsMcpServer(
   } = {},
 ): Server {
   const cfg = params.config ?? loadConfig();
+  initGuardrailsFromConfig(cfg.guardrails, {
+    info: logInfo,
+    warn: logWarn,
+    error: logError,
+  });
   const tools = (params.tools ?? resolveTools(cfg)).map((tool) => {
     if (isToolWrappedWithBeforeToolCallHook(tool)) {
       return tool;
