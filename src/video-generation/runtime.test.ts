@@ -517,6 +517,30 @@ describe("video-generation runtime", () => {
     ).rejects.toThrow(/supports at most 4s per video, 6s requested/);
   });
 
+  it("rejects provider results that contain undeliverable assets", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "video-plugin",
+      capabilities: {},
+      generateVideo: async () => ({
+        videos: [{ mimeType: "video/mp4" }],
+      }),
+    });
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "video-plugin/vid-v1" },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "animate a cat",
+      }),
+    ).rejects.toThrow(/neither buffer nor url is set/);
+  });
+
   it("lists runtime video-generation providers through the provider registry", () => {
     const providers: VideoGenerationProvider[] = [
       {

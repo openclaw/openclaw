@@ -815,17 +815,55 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
     modelOverride: params.model,
   });
   const outputs = await Promise.all(
-    result.videos.map(async (video, index) => ({
-      ...(await writeOutputAsset({
-        buffer: video.buffer,
-        mimeType: video.mimeType,
-        originalFilename: video.fileName,
-        outputPath: params.output,
-        outputIndex: index,
-        outputCount: result.videos.length,
-        subdir: "generated",
-      })),
-    })),
+    result.videos.map(async (video, index) => {
+      if (!video.buffer && !video.url) {
+        throw new Error(`Video asset at index ${index} has neither buffer nor url`);
+      }
+
+      let videoBuffer = video.buffer;
+      if (!videoBuffer && video.url) {
+        const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
+        if (!response.ok) {
+          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+        }
+        if (params.output && response.body) {
+          const { pipeline } = await import("node:stream/promises");
+          const { Readable } = await import("node:stream");
+          const { createWriteStream } = await import("node:fs");
+          const mimeType = normalizeMimeType(video.mimeType);
+          const ext =
+            extensionForMime(mimeType) ||
+            path.extname(video.fileName ?? "") ||
+            path.extname(params.output ?? "");
+          const resolvedOutput = path.resolve(params.output);
+          const parsed = path.parse(resolvedOutput);
+          const filePath =
+            result.videos.length <= 1
+              ? path.join(parsed.dir, `${parsed.name}${ext}`)
+              : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
+          await fs.mkdir(path.dirname(filePath), { recursive: true });
+          await pipeline(
+            Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
+            createWriteStream(filePath),
+          );
+          const stat = await fs.stat(filePath);
+          return { path: filePath, mimeType: video.mimeType, size: stat.size };
+        }
+        videoBuffer = Buffer.from(await response.arrayBuffer());
+      }
+
+      return {
+        ...(await writeOutputAsset({
+          buffer: videoBuffer!,
+          mimeType: video.mimeType,
+          originalFilename: video.fileName,
+          outputPath: params.output,
+          outputIndex: index,
+          outputCount: result.videos.length,
+          subdir: "generated",
+        })),
+      };
+    }),
   );
   return {
     ok: true,
