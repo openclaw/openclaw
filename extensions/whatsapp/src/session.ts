@@ -194,26 +194,42 @@ async function resolveEnvProxyAgent(
   });
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>, timeoutMs = 0) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
     };
     const evWithOff = sock.ev as unknown as OffCapable;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      evWithOff.off?.("connection.update", handler);
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
 
     const handler = (...args: unknown[]) => {
       const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
       if (update.connection === "open") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         resolve();
       }
       if (update.connection === "close") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         reject(update.lastDisconnect ?? new Error("Connection closed"));
       }
     };
 
     sock.ev.on("connection.update", handler);
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`WhatsApp connection timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
   });
 }
 

@@ -152,6 +152,32 @@ describe("web session", () => {
     await expect(promise).rejects.toBeInstanceOf(Error);
   });
 
+  it("rejects after timeout with no connection event", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      100,
+    );
+    vi.advanceTimersByTime(100);
+    await expect(promise).rejects.toThrow("timed out after 100ms");
+    expect(ev.listenerCount("connection.update")).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("clears timeout when connection opens before timeout", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      5000,
+    );
+    ev.emit("connection.update", { connection: "open" });
+    await expect(promise).resolves.toBeUndefined();
+    expect(ev.listenerCount("connection.update")).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("logWebSelfId prints cached E.164 when creds exist", () => {
     const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
       if (typeof p !== "string") {

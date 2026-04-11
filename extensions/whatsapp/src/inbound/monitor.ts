@@ -77,7 +77,7 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
-  await waitForWaConnection(sock);
+  await waitForWaConnection(sock, 60_000);
   const connectedAtMs = Date.now();
   if (options.socketRef) {
     options.socketRef.current = sock;
