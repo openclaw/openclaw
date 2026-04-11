@@ -29,6 +29,23 @@ function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
+function resolveWaitTransportFailure(error: unknown): {
+  outcome: SubagentRunOutcome;
+  reason: SubagentLifecycleEndedReason;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/gateway timeout/i.test(message)) {
+    return {
+      outcome: { status: "timeout" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    };
+  }
+  return {
+    outcome: { status: "error", error: message },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+  };
+}
+
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -128,8 +145,34 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
-    } catch {
-      // ignore
+    } catch (error) {
+      const entry = params.runs.get(runId);
+      if (!entry) {
+        return;
+      }
+      const endedAt = typeof entry.endedAt === "number" ? entry.endedAt : Date.now();
+      const { outcome, reason } = resolveWaitTransportFailure(error);
+      let mutated = false;
+      if (entry.endedAt !== endedAt) {
+        entry.endedAt = endedAt;
+        mutated = true;
+      }
+      if (!runOutcomesEqual(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (mutated) {
+        params.persist();
+      }
+      await params.completeSubagentRun({
+        runId,
+        endedAt,
+        outcome,
+        reason,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
     }
   };
 
