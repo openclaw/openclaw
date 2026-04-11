@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -13,6 +14,7 @@ vi.mock("../../agents/agent-scope.js", async () => {
   return {
     ...actual,
     resolveSessionAgentId: resolveSessionAgentIdMock,
+    resolveAgentDir: vi.fn(actual.resolveAgentDir),
   };
 });
 
@@ -186,6 +188,37 @@ describe("handleBtwCommand", () => {
     expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: expect.stringContaining("/agents/worker-1/agent"),
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the canonical session agent dir even when the wrapper agentDir disagrees", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentId = "main";
+    params.agentDir = "/tmp/main-agent";
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    resolveSessionAgentIdMock.mockReturnValue("worker-1");
+    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/worker-1-agent");
+    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:worker-1:whatsapp:direct:12345",
+      config: expect.any(Object),
+    });
+    expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "worker-1");
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/worker-1-agent",
       }),
     );
     expect(result).toEqual({
