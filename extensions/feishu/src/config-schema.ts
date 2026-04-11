@@ -232,7 +232,7 @@ export const FeishuConfigSchema = z
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
-  .strict()
+  .passthrough()
   .superRefine((value, ctx) => {
     const defaultAccount = value.defaultAccount?.trim();
     if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
