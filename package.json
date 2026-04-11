@@ -33,6 +33,7 @@
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
     "skills/",
+    "qa/scenarios/",
     "scripts/npm-runner.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
