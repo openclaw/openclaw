@@ -42,7 +42,11 @@ import {
 } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import {
+  archivePriorIsolatedEntryAfterRotation,
+  capturePriorIsolatedEntryForArchival,
+  resolveCronSession,
+} from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -822,23 +826,61 @@ export async function runHeartbeatOnce(opts: {
       nowMs: startedAt,
       forceNew: true,
     });
+
+    // Capture the prior entry's identity BEFORE the store is updated, so we
+    // can archive its transcript file after the rotation. Returns undefined
+    // when isNewSession is false or no prior entry exists, in which case the
+    // later archival call is a no-op. This is the "reset" archival path —
+    // the entry persists at the same key, only the transcript is rolling.
+    const rotatedIsolatedEntry = capturePriorIsolatedEntryForArchival({
+      store: cronSession.store,
+      sessionKey: isolatedSessionKey,
+      isNewSession: cronSession.isNewSession,
+    });
+
+    // The "delete" archival path: a stale `:heartbeat:heartbeat` suffix-collapse
+    // entry is being removed from the store entirely (a different concept
+    // from rotation — the entry is genuinely going away). Tracked separately
+    // so the two archival calls use semantically-correct retention classes:
+    // `reason: "deleted"` honours `maintenance.pruneAfterMs`, while
+    // `reason: "reset"` (rotation) honours `maintenance.resetArchiveRetentionMs`.
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
-    const removedSessionFiles = new Map<string, string | undefined>();
+    const deletedSessionFiles = new Map<string, string | undefined>();
     if (staleIsolatedSessionKey) {
       const staleEntry = cronSession.store[staleIsolatedSessionKey];
       if (staleEntry?.sessionId) {
-        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+        deletedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
       }
       delete cronSession.store[staleIsolatedSessionKey];
     }
+
     cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
     cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    if (removedSessionFiles.size > 0) {
+
+    // Rotation archival: rename the prior run's transcript to
+    // `<file>.reset.<ts>`. Runs after the store save so the archival's
+    // internal `referencedSessionIds` computation reflects the rotation.
+    try {
+      await archivePriorIsolatedEntryAfterRotation({
+        priorEntryForArchival: rotatedIsolatedEntry,
+        store: cronSession.store,
+        storePath: cronSession.storePath,
+      });
+    } catch (err) {
+      log.warn("heartbeat: failed to archive rotated isolated session transcript", {
+        err: String(err),
+        isolatedSessionKey,
+        priorSessionId: rotatedIsolatedEntry?.sessionId,
+      });
+    }
+
+    // Suffix-collapse archival: file from a genuinely-removed entry.
+    if (deletedSessionFiles.size > 0) {
       try {
         const referencedSessionIds = new Set(
           Object.values(cronSession.store)
@@ -846,19 +888,20 @@ export async function runHeartbeatOnce(opts: {
             .filter((sessionId): sessionId is string => Boolean(sessionId)),
         );
         await archiveRemovedSessionTranscripts({
-          removedSessionFiles,
+          removedSessionFiles: deletedSessionFiles,
           referencedSessionIds,
           storePath: cronSession.storePath,
           reason: "deleted",
           restrictToStoreDir: true,
         });
       } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+        log.warn("heartbeat: failed to archive stale suffix-collapse session transcript", {
           err: String(err),
-          sessionKey: staleIsolatedSessionKey,
+          staleIsolatedSessionKey,
         });
       }
     }
+
     runSessionKey = isolatedSessionKey;
   }
 

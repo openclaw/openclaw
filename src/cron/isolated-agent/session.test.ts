@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions/store.js", () => ({
   loadSessionStore: vi.fn(),
+  archiveRemovedSessionTranscripts: vi.fn().mockResolvedValue(new Set()),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -25,8 +26,16 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
-import { resolveCronSession } from "./session.js";
+import {
+  archiveRemovedSessionTranscripts,
+  loadSessionStore,
+} from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  archivePriorIsolatedEntryAfterRotation,
+  capturePriorIsolatedEntryForArchival,
+  resolveCronSession,
+} from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
 
@@ -268,5 +277,246 @@ describe("resolveCronSession", () => {
       // Should still preserve other fields from entry
       expect(result.sessionEntry.modelOverride).toBe("some-model");
     });
+
+    describe("sessionFile rotation", () => {
+      // Regression for the `isolatedSession: true` bug where every forceNew
+      // run inherited the prior entry's sessionFile via the `...entry` spread.
+      // `resolveSessionFilePath` prefers `entry.sessionFile` over recomputing
+      // from sessionId, so the inherited path won over the new sessionId and
+      // every run silently appended to the same physical transcript file
+      // forever — defeating isolation and poisoning each run with the
+      // in-context history of all prior runs.
+
+      it("clears sessionFile when forceNew is true", () => {
+        const result = resolveWithStoredEntry({
+          sessionKey: "agent:main:main:heartbeat",
+          entry: {
+            sessionId: "old-heartbeat-session-id",
+            updatedAt: NOW_MS - 1000,
+            sessionFile: "/tmp/agents/main/sessions/old-heartbeat-session-id.jsonl",
+          },
+          fresh: true,
+          forceNew: true,
+        });
+
+        expect(result.isNewSession).toBe(true);
+        expect(result.sessionEntry.sessionId).not.toBe("old-heartbeat-session-id");
+        // Must be undefined so the downstream resolver falls through to
+        // computing a new path from the new sessionId.
+        expect(result.sessionEntry.sessionFile).toBeUndefined();
+      });
+
+      it("clears sessionFile when session is stale (non-forceNew)", () => {
+        const result = resolveWithStoredEntry({
+          entry: {
+            sessionId: "old-session-id",
+            updatedAt: NOW_MS - 86_400_000,
+            sessionFile: "/tmp/agents/main/sessions/old-session-id.jsonl",
+          },
+          fresh: false,
+        });
+
+        expect(result.isNewSession).toBe(true);
+        expect(result.sessionEntry.sessionFile).toBeUndefined();
+      });
+
+      it("preserves sessionFile when reusing a fresh session", () => {
+        const result = resolveWithStoredEntry({
+          entry: {
+            sessionId: "existing-session-id-202",
+            updatedAt: NOW_MS - 1000,
+            systemSent: true,
+            sessionFile: "/tmp/agents/main/sessions/existing-session-id-202.jsonl",
+          },
+          fresh: true,
+        });
+
+        expect(result.isNewSession).toBe(false);
+        // Reuse path must not rotate — subsequent writes go to the same file.
+        expect(result.sessionEntry.sessionFile).toBe(
+          "/tmp/agents/main/sessions/existing-session-id-202.jsonl",
+        );
+      });
+
+      it("leaves sessionFile undefined when no prior entry exists (first-ever run)", () => {
+        const result = resolveWithStoredEntry({
+          forceNew: true,
+          // No entry seeded — first-ever run.
+        });
+
+        expect(result.isNewSession).toBe(true);
+        expect(result.sessionEntry.sessionFile).toBeUndefined();
+      });
+    });
+  });
+});
+
+describe("capturePriorIsolatedEntryForArchival", () => {
+  it("returns the prior entry identity when isNewSession and prior entry exists", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "prior-id",
+        updatedAt: 0,
+        sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+      } as SessionEntry,
+    };
+    const result = capturePriorIsolatedEntryForArchival({
+      store,
+      sessionKey: "agent:main:main:heartbeat",
+      isNewSession: true,
+    });
+    expect(result).toEqual({
+      sessionId: "prior-id",
+      sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+    });
+  });
+
+  it("returns undefined when isNewSession is false (reuse path)", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "existing-id",
+        updatedAt: 0,
+        sessionFile: "/tmp/agents/main/sessions/existing-id.jsonl",
+      } as SessionEntry,
+    };
+    const result = capturePriorIsolatedEntryForArchival({
+      store,
+      sessionKey: "agent:main:main:heartbeat",
+      isNewSession: false,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the store has no entry at the key (first-ever run)", () => {
+    const result = capturePriorIsolatedEntryForArchival({
+      store: {},
+      sessionKey: "agent:main:main:heartbeat",
+      isNewSession: true,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the prior entry has no sessionId", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        updatedAt: 0,
+      } as unknown as SessionEntry,
+    };
+    const result = capturePriorIsolatedEntryForArchival({
+      store,
+      sessionKey: "agent:main:main:heartbeat",
+      isNewSession: true,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("captures sessionId even when sessionFile is undefined (legacy row)", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "legacy-id",
+        updatedAt: 0,
+      } as SessionEntry,
+    };
+    const result = capturePriorIsolatedEntryForArchival({
+      store,
+      sessionKey: "agent:main:main:heartbeat",
+      isNewSession: true,
+    });
+    expect(result).toEqual({ sessionId: "legacy-id", sessionFile: undefined });
+  });
+});
+
+describe("archivePriorIsolatedEntryAfterRotation", () => {
+  beforeEach(() => {
+    vi.mocked(archiveRemovedSessionTranscripts).mockClear();
+    vi.mocked(archiveRemovedSessionTranscripts).mockResolvedValue(new Set());
+  });
+
+  it("is a no-op when priorEntryForArchival is undefined", async () => {
+    await archivePriorIsolatedEntryAfterRotation({
+      priorEntryForArchival: undefined,
+      store: {},
+      storePath: "/tmp/test-store.json",
+    });
+    expect(archiveRemovedSessionTranscripts).not.toHaveBeenCalled();
+  });
+
+  it("invokes archival with reason 'reset' and restrictToStoreDir", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "new-id",
+        updatedAt: 0,
+        sessionFile: "/tmp/agents/main/sessions/new-id.jsonl",
+      } as SessionEntry,
+    };
+    await archivePriorIsolatedEntryAfterRotation({
+      priorEntryForArchival: {
+        sessionId: "prior-id",
+        sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+      },
+      store,
+      storePath: "/tmp/test-store.json",
+    });
+    expect(archiveRemovedSessionTranscripts).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(archiveRemovedSessionTranscripts).mock.calls[0]?.[0];
+    expect(call?.reason).toBe("reset");
+    expect(call?.restrictToStoreDir).toBe(true);
+    expect(call?.storePath).toBe("/tmp/test-store.json");
+    // removedSessionFiles must contain exactly the prior entry's (id, file).
+    const entries = Array.from(call?.removedSessionFiles ?? []);
+    expect(entries).toEqual([["prior-id", "/tmp/agents/main/sessions/prior-id.jsonl"]]);
+    // referencedSessionIds must reflect the post-rotation store state (new id).
+    expect(call?.referencedSessionIds.has("new-id")).toBe(true);
+    expect(call?.referencedSessionIds.has("prior-id")).toBe(false);
+  });
+
+  it("passes undefined sessionFile through for legacy rows", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "new-id",
+        updatedAt: 0,
+      } as SessionEntry,
+    };
+    await archivePriorIsolatedEntryAfterRotation({
+      priorEntryForArchival: { sessionId: "legacy-id", sessionFile: undefined },
+      store,
+      storePath: "/tmp/test-store.json",
+    });
+    expect(archiveRemovedSessionTranscripts).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(archiveRemovedSessionTranscripts).mock.calls[0]?.[0];
+    const entries = Array.from(call?.removedSessionFiles ?? []);
+    // sessionFile is undefined — archiveRemovedSessionTranscripts accepts this
+    // and falls back to deriving candidates from sessionId + storePath.
+    expect(entries).toEqual([["legacy-id", undefined]]);
+  });
+
+  it("archival is still invoked when the prior sessionId happens to remain in the store", async () => {
+    // Safety path: archiveRemovedSessionTranscripts internally skips any
+    // sessionId still in referencedSessionIds, so passing the prior id
+    // through is safe even if (pathologically) two entries share it.
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main:heartbeat": {
+        sessionId: "prior-id",
+        updatedAt: 0,
+        sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+      } as SessionEntry,
+      "agent:main:main:heartbeat:run:abc": {
+        sessionId: "prior-id",
+        updatedAt: 0,
+      } as SessionEntry,
+    };
+    await archivePriorIsolatedEntryAfterRotation({
+      priorEntryForArchival: {
+        sessionId: "prior-id",
+        sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+      },
+      store,
+      storePath: "/tmp/test-store.json",
+    });
+    expect(archiveRemovedSessionTranscripts).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(archiveRemovedSessionTranscripts).mock.calls[0]?.[0];
+    // referencedSessionIds contains the prior-id because it's still in the
+    // store — archival will internally skip it (safety).
+    expect(call?.referencedSessionIds.has("prior-id")).toBe(true);
   });
 });

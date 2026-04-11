@@ -284,6 +284,12 @@ async function prepareCronRunContext(params: {
       const { updateSessionStore } = await loadSessionStoreRuntime();
       await updateSessionStore(storePath, update);
     },
+    log: {
+      warn: (message, context) =>
+        logWarn(
+          `[cron:${input.job.id}] ${message}${context ? ` ${JSON.stringify(context)}` : ""}`,
+        ),
+    },
   });
   const withRunSession: WithRunSession = (result) => ({
     ...result,
