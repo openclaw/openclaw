@@ -484,11 +484,13 @@ Follow-up:
         },
         baselineSummary: {
           scenarios: parityPassScenarios,
-          run: { primaryProvider: "openai" },
+          run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
         },
         comparedAt: "2026-04-11T00:00:00.000Z",
       }),
-    ).toThrow(/baseline summary run.primaryProvider=openai does not match --baseline-label/);
+    ).toThrow(
+      /baseline summary run\.primaryProvider=openai and run\.primaryModel=gpt-5\.4 do not match --baseline-label/,
+    );
   });
 
   it("accepts matching run.primaryProvider labels without throwing", () => {
@@ -525,6 +527,62 @@ Follow-up:
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "GPT-5.4 candidate",
       baselineLabel: "Opus 4.6 baseline",
+      candidateSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+      },
+      baselineSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(true);
+  });
+
+  it("skips provider verification for mixed-case or decorated display labels", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "Candidate: GPT-5.4",
+      baselineLabel: "Opus 4.6 / baseline",
+      candidateSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+      },
+      baselineSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(true);
+  });
+
+  it("throws when a structured label mismatches the recorded model even if the provider matches", () => {
+    expect(() =>
+      buildQaAgenticParityComparison({
+        candidateLabel: "openai/gpt-5.4",
+        baselineLabel: "anthropic/claude-opus-4-6",
+        candidateSummary: {
+          scenarios: FULL_PARITY_PASS_SCENARIOS,
+          run: { primaryProvider: "openai", primaryModel: "gpt-5.4-alt" },
+        },
+        baselineSummary: {
+          scenarios: FULL_PARITY_PASS_SCENARIOS,
+          run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        },
+        comparedAt: "2026-04-11T00:00:00.000Z",
+      }),
+    ).toThrow(
+      /candidate summary run\.primaryProvider=openai and run\.primaryModel=gpt-5\.4-alt do not match --candidate-label=openai\/gpt-5\.4/,
+    );
+  });
+
+  it("accepts colon-delimited structured labels when provider and model both match", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai:gpt-5.4",
+      baselineLabel: "anthropic:claude-opus-4-6",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
