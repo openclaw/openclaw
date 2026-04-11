@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Logging: replace bare console.log/warn calls with createSubsystemLogger in model-selection, dotenv, and tailscale so messages route through the structured log pipeline instead of bypassing it.
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
 - QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown by routing QA command registration through a narrow facade. (#64648) Thanks @obviyus.
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history before finalization so tool-generated audio reaches webchat clients again. (#63514) thanks @bittoby
