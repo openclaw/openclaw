@@ -29,6 +29,7 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -38,7 +39,7 @@ export async function resolveCommandsSystemPromptBundle(
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
+    sessionId: targetSessionEntry?.sessionId,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
@@ -53,7 +54,7 @@ export async function resolveCommandsSystemPromptBundle(
           remote: getRemoteSkillEligibility({
             advertiseExecNode: canExecRequestNode({
               cfg: params.cfg,
-              sessionEntry: params.sessionEntry,
+              sessionEntry: targetSessionEntry,
               sessionKey: params.sessionKey,
               agentId: sessionAgentId,
             }),
@@ -75,10 +76,10 @@ export async function resolveCommandsSystemPromptBundle(
         sessionKey: params.sessionKey,
         allowGatewaySubagentBinding: true,
         messageProvider: params.command.channel,
-        groupId: params.sessionEntry?.groupId ?? undefined,
-        groupChannel: params.sessionEntry?.groupChannel ?? undefined,
-        groupSpace: params.sessionEntry?.space ?? undefined,
-        spawnedBy: params.sessionEntry?.spawnedBy ?? undefined,
+        groupId: targetSessionEntry?.groupId ?? undefined,
+        groupChannel: targetSessionEntry?.groupChannel ?? undefined,
+        groupSpace: targetSessionEntry?.space ?? undefined,
+        spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
         senderId: params.command.senderId,
         senderName: params.ctx.SenderName,
         senderUsername: params.ctx.SenderUsername,

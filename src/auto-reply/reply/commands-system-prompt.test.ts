@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -162,6 +163,44 @@ describe("resolveCommandsSystemPromptBundle", () => {
       expect.objectContaining({
         agentId: "target",
         sessionKey: "agent:target:telegram:direct:target-session",
+      }),
+    );
+  });
+
+  it("prefers the target session entry for bootstrap and tool metadata", async () => {
+    const params = makeParams();
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      groupId: "wrapper-group",
+      groupChannel: "#wrapper",
+      space: "wrapper-space",
+      spawnedBy: "agent:wrapper",
+    };
+    params.sessionStore = {
+      "agent:target:telegram:direct:target-session": {
+        sessionId: "target-session",
+        groupId: "target-group",
+        groupChannel: "#target",
+        space: "target-space",
+        spawnedBy: "agent:target-parent",
+      },
+    } as HandleCommandsParams["sessionStore"];
+    params.sessionKey = "agent:target:telegram:direct:target-session";
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(resolveBootstrapContextForRun)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "target-session",
+      }),
+    );
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: "target-group",
+        groupChannel: "#target",
+        groupSpace: "target-space",
+        spawnedBy: "agent:target-parent",
       }),
     );
   });
