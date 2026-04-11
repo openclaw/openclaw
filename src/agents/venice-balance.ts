@@ -14,6 +14,22 @@ const VENICE_BALANCE_CACHE_MS = 30_000;
 const VENICE_BALANCE_TIMEOUT_MS = 4_000;
 const VENICE_RATE_LIMITS_PATH = "/api_keys/rate_limits";
 
+/**
+ * Determine if a Venice balance snapshot indicates insufficient funds.
+ * Venice accounts may have USD balance, DIEM credits, or both.
+ * The account is considered funded if EITHER balance meets the threshold.
+ */
+function isBalanceBelowThreshold(snapshot: VeniceBalanceSnapshot, thresholdUsd: number): boolean {
+  const usd = snapshot.usdBalance ?? 0;
+  const diem = snapshot.diemBalance ?? 0;
+  // DIEM credits are Venice's internal currency; any positive amount means the account is funded.
+  if (diem > 0) {
+    return false;
+  }
+  // Fall back to USD check if no DIEM credits are available.
+  return usd < thresholdUsd;
+}
+
 type VeniceBalanceSnapshot = {
   usdBalance?: number;
   diemBalance?: number;
@@ -185,7 +201,7 @@ export async function shouldSkipVeniceForLowBalance(params: {
   const cached = balanceCacheByKey.get(apiKey);
   if (cached && cached.expiresAt > now) {
     return {
-      skip: (cached.value.usdBalance ?? Number.POSITIVE_INFINITY) < thresholdUsd,
+      skip: isBalanceBelowThreshold(cached.value, thresholdUsd),
       thresholdUsd,
       snapshot: cached.value,
     };
@@ -195,7 +211,7 @@ export async function shouldSkipVeniceForLowBalance(params: {
   if (inFlight) {
     const snapshot = await inFlight;
     return {
-      skip: (snapshot.usdBalance ?? Number.POSITIVE_INFINITY) < thresholdUsd,
+      skip: isBalanceBelowThreshold(snapshot, thresholdUsd),
       thresholdUsd,
       snapshot,
     };
@@ -217,7 +233,7 @@ export async function shouldSkipVeniceForLowBalance(params: {
     value: snapshot,
   });
   return {
-    skip: (snapshot.usdBalance ?? Number.POSITIVE_INFINITY) < thresholdUsd,
+    skip: isBalanceBelowThreshold(snapshot, thresholdUsd),
     thresholdUsd,
     snapshot,
   };

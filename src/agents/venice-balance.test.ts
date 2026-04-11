@@ -38,7 +38,7 @@ describe("venice balance guard", () => {
     });
   });
 
-  it("skips Venice when USD balance is below default threshold", async () => {
+  it("skips Venice when USD balance is below threshold and no DIEM credits", async () => {
     process.env.VENICE_API_KEY = "test-venice-key";
     const fetchMock = vi.fn(
       async () =>
@@ -47,7 +47,7 @@ describe("venice balance guard", () => {
             data: {
               balances: {
                 USD: 0.01,
-                DIEM: 0.2,
+                DIEM: 0,
               },
             },
           }),
@@ -65,6 +65,34 @@ describe("venice balance guard", () => {
     expect(result.thresholdUsd).toBe(VENICE_LOW_BALANCE_DEFAULT_USD);
     expect(result.snapshot?.usdBalance).toBe(0.01);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows Venice when USD is low but DIEM credits are available", async () => {
+    process.env.VENICE_API_KEY = "test-venice-key";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              balances: {
+                USD: 0,
+                DIEM: 7,
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await shouldSkipVeniceForLowBalance({
+      cfg: makeCfg(),
+      now: Date.UTC(2026, 2, 3, 11, 0, 0),
+    });
+
+    expect(result.skip).toBe(false);
+    expect(result.snapshot?.usdBalance).toBe(0);
+    expect(result.snapshot?.diemBalance).toBe(7);
   });
 
   it("uses configured threshold and allows Venice when balance is above it", async () => {
