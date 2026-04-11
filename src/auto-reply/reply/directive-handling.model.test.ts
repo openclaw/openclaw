@@ -21,11 +21,11 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -49,7 +49,15 @@ const queueMocks = vi.hoisted(() => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
+}));
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn(async () => [
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+    { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
+  ]),
 }));
 
 vi.mock("../../agents/sandbox.js", () => ({

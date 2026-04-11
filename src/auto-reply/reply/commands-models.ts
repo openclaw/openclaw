@@ -21,6 +21,9 @@ import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+type ModelsCommandSessionEntry = Partial<
+  Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
+>;
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
@@ -196,7 +199,7 @@ function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
@@ -215,7 +218,7 @@ export function formatModelsAvailableHeader(params: {
   total: number;
   cfg: OpenClawConfig;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
@@ -233,7 +236,7 @@ export async function resolveModelsCommandReply(params: {
   currentModel?: string;
   agentId?: string;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsCommandSessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
