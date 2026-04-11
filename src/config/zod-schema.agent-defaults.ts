@@ -51,6 +51,9 @@ export const AgentDefaultsSchema = z
     systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    bootstrapSignatureMode: z
+      .union([z.literal("lenient"), z.literal("strict"), z.literal("auto")])
+      .optional(),
     ...AgentBootstrapFileOverrideFields,
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),

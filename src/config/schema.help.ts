@@ -850,6 +850,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+  "agents.defaults.bootstrapSignatureMode":
+    'Controls how the effective AGENTS bootstrap source is recorded in transcripts and compared on continuation-skip turns: "lenient" skips signature comparison, "strict" always enforces it, "auto" (default) enforces it only when any agentsFile or agentsFilesByModel key is set anywhere in the resolved agents config. Use "strict" to force drift detection even when no model-aware overrides are configured; use "lenient" to preserve pre-model-aware-AGENTS behavior exactly.',
   "agents.defaults.agentsFile":
     "Default AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the workspace root when you want the main agent to inject a different Markdown file than AGENTS.md.",
   "agents.defaults.agentsFilesByModel":

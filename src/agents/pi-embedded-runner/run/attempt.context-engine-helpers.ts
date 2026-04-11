@@ -14,6 +14,8 @@ export type AttemptBootstrapContext = {
   bootstrapSignature?: string;
 };
 
+export type AttemptBootstrapSignatureMode = "lenient" | "strict";
+
 export async function resolveAttemptBootstrapContext<
   TContext extends AttemptBootstrapContext,
 >(params: {
@@ -21,8 +23,19 @@ export async function resolveAttemptBootstrapContext<
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   sessionFile: string;
+  /**
+   * Effective bootstrap signature mode. Defaults to "strict" for compatibility
+   * with callers that have not been plumbed yet. When "lenient", a recorded
+   * completion marker is accepted even if it has no signature and the
+   * signature-only probe is skipped entirely.
+   */
+  signatureMode?: AttemptBootstrapSignatureMode;
   resolveBootstrapSignatureForRun?: () => Promise<string | undefined>;
-  hasCompletedBootstrapTurn: (sessionFile: string, bootstrapSignature?: string) => Promise<boolean>;
+  hasCompletedBootstrapTurn: (
+    sessionFile: string,
+    bootstrapSignature?: string,
+    options?: { signatureMode?: AttemptBootstrapSignatureMode },
+  ) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<TContext>;
 }): Promise<
   TContext & {
@@ -30,18 +43,32 @@ export async function resolveAttemptBootstrapContext<
     shouldRecordCompletedBootstrapTurn: boolean;
   }
 > {
+  const signatureMode: AttemptBootstrapSignatureMode = params.signatureMode ?? "strict";
   const shouldCheckContinuationTurn =
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat";
   let bootstrapSignature: string | undefined;
   let isContinuationTurn = false;
   if (shouldCheckContinuationTurn) {
-    const hasCompletedBootstrap = await params.hasCompletedBootstrapTurn(params.sessionFile);
+    const hasCompletedBootstrap = await params.hasCompletedBootstrapTurn(
+      params.sessionFile,
+      undefined,
+      { signatureMode },
+    );
     if (hasCompletedBootstrap) {
-      bootstrapSignature = await params.resolveBootstrapSignatureForRun?.();
-      isContinuationTurn = bootstrapSignature
-        ? await params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature)
-        : true;
+      if (signatureMode === "lenient") {
+        // Lenient mode skips signature recomputation entirely: the perf path
+        // short-circuits, and the continuation bytes stay byte-identical to
+        // pre-feature behavior.
+        isContinuationTurn = true;
+      } else {
+        bootstrapSignature = await params.resolveBootstrapSignatureForRun?.();
+        isContinuationTurn = bootstrapSignature
+          ? await params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature, {
+              signatureMode,
+            })
+          : true;
+      }
     }
   }
   const shouldRecordCompletedBootstrapTurn =
