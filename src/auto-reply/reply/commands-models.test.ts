@@ -14,7 +14,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
 }));
 
 const modelAuthLabelMocks = vi.hoisted(() => ({
-  resolveModelAuthLabel: vi.fn(() => undefined),
+  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -22,7 +22,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: (...args: unknown[]) => modelAuthLabelMocks.resolveModelAuthLabel(...args),
+  resolveModelAuthLabel: (params: unknown) => modelAuthLabelMocks.resolveModelAuthLabel(params),
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -256,11 +256,15 @@ describe("handleModelsCommand", () => {
       sessionKey: "agent:support:main",
     });
     params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
       providerOverride: "wrapper-provider",
       modelOverride: "wrapper-model",
     } as HandleCommandsParams["sessionEntry"];
     params.sessionStore = {
       "agent:support:main": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
         providerOverride: "target-provider",
         modelOverride: "target-model",
       },

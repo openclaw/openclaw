@@ -96,13 +96,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : params.agentId;
-  const shouldResolveSessionAgentDir =
-    sessionAgentId !== undefined &&
-    (!params.agentDir || (params.agentId !== undefined && sessionAgentId !== params.agentId));
-  const sessionAgentDir = shouldResolveSessionAgentDir
-    ? resolveAgentDir(params.cfg, sessionAgentId)
-    : params.agentDir;
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const sessionAgentDir =
+    sessionAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,

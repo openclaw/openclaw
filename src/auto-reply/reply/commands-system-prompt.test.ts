@@ -171,6 +171,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     const params = makeParams();
     params.sessionEntry = {
       sessionId: "wrapper-session",
+      updatedAt: Date.now(),
       groupId: "wrapper-group",
       groupChannel: "#wrapper",
       space: "wrapper-space",
@@ -179,6 +180,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     params.sessionStore = {
       "agent:target:telegram:direct:target-session": {
         sessionId: "target-session",
+        updatedAt: Date.now(),
         groupId: "target-group",
         groupChannel: "#target",
         space: "target-space",
