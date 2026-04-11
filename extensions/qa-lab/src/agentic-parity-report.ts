@@ -255,7 +255,7 @@ function extractProviderFromLabel(label: string): string | null {
   if (separatorMatch) {
     return separatorMatch[1]?.toLowerCase() ?? null;
   }
-  return trimmed.toLowerCase();
+  return null;
 }
 
 /**
