@@ -173,9 +173,9 @@ function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
 }
 
 function resolveDreamingNextCycle(
-  status: { phases: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
+  status: { phases?: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
 ): string | null {
-  if (!status) {
+  if (!status?.phases) {
     return null;
   }
   const nextRunAtMs = Object.values(status.phases)
@@ -412,8 +412,8 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
-  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
+  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -729,17 +729,21 @@ export function renderApp(state: AppViewState) {
     }
     switch (state.agentsPanel) {
       case "files":
-        return void loadAgentFiles(state, agentId);
+        void loadAgentFiles(state, agentId);
+        return;
       case "skills":
-        return void loadAgentSkills(state, agentId);
+        void loadAgentSkills(state, agentId);
+        return;
       case "tools":
         void loadToolsCatalog(state, agentId);
-        return void refreshVisibleToolsEffectiveForCurrentSession(state);
+        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
     if (panel === "channels") {
-      return void loadChannels(state, false);
+      void loadChannels(state, false);
+      return;
     }
     if (panel === "cron") {
       void state.loadCron();
@@ -1770,23 +1774,7 @@ export function renderApp(state: AppViewState) {
           ? renderChat({
               sessionKey: state.sessionKey,
               onSessionKeyChange: (next) => {
-                state.sessionKey = next;
-                state.chatMessage = "";
-                state.chatAttachments = [];
-                state.chatStream = null;
-                state.chatStreamStartedAt = null;
-                state.chatRunId = null;
-                state.chatQueue = [];
-                state.resetToolStream();
-                state.resetChatScroll();
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: next,
-                  lastActiveSessionKey: next,
-                });
-                void state.loadAssistantIdentity();
-                void loadChatHistory(state);
-                void refreshChatAvatar(state);
+                switchChatSession(state, next);
               },
               thinkingLevel: state.chatThinkingLevel,
               showThinking,
@@ -1797,6 +1785,7 @@ export function renderApp(state: AppViewState) {
               fallbackStatus: state.fallbackStatus,
               assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
+              sideResult: state.chatSideResult,
               toolMessages: state.chatToolMessages,
               streamSegments: state.chatStreamSegments,
               stream: state.chatStream,
@@ -1810,6 +1799,7 @@ export function renderApp(state: AppViewState) {
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               onRefresh: () => {
+                state.chatSideResult = null;
                 state.resetToolStream();
                 return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
@@ -1832,6 +1822,9 @@ export function renderApp(state: AppViewState) {
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onDismissSideResult: () => {
+                state.chatSideResult = null;
+              },
               onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
@@ -1840,6 +1833,7 @@ export function renderApp(state: AppViewState) {
                 try {
                   await state.client.request("sessions.reset", { key: state.sessionKey });
                   state.chatMessages = [];
+                  state.chatSideResult = null;
                   state.chatStream = null;
                   state.chatRunId = null;
                   await loadChatHistory(state);
@@ -1850,17 +1844,7 @@ export function renderApp(state: AppViewState) {
               agentsList: state.agentsList,
               currentAgentId: resolvedAgentId ?? "main",
               onAgentChange: (agentId: string) => {
-                state.sessionKey = buildAgentMainSessionKey({ agentId });
-                state.chatMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: state.sessionKey,
-                  lastActiveSessionKey: state.sessionKey,
-                });
-                void loadChatHistory(state);
-                void state.loadAssistantIdentity();
+                switchChatSession(state, buildAgentMainSessionKey({ agentId }));
               },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
@@ -1935,9 +1919,8 @@ export function renderApp(state: AppViewState) {
               groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
               promotedCount: state.dreamingStatus?.promotedToday ?? 0,
-              phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
+              phases: state.dreamingStatus?.phases ?? undefined,
               shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
-              signalEntries: state.dreamingStatus?.signalEntries ?? [],
               promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
               dreamingOf: null,
               nextCycle: dreamingNextCycle,
@@ -1955,7 +1938,6 @@ export function renderApp(state: AppViewState) {
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
-              onToggleEnabled: applyDreamingEnabled,
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}

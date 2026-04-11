@@ -10,7 +10,7 @@ import {
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.ts";
+import type { NodesProps } from "./nodes.types.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
@@ -89,7 +89,7 @@ function resolveExecApprovalsDefaults(
     security: normalizeSecurity(defaults.security),
     ask: normalizeAsk(defaults.ask),
     askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? false),
+    autoAllowSkills: defaults.autoAllowSkills ?? false,
   };
 }
 

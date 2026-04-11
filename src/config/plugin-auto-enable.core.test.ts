@@ -12,7 +12,7 @@ import {
   resetPluginAutoEnableTestState,
   writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
-import { validateConfigObject } from "./validation.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -57,7 +57,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.autoEnabledReasons).toEqual({});
   });
 
-  it("auto-enables built-in channels without appending to plugins.allow", () => {
+  it("auto-enables built-in channels and preserves them in restrictive plugins.allow", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
@@ -68,7 +68,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
     expect(result.autoEnabledReasons).toEqual({
       slack: ["slack configured"],
     });
@@ -202,6 +202,24 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
+  it("auto-enables an opt-in provider plugin when an explicit provider model is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            model: "codex/gpt-5.4",
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
+  });
+
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -264,10 +282,10 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
-  it("does not append built-in WhatsApp to plugins.allow during auto-enable", () => {
+  it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
@@ -283,8 +301,50 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
+  });
+
+  it("preserves configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            discord: {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
+    expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
+  });
+
+  it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            "missing-plugin": {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
+    expect(result.changes).toEqual([]);
   });
 
   it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {

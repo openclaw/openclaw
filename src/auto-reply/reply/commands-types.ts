@@ -6,7 +6,7 @@ import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { TypingController } from "./typing.js";
 
 export type CommandContext = {

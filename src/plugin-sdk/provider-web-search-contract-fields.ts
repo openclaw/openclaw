@@ -57,6 +57,7 @@ function createSearchCredentialFields(
         setCredentialValue: () => {},
       };
   }
+  throw new Error("Unsupported web search credential type");
 }
 
 function createConfiguredCredentialFields(
