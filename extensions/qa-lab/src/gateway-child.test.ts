@@ -64,6 +64,11 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.GEMINI_API_KEY).toBe("gemini-live");
   });
 
+  it("defaults gateway-child provider mode to mock-openai when omitted", () => {
+    expect(__testing.resolveQaGatewayChildProviderMode(undefined)).toBe("mock-openai");
+    expect(__testing.resolveQaGatewayChildProviderMode("live-frontier")).toBe("live-frontier");
+  });
+
   it("keeps explicit provider env vars over live aliases", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
