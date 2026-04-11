@@ -427,6 +427,8 @@ describe("runWithModelFallback", () => {
       ["openai", "gpt-4.1-mini"],
       ["anthropic", "claude-haiku-3-5", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
+  });
+
   it("falls back on transient HTTP 5xx errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
@@ -1217,6 +1219,9 @@ describe("runWithModelFallback", () => {
         2, "groq", "llama-3.3-70b-versatile",
         expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
       );
+    });
+
+    it("still skips fallbacks when using different provider than config", async () => {
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -1280,6 +1285,10 @@ describe("runWithModelFallback", () => {
         2, "groq", "llama-3.3-70b-versatile",
         expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
       );
+    });
+  });
+
+  describe("fallback behavior with provider cooldowns", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
       reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
