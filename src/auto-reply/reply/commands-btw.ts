@@ -1,4 +1,4 @@
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -33,8 +33,11 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
   const agentDir =
-    params.agentDir ?? (params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined);
+    params.agentDir ?? (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined);
 
   if (!agentDir) {
     return {

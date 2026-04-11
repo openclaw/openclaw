@@ -1,3 +1,4 @@
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -92,11 +93,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     runtime.abortEmbeddedPiRun(sessionId);
     await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
+  const sessionAgentDir =
+    params.agentDir ?? (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined);
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
-    agentId: params.agentId,
+    agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
   const result = await runtime.compactEmbeddedPiSession({
@@ -108,16 +114,20 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       params.sessionEntry,
       runtime.resolveSessionFilePathOptions({
-        agentId: params.agentId,
+        agentId: sessionAgentId,
         storePath: params.storePath,
       }),
     ),
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
+    agentDir: sessionAgentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,

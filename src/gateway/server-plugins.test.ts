@@ -78,6 +78,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   webFetchProviders: [],
   webSearchProviders: [],
   memoryEmbeddingProviders: [],
+  agentHarnesses: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],

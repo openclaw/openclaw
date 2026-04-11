@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramModelsProviderChannelData } from "../../../test/helpers/channels/command-contract.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -40,7 +39,16 @@ const telegramModelsTestPlugin: ChannelPlugin = {
     },
   }),
   commands: {
-    buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+    buildModelsProviderChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: providers.map((provider) => [
+          {
+            text: provider.id,
+            callback_data: `models:${provider.id}`,
+          },
+        ]),
+      },
+    }),
   },
 };
 
@@ -219,6 +227,26 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(
       buildModelsParams("/models", scopedCfg, "discord", {
         agentId: "support",
+        sessionKey: "agent:support:main",
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("localai");
+  });
+
+  it("uses the canonical target session agent when wrapper agentId differs", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models", scopedCfg, "discord", {
+        agentId: "main",
         sessionKey: "agent:support:main",
       }),
       true,

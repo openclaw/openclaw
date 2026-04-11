@@ -319,6 +319,78 @@ describe("subagent registry persistence", () => {
     expect(after.version).toBe(2);
   });
 
+  it("normalizes persisted and newly registered session keys to canonical trimmed values", async () => {
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-spaced": {
+          runId: "run-spaced",
+          childSessionKey: " agent:main:subagent:spaced-child ",
+          controllerSessionKey: " agent:main:subagent:controller ",
+          requesterSessionKey: " agent:main:main ",
+          requesterDisplayKey: "main",
+          task: "spaced persisted keys",
+          cleanup: "keep",
+          createdAt: 1,
+          startedAt: 1,
+        },
+      },
+    };
+    await writePersistedRegistry(persisted, { seedChildSessions: false });
+
+    const restored = loadSubagentRegistryFromDisk();
+    const restoredEntry = restored.get("run-spaced");
+    expect(restoredEntry).toMatchObject({
+      childSessionKey: "agent:main:subagent:spaced-child",
+      controllerSessionKey: "agent:main:subagent:controller",
+      requesterSessionKey: "agent:main:main",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    addSubagentRunForTests(restoredEntry as never);
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({
+        runId: "run-spaced",
+      }),
+    ]);
+    expect(getSubagentRunByChildSessionKey("agent:main:subagent:spaced-child")).toMatchObject({
+      runId: "run-spaced",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const mod = await import(`./subagent-registry.ts?t=${Date.now()}`);
+    vi.mocked(callGateway).mockResolvedValue({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
+
+    mod.registerSubagentRun({
+      runId: " run-live ",
+      childSessionKey: " agent:main:subagent:live-child ",
+      controllerSessionKey: " agent:main:subagent:live-controller ",
+      requesterSessionKey: " agent:main:main ",
+      requesterDisplayKey: "main",
+      task: "live spaced keys",
+      cleanup: "keep",
+    });
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({
+        runId: "run-live",
+        childSessionKey: "agent:main:subagent:live-child",
+        controllerSessionKey: "agent:main:subagent:live-controller",
+        requesterSessionKey: "agent:main:main",
+      }),
+    ]);
+    expect(mod.getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
+      runId: "run-live",
+    });
+  });
+
   it("retries cleanup announce after a failed announce", async () => {
     const persisted = createPersistedEndedRun({
       runId: "run-3",

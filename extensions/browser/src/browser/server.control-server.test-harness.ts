@@ -396,6 +396,7 @@ vi.mock("../config/config.js", async () => {
           Object.keys(state.cfgProfiles).length > 0
             ? state.cfgProfiles
             : defaultProfilesForState(state.testPort),
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       },
     };
   };
@@ -574,7 +575,7 @@ export function installBrowserControlServerHooks() {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url);
+        const u = url;
         if (u.includes("/json/list")) {
           if (!state.reachable) {
             return makeResponse([]);

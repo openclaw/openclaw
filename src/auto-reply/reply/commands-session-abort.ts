@@ -43,7 +43,11 @@ function resolveAbortTarget(params: {
       sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
     };
   }
-  if (params.sessionEntry && params.sessionKey) {
+  if (
+    params.sessionEntry &&
+    params.sessionKey &&
+    (!targetSessionKey || targetSessionKey === params.sessionKey)
+  ) {
     return {
       entry: params.sessionEntry,
       key: params.sessionKey,

@@ -5,7 +5,7 @@
   "description": "OpenClaw Google plugin",
   "type": "module",
   "dependencies": {
-    "@google/genai": "^1.48.0"
+    "@google/genai": "^1.49.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

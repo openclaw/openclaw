@@ -136,18 +136,18 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
-        const id = normalizeOptionalString(String(entry?.id ?? "")) ?? "";
+        const id = normalizeOptionalString(entry?.id) ?? "";
         if (!id) {
           continue;
         }
-        const provider = normalizeOptionalString(String(entry?.provider ?? "")) ?? "";
+        const provider = normalizeOptionalString(entry?.provider) ?? "";
         if (!provider) {
           continue;
         }
         if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
           continue;
         }
-        const name = normalizeOptionalString(String(entry?.name ?? id)) || id;
+        const name = normalizeOptionalString(entry?.name ?? id) || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
+import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -241,7 +242,7 @@ export async function runQaSuiteCommand(opts: {
   if (runner === "multipass") {
     const result = await runQaMultipass({
       repoRoot,
-      outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       providerMode,
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
@@ -264,7 +265,7 @@ export async function runQaSuiteCommand(opts: {
   }
   const result = await runQaSuiteFromRuntime({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
@@ -299,7 +300,7 @@ export async function runQaCharacterEvalCommand(opts: {
   const judges = parseQaModelSpecs("--judge-model", opts.judgeModel);
   const result = await runQaCharacterEval({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     models: candidates.models,
     scenarioId: opts.scenario,
     candidateFastMode: opts.fast,
@@ -391,7 +392,10 @@ export async function runQaDockerScaffoldCommand(opts: {
   bindUiDist?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const outputDir = path.resolve(repoRoot, opts.outputDir);
+  const outputDir = resolveRepoRelativeOutputDir(repoRoot, opts.outputDir);
+  if (!outputDir) {
+    throw new Error("--output-dir is required.");
+  }
   const result = await writeQaDockerHarnessFiles({
     outputDir,
     repoRoot,
@@ -428,7 +432,7 @@ export async function runQaDockerUpCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const result = await runQaDockerUp({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
     qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
     providerBaseUrl: opts.providerBaseUrl,
@@ -450,3 +454,7 @@ export async function runQaMockOpenAiCommand(opts: { host?: string; port?: numbe
   });
   await runInterruptibleServer("QA mock OpenAI", server);
 }
+
+export const __testing = {
+  resolveRepoRelativeOutputDir,
+};

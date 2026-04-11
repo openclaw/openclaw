@@ -219,9 +219,7 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = String(baseUrlRaw ?? "")
-    .trim()
-    .replace(/\/+$/, "");
+  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
   const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
   const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {

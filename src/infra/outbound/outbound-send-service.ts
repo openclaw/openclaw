@@ -28,6 +28,12 @@ export type OutboundSendContext = {
   params: Record<string, unknown>;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  sessionKey?: string;
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
@@ -69,6 +75,16 @@ async function tryHandleWithPluginAction(params: {
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
     mediaSources: collectActionMediaSources(params.ctx.params),
+    sessionKey: params.ctx.sessionKey,
+    messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
+    accountId:
+      (params.ctx.sessionKey
+        ? (params.ctx.requesterAccountId ?? params.ctx.accountId)
+        : params.ctx.accountId) ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    requesterSenderName: params.ctx.requesterSenderName,
+    requesterSenderUsername: params.ctx.requesterSenderUsername,
+    requesterSenderE164: params.ctx.requesterSenderE164,
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
   });
@@ -145,6 +161,12 @@ export async function executeSendAction(params: {
     to: params.to,
     content: params.message,
     agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.sessionKey,
+    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    requesterSenderName: params.ctx.requesterSenderName,
+    requesterSenderUsername: params.ctx.requesterSenderUsername,
+    requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,

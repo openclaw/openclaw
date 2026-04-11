@@ -568,6 +568,13 @@ async function deliverOutboundPayloadsCore(
     cfg,
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
+    sessionKey: params.session?.key,
+    messageProvider: params.session?.key ? undefined : channel,
+    accountId: params.session?.requesterAccountId ?? accountId,
+    requesterSenderId: params.session?.requesterSenderId,
+    requesterSenderName: params.session?.requesterSenderName,
+    requesterSenderUsername: params.session?.requesterSenderUsername,
+    requesterSenderE164: params.session?.requesterSenderE164,
   });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({

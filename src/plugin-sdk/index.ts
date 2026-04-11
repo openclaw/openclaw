@@ -42,6 +42,7 @@ export type {
   ChannelSetupWizardAllowFromEntry,
 } from "../channels/plugins/setup-wizard-types.js";
 export type {
+  AgentHarness,
   AnyAgentTool,
   CliBackendPlugin,
   MediaUnderstandingProviderPlugin,
