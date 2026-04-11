@@ -14,12 +14,8 @@ import { resolveVideoGenerationSupportedDurations } from "./duration-support.js"
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
-import type {
-  VideoGenerationIgnoredOverride,
-  VideoGenerationProviderOptionType,
-  VideoGenerationResult,
-} from "./types.js";
 import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
+import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
 export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";

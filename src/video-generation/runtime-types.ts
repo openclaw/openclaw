@@ -24,6 +24,8 @@ export type GenerateVideoParams = {
   watermark?: boolean;
   inputImages?: VideoGenerationSourceAsset[];
   inputVideos?: VideoGenerationSourceAsset[];
+  inputAudios?: VideoGenerationSourceAsset[];
+  providerOptions?: Record<string, unknown>;
 };
 
 export type GenerateVideoRuntimeResult = {
