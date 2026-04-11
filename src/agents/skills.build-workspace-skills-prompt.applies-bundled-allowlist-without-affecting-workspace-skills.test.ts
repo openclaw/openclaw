@@ -34,4 +34,33 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Workspace version");
     expect(prompt).not.toContain("peekaboo");
   });
+
+  it("empty allowBundled blocks all bundled skills", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const bundledSkillDir = path.join(bundledDir, "healthcheck");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "healthcheck",
+      description: "System healthcheck",
+      body: "# Healthcheck\n",
+    });
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "demo-skill",
+      description: "Workspace version",
+      body: "# Workspace\n",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: { skills: { allowBundled: [] } },
+    });
+
+    expect(prompt).toContain("Workspace version");
+    expect(prompt).not.toContain("healthcheck");
+  });
 });
