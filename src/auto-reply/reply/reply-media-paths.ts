@@ -7,6 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -42,10 +43,13 @@ function isAllowedAbsoluteReplyMediaPath(params: {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
     return true;
   }
-  const volatileRoots = [params.workspaceDir, params.sandboxRoot]
-    .filter((root): root is string => Boolean(root))
-    .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
-  return volatileRoots.some((root) => isPathInside(root, params.candidate));
+  const allowedRoots = [
+    resolvePreferredOpenClawTmpDir(),
+    ...[params.workspaceDir, params.sandboxRoot]
+      .filter((root): root is string => Boolean(root))
+      .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME)),
+  ];
+  return allowedRoots.some((root) => isPathInside(root, params.candidate));
 }
 
 function isLikelyLocalMediaSource(media: string): boolean {

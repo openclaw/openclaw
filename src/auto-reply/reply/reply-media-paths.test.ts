@@ -12,6 +12,7 @@ vi.mock("../../media/store.js", () => ({
   saveMediaSource,
 }));
 
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 describe("createReplyMediaPathNormalizer", () => {
@@ -125,6 +126,25 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(result).toMatchObject({
       mediaUrl: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
       mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
+  it("allows generated media under the preferred openclaw temp root", async () => {
+    const mediaPath = path.join(resolvePreferredOpenClawTmpDir(), "tts-test", "voice-1.mp3");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [mediaPath],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: mediaPath,
+      mediaUrls: [mediaPath],
     });
     expect(saveMediaSource).not.toHaveBeenCalled();
   });
