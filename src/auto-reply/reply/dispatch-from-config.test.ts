@@ -238,6 +238,11 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
+// Also mock the direct internal-hooks import used by message-received-hooks.ts
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
@@ -2109,6 +2114,41 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "telegram:999",
       }),
     );
+  });
+
+  it("emits message_received hook before dispatch logic (regression #64525)", async () => {
+    // Regression: message_received must fire at ingestion, before the
+    // dispatch-vs-enqueue decision.  Previously the hook was emitted deep
+    // inside the dispatch pipeline; messages queued via enqueueFollowupRun
+    // and drained through followup-runner bypassed it entirely.
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const callOrder: string[] = [];
+    hookMocks.runner.runMessageReceived.mockImplementation(async () => {
+      callOrder.push("message_received");
+    });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:direct:99",
+      MessageSidFull: "msg-regression",
+      Timestamp: 1710000000000,
+      CommandBody: "queued message",
+      RawBody: "queued message",
+      Body: "queued message",
+    });
+    const replyResolver = vi.fn(async () => {
+      callOrder.push("reply_resolver");
+      return { text: "ok" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    // Hook must have fired before the reply resolver ran
+    expect(callOrder[0]).toBe("message_received");
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledTimes(1);
   });
 
   it("does not broadcast inbound claims without a core-owned plugin binding", async () => {

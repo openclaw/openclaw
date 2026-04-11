@@ -10,14 +10,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimContext,
   toPluginInboundClaimEvent,
-  toInternalMessageReceivedContext,
-  toPluginMessageContext,
-  toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -53,13 +49,12 @@ import {
   type ReplyPayload,
 } from "../types.js";
 import {
-  createInternalHookEvent,
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
-  triggerInternalHook,
 } from "./dispatch-from-config.runtime.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { emitMessageReceivedHooks } from "./message-received-hooks.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -263,6 +258,12 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
+  // Emit message_received hooks at the ingestion layer, before the
+  // dispatch-vs-enqueue decision.  This ensures the hook fires for ALL
+  // inbound messages regardless of session state — including messages
+  // that will be queued and later drained via followup-runner.
+  emitMessageReceivedHooks(ctx);
+
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
@@ -288,9 +289,7 @@ export async function dispatchReplyFromConfig(params: {
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
 
-  // Extract message context for hooks (plugin and internal)
-  const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  // Extract message context for hooks (inbound claim)
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
@@ -486,30 +485,6 @@ export async function dispatchReplyFromConfig(params: {
         return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
       }
     }
-  }
-
-  // Trigger plugin hooks (fire-and-forget)
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(hookContext),
-        toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
-  }
-
-  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
-      "dispatch-from-config: message_received internal hook failed",
-    );
   }
 
   markProcessing();
