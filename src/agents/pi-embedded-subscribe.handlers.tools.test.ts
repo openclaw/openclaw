@@ -134,6 +134,47 @@ describe("handleToolExecutionStart read path checks", () => {
   });
 });
 
+describe("handleToolExecutionEnd warning-only tool results", () => {
+  it("does not classify warning-only message results as tool errors", async () => {
+    const { ctx } = createTestContext();
+    const onAgentEvent = vi.fn();
+    ctx.params.onAgentEvent = onAgentEvent;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId: "tool-msg-warning",
+        args: { action: "react", emoji: "🫡", chat_id: "123", messageId: "456" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId: "tool-msg-warning",
+        isError: true,
+        result: { ok: false, warning: "Reaction unavailable: 🫡" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "result",
+          name: "message",
+          isError: false,
+        }),
+      }),
+    );
+  });
+});
+
 describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
