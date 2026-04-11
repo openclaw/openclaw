@@ -193,6 +193,25 @@ describe("cli-session helpers", () => {
     expect(entry.suppressCliHistoryImport).toBeUndefined();
   });
 
+  it("keeps reset CLI import suppression when the preserved session is rebound unchanged", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+      suppressCliHistoryImport: true,
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "preserved-codex-session" },
+      },
+      cliSessionIds: {
+        "codex-cli": "preserved-codex-session",
+      },
+    };
+
+    setCliSessionBinding(entry, "codex-cli", { sessionId: "preserved-codex-session" });
+
+    expect(entry.suppressCliHistoryImport).toBe(true);
+    expect(getCliSessionBinding(entry, "codex-cli")?.sessionId).toBe("preserved-codex-session");
+  });
+
   it("hashes trimmed extra system prompts consistently", () => {
     expect(hashCliSessionText("  keep this  ")).toBe(hashCliSessionText("keep this"));
     expect(hashCliSessionText("")).toBeUndefined();

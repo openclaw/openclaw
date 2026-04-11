@@ -62,4 +62,48 @@ describe("persistSessionUsageUpdate", () => {
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("fresh-session");
   });
+
+  it("keeps reset CLI import suppression when persisting the preserved CLI binding", async () => {
+    const sessionKey = "agent:main:usage:test-codex-cli-reuse";
+    const sessionId = "test-openclaw-session";
+    const store: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        suppressCliHistoryImport: true,
+        cliSessionBindings: {
+          "codex-cli": {
+            sessionId: "preserved-session",
+          },
+        },
+        cliSessionIds: {
+          "codex-cli": "preserved-session",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2));
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg: {} as OpenClawConfig,
+      usage: {
+        input: 10,
+        output: 5,
+      },
+      providerUsed: "codex-cli",
+      modelUsed: "gpt-5.4",
+      contextTokensUsed: 128_000,
+      cliSessionBinding: {
+        sessionId: "preserved-session",
+      },
+    });
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.suppressCliHistoryImport).toBe(true);
+    expect(persisted[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "preserved-session",
+    });
+    expect(persisted[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("preserved-session");
+  });
 });

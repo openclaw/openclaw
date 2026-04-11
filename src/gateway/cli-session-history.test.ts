@@ -346,8 +346,70 @@ describe("cli session history", () => {
     );
   });
 
-  it("merges all bound CLI histories when local transcript is empty", async () => {
+  it("merges all bound CLI histories when provider is unknown and local transcript is empty", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-history-merge-"));
+    const homeDir = path.join(root, "home");
+    const originalHome = process.env.HOME;
+    const claudeSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+    const codexSessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
+    const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const codexSessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+    await fs.mkdir(claudeProjectsDir, { recursive: true });
+    await fs.mkdir(codexSessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeProjectsDir, `${claudeSessionId}.jsonl`),
+      createClaudeHistoryLines(claudeSessionId),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(codexSessionsDir, `rollout-2026-04-11T15-38-33-${codexSessionId}.jsonl`),
+      createCodexHistoryLines(codexSessionId),
+      "utf-8",
+    );
+    process.env.HOME = homeDir;
+    try {
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: claudeSessionId,
+            },
+            "codex-cli": {
+              sessionId: codexSessionId,
+            },
+          },
+        },
+        provider: undefined,
+        localMessages: [],
+        homeDir,
+      });
+      expect(messages).toHaveLength(5);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        __openclaw: { importedFrom: "claude-cli", cliSessionId: claudeSessionId },
+      });
+      expect(messages[3]).toMatchObject({
+        role: "user",
+        __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
+      });
+      expect(messages[4]).toMatchObject({
+        role: "assistant",
+        __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
+      });
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes empty-transcript imports to the active provider when one is resolved", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-history-scope-"));
     const homeDir = path.join(root, "home");
     const originalHome = process.env.HOME;
     const claudeSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
@@ -385,16 +447,12 @@ describe("cli session history", () => {
         localMessages: [],
         homeDir,
       });
-      expect(messages).toHaveLength(5);
+      expect(messages).toHaveLength(2);
       expect(messages[0]).toMatchObject({
-        role: "user",
-        __openclaw: { importedFrom: "claude-cli", cliSessionId: claudeSessionId },
-      });
-      expect(messages[3]).toMatchObject({
         role: "user",
         __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
       });
-      expect(messages[4]).toMatchObject({
+      expect(messages[1]).toMatchObject({
         role: "assistant",
         __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
       });
@@ -510,6 +568,64 @@ describe("cli session history", () => {
       await fs.rm(filePath, { force: true });
       expect(readCodexCliSessionMessages({ cliSessionId: sessionId, homeDir })).toEqual([]);
     });
+  });
+
+  it("prefers the newest matching codex transcript file for the same session id", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-history-newest-"));
+    const homeDir = path.join(root, "home");
+    const sessionId = "same-session-id";
+    const sessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+    const olderFile = path.join(sessionsDir, `rollout-2026-04-11T15-38-33-${sessionId}.jsonl`);
+    const newerFile = path.join(sessionsDir, `rollout-2026-04-11T15-38-34-${sessionId}.jsonl`);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      olderFile,
+      createCodexHistoryLines(sessionId, [
+        {
+          timestamp: "2026-04-11T07:38:34.000Z",
+          payload: {
+            type: "user_message",
+            message: "Loaded from the older transcript",
+          },
+        },
+      ]),
+      "utf-8",
+    );
+    await fs.writeFile(
+      newerFile,
+      createCodexHistoryLines(sessionId, [
+        {
+          timestamp: "2026-04-11T07:38:34.000Z",
+          payload: {
+            type: "user_message",
+            message: "Loaded from the newer transcript",
+          },
+        },
+      ]),
+      "utf-8",
+    );
+    await fs.utimes(
+      olderFile,
+      new Date("2026-04-11T07:38:33.000Z"),
+      new Date("2026-04-11T07:38:33.000Z"),
+    );
+    await fs.utimes(
+      newerFile,
+      new Date("2026-04-11T07:38:34.000Z"),
+      new Date("2026-04-11T07:38:34.000Z"),
+    );
+
+    try {
+      expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(newerFile);
+      const messages = readCodexCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "Loaded from the newer transcript",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("ignores non-event Codex transcript records while importing event messages", async () => {

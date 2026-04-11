@@ -89,6 +89,33 @@ function setCachedCodexCliSessionPath(cacheKey: string, filePath: string): void 
   pruneCodexCliSessionPathCache();
 }
 
+function resolveCodexCliSessionFileCandidateMtime(filePath: string): number {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+}
+
+function shouldReplaceCodexCliSessionFileCandidate(
+  currentBest: { filePath: string; mtimeMs: number } | undefined,
+  nextCandidate: { filePath: string; mtimeMs: number },
+): boolean {
+  if (!currentBest) {
+    return true;
+  }
+  if (nextCandidate.mtimeMs !== currentBest.mtimeMs) {
+    return nextCandidate.mtimeMs > currentBest.mtimeMs;
+  }
+  const nextName = path.basename(nextCandidate.filePath);
+  const currentName = path.basename(currentBest.filePath);
+  const fileNameCompare = nextName.localeCompare(currentName);
+  if (fileNameCompare !== 0) {
+    return fileNameCompare > 0;
+  }
+  return nextCandidate.filePath.localeCompare(currentBest.filePath) > 0;
+}
+
 function findCodexCliSessionFile(params: {
   sessionsDir: string;
   cliSessionId: string;
@@ -107,6 +134,7 @@ function findCodexCliSessionFile(params: {
   }
 
   const stack = [params.sessionsDir];
+  let bestMatch: { filePath: string; mtimeMs: number } | undefined;
   while (stack.length > 0) {
     const currentDir = stack.pop();
     if (!currentDir) {
@@ -127,11 +155,20 @@ function findCodexCliSessionFile(params: {
       if (!entry.isFile() || !isCodexCliHistoryFile(filePath, params.cliSessionId)) {
         continue;
       }
-      setCachedCodexCliSessionPath(cacheKey, filePath);
-      return filePath;
+      const candidate = {
+        filePath,
+        mtimeMs: resolveCodexCliSessionFileCandidateMtime(filePath),
+      };
+      if (shouldReplaceCodexCliSessionFileCandidate(bestMatch, candidate)) {
+        bestMatch = candidate;
+      }
     }
   }
-  return undefined;
+  if (!bestMatch) {
+    return undefined;
+  }
+  setCachedCodexCliSessionPath(cacheKey, bestMatch.filePath);
+  return bestMatch.filePath;
 }
 
 export function resolveCodexCliSessionFilePath(params: {

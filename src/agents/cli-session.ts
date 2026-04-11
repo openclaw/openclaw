@@ -67,6 +67,7 @@ export function setCliSessionBinding(
   if (!trimmed) {
     return;
   }
+  const previousSessionId = getCliSessionBinding(entry, normalized)?.sessionId;
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
     [normalized]: {
@@ -89,7 +90,9 @@ export function setCliSessionBinding(
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = trimmed;
   }
-  entry.suppressCliHistoryImport = undefined;
+  if (previousSessionId !== trimmed) {
+    entry.suppressCliHistoryImport = undefined;
+  }
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
