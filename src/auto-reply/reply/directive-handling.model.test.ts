@@ -772,6 +772,43 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
   });
 
+  it("reports current thinking status", async () => {
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think"),
+        currentThinkLevel: "low",
+      }),
+    );
+
+    expect(result?.text).toContain("Current thinking level: low");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, high, adaptive.");
+  });
+
+  it("persists verbose on and off directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const enabled = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/verbose on"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(enabled?.text).toMatch(/^⚙️ Verbose logging enabled\./);
+    expect(sessionEntry.verboseLevel).toBe("on");
+
+    const disabled = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/verbose off"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(disabled?.text).toMatch(/Verbose logging disabled\./);
+    expect(sessionEntry.verboseLevel).toBe("off");
+  });
+
   it("persists and reports fast-mode directives", async () => {
     const sessionEntry = createSessionEntry();
     const sessionStore = { [sessionKey]: sessionEntry };

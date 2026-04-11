@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -8,11 +7,9 @@ import {
 import {
   makeIsolatedEnv,
   makeRegistry,
-  makeTempDir,
   resetPluginAutoEnableTestState,
-  writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
-import { validateConfigObject } from "./validation.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -282,7 +279,7 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
   it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
@@ -302,7 +299,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {
@@ -425,25 +422,13 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
   });
 
-  it("uses the provided env when loading plugin manifests automatically", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "apn-channel");
-    writePluginManifestFixture({
-      rootDir: pluginDir,
-      id: "apn-channel",
-      channels: ["apn"],
-    });
-
+  it("uses the provided manifest registry for plugin channel ids", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { apn: { someKey: "value" } },
       },
-      env: {
-        ...makeIsolatedEnv(),
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
     });
 
     expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);

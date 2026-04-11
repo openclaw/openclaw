@@ -294,6 +294,26 @@ describe("handleAgentEnd", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
+  it("emits orphaned tool media before the lifecycle end event", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    await handleAgentEnd(ctx);
+
+    const blockReplyOrder =
+      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
+
+    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
   it("resolves compaction wait before awaiting an async block reply flush", async () => {
     let resolveFlush: (() => void) | undefined;
     const ctx = createContext(undefined);
