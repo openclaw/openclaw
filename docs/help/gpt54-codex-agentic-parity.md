@@ -344,7 +344,7 @@ Parity evidence is intentionally split across two layers:
 
 ## How to read the parity verdict
 
-Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readable decision for the first-wave parity pack.
+Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readable decision for the ten-scenario parity pack.
 
 - `pass` means GPT-5.4 covered the same scenarios as Opus 4.6 and did not regress on the agreed aggregate metrics.
 - `fail` means at least one hard gate tripped: weaker completion, worse unintended stops, weaker valid tool use, any fake-success case, or mismatched scenario coverage.
