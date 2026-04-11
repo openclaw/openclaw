@@ -319,7 +319,6 @@ describe("handleCompactCommand", () => {
           sessionId: "target-session",
         }),
         tokensAfter: 321,
-        skillsSnapshot: { prompt: "target", skills: [] },
       }),
     );
   });
