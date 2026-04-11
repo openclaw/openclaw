@@ -1375,7 +1375,7 @@ export async function runEmbeddedAttempt(
       const makeAbortError = (signal: AbortSignal): Error => {
         const reason = getAbortReason(signal);
         // If the reason is already an Error, preserve it to keep the original message
-        // (e.g., "LLM idle timeout (60s): no response from model" instead of "aborted")
+        // (e.g., "LLM idle timeout (<n>s): no response from model" instead of "aborted")
         if (reason instanceof Error) {
           const err = new Error(reason.message, { cause: reason });
           err.name = "AbortError";
