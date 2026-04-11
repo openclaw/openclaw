@@ -935,4 +935,146 @@ describe("qa mock openai server", () => {
       ],
     });
   });
+
+  it("advertises Anthropic claude-opus-4-6 baseline model on /v1/models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((entry) => entry.id);
+    expect(ids).toContain("claude-opus-4-6");
+    expect(ids).toContain("gpt-5.4");
+  });
+
+  it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      type: string;
+      role: string;
+      model: string;
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.type).toBe("message");
+    expect(body.role).toBe("assistant");
+    expect(body.model).toBe("claude-opus-4-6");
+    expect(body.stop_reason).toBe("tool_use");
+    const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
+      | { name: string; input: Record<string, unknown> }
+      | undefined;
+    expect(toolUseBlock?.name).toBe("read");
+    expect(toolUseBlock?.input).toEqual({ path: "QA_SCENARIO_PLAN.md" });
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      model: "claude-opus-4-6",
+      plannedToolName: "read",
+    });
+  });
+
+  it("dispatches Anthropic /v1/messages tool_result follow-ups through the shared scenario logic", async () => {
+    // This verifies the Anthropic adapter correctly feeds tool_result
+    // content blocks into the shared scenario dispatcher so downstream
+    // "has this scenario already called a tool?" logic fires the same way
+    // it does on the OpenAI /v1/responses route. The subagent handoff
+    // scenario is ideal because the mock has a two-stage flow: first
+    // delegate prompt → sessions_spawn tool_use, then tool_result →
+    // "Delegated task: ..." prose summary.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_1",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_1",
+                content: "SUBAGENT-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    const textBlock = body.content.find((block) => block.type === "text") as
+      | { text: string }
+      | undefined;
+    // The mock's subagent-handoff branch echoes "Delegated task", a
+    // tool-output evidence line, and a folded-back "Evidence" marker.
+    expect(textBlock?.text).toContain("Delegated task");
+    expect(textBlock?.text).toContain("Evidence");
+  });
 });

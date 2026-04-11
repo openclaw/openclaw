@@ -33,6 +33,41 @@ type MockOpenAiRequestSnapshot = {
   plannedToolName?: string;
 };
 
+// Anthropic /v1/messages request/response shapes the mock actually needs.
+// This is a subset of the real Anthropic Messages API — just enough so the
+// QA suite can run its parity pack against a "baseline" Anthropic provider
+// without needing real API keys. The scenarios drive their dispatch through
+// the shared mock scenario logic (buildResponsesPayload), so whatever
+// behavior the OpenAI mock exposes is automatically mirrored on this route.
+type AnthropicMessageContentBlock =
+  | { type: "text"; text: string }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | Array<{ type: "text"; text: string }>;
+    }
+  | { type: "image"; source: Record<string, unknown> };
+
+type AnthropicMessage = {
+  role: "user" | "assistant";
+  content: string | AnthropicMessageContentBlock[];
+};
+
+type AnthropicMessagesRequest = {
+  model?: string;
+  max_tokens?: number;
+  system?: string | Array<{ type: "text"; text: string }>;
+  messages?: AnthropicMessage[];
+  tools?: Array<Record<string, unknown>>;
+  stream?: boolean;
+};
+
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 let subagentFanoutPhase = 0;
@@ -715,6 +750,252 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   return buildAssistantEvents(buildAssistantText(input, body));
 }
 
+// ---------------------------------------------------------------------------
+// Anthropic /v1/messages adapter
+// ---------------------------------------------------------------------------
+//
+// The QA parity gate needs two comparable scenario runs: one against the
+// "candidate" (openai/gpt-5.4) and one against the "baseline"
+// (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
+// the scenario prompt branches we care about. Rather than duplicating that
+// machinery, the /v1/messages route below translates Anthropic request
+// shapes into the shared ResponsesInputItem[] format, calls the same
+// buildResponsesPayload() dispatcher, and then re-serializes the resulting
+// events into an Anthropic response. This gives the parity harness a
+// baseline lane that exercises the same scenario logic without requiring
+// real Anthropic API keys.
+//
+// Scope: handles non-streaming Anthropic Messages requests with text and
+// tool_result content blocks, which is what the QA suite runner actually
+// sends. Streaming is intentionally out of scope for this mock because the
+// suite runner supports non-streaming fallback.
+
+function normalizeAnthropicSystemToString(
+  system: AnthropicMessagesRequest["system"],
+): string | undefined {
+  if (typeof system === "string") {
+    return system.trim() || undefined;
+  }
+  if (Array.isArray(system)) {
+    const joined = system
+      .map((block) => (block?.type === "text" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return joined || undefined;
+  }
+  return undefined;
+}
+
+function stringifyToolResultContent(
+  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
+): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => (block?.type === "text" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function convertAnthropicMessagesToResponsesInput(params: {
+  system?: AnthropicMessagesRequest["system"];
+  messages: AnthropicMessage[];
+}): ResponsesInputItem[] {
+  const items: ResponsesInputItem[] = [];
+  const systemText = normalizeAnthropicSystemToString(params.system);
+  if (systemText) {
+    items.push({
+      role: "system",
+      content: [{ type: "input_text", text: systemText }],
+    });
+  }
+  for (const message of params.messages) {
+    const content = message.content;
+    if (typeof content === "string") {
+      items.push({
+        role: message.role,
+        content: [
+          message.role === "assistant"
+            ? { type: "output_text", text: content }
+            : { type: "input_text", text: content },
+        ],
+      });
+      continue;
+    }
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
+    const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      if (block.type === "text") {
+        textPieces.push({
+          type: message.role === "assistant" ? "output_text" : "input_text",
+          text: block.text ?? "",
+        });
+        continue;
+      }
+      if (block.type === "image") {
+        // Mock only needs to count image inputs; a placeholder URL is fine.
+        imagePieces.push({ type: "input_image", image_url: "anthropic-mock:image" });
+        continue;
+      }
+      if (block.type === "tool_result") {
+        const output = stringifyToolResultContent(block.content);
+        if (output.trim()) {
+          items.push({ type: "function_call_output", output });
+        }
+        continue;
+      }
+      if (block.type === "tool_use") {
+        // Mirror OpenAI's function_call output_item shape so downstream
+        // prompt extraction still sees "the assistant just emitted a tool
+        // call". The scenario dispatcher looks for tool_output on the next
+        // user turn, not the assistant's prior tool_use, so a minimal
+        // placeholder is enough.
+        items.push({
+          type: "function_call",
+          name: block.name,
+          arguments: JSON.stringify(block.input ?? {}),
+          call_id: block.id,
+        });
+        continue;
+      }
+    }
+    if (textPieces.length > 0 || imagePieces.length > 0) {
+      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
+      items.push({ role: message.role, content: combinedContent });
+    }
+  }
+  return items;
+}
+
+type ExtractedAssistantOutput = {
+  text: string;
+  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+};
+
+function extractFinalAssistantOutputFromEvents(events: StreamEvent[]): ExtractedAssistantOutput {
+  const toolCalls: ExtractedAssistantOutput["toolCalls"] = [];
+  let text = "";
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as {
+      type?: unknown;
+      name?: unknown;
+      call_id?: unknown;
+      id?: unknown;
+      arguments?: unknown;
+      content?: unknown;
+    };
+    if (item.type === "function_call" && typeof item.name === "string") {
+      let input: Record<string, unknown> = {};
+      if (typeof item.arguments === "string" && item.arguments.trim()) {
+        try {
+          const parsed = JSON.parse(item.arguments) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            input = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // keep empty input on malformed args — mock dispatcher owns arg shape
+        }
+      }
+      toolCalls.push({
+        id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
+        name: item.name,
+        input,
+      });
+      continue;
+    }
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const piece of item.content as Array<{ type?: unknown; text?: unknown }>) {
+        if (piece?.type === "output_text" && typeof piece.text === "string") {
+          text = piece.text;
+        }
+      }
+    }
+  }
+  return { text, toolCalls };
+}
+
+function buildAnthropicMessageResponse(params: {
+  model: string;
+  extracted: ExtractedAssistantOutput;
+}): Record<string, unknown> {
+  const content: Array<Record<string, unknown>> = [];
+  if (params.extracted.text) {
+    content.push({ type: "text", text: params.extracted.text });
+  }
+  for (const call of params.extracted.toolCalls) {
+    content.push({
+      type: "tool_use",
+      id: call.id,
+      name: call.name,
+      input: call.input,
+    });
+  }
+  if (content.length === 0) {
+    content.push({ type: "text", text: "" });
+  }
+  const stopReason = params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn";
+  const approxInputTokens = 64;
+  const approxOutputTokens = Math.max(
+    16,
+    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
+  );
+  return {
+    id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
+    type: "message",
+    role: "assistant",
+    model: params.model || "claude-opus-4-6",
+    content,
+    stop_reason: stopReason,
+    stop_sequence: null,
+    usage: {
+      input_tokens: approxInputTokens,
+      output_tokens: approxOutputTokens,
+    },
+  };
+}
+
+async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
+  events: StreamEvent[];
+  input: ResponsesInputItem[];
+  extracted: ExtractedAssistantOutput;
+  responseBody: Record<string, unknown>;
+}> {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const input = convertAnthropicMessagesToResponsesInput({
+    system: body.system,
+    messages,
+  });
+  // Dispatch through the same scenario logic the /v1/responses route uses.
+  // The mock dispatcher only reads `body.input`, `body.model`, and
+  // `body.stream`, so a synthetic shim body is sufficient.
+  const dispatchBody: Record<string, unknown> = {
+    input,
+    model: typeof body.model === "string" ? body.model : "claude-opus-4-6",
+    stream: false,
+  };
+  const events = await buildResponsesPayload(dispatchBody);
+  const extracted = extractFinalAssistantOutputFromEvents(events);
+  const responseBody = buildAnthropicMessageResponse({
+    model: typeof body.model === "string" ? body.model : "claude-opus-4-6",
+    extracted,
+  });
+  return { events, input, extracted, responseBody };
+}
+
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
   subagentFanoutPhase = 0;
@@ -734,6 +1015,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.4-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
+          { id: "claude-opus-4-6", object: "model" },
+          { id: "claude-sonnet-4-6", object: "model" },
         ],
       });
       return;
@@ -818,6 +1101,34 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         return;
       }
       writeSse(res, events);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/messages") {
+      const raw = await readBody(req);
+      const body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+      const { events, input, responseBody } = await buildMessagesPayload(body);
+      // Record the adapted request snapshot so /debug/requests gives the QA
+      // suite the same plannedToolName / allInputText / toolOutput signals
+      // on the Anthropic route that the OpenAI route already exposes. This
+      // is what lets a single parity run diff assertions across both lanes.
+      lastRequest = {
+        raw,
+        body: body as Record<string, unknown>,
+        prompt: extractLastUserText(input),
+        allInputText: extractAllInputTexts(input),
+        toolOutput: extractToolOutput(input),
+        model: typeof body.model === "string" ? body.model : "",
+        imageInputCount: countImageInputs(input),
+        plannedToolName: extractPlannedToolName(events),
+      };
+      requests.push(lastRequest);
+      if (requests.length > 50) {
+        requests.splice(0, requests.length - 50);
+      }
+      // Anthropic Messages API supports streaming via SSE, but the QA suite
+      // runner always falls back to non-streaming for mock provider mode so
+      // this route only needs the JSON completion path.
+      writeJson(res, 200, responseBody);
       return;
     }
     writeJson(res, 404, { error: "not found" });
