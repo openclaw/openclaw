@@ -82,6 +82,7 @@ export function normalizeReplyPayloadsForDelivery(
       replyToTag: payload.replyToTag || parsed.replyToTag,
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+      interactive: payload.interactive ?? parsed.interactive,
     };
     if (parsed.isSilent && mergedMedia.length === 0) {
       continue;
