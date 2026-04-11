@@ -513,7 +513,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       policy: {
         isGroup: !isDirectMessage,
-        requireMention: Boolean(requireMention),
+        requireMention,
         allowTextCommands: false,
         hasControlCommand: false,
         commandAuthorized: false,

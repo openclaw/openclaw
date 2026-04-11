@@ -827,7 +827,7 @@ async function resolveGeneratedImagePath(params: {
         );
         for (let index = requests.length - 1; index >= 0; index -= 1) {
           const request = requests[index];
-          if (!String(request.allInputText ?? "").includes(params.promptSnippet)) {
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
             continue;
           }
           const mediaPath = extractMediaPathFromText(request.toolOutput);
@@ -1055,7 +1055,7 @@ async function runAgentPrompt(
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
   if (waited.status !== "ok") {
     throw new Error(
-      `agent.wait returned ${String(waited.status ?? "unknown")}: ${waited.error ?? "no error"}`,
+      `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );
   }
   return {

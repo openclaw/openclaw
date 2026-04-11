@@ -205,11 +205,11 @@ function isMatrixAccountReady(entry?: {
   restartPending?: boolean;
   running?: boolean;
 }): boolean {
-  return Boolean(
+  return (
     entry?.running === true &&
     entry.connected === true &&
     entry.restartPending !== true &&
-    (entry.healthState === undefined || entry.healthState === "healthy"),
+    (entry.healthState === undefined || entry.healthState === "healthy")
   );
 }
 
