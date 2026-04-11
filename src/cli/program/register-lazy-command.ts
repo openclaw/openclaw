@@ -18,6 +18,7 @@ export function registerLazyCommand({
   register,
 }: RegisterLazyCommandParams): void {
   const placeholder = program.command(name).description(description);
+  placeholder.helpOption(false);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
