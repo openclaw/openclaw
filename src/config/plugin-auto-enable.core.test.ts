@@ -12,7 +12,7 @@ import {
   resetPluginAutoEnableTestState,
   writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
-import { validateConfigObject } from "./validation.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -282,7 +282,7 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
   it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
@@ -302,7 +302,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {
