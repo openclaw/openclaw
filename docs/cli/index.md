@@ -51,6 +51,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
+- [`clawmodeler`](/cli/clawmodeler)
 - [`hooks`](/cli/hooks)
 - [`webhooks`](/cli/webhooks)
 - [`pairing`](/cli/pairing)

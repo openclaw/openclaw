@@ -1,0 +1,13 @@
+-r clawmodeler-requirements-full.txt
+torch
+torchvision
+torchaudio
+lightgbm
+xgboost
+catboost
+sentence-transformers
+transformers
+accelerate
+onnxruntime
+hdbscan
+umap-learn

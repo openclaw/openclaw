@@ -114,6 +114,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "clawmodeler",
+    description: "Run transportation modeling workflows",
+    hasSubcommands: true,
+  },
+  {
     name: "pairing",
     description: "Secure DM pairing (approve inbound requests)",
     hasSubcommands: true,

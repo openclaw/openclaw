@@ -1,0 +1,14 @@
+-r clawmodeler-requirements-standard.txt
+h5py
+zarr
+xarray
+pulp
+ortools
+cvxpy
+mesa
+simpy
+joblib
+dask
+sumolib
+traci
+openmatrix

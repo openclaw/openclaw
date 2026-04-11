@@ -1,0 +1,20 @@
+-r clawmodeler-requirements-light.txt
+geopandas
+pyogrio
+rasterio
+rtree
+numpy
+scipy
+networkx
+osmnx
+scikit-learn
+statsmodels
+matplotlib
+plotly
+folium
+gtfs-kit
+partridge
+openpyxl
+xlsxwriter
+python-docx
+weasyprint

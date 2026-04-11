@@ -1,0 +1,327 @@
+{
+  "schema_version": "1.0.0",
+  "profiles": {
+    "light": {
+      "description": "Fast local screening stack for small projects and demos.",
+      "includes": ["core", "gis-light", "reports"]
+    },
+    "standard": {
+      "description": "Default planning stack for GIS, OSM routing, GTFS, accessibility, and reports.",
+      "includes": ["core", "gis-standard", "routing-standard", "transit-standard", "reports"]
+    },
+    "full": {
+      "description": "Max local transportation modeling lab with simulation, optimization, and bridge runtimes.",
+      "includes": [
+        "core",
+        "gis-standard",
+        "routing-standard",
+        "transit-standard",
+        "simulation-full",
+        "optimization",
+        "reports"
+      ]
+    },
+    "gpu": {
+      "description": "Optional ML/deep-learning profile for calibrated or surrogate models.",
+      "includes": ["ml-standard", "ml-gpu"]
+    }
+  },
+  "tools": [
+    {
+      "id": "python3",
+      "name": "Python 3",
+      "category": "runtime",
+      "profile": "light",
+      "kind": "binary",
+      "binary": "python3",
+      "required": true,
+      "purpose": "Runs the ClawModeler sidecar and Python modeling workflows.",
+      "agent_use": "Execute intake, planning, modeling, QA, and export commands."
+    },
+    {
+      "id": "java",
+      "name": "Java runtime",
+      "category": "runtime",
+      "profile": "standard",
+      "kind": "binary",
+      "binary": "java",
+      "required": false,
+      "purpose": "Runs Java-based transportation engines.",
+      "agent_use": "Use for R5 and MATSim workflows when enabled."
+    },
+    {
+      "id": "duckdb",
+      "name": "DuckDB",
+      "category": "database",
+      "profile": "light",
+      "kind": "python_module",
+      "module": "duckdb",
+      "required": false,
+      "purpose": "Local analytical database and workspace store.",
+      "agent_use": "Store project tables, fact-blocks, scenario specs, and reproducibility state."
+    },
+    {
+      "id": "pandas",
+      "name": "pandas",
+      "category": "dataframe",
+      "profile": "light",
+      "kind": "python_module",
+      "module": "pandas",
+      "required": false,
+      "purpose": "Tabular analysis and file IO.",
+      "agent_use": "Clean CSVs, summarize model outputs, and prepare report tables."
+    },
+    {
+      "id": "geopandas",
+      "name": "GeoPandas",
+      "category": "gis",
+      "profile": "standard",
+      "kind": "python_module",
+      "module": "geopandas",
+      "required": false,
+      "purpose": "Vector geospatial dataframes.",
+      "agent_use": "Perform spatial joins, CRS transforms, and map layer preparation."
+    },
+    {
+      "id": "shapely",
+      "name": "Shapely",
+      "category": "gis",
+      "profile": "light",
+      "kind": "python_module",
+      "module": "shapely",
+      "required": false,
+      "purpose": "Geometry operations.",
+      "agent_use": "Validate and repair geometries when DuckDB spatial is unavailable."
+    },
+    {
+      "id": "pyproj",
+      "name": "pyproj",
+      "category": "gis",
+      "profile": "light",
+      "kind": "python_module",
+      "module": "pyproj",
+      "required": false,
+      "purpose": "Coordinate reference system transforms.",
+      "agent_use": "Detect and transform CRS for planning inputs."
+    },
+    {
+      "id": "gdal",
+      "name": "GDAL/OGR",
+      "category": "gis",
+      "profile": "standard",
+      "kind": "binary",
+      "binary": "ogrinfo",
+      "required": false,
+      "purpose": "Geospatial file inspection and conversion.",
+      "agent_use": "Inspect Shapefiles, GeoPackages, rasters, and projection metadata."
+    },
+    {
+      "id": "networkx",
+      "name": "NetworkX",
+      "category": "routing",
+      "profile": "standard",
+      "kind": "python_module",
+      "module": "networkx",
+      "required": false,
+      "purpose": "Graph algorithms and shortest paths.",
+      "agent_use": "Compute accessibility paths and network metrics."
+    },
+    {
+      "id": "osmnx",
+      "name": "OSMnx",
+      "category": "routing",
+      "profile": "standard",
+      "kind": "python_module",
+      "module": "osmnx",
+      "required": false,
+      "purpose": "OpenStreetMap network acquisition and routing preparation.",
+      "agent_use": "Build local street networks, add edge speeds, and cache GraphML."
+    },
+    {
+      "id": "r5",
+      "name": "Conveyal R5",
+      "category": "transit",
+      "profile": "full",
+      "kind": "file_glob",
+      "glob": "vendor/r5*.jar",
+      "required": false,
+      "purpose": "Transit and multimodal many-to-many accessibility.",
+      "agent_use": "Use for GTFS plus OSM transit accessibility matrices."
+    },
+    {
+      "id": "sumo-binary",
+      "name": "SUMO binary",
+      "category": "simulation",
+      "profile": "full",
+      "kind": "binary",
+      "binary": "sumo",
+      "required": false,
+      "purpose": "Microscopic traffic simulation.",
+      "agent_use": "Run detailed corridor and operations scenarios."
+    },
+    {
+      "id": "sumo-source",
+      "name": "SUMO local source",
+      "category": "simulation",
+      "profile": "full",
+      "kind": "path",
+      "path": "sumo",
+      "required": false,
+      "purpose": "Local SUMO source and tools.",
+      "agent_use": "Build or inspect SUMO tooling and create bridge exports."
+    },
+    {
+      "id": "matsim-source",
+      "name": "MATSim local source",
+      "category": "simulation",
+      "profile": "full",
+      "kind": "path",
+      "path": "matsim-libs",
+      "required": false,
+      "purpose": "Agent-based transportation simulation source.",
+      "agent_use": "Prepare MATSim network/population/plans handoffs."
+    },
+    {
+      "id": "urbansim-source",
+      "name": "UrbanSim local source",
+      "category": "land-use",
+      "profile": "full",
+      "kind": "path",
+      "path": "urbansim",
+      "required": false,
+      "purpose": "Land-use and transportation interaction modeling.",
+      "agent_use": "Prepare long-horizon land-use scenario bridge workflows."
+    },
+    {
+      "id": "dtalite-source",
+      "name": "DTALite local source",
+      "category": "assignment",
+      "profile": "full",
+      "kind": "path",
+      "path": "DTALite",
+      "required": false,
+      "purpose": "Dynamic traffic assignment bridge target.",
+      "agent_use": "Prepare network and OD matrix handoffs for DTA workflows."
+    },
+    {
+      "id": "tbest-source",
+      "name": "TBEST tools local source",
+      "category": "transit",
+      "profile": "full",
+      "kind": "path",
+      "path": "tbest-tools",
+      "required": false,
+      "purpose": "Stop-level ridership bridge tooling.",
+      "agent_use": "Ingest or prepare TBEST-style transit ridership handoffs."
+    },
+    {
+      "id": "ortools",
+      "name": "OR-Tools",
+      "category": "optimization",
+      "profile": "full",
+      "kind": "python_module",
+      "module": "ortools",
+      "required": false,
+      "purpose": "Optimization and routing problems.",
+      "agent_use": "Optimize project bundles, phasing, routing, and constrained selections."
+    },
+    {
+      "id": "sklearn",
+      "name": "scikit-learn",
+      "category": "ml",
+      "profile": "full",
+      "kind": "python_module",
+      "module": "sklearn",
+      "required": false,
+      "purpose": "Classical machine learning.",
+      "agent_use": "Build exploratory demand, clustering, or surrogate models with validation."
+    },
+    {
+      "id": "torch",
+      "name": "PyTorch",
+      "category": "ml",
+      "profile": "gpu",
+      "kind": "python_module",
+      "module": "torch",
+      "required": false,
+      "purpose": "Deep learning and GPU acceleration.",
+      "agent_use": "Use only with training data and validation for ML-assisted modeling."
+    },
+    {
+      "id": "xgboost",
+      "name": "XGBoost",
+      "category": "ml",
+      "profile": "gpu",
+      "kind": "python_module",
+      "module": "xgboost",
+      "required": false,
+      "purpose": "Gradient boosted tree models.",
+      "agent_use": "Model calibrated demand or surrogate outcomes when labeled data exist."
+    },
+    {
+      "id": "pandoc",
+      "name": "Pandoc",
+      "category": "reports",
+      "profile": "standard",
+      "kind": "binary",
+      "binary": "pandoc",
+      "required": false,
+      "purpose": "Document format conversion.",
+      "agent_use": "Convert Markdown reports to DOCX/PDF when configured."
+    },
+    {
+      "id": "graphviz",
+      "name": "Graphviz",
+      "category": "reports",
+      "profile": "standard",
+      "kind": "binary",
+      "binary": "dot",
+      "required": false,
+      "purpose": "Diagram rendering.",
+      "agent_use": "Render method, workflow, and network diagrams for reports."
+    },
+    {
+      "id": "docker",
+      "name": "Docker or compatible runtime",
+      "category": "packaging",
+      "profile": "full",
+      "kind": "binary",
+      "binary": "docker",
+      "required": false,
+      "purpose": "Containerized heavy model runtimes.",
+      "agent_use": "Run reproducible full-stack model containers when available."
+    }
+  ],
+  "method_policy": [
+    {
+      "when": "quick screening, small agency, incomplete data",
+      "prefer": ["duckdb", "geopandas", "networkx", "osmnx"],
+      "fallback": "Use proxy screening and label limitations."
+    },
+    {
+      "when": "transit accessibility with GTFS",
+      "prefer": ["r5", "java"],
+      "fallback": "Compute GTFS route metrics and stop-access proxies."
+    },
+    {
+      "when": "corridor or intersection operations",
+      "prefer": ["sumo-binary", "sumo-source"],
+      "fallback": "Create SUMO bridge export and request demand/network detail."
+    },
+    {
+      "when": "agent-based demand simulation",
+      "prefer": ["matsim-source", "java"],
+      "fallback": "Create MATSim bridge export and request population/plans."
+    },
+    {
+      "when": "land-use and transportation interaction",
+      "prefer": ["urbansim-source"],
+      "fallback": "Create UrbanSim bridge export and request development inputs."
+    },
+    {
+      "when": "machine learning requested",
+      "prefer": ["sklearn", "torch", "xgboost"],
+      "fallback": "Use ML only as exploratory unless training and validation data exist."
+    }
+  ]
+}

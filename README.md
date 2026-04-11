@@ -33,6 +33,24 @@ Preferred setup: run `openclaw onboard` in your terminal.
 OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills. It is the recommended CLI setup path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 
+## ClawModeler Transportation Modeling Edition
+
+This fork adds ClawModeler: an OpenClaw agent workflow for transportation demand
+modeling, accessibility screening, GTFS summaries, project scoring, QA-gated
+reports, and bridge handoffs to SUMO, MATSim, UrbanSim, DTALite, and TBEST.
+
+Start with:
+
+```bash
+openclaw clawmodeler init --workspace ./my-region
+openclaw clawmodeler demo --workspace ./demo-workspace
+openclaw clawmodeler tools --json
+```
+
+See [CLAWMODELER_README.md](CLAWMODELER_README.md) and
+[docs/clawmodeler-stack.md](docs/clawmodeler-stack.md) for the current modeling
+stack, data contract, install profiles, and agent workflow.
+
 ## Sponsors
 
 <table>

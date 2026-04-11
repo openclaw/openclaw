@@ -1,3 +1,55 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clawmodeler-engine"
+version = "0.1.0"
+description = "ClawModeler transportation modeling sidecar for OpenClaw."
+readme = "CLAWMODELER_README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ClawModeler contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+light = []
+standard = ["duckdb", "pandas", "shapely", "pyproj", "networkx", "osmnx"]
+full = ["duckdb", "pandas", "shapely", "pyproj", "networkx", "osmnx", "ortools", "scikit-learn"]
+gpu = ["torch", "xgboost"]
+
+[project.scripts]
+clawmodeler-engine = "clawmodeler_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["clawmodeler_engine*"]
+exclude = [
+  "apps*",
+  "assets*",
+  "dist*",
+  "docs*",
+  "extensions*",
+  "packages*",
+  "scripts*",
+  "skills*",
+  "src*",
+  "test*",
+  "ui*",
+  "vendor*",
+  "sumo*",
+  "matsim-libs*",
+  "urbansim*",
+  "DTALite*",
+  "tbest-tools*",
+]
+
+[tool.setuptools.package-data]
+clawmodeler_engine = ["toolbox.default.json"]
+
+[tool.setuptools]
+include-package-data = false
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

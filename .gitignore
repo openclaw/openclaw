@@ -60,6 +60,13 @@ apps/macos/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 
+# Local ClawModeler external engine resources
+DTALite/
+matsim-libs/
+sumo/
+tbest-tools/
+urbansim/
+
 # Vendor build artifacts
 vendor/a2ui/renderers/lit/dist/
 src/canvas-host/a2ui/*.bundle.js

@@ -1111,7 +1111,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["tools/index"]
+                "pages": ["tools/index", "clawmodeler-stack", "clawmodeler-roadmap"]
               },
               {
                 "group": "Plugins",
@@ -1515,6 +1515,7 @@
                     "pages": [
                       "cli/acp",
                       "cli/clawbot",
+                      "cli/clawmodeler",
                       "cli/completion",
                       "cli/dns",
                       "cli/docs",

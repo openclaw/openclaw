@@ -1,0 +1,7 @@
+duckdb
+pandas
+pyarrow
+shapely
+pyproj
+jinja2
+markdown
