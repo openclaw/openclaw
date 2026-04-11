@@ -104,7 +104,7 @@ export async function checkInboundAccessControl(params: {
       }
       const normalizedEntrySet = new Set(
         allowEntries
-          .map((entry) => normalizeWhatsAppTarget(String(entry)))
+          .map((entry) => normalizeWhatsAppTarget(entry))
           .filter((entry): entry is string => Boolean(entry)),
       );
       if (!params.group && isSamePhone) {
