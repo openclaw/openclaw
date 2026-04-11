@@ -15,6 +15,29 @@ const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
+function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    timer = null;
+    resolve(onTimeout());
+  }, timeoutMs);
+  timer.unref?.();
+
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return {
+    promise,
+    clear() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   clearSkillsRefreshTimer?: () => void;
@@ -172,10 +195,15 @@ export function createGatewayCloseHandler(params: {
       await params.configReloader.stop().catch(() => {});
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
+      const websocketGraceTimeout = createTimeoutRace(
+        WEBSOCKET_CLOSE_GRACE_MS,
+        () => false as const,
+      );
       const closedWithinGrace = await Promise.race([
         closePromise.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), WEBSOCKET_CLOSE_GRACE_MS)),
+        websocketGraceTimeout.promise,
       ]);
+      websocketGraceTimeout.clear();
       if (!closedWithinGrace) {
         shutdownLog.warn(
           `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
@@ -187,17 +215,13 @@ export function createGatewayCloseHandler(params: {
             /* ignore */
           }
         }
-        await Promise.race([
-          closePromise,
-          new Promise<void>((resolve) =>
-            setTimeout(() => {
-              shutdownLog.warn(
-                `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
-              );
-              resolve();
-            }, WEBSOCKET_CLOSE_FORCE_CONTINUE_MS),
-          ),
-        ]);
+        const websocketForceTimeout = createTimeoutRace(WEBSOCKET_CLOSE_FORCE_CONTINUE_MS, () => {
+          shutdownLog.warn(
+            `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
+          );
+        });
+        await Promise.race([closePromise, websocketForceTimeout.promise]);
+        websocketForceTimeout.clear();
       }
       const servers =
         params.httpServers && params.httpServers.length > 0
@@ -214,21 +238,26 @@ export function createGatewayCloseHandler(params: {
         const closePromise = new Promise<void>((resolve, reject) =>
           httpServer.close((err) => (err ? reject(err) : resolve())),
         );
+        const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
         const closedWithinGrace = await Promise.race([
           closePromise.then(() => true),
-          new Promise<false>((resolve) => setTimeout(() => resolve(false), HTTP_CLOSE_GRACE_MS)),
+          httpGraceTimeout.promise,
         ]);
+        httpGraceTimeout.clear();
         if (!closedWithinGrace) {
           shutdownLog.warn(
             `http server close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
           );
           httpServer.closeAllConnections?.();
+          const httpForceTimeout = createTimeoutRace(
+            HTTP_CLOSE_FORCE_WAIT_MS,
+            () => false as const,
+          );
           const closedAfterForce = await Promise.race([
             closePromise.then(() => true),
-            new Promise<false>((resolve) =>
-              setTimeout(() => resolve(false), HTTP_CLOSE_FORCE_WAIT_MS),
-            ),
+            httpForceTimeout.promise,
           ]);
+          httpForceTimeout.clear();
           if (!closedAfterForce) {
             throw new Error(
               `http server close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,

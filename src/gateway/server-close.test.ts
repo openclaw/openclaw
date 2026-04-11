@@ -125,6 +125,7 @@ describe("createGatewayCloseHandler", () => {
     await closePromise;
 
     expect(terminate).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("websocket server close exceeded 1000ms"),
@@ -173,6 +174,7 @@ describe("createGatewayCloseHandler", () => {
     await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS + WEBSOCKET_CLOSE_FORCE_CONTINUE_MS);
     await closePromise;
 
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("websocket server close still pending after 250ms force window"),
@@ -226,6 +228,7 @@ describe("createGatewayCloseHandler", () => {
     await closePromise;
 
     expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("http server close exceeded 1000ms"),
@@ -274,5 +277,6 @@ describe("createGatewayCloseHandler", () => {
     );
     await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
     await closeExpectation;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
