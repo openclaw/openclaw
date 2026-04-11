@@ -57,6 +57,7 @@ jobs:
           pnpm openclaw qa suite \
             --parity-pack agentic \
             --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4-alt \
             --output-dir .artifacts/qa-e2e/gpt54
 
       - name: Run Opus 4.6 lane
@@ -64,6 +65,7 @@ jobs:
           pnpm openclaw qa suite \
             --parity-pack agentic \
             --model anthropic/claude-opus-4-6 \
+            --alt-model anthropic/claude-sonnet-4-6 \
             --output-dir .artifacts/qa-e2e/opus46
 
       - name: Generate parity report
