@@ -43,6 +43,7 @@ type DeletedMessageView = {
 
 type GetMessagesResponse = {
   messages: Array<MessageView | DeletedMessageView>;
+  cursor?: string;
 };
 
 type InboundMessage = {
@@ -68,9 +69,15 @@ function nextPollMs(current: number, hadActivity: boolean): number {
   return Math.min(Math.round(current * BACKOFF_FACTOR), MAX_POLL_MS);
 }
 
+/** Maximum pages fetched per convo per poll cycle to bound API cost on very active convos. */
+const MAX_FETCH_PAGES = 20;
+
 /**
  * Fetch all messages in a conversation that are newer than the tracked rev.
- * Returns at most a handful of recent messages to avoid fetching full history.
+ *
+ * Paginates `getMessages` (newest-first) until it encounters a message at or
+ * before the watermark or exhausts all pages, then returns results in
+ * chronological order (oldest first) for in-order dispatch.
  */
 async function fetchNewMessages(
   agent: BskyAgent,
@@ -78,32 +85,48 @@ async function fetchNewMessages(
   selfDid: string,
   lastRev: string,
 ): Promise<InboundMessage[]> {
-  const data = await chatApiGet<GetMessagesResponse>(agent, LXM_GET_MESSAGES, {
-    convoId,
-    limit: 10,
-  });
   const results: InboundMessage[] = [];
-  for (const msg of data.messages) {
-    if (!isMessageView(msg)) {
-      continue;
-    }
-    // Skip if this message is not newer than what we've already seen
-    if (msg.rev <= lastRev) {
-      continue;
-    }
-    // Skip our own outbound messages
-    if (msg.sender.did === selfDid) {
-      continue;
-    }
-    results.push({
+  let cursor: string | undefined;
+
+  for (let page = 0; page < MAX_FETCH_PAGES; page++) {
+    const data = await chatApiGet<GetMessagesResponse>(agent, LXM_GET_MESSAGES, {
       convoId,
-      messageId: msg.id,
-      text: msg.text,
-      senderDid: msg.sender.did,
-      sentAt: msg.sentAt,
+      limit: 10,
+      ...(cursor ? { cursor } : {}),
     });
+
+    let reachedOld = false;
+    for (const msg of data.messages) {
+      if (!isMessageView(msg)) {
+        continue;
+      }
+      // Messages are returned newest-first; once we hit one at or before the
+      // watermark, everything further back is already processed — stop paginating.
+      if (msg.rev <= lastRev) {
+        reachedOld = true;
+        break;
+      }
+      // Skip our own outbound messages
+      if (msg.sender.did === selfDid) {
+        continue;
+      }
+      results.push({
+        convoId,
+        messageId: msg.id,
+        text: msg.text,
+        senderDid: msg.sender.did,
+        sentAt: msg.sentAt,
+      });
+    }
+
+    if (reachedOld || !data.cursor) {
+      break;
+    }
+    cursor = data.cursor;
   }
-  return results;
+
+  // Reverse to chronological order (oldest first) for in-order dispatch
+  return results.toReversed();
 }
 
 export type PollCallbacks = {
