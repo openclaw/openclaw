@@ -541,6 +541,7 @@ export async function resolveReplyDirectives(params: {
     directives,
     sessionEntry,
     agentExecDefaults: agentEntry?.tools?.exec,
+    senderIsOwner: command.senderIsOwner,
   });
 
   return {

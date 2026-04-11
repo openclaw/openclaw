@@ -8,6 +8,7 @@ export function resolveReplyExecOverrides(params: {
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
   agentExecDefaults?: ReplyExecOverrides;
+  senderIsOwner?: boolean;
 }): ReplyExecOverrides | undefined {
   const host =
     params.directives.execHost ??
@@ -24,6 +25,11 @@ export function resolveReplyExecOverrides(params: {
   const node =
     params.directives.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
   if (!host && !security && !ask && !node) {
+    // Non-owner channel senders get restrictive exec defaults to prevent
+    // unauthenticated command execution via prompt injection.
+    if (params.senderIsOwner === false) {
+      return { security: "deny", ask: "always" };
+    }
     return undefined;
   }
   return { host, security, ask, node };

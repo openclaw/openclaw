@@ -90,6 +90,46 @@ describe("reply exec overrides", () => {
     });
   });
 
+  it("defaults to deny+always for non-owner senders with no overrides", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry: createSessionEntry(),
+        senderIsOwner: false,
+      }),
+    ).toEqual({ security: "deny", ask: "always" });
+  });
+
+  it("returns undefined for owner senders with no overrides (uses global defaults)", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry: createSessionEntry(),
+        senderIsOwner: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when senderIsOwner is undefined (backward compatible)", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry: createSessionEntry(),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses explicit overrides for non-owner senders when configured", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry: createSessionEntry(),
+        agentExecDefaults: AGENT_EXEC_DEFAULTS,
+        senderIsOwner: false,
+      }),
+    ).toEqual(AGENT_EXEC_DEFAULTS);
+  });
+
   it("resolves the latest persisted exec directive for later turns", async () => {
     const sessionEntry = createSessionEntry();
     const sessionStore = { "agent:main:main": sessionEntry };
