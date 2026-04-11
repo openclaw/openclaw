@@ -1,6 +1,8 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it } from "vitest";
-import { loadSessionStore } from "../config/sessions.js";
+import type { ModelAliasIndex } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import {
   assertModelSelection,
   installDirectiveBehaviorE2EHooks,
@@ -17,6 +19,9 @@ import {
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { getReplyFromConfig } from "./reply.js";
+import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
+import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 
 function makeDefaultModelConfig(home: string) {
   return makeWhatsAppDirectiveConfig(home, {
@@ -45,27 +50,47 @@ async function runReplyToCurrentCase(home: string, text: string) {
   return Array.isArray(res) ? res[0] : res;
 }
 
-async function expectThinkStatusForReasoningModel(params: {
-  home: string;
-  reasoning: boolean;
-  expectedLevel: "low" | "off";
-}): Promise<void> {
-  loadModelCatalogMock.mockResolvedValueOnce([
-    {
-      id: "claude-opus-4-6",
-      name: "Opus 4.5",
-      provider: "anthropic",
-      reasoning: params.reasoning,
-    },
-  ]);
+const emptyAliasIndex: ModelAliasIndex = {
+  byAlias: new Map(),
+  byKey: new Map(),
+};
 
-  const res = await getReplyFromConfig(
-    { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
-    {},
-    makeWhatsAppDirectiveConfig(params.home, { model: "anthropic/claude-opus-4-6" }),
-  );
+async function expectThinkStatus(params: { expectedLevel: "low" | "off" }): Promise<void> {
+  const sessionKey = "agent:main:whatsapp:+1222";
+  const sessionEntry: SessionEntry = {
+    sessionId: "think-status",
+    updatedAt: Date.now(),
+  };
+  const res = await handleDirectiveOnly({
+    cfg: {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          workspace: "/tmp/openclaw",
+        },
+      },
+    } as OpenClawConfig,
+    directives: parseInlineDirectives("/think"),
+    sessionEntry,
+    sessionStore: { [sessionKey]: sessionEntry },
+    sessionKey,
+    elevatedEnabled: false,
+    elevatedAllowed: false,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    aliasIndex: emptyAliasIndex,
+    allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    initialModelLabel: "anthropic/claude-opus-4-6",
+    formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    currentThinkLevel: params.expectedLevel,
+  } satisfies HandleDirectiveOnlyParams);
 
-  const text = replyText(res);
+  const text = res?.text;
   expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
   expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 }
@@ -115,16 +140,8 @@ describe("directive behavior", () => {
 
   it("covers /think status and reasoning defaults for reasoning and non-reasoning models", async () => {
     await withTempHome(async (home) => {
-      await expectThinkStatusForReasoningModel({
-        home,
-        reasoning: true,
-        expectedLevel: "low",
-      });
-      await expectThinkStatusForReasoningModel({
-        home,
-        reasoning: false,
-        expectedLevel: "off",
-      });
+      await expectThinkStatus({ expectedLevel: "low" });
+      await expectThinkStatus({ expectedLevel: "off" });
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
 
       runEmbeddedPiAgentMock.mockClear();
