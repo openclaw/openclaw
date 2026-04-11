@@ -16,6 +16,8 @@ export function makeBrowserProfile(
     color: "#FF4500",
     driver: "openclaw",
     attachOnly: false,
+    headless: undefined,
+    executablePath: undefined,
     ...overrides,
   };
 }
