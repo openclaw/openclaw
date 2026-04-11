@@ -908,6 +908,50 @@ describe("provider attribution", () => {
           supportsNativeStreamingUsageCompat: false,
         },
       },
+      {
+        name: "local llama.cpp completions",
+        input: {
+          provider: "generic",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:8080/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "generic",
+          endpointClass: "local",
+          isKnownNativeEndpoint: false,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "localhost LM Studio completions",
+        input: {
+          provider: "generic",
+          api: "openai-completions",
+          baseUrl: "http://localhost:1234/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "generic",
+          endpointClass: "local",
+          isKnownNativeEndpoint: false,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
     ];
 
     for (const testCase of cases) {

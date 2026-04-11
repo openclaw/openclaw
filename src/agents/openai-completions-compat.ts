@@ -75,8 +75,16 @@ export function resolveOpenAICompletionsCompatDefaults(
       knownProviderFamily !== "mistral" &&
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
+    // Local endpoints (llama.cpp, LM Studio, vLLM, etc.) follow the OpenAI-compatible
+    // API and support `stream_options.include_usage`. They also safely ignore unknown
+    // fields, so sending this option is always safe. Without it, local backends omit
+    // the `usage` field from streaming responses, causing token tracking and context
+    // compaction to break entirely.
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      !isNonStandard &&
+      (!usesConfiguredNonOpenAIEndpoint ||
+        supportsNativeStreamingUsageCompat ||
+        endpointClass === "local"),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,

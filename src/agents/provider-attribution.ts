@@ -611,8 +611,12 @@ export function resolveProviderRequestCapabilities(
       api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
+    // Local endpoints (llama.cpp, LM Studio, vLLM, etc.) also support
+    // stream_options.include_usage and safely ignore unknown fields.
     supportsNativeStreamingUsageCompat:
-      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
+      endpointClass === "moonshot-native" ||
+      endpointClass === "modelstudio-native" ||
+      endpointClass === "local",
     compatibilityFamily,
   };
 }

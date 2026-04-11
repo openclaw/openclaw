@@ -38,6 +38,18 @@ describe("provider-catalog-shared native streaming usage compat", () => {
         baseUrl: "https://proxy.example.com/v1",
       }),
     ).toBe(false);
+    expect(
+      supportsNativeStreamingUsageCompat({
+        providerId: "generic",
+        baseUrl: "http://127.0.0.1:8080/v1",
+      }),
+    ).toBe(true);
+    expect(
+      supportsNativeStreamingUsageCompat({
+        providerId: "generic",
+        baseUrl: "http://localhost:1234/v1",
+      }),
+    ).toBe(true);
   });
 
   it("opts models into streaming usage for native endpoints while preserving explicit overrides", () => {

@@ -824,10 +824,25 @@ export async function runEmbeddedPiAgent(
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
             const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
-            const tokenUsedRatio =
+            let tokenUsedRatio =
               lastTurnPromptTokens != null && ctxInfo.tokens > 0
                 ? lastTurnPromptTokens / ctxInfo.tokens
                 : 0;
+
+            // When usage data is unavailable (e.g. local inference backends that
+            // did not report token counts), fall back to estimating context
+            // pressure from the conversation message count. A large message
+            // history with a timeout strongly suggests context pressure.
+            if (tokenUsedRatio === 0 && attempt.messagesSnapshot != null && ctxInfo.tokens > 0) {
+              const estimatedTokensPerMessage = 80;
+              const estimatedPromptTokens = attempt.messagesSnapshot.length * estimatedTokensPerMessage;
+              tokenUsedRatio = Math.min(estimatedPromptTokens / ctxInfo.tokens, 1);
+              if (tokenUsedRatio > 0) {
+                log.info(
+                  `[timeout-compaction] exact usage unavailable; estimated prompt tokens at ~${estimatedPromptTokens} from ${attempt.messagesSnapshot.length} messages (${Math.round(tokenUsedRatio * 100)}% of context)`,
+                );
+              }
+            }
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
                 `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to failover rotation`,
