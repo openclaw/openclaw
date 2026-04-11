@@ -29,6 +29,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
         final: true,
@@ -196,7 +197,7 @@ describe("handleAgentEnd", () => {
   it("surfaces replay-invalid paused lifecycle end state when present", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayInvalid = true;
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
     ctx.state.livenessState = "paused";
 
     await handleAgentEnd(ctx);
@@ -214,7 +215,7 @@ describe("handleAgentEnd", () => {
   it("derives abandoned lifecycle end state when replay-invalid work finished without a reply", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
-    ctx.state.replayInvalid = true;
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
     ctx.state.livenessState = "working";
     ctx.state.assistantTexts = [];
     ctx.state.messagingToolSentTexts = [];

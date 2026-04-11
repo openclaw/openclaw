@@ -576,8 +576,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
     emit({ type: "agent_end" });
 
-    expect(subscription.getReplayInvalid()).toBe(true);
-    expect(subscription.getHadPotentialSideEffects()).toBe(true);
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toContainEqual(
       expect.objectContaining({

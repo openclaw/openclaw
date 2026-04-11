@@ -40,6 +40,13 @@ type RunLivenessAttempt = Pick<
   "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
 >;
 
+export function isIncompleteTerminalAssistantTurn(params: {
+  hasAssistantVisibleText: boolean;
+  lastAssistant?: { stopReason?: string } | null;
+}): boolean {
+  return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+}
+
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
@@ -133,7 +140,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const stopReason = params.attempt.lastAssistant?.stopReason;
-  if (stopReason !== "toolUse" && stopReason !== "error") {
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
+    hasAssistantVisibleText: params.payloadCount > 0,
+    lastAssistant: params.attempt.lastAssistant,
+  });
+  if (!incompleteTerminalAssistant && stopReason !== "error") {
     return null;
   }
 

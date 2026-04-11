@@ -125,6 +125,7 @@ import {
 } from "../prompt-cache-observability.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -1408,8 +1409,7 @@ export async function runEmbeddedAttempt(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
           runId: params.runId,
-          initialReplayInvalid: params.initialReplayInvalid,
-          initialHadPotentialSideEffects: params.initialHadPotentialSideEffects,
+          initialReplayState: params.initialReplayState,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
@@ -1447,8 +1447,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
-        getReplayInvalid,
-        getHadPotentialSideEffects,
+        getReplayState,
         didSendViaMessagingTool,
         getLastToolError,
         setTerminalLifecycleMeta,
@@ -2280,11 +2279,9 @@ export async function runEmbeddedAttempt(
         didSendViaMessagingTool: didSendViaMessagingTool(),
         successfulCronAdds: getSuccessfulCronAdds(),
       });
-      const replayMetadata = {
-        hadPotentialSideEffects:
-          observedReplayMetadata.hadPotentialSideEffects || getHadPotentialSideEffects(),
-        replaySafe: observedReplayMetadata.replaySafe && !getReplayInvalid(),
-      };
+      const replayMetadata = replayMetadataFromState(
+        observeReplayMetadata(getReplayState(), observedReplayMetadata),
+      );
 
       return {
         replayMetadata,

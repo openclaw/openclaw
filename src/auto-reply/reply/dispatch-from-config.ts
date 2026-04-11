@@ -346,6 +346,32 @@ export async function dispatchReplyFromConfig(params: {
   const originatingTo = ctx.OriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
+  const routeReplyToOriginating = async (
+    payload: ReplyPayload,
+    options?: { abortSignal?: AbortSignal; mirror?: boolean },
+  ) => {
+    if (!shouldRouteToOriginating || !originatingChannel || !originatingTo || !routeReplyRuntime) {
+      return null;
+    }
+    return await routeReplyRuntime.routeReply({
+      payload,
+      channel: originatingChannel,
+      to: originatingTo,
+      sessionKey: ctx.SessionKey,
+      accountId: ctx.AccountId,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+      threadId: routeThreadId,
+      cfg,
+      abortSignal: options?.abortSignal,
+      mirror: options?.mirror,
+      isGroup,
+      groupId,
+    });
+  };
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -365,24 +391,11 @@ export async function dispatchReplyFromConfig(params: {
     if (abortSignal?.aborted) {
       return;
     }
-    const result = await routeReplyRuntime.routeReply({
-      payload,
-      channel: originatingChannel,
-      to: originatingTo,
-      sessionKey: ctx.SessionKey,
-      accountId: ctx.AccountId,
-      requesterSenderId: ctx.SenderId,
-      requesterSenderName: ctx.SenderName,
-      requesterSenderUsername: ctx.SenderUsername,
-      requesterSenderE164: ctx.SenderE164,
-      threadId: routeThreadId,
-      cfg,
+    const result = await routeReplyToOriginating(payload, {
       abortSignal,
       mirror,
-      isGroup,
-      groupId,
     });
-    if (!result.ok) {
+    if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
   };
@@ -391,22 +404,8 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
-      const result = await routeReplyRuntime.routeReply({
-        payload,
-        channel: originatingChannel,
-        to: originatingTo,
-        sessionKey: ctx.SessionKey,
-        accountId: ctx.AccountId,
-        requesterSenderId: ctx.SenderId,
-        requesterSenderName: ctx.SenderName,
-        requesterSenderUsername: ctx.SenderUsername,
-        requesterSenderE164: ctx.SenderE164,
-        threadId: routeThreadId,
-        cfg,
-        isGroup,
-        groupId,
-      });
+    const result = await routeReplyToOriginating(payload);
+    if (result) {
       if (!result.ok) {
         logVerbose(
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
@@ -551,22 +550,8 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          requesterSenderId: ctx.SenderId,
-          requesterSenderName: ctx.SenderName,
-          requesterSenderUsername: ctx.SenderUsername,
-          requesterSenderE164: ctx.SenderE164,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
+      const result = await routeReplyToOriginating(payload);
+      if (result) {
         queuedFinal = result.ok;
         if (result.ok) {
           routedFinalCount += 1;
@@ -612,22 +597,8 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
-      if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
-          payload: ttsPayload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          requesterSenderId: ctx.SenderId,
-          requesterSenderName: ctx.SenderName,
-          requesterSenderUsername: ctx.SenderUsername,
-          requesterSenderE164: ctx.SenderE164,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
+      const result = await routeReplyToOriginating(ttsPayload);
+      if (result) {
         if (!result.ok) {
           logVerbose(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
@@ -1046,27 +1017,8 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (
-            shouldRouteToOriginating &&
-            routeReplyRuntime &&
-            originatingChannel &&
-            originatingTo
-          ) {
-            const result = await routeReplyRuntime.routeReply({
-              payload: ttsOnlyPayload,
-              channel: originatingChannel,
-              to: originatingTo,
-              sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              requesterSenderId: ctx.SenderId,
-              requesterSenderName: ctx.SenderName,
-              requesterSenderUsername: ctx.SenderUsername,
-              requesterSenderE164: ctx.SenderE164,
-              threadId: routeThreadId,
-              cfg,
-              isGroup,
-              groupId,
-            });
+          const result = await routeReplyToOriginating(ttsOnlyPayload);
+          if (result) {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;

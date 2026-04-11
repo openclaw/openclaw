@@ -10,6 +10,24 @@ import {
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
+  function normalizeOpenAIParameters(parameters: unknown): unknown {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+    return normalized[0]?.parameters;
+  }
+
   it("covers the tool compat family matrix", () => {
     const cases = [
       {
@@ -101,37 +119,51 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   });
 
-  it("preserves nested empty property schemas and object annotations", () => {
-    const hooks = buildProviderToolCompatFamilyHooks("openai");
-    const parameters = {
-      type: "object",
-      properties: {
-        payload: {},
-        mode: {
-          type: "string",
-          default: {},
-          const: {},
+  it("preserves nested schemas and annotation objects while normalizing strict openai schemas", () => {
+    const cases = [
+      {
+        name: "property schema",
+        parameters: {
+          type: "object",
+          properties: { payload: {} },
+          required: ["payload"],
+          additionalProperties: false,
         },
       },
-      required: ["payload", "mode"],
-      additionalProperties: false,
-    };
-    const tools = [{ name: "demo", description: "", parameters }] as never;
+      {
+        name: "schema maps",
+        parameters: {
+          type: "object",
+          properties: { mode: { $defs: { nested: {} }, dependentSchemas: { flag: {} } } },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "nested schema arrays",
+        parameters: {
+          type: "object",
+          properties: { mode: { anyOf: [{}], prefixItems: [{}] } },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "annotation objects",
+        parameters: {
+          type: "object",
+          properties: { mode: { type: "string", default: {}, const: {}, examples: [{}] } },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+      },
+    ];
 
-    const normalized = hooks.normalizeToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      model: {
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        id: "gpt-5.4",
-      } as never,
-      tools,
-    });
-
-    expect(normalized[0]?.parameters).toEqual(parameters);
+    for (const testCase of cases) {
+      expect(normalizeOpenAIParameters(testCase.parameters), testCase.name).toEqual(
+        testCase.parameters,
+      );
+    }
   });
 
   it("does not tighten permissive object schemas just to satisfy strict mode", () => {

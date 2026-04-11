@@ -6,6 +6,7 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { isIncompleteTerminalAssistantTurn } from "./pi-embedded-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -42,12 +43,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
-  const incompleteTerminalAssistant =
-    !hasAssistantVisibleText &&
-    isAssistantMessage(lastAssistant) &&
-    lastAssistant.stopReason === "toolUse";
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
+    hasAssistantVisibleText,
+    lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
+  });
   const replayInvalid =
-    ctx.state.replayInvalid === true || incompleteTerminalAssistant ? true : undefined;
+    ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
   const derivedWorkingTerminalState = isError
     ? "blocked"
     : replayInvalid && !hasAssistantVisibleText

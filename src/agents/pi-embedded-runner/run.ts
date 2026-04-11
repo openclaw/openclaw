@@ -76,6 +76,7 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
+import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
@@ -564,8 +565,7 @@ export async function runEmbeddedPiAgent(
           }
         };
         let authRetryPending = false;
-        let accumulatedReplayInvalid = false;
-        let accumulatedHadPotentialSideEffects = false;
+        let accumulatedReplayState = createEmbeddedRunReplayState();
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -598,7 +598,7 @@ export async function runEmbeddedPiAgent(
                 lastRunPromptUsage,
                 lastTurnTotal,
               }),
-              replayInvalid: accumulatedReplayInvalid ? true : undefined,
+              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
               livenessState: "blocked",
             });
           }
@@ -676,8 +676,7 @@ export async function runEmbeddedPiAgent(
             resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
-            initialReplayInvalid: accumulatedReplayInvalid,
-            initialHadPotentialSideEffects: accumulatedHadPotentialSideEffects,
+            initialReplayState: accumulatedReplayState,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
@@ -754,17 +753,18 @@ export async function runEmbeddedPiAgent(
             model: modelId,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
-            accumulatedReplayInvalid ||
+            accumulatedReplayState.replayInvalid ||
             resolveReplayInvalidFlag({
               attempt,
               incompleteTurnText,
             });
           if (resolveReplayInvalidForAttempt(null)) {
-            accumulatedReplayInvalid = true;
+            accumulatedReplayState = { ...accumulatedReplayState, replayInvalid: true };
           }
-          if (attempt.replayMetadata.hadPotentialSideEffects) {
-            accumulatedHadPotentialSideEffects = true;
-          }
+          accumulatedReplayState = observeReplayMetadata(
+            accumulatedReplayState,
+            attempt.replayMetadata,
+          );
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
