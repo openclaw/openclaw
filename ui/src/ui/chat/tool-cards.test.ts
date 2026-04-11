@@ -85,6 +85,47 @@ describe("tool-cards", () => {
     expect(cards[0]?.inputText).toContain('"mode": "preview"');
   });
 
+  it("pairs interleaved nameless tool results in content order", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "browser.open",
+            input: { url: "https://example.com/a" },
+          },
+          {
+            type: "tool_result",
+            name: "browser.open",
+            text: "Opened A",
+          },
+          {
+            type: "tool_use",
+            name: "browser.open",
+            input: { url: "https://example.com/b" },
+          },
+          {
+            type: "tool_result",
+            name: "browser.open",
+            text: "Opened B",
+          },
+        ],
+      },
+      "msg:ordered",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      inputText: '{\n  "url": "https://example.com/a"\n}',
+      outputText: "Opened A",
+    });
+    expect(cards[1]).toMatchObject({
+      inputText: '{\n  "url": "https://example.com/b"\n}',
+      outputText: "Opened B",
+    });
+  });
+
   it("builds sidebar content with input and empty output status", () => {
     const [card] = extractToolCards(
       {

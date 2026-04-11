@@ -149,40 +149,35 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
       (typeof item.name === "string" &&
         (item.arguments != null || item.args != null || item.input != null));
-    if (!isToolCall) {
+    if (isToolCall) {
+      const args = coerceArgs(item.arguments ?? item.args ?? item.input);
+      cards.push({
+        id: resolveToolCardId(item, m, index, prefix),
+        name: (item.name as string) ?? "tool",
+        args,
+        inputText: serializeToolInput(args),
+      });
       continue;
     }
-    const args = coerceArgs(item.arguments ?? item.args ?? item.input);
-    cards.push({
-      id: resolveToolCardId(item, m, index, prefix),
-      name: (item.name as string) ?? "tool",
-      args,
-      inputText: serializeToolInput(args),
-    });
-  }
 
-  for (let index = 0; index < content.length; index++) {
-    const item = content[index] ?? {};
-    const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
-    if (kind !== "toolresult" && kind !== "tool_result") {
-      continue;
+    if (kind === "toolresult" || kind === "tool_result") {
+      const name = typeof item.name === "string" ? item.name : "tool";
+      const cardId = resolveToolCardId(item, m, index, prefix);
+      const existing = findLatestCard(cards, cardId, name);
+      const text = extractToolText(item);
+      const preview = extractToolPreview(text, name);
+      if (existing) {
+        existing.outputText = text;
+        existing.preview = preview;
+        continue;
+      }
+      cards.push({
+        id: cardId,
+        name,
+        outputText: text,
+        preview,
+      });
     }
-    const name = typeof item.name === "string" ? item.name : "tool";
-    const cardId = resolveToolCardId(item, m, index, prefix);
-    const existing = findLatestCard(cards, cardId, name);
-    const text = extractToolText(item);
-    const preview = extractToolPreview(text, name);
-    if (existing) {
-      existing.outputText = text;
-      existing.preview = preview;
-      continue;
-    }
-    cards.push({
-      id: cardId,
-      name,
-      outputText: text,
-      preview,
-    });
   }
 
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
