@@ -273,6 +273,7 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   const envUrlOverride = explicitUrl
     ? undefined
     : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+  const urlOverride = explicitUrl ?? envUrlOverride;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envAuth = resolveExplicitGatewayAuth({
     token: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -282,14 +283,8 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     explicitAuth.token || explicitAuth.password || envAuth.token || envAuth.password;
   let config = opts.config;
   if (!config) {
-    if (explicitUrl && hasOverrideAuth) {
+    if (urlOverride && hasOverrideAuth) {
       config = {} as OpenClawConfig;
-    } else if (envUrlOverride && hasOverrideAuth) {
-      try {
-        config = resolveGatewayConfig();
-      } catch {
-        config = {} as OpenClawConfig;
-      }
     } else {
       config = resolveGatewayConfig();
     }
@@ -300,7 +295,6 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
     : undefined;
   const cliUrlOverride = explicitUrl;
-  const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
   return {

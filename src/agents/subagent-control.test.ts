@@ -363,6 +363,65 @@ describe("sendControlledSubagentMessage", () => {
       replyText: undefined,
     });
   });
+
+  it("preserves timeout status when agent.wait transport throws a gateway timeout", async () => {
+    addSubagentRunForTests({
+      runId: "run-owned-timeout",
+      childSessionKey: "agent:main:subagent:owned-timeout",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-followup-timeout" } as T;
+        }
+        if (request.method === "agent.wait") {
+          throw new Error("gateway timeout while waiting");
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-owned-timeout",
+        childSessionKey: "agent:main:subagent:owned-timeout",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "continue work",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "continue",
+    });
+
+    expect(result).toEqual({
+      status: "timeout",
+      runId: "run-followup-timeout",
+      error: "gateway timeout while waiting",
+    });
+  });
 });
 
 describe("killSubagentRunAdmin", () => {
