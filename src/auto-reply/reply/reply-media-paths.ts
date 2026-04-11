@@ -7,6 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { ensureMediaHosted } from "../../media/host.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -64,6 +65,30 @@ function isLikelyLocalMediaSource(media: string): boolean {
 
 function getPayloadMediaList(payload: ReplyPayload): string[] {
   return resolveSendableOutboundReplyParts(payload).mediaUrls;
+}
+
+/**
+ * Convert a local filesystem media path to a gateway-accessible URL.
+ *
+ * Paths that are already HTTP(S) URLs are returned unchanged. Local paths are
+ * hosted through the media server so that external transports (WhatsApp, etc.)
+ * can fetch them over the network.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/64665
+ */
+async function convertLocalPathToGatewayUrl(mediaPath: string): Promise<string> {
+  if (HTTP_URL_RE.test(mediaPath)) {
+    return mediaPath;
+  }
+  try {
+    const hosted = await ensureMediaHosted(mediaPath, { startServer: false });
+    return hosted.url;
+  } catch (err) {
+    logVerbose(
+      `media path→URL conversion failed for ${mediaPath}, returning local path: ${String(err)}`,
+    );
+    return mediaPath;
+  }
 }
 
 export function createReplyMediaPathNormalizer(params: {
@@ -219,10 +244,19 @@ export function createReplyMediaPathNormalizer(params: {
       };
     }
 
+    // Convert local filesystem paths to gateway-accessible URLs so that
+    // external transports (WhatsApp, Telegram, etc.) can fetch the media
+    // over HTTP instead of receiving unusable local paths.
+    // Fixes: https://github.com/openclaw/openclaw/issues/64665
+    const gatewayUrls: string[] = [];
+    for (const media of normalizedMedia) {
+      gatewayUrls.push(await convertLocalPathToGatewayUrl(media));
+    }
+
     return {
       ...payload,
-      mediaUrl: normalizedMedia[0],
-      mediaUrls: normalizedMedia,
+      mediaUrl: gatewayUrls[0],
+      mediaUrls: gatewayUrls,
     };
   };
 }
