@@ -1,10 +1,11 @@
+import * as fs from "node:fs";
 // IHttpServerAdapter is re-exported via the public barrel (`export * from './http'`)
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -88,12 +89,119 @@ export async function createMSTeamsApp(
   creds: MSTeamsCredentials,
   sdk: MSTeamsTeamsSdk,
 ): Promise<MSTeamsApp> {
+  if (creds.type === "federated") {
+    return createFederatedApp(creds, sdk);
+  }
   return new sdk.App({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
     httpServerAdapter: createNoOpHttpServerAdapter(),
   } as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
+}
+
+function createFederatedApp(creds: MSTeamsFederatedCredentials, sdk: MSTeamsTeamsSdk): MSTeamsApp {
+  if (creds.useManagedIdentity) {
+    return createManagedIdentityApp(creds, sdk);
+  }
+
+  // Certificate-based auth
+  if (!creds.certificatePath) {
+    throw new Error("Federated credentials require either a certificate path or managed identity.");
+  }
+
+  let privateKey: string;
+  try {
+    privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
+      cause: err,
+    });
+  }
+
+  return createCertificateApp(creds, privateKey, sdk);
+}
+
+function createCertificateApp(
+  creds: MSTeamsFederatedCredentials,
+  privateKey: string,
+  sdk: MSTeamsTeamsSdk,
+): MSTeamsApp {
+  // Lazily create and cache the credential so the token cache is reused.
+  let credentialPromise: Promise<
+    InstanceType<typeof import("@azure/identity").ClientCertificateCredential>
+  > | null = null;
+
+  const getCredential = async () => {
+    if (!credentialPromise) {
+      credentialPromise = import("@azure/identity").then(
+        (az) =>
+          new az.ClientCertificateCredential(creds.tenantId, creds.appId, {
+            certificate: privateKey,
+          }),
+      );
+    }
+    return credentialPromise;
+  };
+
+  const tokenProvider = async (scope: string | string[]): Promise<string> => {
+    const credential = await getCredential();
+    const token = await credential.getToken(scope);
+
+    if (!token?.token) {
+      throw new Error("Failed to acquire token via certificate credential.");
+    }
+
+    return token.token;
+  };
+
+  return new sdk.App({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    token: tokenProvider,
+    httpServerAdapter: createNoOpHttpServerAdapter(),
+  } as unknown as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
+}
+
+function createManagedIdentityApp(
+  creds: MSTeamsFederatedCredentials,
+  sdk: MSTeamsTeamsSdk,
+): MSTeamsApp {
+  // Lazily create and cache the credential instance so the token cache is
+  // reused across calls instead of hitting IMDS/AAD on every message.
+  let credentialPromise: Promise<
+    InstanceType<typeof import("@azure/identity").ManagedIdentityCredential>
+  > | null = null;
+
+  const getCredential = async () => {
+    if (!credentialPromise) {
+      credentialPromise = import("@azure/identity").then((az) =>
+        creds.managedIdentityClientId
+          ? new az.ManagedIdentityCredential(creds.managedIdentityClientId)
+          : new az.ManagedIdentityCredential(),
+      );
+    }
+    return credentialPromise;
+  };
+
+  const tokenProvider = async (scope: string | string[]): Promise<string> => {
+    const credential = await getCredential();
+    const token = await credential.getToken(scope);
+
+    if (!token?.token) {
+      throw new Error("Failed to acquire token via managed identity.");
+    }
+
+    return token.token;
+  };
+
+  return new sdk.App({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    token: tokenProvider,
+    httpServerAdapter: createNoOpHttpServerAdapter(),
+  } as unknown as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
 }
 
 /**

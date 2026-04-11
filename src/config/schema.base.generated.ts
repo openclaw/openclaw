@@ -20586,6 +20586,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
               },
+              embedSandbox: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "strict",
+                  },
+                  {
+                    type: "string",
+                    const: "scripts",
+                  },
+                  {
+                    type: "string",
+                    const: "trusted",
+                  },
+                ],
+                title: "Control UI Embed Sandbox Mode",
+                description:
+                  'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+              },
+              allowExternalEmbedUrls: {
+                type: "boolean",
+                title: "Allow External Control UI Embed URLs",
+                description:
+                  "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
               allowedOrigins: {
                 type: "array",
                 items: {
@@ -24073,6 +24098,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       placeholder: "dist/control-ui",
       tags: ["network"],
     },
+    "gateway.controlUi.embedSandbox": {
+      label: "Control UI Embed Sandbox Mode",
+      help: 'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+      tags: ["security", "access", "advanced"],
+    },
+    "gateway.controlUi.allowExternalEmbedUrls": {
+      label: "Allow External Control UI Embed URLs",
+      help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+      tags: ["security", "access", "network", "advanced"],
+    },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
       help: 'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
@@ -27124,6 +27159,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.11",
+  version: "2026.4.11-beta.1",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
@@ -7,7 +7,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "./index.js";
-import type { ChannelPairingAdapter } from "./types.js";
+import type { ChannelPairingAdapter } from "./pairing.types.js";
 
 export function listPairingChannels(): ChannelId[] {
   // Channel docking: pairing support is declared via plugin.pairing.

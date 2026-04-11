@@ -10,11 +10,11 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
+import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
@@ -305,7 +305,7 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
    */
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
 };
 
 export type ChannelLogoutResult = {
