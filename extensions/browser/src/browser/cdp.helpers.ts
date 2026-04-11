@@ -2,11 +2,16 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
-import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
+import {
+  SsrFBlockedError,
+  type SsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
+} from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 export { isLoopbackHost };
@@ -63,9 +68,13 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: ssrfPolicy,
-  });
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+      policy: ssrfPolicy,
+    });
+  } catch (error) {
+    throw new BrowserCdpEndpointBlockedError({ cause: error });
+  }
 }
 
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
@@ -254,14 +263,12 @@ export async function fetchCdpChecked(
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await withNoProxyForCdpUrl(url, async () => {
-      const currentFetch = globalThis.fetch;
       const guarded = await fetchWithSsrFGuard({
         url,
         init: { ...init, headers },
         signal: ctrl.signal,
         policy: ssrfPolicy ?? { allowPrivateNetwork: true },
         auditContext: "browser-cdp",
-        fetchImpl: (input, requestInit) => currentFetch(input, requestInit),
       });
       guardedRelease = guarded.release;
       return guarded.response;
@@ -276,6 +283,9 @@ export async function fetchCdpChecked(
     return { response: res, release };
   } catch (error) {
     await release();
+    if (error instanceof SsrFBlockedError) {
+      throw new BrowserCdpEndpointBlockedError({ cause: error });
+    }
     throw error;
   }
 }

@@ -164,10 +164,31 @@ async function handleFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        await context.sendActivity({
-          type: "message",
-          attachments: [fileInfoCard],
-        });
+        // Only send a new file info message if we can't replace the consent card in-place
+        if (!pendingFile.consentCardActivityId) {
+          await context.sendActivity({
+            type: "message",
+            attachments: [fileInfoCard],
+          });
+        }
+
+        // Replace the original FileConsentCard with the file info card so the
+        // consent prompt no longer shows as pending in the chat
+        if (pendingFile.consentCardActivityId) {
+          try {
+            await context.updateActivity({
+              id: pendingFile.consentCardActivityId,
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          } catch {
+            // Non-fatal fallback: if update fails, send as new message
+            await context.sendActivity({
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          }
+        }
 
         log.info("file upload complete", {
           uploadId,

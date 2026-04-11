@@ -13,7 +13,7 @@ overrides:
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
-  basic-ftp: 5.2.1
+  basic-ftp: 5.2.2
   file-type: 22.0.1
   form-data: 2.5.4
   minimatch: 10.2.4
@@ -413,6 +413,22 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/cloudflare-ai-gateway:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/codex:
+    dependencies:
+      '@mariozechner/pi-coding-agent':
+        specifier: 0.66.1
+        version: 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -827,6 +843,9 @@ importers:
       '@microsoft/teams.apps':
         specifier: 2.0.7
         version: 2.0.7
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -2442,19 +2461,37 @@ packages:
     resolution: {integrity: sha512-faGUlTcXka5l7rv0lP3K3vGW/ejRuOS24RR2aSFWREUQqzjgdsuWNo/IiPqL3kWRGt6Ahl2+qcDAwtdeWeuGUw==}
     hasBin: true
 
+  '@mariozechner/pi-agent-core@0.65.2':
+    resolution: {integrity: sha512-GYOrX5aRUpSDMPtKR174Tv72CWH92anqlRuiGn8PV05OowPAahT99JoxvZEP4fcKANBdHsyDfMMwFYpPhvPBUQ==}
+    engines: {node: '>=20.0.0'}
+
   '@mariozechner/pi-agent-core@0.66.1':
     resolution: {integrity: sha512-Nj54A7SuB/EQi8r3Gs+glFOr9wz/a9uxYFf0pCLf2DE7VmzA9O7WSejrvArna17K6auftLSdNyRRe2bIO0qezg==}
     engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-ai@0.65.2':
+    resolution: {integrity: sha512-XCbXncmh10Q89tvS0880Ms6pv3DTxFTEtanfVHEPXKQBi0FBYnrkAlOnP5VRU8vCfe18P1AMNsWCndsCBUqY7g==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
 
   '@mariozechner/pi-ai@0.66.1':
     resolution: {integrity: sha512-7IZHvpsFdKEBkTmjNrdVL7JLUJVIpha6bwTr12cZ5XyDrxij06wP6Ncpnf4HT5BXAzD5w2JnoqTOSbMEIZj3dg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
+  '@mariozechner/pi-coding-agent@0.65.2':
+    resolution: {integrity: sha512-/rpFzPQ+CishxrSwJHSSRZBQHHWy2K3Rbu/iV0HcMq/hl9cSI2ygpwjVTRbPW+NuP1tHxVV3AMxz69VLAs5Ztg==}
+    engines: {node: '>=20.6.0'}
+    hasBin: true
+
   '@mariozechner/pi-coding-agent@0.66.1':
     resolution: {integrity: sha512-cNmatT+5HvYzQ78cRhRih00wCeUTH/fFx9ecJh5AbN7axgWU+bwiZYy0cjrTsGVgMGF4xMYlPRn/Nze9JEB+/w==}
     engines: {node: '>=20.6.0'}
     hasBin: true
+
+  '@mariozechner/pi-tui@0.65.2':
+    resolution: {integrity: sha512-LBPbIBASjCF4QLrc/dwmPdBzVMsbkDhzmBIAFgglX5rZBnGRppB7ekSA+1kb5pdxDpDn8IbxJX+bl7ZaeqZqxw==}
+    engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-tui@0.66.1':
     resolution: {integrity: sha512-hNFN42ebjwtfGooqoUwM+QaPR1XCyqPuueuP3aLOWS1bZ2nZP/jq8MBuGNrmMw1cgiDcotvOlSNj3BatzEOGsw==}
@@ -4446,8 +4483,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  basic-ftp@5.2.1:
-    resolution: {integrity: sha512-0yaL8JdxTknKDILitVpfYfV2Ob6yb3udX/hK97M7I3jOeznBNxQPtVvTUtnhUkyHlxFWyr5Lvknmgzoc7jf+1Q==}
+  basic-ftp@5.2.2:
+    resolution: {integrity: sha512-1tDrzKsdCg70WGvbFss/ulVAxupNauGnOlgpyjKzeQxzyllBLS0CGLV7tjIXTK3ZQA9/FBEm9qyFFN1bciA6pw==}
     engines: {node: '>=10.0.0'}
 
   bidi-js@1.0.3:
@@ -9012,9 +9049,45 @@ snapshots:
       std-env: 3.10.0
       yoctocolors: 2.1.2
 
+  '@mariozechner/pi-agent-core@0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-agent-core@0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/pi-ai': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
+      '@aws-sdk/client-bedrock-runtime': 3.1028.0
+      '@google/genai': 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@mistralai/mistralai': 1.14.1
+      '@sinclair/typebox': 0.34.49
+      ajv: 8.18.0
+      ajv-formats: 3.0.1(ajv@8.18.0)
+      chalk: 5.6.2
+      openai: 6.26.0(ws@8.20.0)(zod@4.3.6)
+      partial-json: 0.1.7
+      proxy-agent: 6.5.0
+      undici: 7.24.7
+      zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -9039,6 +9112,39 @@ snapshots:
       proxy-agent: 6.5.0
       undici: 7.24.7
       zod-to-json-schema: 3.25.2(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+    dependencies:
+      '@mariozechner/jiti': 2.6.5
+      '@mariozechner/pi-agent-core': 0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.65.2
+      '@silvia-odwyer/photon-node': 0.3.4
+      ajv: 8.18.0
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.4
+      extract-zip: 2.0.1
+      file-type: 22.0.1
+      glob: 13.0.6
+      hosted-git-info: 9.0.2
+      ignore: 7.0.5
+      marked: 15.0.12
+      minimatch: 10.2.4
+      proper-lockfile: 4.1.2
+      strip-ansi: 7.2.0
+      undici: 7.24.7
+      yaml: 2.8.3
+    optionalDependencies:
+      '@mariozechner/clipboard': 0.3.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -9080,6 +9186,16 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
+
+  '@mariozechner/pi-tui@0.65.2':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.5.0
+      marked: 15.0.12
+      mime-types: 3.0.2
+    optionalDependencies:
+      koffi: 2.15.6
 
   '@mariozechner/pi-tui@0.66.1':
     dependencies:
@@ -11023,7 +11139,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  basic-ftp@5.2.1: {}
+  basic-ftp@5.2.2: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -11773,7 +11889,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.2.1
+      basic-ftp: 5.2.2
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -11781,7 +11897,7 @@ snapshots:
 
   get-uri@8.0.0:
     dependencies:
-      basic-ftp: 5.2.1
+      basic-ftp: 5.2.2
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:

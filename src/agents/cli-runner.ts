@@ -97,10 +97,8 @@ export type RunClaudeCliAgentParams = Omit<RunCliAgentParams, "provider" | "cliS
   claudeSessionId?: string;
 };
 
-export async function runClaudeCliAgent(
-  params: RunClaudeCliAgentParams,
-): Promise<EmbeddedPiRunResult> {
-  return runCliAgent({
+export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): RunCliAgentParams {
+  return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -120,5 +118,11 @@ export async function runClaudeCliAgent(
     // an incompatible Claude session on the generic runner path.
     images: params.images,
     senderIsOwner: params.senderIsOwner,
-  });
+  };
+}
+
+export async function runClaudeCliAgent(
+  params: RunClaudeCliAgentParams,
+): Promise<EmbeddedPiRunResult> {
+  return runCliAgent(buildRunClaudeCliAgentParams(params));
 }

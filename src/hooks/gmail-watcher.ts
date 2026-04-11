@@ -13,6 +13,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
 import {
+  buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   type GmailHookRuntimeConfig,
@@ -60,7 +61,7 @@ async function startGmailWatch(
  */
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
-  log.info(`starting gog ${args.join(" ")}`);
+  log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
 
   const child = spawn("gog", args, {

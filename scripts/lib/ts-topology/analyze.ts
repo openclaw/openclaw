@@ -413,4 +413,5 @@ export function filterRecordsForReport(
     case "public-surface-usage":
       return records;
   }
+  throw new Error("Unsupported topology report");
 }

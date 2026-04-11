@@ -218,7 +218,13 @@ export async function installPackageDir(params: {
       candidatePaths: [canonicalTargetDir],
     });
     stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
-    await fs.cp(params.sourceDir, stageDir, { recursive: true, verbatimSymlinks: true });
+    await fs.cp(params.sourceDir, stageDir, {
+      recursive: true,
+      // Keep relative symlinks relative to the staged copy. Node's default
+      // rewrites them toward the source tree, which makes valid vendored
+      // package links look like install-root escapes during post-copy scans.
+      verbatimSymlinks: true,
+    });
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
   }
