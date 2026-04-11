@@ -24,9 +24,16 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
+// #64293: treat empty heartbeat config ({}) as explicitly disabled
+function isEmptyObject(obj: unknown): boolean {
+  return (
+    typeof obj === "object" && obj !== null && !Array.isArray(obj) && Object.keys(obj).length === 0
+  );
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
+  return list.some((entry) => Boolean(entry?.heartbeat) && !isEmptyObject(entry?.heartbeat));
 }
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
@@ -35,8 +42,16 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      (entry) =>
+        Boolean(entry?.heartbeat) &&
+        !isEmptyObject(entry?.heartbeat) &&
+        normalizeAgentId(entry?.id) === resolvedAgentId,
     );
+  }
+  // #64293: treat empty defaults heartbeat as disabled
+  const defaults = cfg.agents?.defaults?.heartbeat;
+  if (isEmptyObject(defaults)) {
+    return false;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
@@ -46,6 +61,10 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
   heartbeat?: HeartbeatConfig,
 ) {
+  // #64293: treat empty heartbeat config as disabled
+  if (isEmptyObject(heartbeat)) {
+    return null;
+  }
   const raw =
     overrideEvery ??
     heartbeat?.every ??
