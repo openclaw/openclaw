@@ -19,6 +19,9 @@ const inputPaths = [
   a2uiAppDir,
 ];
 const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
+const relativeInputPaths = inputPaths.map((inputPath) =>
+  normalizePath(path.relative(rootDir, inputPath)),
+);
 
 function fail(message) {
   console.error(message);
@@ -79,10 +82,29 @@ async function walkFiles(entryPath, files) {
   }
 }
 
+function listTrackedInputFiles() {
+  const result = spawnSync("git", ["ls-files", "--", ...relativeInputPaths], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((filePath) => path.join(rootDir, filePath))
+    .filter((filePath) => isBundleHashInputPath(filePath));
+}
+
 async function computeHash() {
-  const files = [];
-  for (const inputPath of inputPaths) {
-    await walkFiles(inputPath, files);
+  let files = listTrackedInputFiles();
+  if (!files) {
+    files = [];
+    for (const inputPath of inputPaths) {
+      await walkFiles(inputPath, files);
+    }
   }
   files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 
