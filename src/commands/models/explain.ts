@@ -1,5 +1,9 @@
+import { loadSessionStore } from "../../config/sessions.js";
 import { type OutputRuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { resolveSessionModelRef } from "../../gateway/session-utils.js";
+import {
+  resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
+} from "../../gateway/session-utils.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
 
@@ -7,6 +11,7 @@ export async function modelsExplainCommand(
   opts: {
     model?: string;
     provider?: string;
+    session?: string;
     json?: boolean;
     agent?: string;
   },
@@ -17,14 +22,43 @@ export async function modelsExplainCommand(
     runtime,
   });
   const cfg = resolvedConfig;
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+  let agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+  let sessionKey: string | null = null;
+  let sessionStorePath: string | null = null;
+  let entry:
+    | {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      }
+    | undefined;
+
+  if (opts.session) {
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: opts.session });
+    const store = loadSessionStore(target.storePath);
+    const matchedKey = target.storeKeys.find((key) => store[key]);
+    const sessionEntry = matchedKey ? store[matchedKey] : undefined;
+    if (!sessionEntry) {
+      throw new Error(`Session not found: ${opts.session}`);
+    }
+    agentId = target.agentId;
+    sessionKey = target.canonicalKey;
+    sessionStorePath = target.storePath;
+    entry = {
+      ...(sessionEntry.providerOverride ? { providerOverride: sessionEntry.providerOverride } : {}),
+      ...(sessionEntry.modelOverride ? { modelOverride: sessionEntry.modelOverride } : {}),
+      ...(sessionEntry.modelProvider ? { modelProvider: sessionEntry.modelProvider } : {}),
+      ...(sessionEntry.model ? { model: sessionEntry.model } : {}),
+    };
+  } else {
+    entry = {
+      ...(opts.provider ? { providerOverride: opts.provider } : {}),
+      ...(opts.model ? { modelOverride: opts.model } : {}),
+    };
+  }
+
   const defaults = resolveSessionModelRef(cfg, undefined, agentId);
-
-  const entry = {
-    ...(opts.provider ? { providerOverride: opts.provider } : {}),
-    ...(opts.model ? { modelOverride: opts.model } : {}),
-  };
-
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   const inferredFamilyRoutingApplied =
     Boolean(opts.model) &&
@@ -32,15 +66,23 @@ export async function modelsExplainCommand(
     resolved.provider !== (opts.provider ?? defaults.provider);
   const payload = {
     agentId: agentId ?? "main",
+    session: sessionKey
+      ? {
+          key: sessionKey,
+          storePath: sessionStorePath,
+        }
+      : null,
     input: {
-      providerOverride: opts.provider ?? null,
-      modelOverride: opts.model ?? null,
+      providerOverride: opts.provider ?? entry?.providerOverride ?? null,
+      modelOverride: opts.model ?? entry?.modelOverride ?? null,
+      runtimeProvider: entry?.modelProvider ?? null,
+      runtimeModel: entry?.model ?? null,
     },
     defaults,
     resolution: {
       startedFromDefault: `${defaults.provider}/${defaults.model}`,
-      explicitProviderOverrideApplied: opts.provider ?? null,
-      explicitModelOverrideApplied: opts.model ?? null,
+      explicitProviderOverrideApplied: opts.provider ?? entry?.providerOverride ?? null,
+      explicitModelOverrideApplied: opts.model ?? entry?.modelOverride ?? null,
       familyInferenceApplied: inferredFamilyRoutingApplied,
     },
     resolved,

@@ -117,14 +117,15 @@ export function registerModelsCli(program: Command) {
   models
     .command("explain")
     .description("Explain effective provider/model resolution")
-    .argument("<model>", "Model id or canonical model name")
+    .argument("[model]", "Model id or canonical model name")
     .option("--provider <name>", "Optional provider override to explain")
+    .option("--session <key>", "Explain effective resolution for a persisted session")
     .option("--json", "Output JSON", false)
     .option(
       "--agent <id>",
       "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
     )
-    .action(async (model: string, opts, command) => {
+    .action(async (model: string | undefined, opts, command) => {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
@@ -132,6 +133,7 @@ export function registerModelsCli(program: Command) {
           {
             model,
             provider: opts.provider as string | undefined,
+            session: opts.session as string | undefined,
             json: Boolean(opts.json),
             agent,
           },
