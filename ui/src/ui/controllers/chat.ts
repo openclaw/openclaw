@@ -32,6 +32,19 @@ function shouldApplyChatHistoryResult(
   return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
 }
 
+/**
+ * Extract a stable identifier from a chat message for deduplication.
+ * Uses `id` first (server-assigned), falls back to `timestamp` + role.
+ */
+function messageKey(m: unknown): string {
+  if (!m || typeof m !== "object") return String(Math.random());
+  const r = m as Record<string, unknown>;
+  if (typeof r.id === "string" && r.id) return r.id;
+  const role = typeof r.role === "string" ? r.role : "?";
+  const ts = typeof r.timestamp === "number" ? r.timestamp : 0;
+  return `${role}:${ts}`;
+}
+
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
@@ -108,8 +121,38 @@ export async function loadChatHistory(state: ChatState) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
     }
-    const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const incoming = Array.isArray(res.messages) ? res.messages : [];
+    const filteredIncoming = incoming.filter((message) => !isAssistantSilentReply(message));
+    // FIX (Bug #6): Merge incrementally instead of replacing the entire array.
+    // This prevents visible messages from disappearing during tool execution or
+    // when a final event triggers a full history reload.
+    const existingKeys = new Set(state.chatMessages.map(messageKey));
+    const newMessages = filteredIncoming.filter((m) => !existingKeys.has(messageKey(m)));
+    if (newMessages.length > 0) {
+      const merged = [...state.chatMessages, ...newMessages];
+      merged.sort((a, b) => {
+        const ta = (a as Record<string, unknown>).timestamp as number ?? 0;
+        const tb = (b as Record<string, unknown>).timestamp as number ?? 0;
+        return ta - tb;
+      });
+      state.chatMessages = merged.slice(-200);
+    } else if (filteredIncoming.length !== state.chatMessages.length) {
+      // Server returned a different set (e.g. after pruning) — use server data
+      // but preserve any local-only streaming messages that aren't on the server yet.
+      const localOnly = state.chatMessages.filter((m) => {
+        const key = messageKey(m);
+        return !filteredIncoming.some((im) => messageKey(im) === key);
+      });
+      if (localOnly.length > 0) {
+        state.chatMessages = [...filteredIncoming, ...localOnly].toSorted((a, b) => {
+          const ta = (a as Record<string, unknown>).timestamp as number ?? 0;
+          const tb = (b as Record<string, unknown>).timestamp as number ?? 0;
+          return ta - tb;
+        }).slice(-200);
+      } else {
+        state.chatMessages = filteredIncoming;
+      }
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -342,8 +385,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
-  // Final from another run (e.g. sub-agent announce): refresh history to show new message.
-  // See https://github.com/openclaw/openclaw/issues/1909
+  // FIX (Bug #1): Accept events from the same session even if runId differs.
+  // Previously, events with a different runId were silently dropped, causing
+  // messages to disappear during tool execution or multi-run operations.
+  // We still allow "final" from other runs (e.g. sub-agent announce) per #1909.
+  // For delta/aborted/error from other runs, we don't set chatStream but we
+  // let the caller know so it can refresh history.
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -353,7 +400,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
       return "final";
     }
-    return null;
+    // Don't silently discard — return the state so the caller can refresh.
+    // This ensures messages from parallel runs (sub-agents, cron announces)
+    // trigger a history refresh instead of vanishing.
+    return payload.state;
   }
 
   if (payload.state === "delta") {
@@ -403,6 +453,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
+    // FIX (Bug #4): Display error as a visible message in the chat, not just a banner.
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `Error: ${payload.errorMessage ?? "Unknown error occurred"}` },
+        ],
+        timestamp: Date.now(),
+        isError: true,
+      },
+    ];
   }
   return payload.state;
 }

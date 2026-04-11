@@ -221,8 +221,36 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
-      return;
+    // FIX (Bug #2): Accept events from sub-agent sessions that share the same
+    // agent scope. Sub-agent sessions like "agent:strategies_monitor:main" should
+    // still show messages in the TUI even though the sessionKey differs slightly.
+    const isSessionMatch = isSameSessionKey(evt.sessionKey, state.currentSessionKey);
+    const isKnownRun = sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
+    const isLocalRun = isLocalRunId?.(evt.runId);
+
+    if (!isSessionMatch && !isKnownRun && !isLocalRun) {
+      // Check if the event comes from a sub-agent "main" session.
+      // Accept sub-agent "main" sessions (agent:X:main) when viewing the main session.
+      // Reject events from completely different conversations (different Telegram group, etc).
+      if (evt.sessionKey && state.currentSessionKey) {
+        const eventParts = evt.sessionKey.split(":");
+        const stateParts = state.currentSessionKey.split(":");
+        if (
+          eventParts.length >= 3 &&
+          stateParts.length >= 3 &&
+          eventParts[0] === "agent" &&
+          stateParts[0] === "agent" &&
+          eventParts[1] === stateParts[1] &&
+          eventParts[2] === "main" &&
+          (stateParts[2] === "main" || stateParts.length === 3)
+        ) {
+          // Same agent, sub-agent main session — accept
+        } else {
+          return; // Different agent or different conversation — reject
+        }
+      } else {
+        return; // Can't determine relation
+      }
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
@@ -296,6 +324,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         chatLog.dropAssistant(evt.runId);
       } else {
         chatLog.finalizeAssistant(finalText, evt.runId);
+      }
+      // FIX (Bug #2): Finalize all pending tool executions when the run ends.
+      if (typeof chatLog.finalizeAllTools === "function") {
+        chatLog.finalizeAllTools();
       }
       finalizeRun({
         runId: evt.runId,
@@ -377,11 +409,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (phase === "start") {
         setActivityStatus("running");
       }
-      if (phase === "end") {
-        setActivityStatus("idle");
-      }
-      if (phase === "error") {
-        setActivityStatus("error");
+      if (phase === "end" || phase === "error") {
+        setActivityStatus(phase === "error" ? "error" : "idle");
       }
       tui.requestRender();
     }

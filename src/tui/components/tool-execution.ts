@@ -134,4 +134,12 @@ export class ToolExecutionComponent extends Container {
       this.output.setText(text);
     }
   }
+
+  forceFinalize() {
+    if (this.isPartial) {
+      this.isPartial = false;
+      this.isError = true;
+      this.refresh();
+    }
+  }
 }

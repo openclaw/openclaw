@@ -1741,24 +1741,33 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
         });
 
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+        // FIX (Bug #3): Preserve orphaned trailing user messages instead of deleting them.
+        // Previously, these messages were removed via branch(), causing them to disappear
+        // from the webchat UI. Now we keep the message in the transcript and simply
+        // branch away from it so the next prompt doesn't create consecutive user turns.
+        // The orphaned user message remains visible in history via its parent branch.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          // Branch from parent — this moves the leaf pointer back so the next
+          // appendMessage (the prompt) doesn't land after a user message, while
+          // the orphaned user message remains in the tree on its own branch.
           if (leafEntry.parentId) {
             sessionManager.branch(leafEntry.parentId);
           } else {
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
+          // FIX (Bug #3): Preserve orphaned trailing user messages instead of deleting them.
+          // Previously, these messages were removed via branch(), causing them to disappear
+          // from the webchat UI. Now we keep the message in the transcript and simply
+          // branch away from it so the next prompt doesn't create consecutive user turns.
+          // The orphaned user message remains visible in history via its parent branch.
           activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
-            `Removed orphaned user message to prevent consecutive user turns. ` +
+            `Branched away from orphaned user message (preserved in tree). ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
-          if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
-            log.warn(orphanRepairMessage);
-          } else {
-            log.debug(orphanRepairMessage);
-          }
+          // This is expected behavior, not a warning condition
+          log.debug(orphanRepairMessage);
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;

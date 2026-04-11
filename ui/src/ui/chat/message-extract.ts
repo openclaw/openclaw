@@ -17,6 +17,14 @@ function processMessageText(text: string, role: string): string {
     : stripEnvelope(text);
 }
 
+// FIX (Bug #8): Strip reply tags that are meant for channel-specific rendering
+// (Discord, Telegram, etc.) and should not appear as raw text in the webchat UI.
+const REPLY_TAG_REGEX = /\[\[reply_to(?:_current|:[^\]]+)?\]\]\s*/g;
+
+function stripReplyTags(text: string): string {
+  return text.replace(REPLY_TAG_REGEX, "").trim();
+}
+
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";

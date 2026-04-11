@@ -534,7 +534,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        setActivityStatus("waiting");
+        if (state.activityStatus === "sending") {
+          setActivityStatus("waiting");
+        }
         tui.requestRender();
       }
     } catch (err) {

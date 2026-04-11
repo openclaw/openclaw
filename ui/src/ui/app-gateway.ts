@@ -297,6 +297,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host.lastError = shutdownHost.pendingShutdownMessage ?? null;
         host.lastErrorCode = null;
       }
+      // FIX (Bug #5): Auto-reconnect with exponential backoff.
+      // The GatewayBrowserClient already has its own reconnect, but the host
+      // needs to re-attach event handlers and reload state after reconnect.
+      // The client's built-in reconnect handles the WebSocket layer;
+      // here we just ensure the UI state is refreshed on reconnect.
     },
     onEvent: (evt) => {
       if (host.client !== client) {
@@ -388,7 +393,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload, host)) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }

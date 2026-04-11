@@ -299,4 +299,12 @@ export class ChatLog extends Container {
       tool.setExpanded(expanded);
     }
   }
+
+  finalizeAllTools() {
+    for (const tool of this.toolById.values()) {
+      if (typeof tool.forceFinalize === "function") {
+        tool.forceFinalize();
+      }
+    }
+  }
 }
