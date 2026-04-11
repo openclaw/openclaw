@@ -82,6 +82,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/proxy-capture": {
+      "types": "./dist/plugin-sdk/proxy-capture.d.ts",
+      "default": "./dist/plugin-sdk/proxy-capture.js"
+    },
     "./plugin-sdk/runtime-secret-resolution": {
       "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
       "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
@@ -369,10 +373,6 @@
     "./plugin-sdk/logging-core": {
       "types": "./dist/plugin-sdk/logging-core.d.ts",
       "default": "./dist/plugin-sdk/logging-core.js"
-    },
-    "./plugin-sdk/proxy-capture": {
-      "types": "./dist/plugin-sdk/proxy-capture.d.ts",
-      "default": "./dist/plugin-sdk/proxy-capture.js"
     },
     "./plugin-sdk/markdown-table-runtime": {
       "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
