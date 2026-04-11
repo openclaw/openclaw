@@ -22,13 +22,20 @@ function readRequiredDiscoveryRefs() {
   return requiredFiles.length > 0 ? requiredFiles : DEFAULT_REQUIRED_DISCOVERY_REFS;
 }
 
+function isMissingQaScenarioPackError(error: unknown) {
+  return error instanceof Error && error.message.startsWith("qa scenario pack not found:");
+}
+
 function getRequiredDiscoveryRefs() {
   if (cachedRequiredDiscoveryRefs) {
     return cachedRequiredDiscoveryRefs;
   }
   try {
     cachedRequiredDiscoveryRefs = readRequiredDiscoveryRefs();
-  } catch {
+  } catch (error) {
+    if (!isMissingQaScenarioPackError(error)) {
+      throw error;
+    }
     // Global npm installs do not ship the qa/scenarios source pack.
     cachedRequiredDiscoveryRefs = DEFAULT_REQUIRED_DISCOVERY_REFS;
   }
