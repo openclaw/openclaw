@@ -355,6 +355,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
   const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
   if (!rawMode || rawMode === "status") {
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionAgentId = params.sessionKey
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
       : params.agentId;
@@ -363,7 +364,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       provider: params.provider,
       model: params.model,
       agentId: sessionAgentId,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
     });
     const suffix =
       state.source === "agent"

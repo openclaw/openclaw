@@ -189,4 +189,34 @@ describe("handleFastCommand", () => {
     );
     expect(result?.reply?.text).toContain("Current fast mode: on");
   });
+
+  it("prefers the target session entry from sessionStore for /fast status", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast status";
+    params.provider = "openai";
+    params.model = "gpt-5.4";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      fastMode: false,
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        fastMode: true,
+      },
+    };
+
+    await handleFastCommand(params, true);
+
+    expect(resolveFastModeStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+          fastMode: true,
+        }),
+      }),
+    );
+  });
 });
