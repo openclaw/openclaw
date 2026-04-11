@@ -440,6 +440,23 @@ describe("doctor state integrity oauth dir checks", () => {
     },
   );
 
+  it("ignores archived deleted transcript files when checking for orphan transcripts", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(
+      path.join(sessionsDir, "orphan-session.jsonl.deleted.2026-04-10T00-00-00.000Z"),
+      '{"type":"session"}\n',
+    );
+
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    expect(stateIntegrityText()).not.toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
     const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
 
