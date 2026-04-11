@@ -111,13 +111,21 @@ run_update_smoke() {
 
   echo "==> Run openclaw update from host-served tgz"
   local update_status
+  local update_stderr_file
+  local update_stderr
+  update_stderr_file="$(mktemp)"
   set +e
   UPDATE_JSON="$(
-    npm_config_omit=optional NPM_CONFIG_OMIT=optional openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>&1
+    npm_config_omit=optional NPM_CONFIG_OMIT=optional openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
   )"
   update_status=$?
   set -e
+  update_stderr="$(cat "$update_stderr_file")"
+  rm -f "$update_stderr_file"
   printf "%s\n" "$UPDATE_JSON"
+  if [[ -n "$update_stderr" ]]; then
+    printf "%s\n" "$update_stderr" >&2
+  fi
   if [[ "$update_status" -ne 0 ]]; then
     echo "ERROR: openclaw update failed with exit code $update_status" >&2
     return "$update_status"

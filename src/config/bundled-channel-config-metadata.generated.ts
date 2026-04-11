@@ -8161,6 +8161,21 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           minimum: 0,
           maximum: 9007199254740991,
         },
+        delegatedAuth: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            scopes: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
+        },
         sso: {
           type: "object",
           properties: {

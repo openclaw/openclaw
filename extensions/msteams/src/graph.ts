@@ -198,7 +198,7 @@ export async function resolveGraphToken(
   }
 
   // Try delegated token if requested and configured
-  if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled) {
+  if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     // Dynamic import to avoid circular dependency (token.ts imports from graph.ts indirectly)
     const { resolveDelegatedAccessToken } = await import("./token.js");
     const delegated = await resolveDelegatedAccessToken({

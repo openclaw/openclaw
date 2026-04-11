@@ -258,6 +258,33 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
+  it("allows npm update compatibility sidecar directories without package.json", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.10",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist/extensions/qa-channel"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist/extensions/qa-lab"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist/extensions/qa-channel/runtime-api.js"),
+        "export {};\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist/extensions/qa-lab/runtime-api.js"),
+        "export {};\n",
+        "utf8",
+      );
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects bundled extension manifests that are not regular files", () => {
     const packageRoot = makeInstalledPackageRoot();
     const outsideManifestRoot = makeInstalledPackageRoot();
