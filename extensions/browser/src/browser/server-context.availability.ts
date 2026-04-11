@@ -59,9 +59,13 @@ export function createProfileAvailability({
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
   const capabilities = getBrowserProfileCapabilities(profile);
+  // attachOnly loopback profiles (e.g. WSL2 → Windows host via 127.0.0.1)
+  // share a loopback address but may cross a virtual network boundary.
+  // Use remote-class timeouts so probes survive the extra latency.
+  const effectivelyLoopback = profile.cdpIsLoopback && !profile.attachOnly;
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
-      profileIsLoopback: profile.cdpIsLoopback,
+      profileIsLoopback: effectivelyLoopback,
       timeoutMs,
       remoteHttpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
       remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,

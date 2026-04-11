@@ -186,9 +186,15 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       } else {
         // Check if something is listening on the port
         try {
+          // attachOnly profiles may sit across a virtual network boundary
+          // (e.g. WSL2 → Windows host via 127.0.0.1) where the default
+          // 200 ms probe is too tight.  Use the remote CDP timeout instead.
+          const probeTimeoutMs = profile.attachOnly
+            ? current.resolved.remoteCdpTimeoutMs
+            : 200;
           const reachable = await isChromeReachable(
             profile.cdpUrl,
-            200,
+            probeTimeoutMs,
             current.resolved.ssrfPolicy,
           );
           if (reachable) {
