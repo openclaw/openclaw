@@ -128,17 +128,11 @@ const OAUTH_SYSTEM_PROMPT_REPLACEMENTS: ReadonlyArray<readonly [string, string]>
 function sanitizeOAuthSystemPrompt(text: string): string {
   let result = text;
 
-  // Strip structured config sections (delimited blocks like ## Configuration, etc.)
-  // These are large (~25KB) structured blocks that serve as a fingerprint.
-  const configPatterns = [
-    /## (?:Configuration|Tools|Available Tools|Tool Configuration|System Configuration|Runtime Configuration)\s*\n[\s\S]*?(?=\n## (?!Configuration|Tools|Available|Tool Config|System Config|Runtime Config)|$)/gi,
-    /```(?:json|yaml|toml)\s*\n\{[\s\S]*?\}\s*\n```/g,
-  ];
-  for (const pattern of configPatterns) {
-    result = result.replace(pattern, "");
-  }
+  // Strip large fenced code blocks (JSON/YAML/TOML config) that inflate
+  // the payload without adding conversational value.
+  result = result.replace(/```(?:json|yaml|toml)\s*\n\{[\s\S]*?\}\s*\n```/g, "");
 
-  // Apply string replacements
+  // Apply string replacements to neutralize provider-specific trigger phrases
   for (const [find, replace] of OAUTH_SYSTEM_PROMPT_REPLACEMENTS) {
     result = result.split(find).join(replace);
   }
@@ -467,9 +461,14 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   }
   return tools.map((tool) => {
     const name = isOAuthToken ? toClaudeCodeName(tool.name) : tool.name;
-    // For OAuth sessions, use minimal descriptions to reduce payload
-    // fingerprinting surface while preserving tool functionality.
-    const description = isOAuthToken ? name : tool.description;
+    // For OAuth sessions, sanitize descriptions with the same trigger-phrase
+    // replacements used for system prompts to maintain consistency.
+    let description = tool.description;
+    if (isOAuthToken && description) {
+      for (const [find, replace] of OAUTH_SYSTEM_PROMPT_REPLACEMENTS) {
+        description = description.split(find).join(replace);
+      }
+    }
     return {
       name,
       description,
