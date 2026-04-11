@@ -17,6 +17,11 @@ const hookMocks = vi.hoisted(() => ({
   ),
 }));
 
+const auditMocks = vi.hoisted(() => ({
+  appendGatewayToolAuditRecord: vi.fn(async () => {}),
+  createGatewayToolAuditRecord: vi.fn((params: unknown) => params),
+}));
+
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
@@ -60,6 +65,11 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
+}));
+
+vi.mock("./tool-audit.js", () => ({
+  appendGatewayToolAuditRecord: auditMocks.appendGatewayToolAuditRecord,
+  createGatewayToolAuditRecord: auditMocks.createGatewayToolAuditRecord,
 }));
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
@@ -250,6 +260,8 @@ beforeEach(() => {
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
+  auditMocks.appendGatewayToolAuditRecord.mockClear();
+  auditMocks.createGatewayToolAuditRecord.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
   hookMocks.runBeforeToolCallHook.mockImplementation(
@@ -397,6 +409,22 @@ describe("POST /tools/invoke", () => {
           agentId: "main",
           sessionKey: "agent:main:main",
           loopDetection: { warnAt: 3 },
+          gatewayToolAudit: expect.objectContaining({
+            surface: "tools-invoke",
+            sessionKey: "agent:main:main",
+            model: null,
+          }),
+        }),
+      }),
+    );
+    expect(auditMocks.appendGatewayToolAuditRecord).toHaveBeenCalledTimes(1);
+    expect(auditMocks.createGatewayToolAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "agents_list",
+        toolCallId: expect.any(String),
+        ctx: expect.objectContaining({
+          surface: "tools-invoke",
+          sessionKey: "agent:main:main",
         }),
       }),
     );

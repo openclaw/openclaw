@@ -28,6 +28,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { appendGatewayToolAuditRecord, createGatewayToolAuditRecord } from "./tool-audit.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -251,6 +252,12 @@ export async function handleToolsInvokeHttpRequest(
     senderIsOwner,
   });
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const gatewayToolAudit = {
+    surface: "tools-invoke" as const,
+    sessionKey,
+    messageChannel: messageChannel ?? undefined,
+    model: null,
+  };
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
@@ -277,6 +284,7 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+        gatewayToolAudit,
       },
     });
     if (hookResult.blocked) {
@@ -286,6 +294,16 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
+    await appendGatewayToolAuditRecord({
+      record: createGatewayToolAuditRecord({
+        tool: toolName,
+        args: hookResult.params,
+        ctx: gatewayToolAudit,
+        toolCallId,
+      }),
+    }).catch((err) => {
+      logWarn(`tools-invoke: gateway tool audit append failed: ${String(err)}`);
+    });
     const result = await gatewayTool.execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {

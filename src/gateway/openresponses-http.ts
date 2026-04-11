@@ -400,6 +400,7 @@ async function runResponsesAgentCommand(params: {
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
+  model: string;
   modelOverride?: string;
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
@@ -423,6 +424,12 @@ async function runResponsesAgentCommand(params: {
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
+      gatewayToolAudit: {
+        surface: "openresponses",
+        sessionKey: params.sessionKey,
+        messageChannel: params.messageChannel,
+        model: params.modelOverride ?? params.model,
+      },
       allowModelOverride: true,
       abortSignal: params.abortSignal,
     },
@@ -462,7 +469,9 @@ export async function handleOpenResponsesHttpRequest(
   }
   // On the compat surface, shared-secret bearer auth is also treated as an
   // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
+  const senderIsOwner =
+    resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth) ||
+    ((opts.auth.mode === "token" || opts.auth.mode === "password") && Boolean(getBearerToken(req)));
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
@@ -691,6 +700,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        model,
         modelOverride,
         streamParams,
         sessionKey,
@@ -968,6 +978,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        model,
         modelOverride,
         streamParams,
         sessionKey,

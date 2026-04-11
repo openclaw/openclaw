@@ -476,6 +476,12 @@ export function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
+    gatewayToolAudit: params.opts.gatewayToolAudit
+      ? {
+          ...params.opts.gatewayToolAudit,
+          model: params.modelOverride ?? params.opts.gatewayToolAudit.model,
+        }
+      : undefined,
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
