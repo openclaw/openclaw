@@ -188,12 +188,13 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     );
     return { shouldContinue: false };
   }
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const reply = await buildStatusReply({
     cfg: params.cfg,
     command: params.command,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: targetSessionEntry,
     sessionKey: params.sessionKey,
-    parentSessionKey: params.sessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
+    parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
     storePath: params.storePath,
     provider: params.provider,
