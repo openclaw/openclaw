@@ -193,6 +193,9 @@ export type TelegramAccountConfig = {
   linkPreview?: boolean;
   /** Send Telegram bot error replies silently (no notification sound). Default: false. */
   silentErrorReplies?: boolean;
+  /** Suppress all model text block delivery (block replies). When true, only
+   *  messages sent explicitly via the message() tool reach the user. */
+  suppressTextBlockDelivery?: boolean;
   /** Controls outbound error reporting: always, once per cooldown window, or silent. */
   errorPolicy?: "always" | "once" | "silent";
   /** Cooldown window for `errorPolicy: "once"` in milliseconds. */

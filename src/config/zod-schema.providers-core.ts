@@ -314,6 +314,7 @@ export const TelegramAccountSchemaBase = z
     healthMonitor: ChannelHealthMonitorSchema,
     linkPreview: z.boolean().optional(),
     silentErrorReplies: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
     errorPolicy: TelegramErrorPolicySchema,

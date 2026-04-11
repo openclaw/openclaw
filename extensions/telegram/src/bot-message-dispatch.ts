@@ -606,6 +606,11 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...replyPipeline,
         deliver: async (payload, info) => {
+          // When suppressTextBlockDelivery is enabled, only messages sent
+          // explicitly via the message() tool reach the user.
+          if (telegramCfg.suppressTextBlockDelivery) {
+            return;
+          }
           if (payload.isError === true) {
             hadErrorReplyFailureOrSkip = true;
           }
