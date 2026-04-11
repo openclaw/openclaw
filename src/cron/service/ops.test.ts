@@ -116,6 +116,58 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
+  it("start repairs malformed persisted job state before startup cleanup (#64137)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-04-11T13:30:00.000Z");
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "null-state-job",
+              name: "null state job",
+              enabled: true,
+              createdAtMs: now - 60_000,
+              updatedAtMs: now - 60_000,
+              schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "tick" },
+              state: null,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await expect(start(state)).resolves.toBeUndefined();
+    expect(state.store?.jobs[0]?.state).toEqual(expect.any(Object));
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<{ state?: Record<string, unknown> }>;
+    };
+    expect(persisted.jobs[0]?.state).toEqual(expect.any(Object));
+
+    stop(state);
+  });
+
   it("records timed out manual runs as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
     const stateRoot = path.dirname(path.dirname(storePath));

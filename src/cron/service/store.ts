@@ -67,6 +67,12 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    // Persisted jobs can also arrive with a missing or malformed runtime state.
+    // Normalize the in-memory shape before scheduler startup touches state fields.
+    const hydratedState = (hydrated as { state?: unknown }).state;
+    if (!hydratedState || typeof hydratedState !== "object" || Array.isArray(hydratedState)) {
+      hydrated.state = {};
+    }
   }
   state.store = {
     version: 1,
