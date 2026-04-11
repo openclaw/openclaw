@@ -328,9 +328,30 @@ Follow-up:
 
     const report = renderQaAgenticParityMarkdownReport(comparison);
 
-    expect(report).toContain("# OpenClaw GPT-5.4 / Opus 4.6 Agentic Parity Report");
+    expect(report).toContain(
+      "# OpenClaw Agentic Parity Report — openai/gpt-5.4 vs anthropic/claude-opus-4-6",
+    );
     expect(report).toContain("| Completion rate | 100.0% | 100.0% |");
     expect(report).toContain("### Approval turn tool followthrough");
     expect(report).toContain("- Verdict: pass");
+  });
+
+  it("parametrizes the markdown header from the comparison labels", () => {
+    // Regression for the loop-7 Copilot finding: callers that configure
+    // non-gpt-5.4 / non-opus labels (for example an internal candidate vs
+    // another candidate) must see the labels in the rendered H1 instead of
+    // the hardcoded "GPT-5.4 / Opus 4.6" title that would otherwise confuse
+    // readers of saved reports.
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4-alt",
+      baselineLabel: "openai/gpt-5.4",
+      candidateSummary: { scenarios: [] },
+      baselineSummary: { scenarios: [] },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+    const report = renderQaAgenticParityMarkdownReport(comparison);
+    expect(report).toContain(
+      "# OpenClaw Agentic Parity Report — openai/gpt-5.4-alt vs openai/gpt-5.4",
+    );
   });
 });
