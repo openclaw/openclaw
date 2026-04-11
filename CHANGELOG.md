@@ -11,6 +11,9 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under `default`. (#53918) Thanks @yhyatt.
 - QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown by routing QA command registration through a narrow facade. (#64648) Thanks @obviyus.
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history before finalization so tool-generated audio reaches webchat clients again. (#63514) thanks @bittoby
+- macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
+- OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
+- Google/Veo: stop sending the unsupported `numberOfVideos` request field so Gemini Developer API Veo runs do not fail before OpenClaw can complete the intended Google video generation path. (#64723) thanks @velvet-shark
 
 ## 2026.4.10
 
@@ -155,6 +158,7 @@ Docs: https://docs.openclaw.ai
 - QA/lab: add character-vibes evaluation reports with model selection and parallel runs so live QA can compare candidate behavior faster.
 - Plugins/provider-auth: let provider manifests declare `providerAuthAliases` so provider variants can share env vars, auth profiles, config-backed auth, and API-key onboarding choices without core-specific wiring.
 - iOS: pin release versioning to an explicit CalVer in `apps/ios/version.json`, keep TestFlight iteration on the same short version until maintainers intentionally promote the next gateway version, and add the documented `pnpm ios:version:pin -- --from-gateway` workflow for release trains. (#63001) Thanks @ngutman.
+- Tools/video_generate: extend the tool and the Plugin SDK with `providerOptions` (vendor-specific options forwarded as a JSON object), `inputAudios` / `audioRef` / `audioRefs` reference audio inputs, per-asset semantic role hints (`imageRoles` / `videoRoles` / `audioRoles`) using a typed `VideoGenerationAssetRole` union, a new `"adaptive"` aspect-ratio sentinel, and `maxInputAudios` provider capability declarations. Providers opt into `providerOptions` by declaring a typed `capabilities.providerOptions` schema (`{ seed: "number", draft: "boolean", ... }`); unknown keys and type mismatches cause the runtime fallback loop to skip the candidate with a visible warning and an `attempts` entry, so vendor-specific options never silently reach the wrong provider. Also raises the in-tool image input cap to 9 and updates the docs table to list all new parameters. (#61987) Thanks @xieyongliang.
 
 ### Fixes
 
