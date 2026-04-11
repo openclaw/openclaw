@@ -141,13 +141,11 @@ export async function postTranscriptionRequest(params: {
   body: BodyInit;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
 }) {
-  // Always disable the pinned DNS dispatcher for transcription requests.
-  // Transcription bodies use FormData (multipart), which undici's dispatcher
-  // corrupts.  Native fetch handles FormData correctly.
   return fetchWithTimeoutGuarded(
     params.url,
     {
@@ -157,7 +155,7 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    resolveGuardedPostRequestOptions({ ...params, pinDns: false }),
+    resolveGuardedPostRequestOptions(params),
   );
 }
 

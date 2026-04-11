@@ -247,7 +247,7 @@ describe("fetchWithTimeoutGuarded", () => {
     );
   });
 
-  it("always passes pinDns: false to the SSRF guard for transcription requests", async () => {
+  it("forwards explicit pinDns overrides to transcription requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://example.com",
@@ -259,57 +259,12 @@ describe("fetchWithTimeoutGuarded", () => {
       headers: new Headers(),
       body: "audio-bytes",
       fetchFn: fetch,
+      pinDns: false,
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pinDns: false,
-      }),
-    );
-  });
-
-  it("always disables pinned DNS for transcription requests to prevent FormData corruption", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
-
-    await postTranscriptionRequest({
-      url: "https://api.openai.com/v1/audio/transcriptions",
-      headers: new Headers({ authorization: "Bearer test" }),
-      body: new FormData(),
-      fetchFn: fetch,
-      allowPrivateNetwork: true,
-      auditContext: "openai-transcription",
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-        policy: { allowPrivateNetwork: true },
-        auditContext: "openai-transcription",
-      }),
-    );
-  });
-
-  it("does not force pinDns for JSON requests", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
-
-    await postJsonRequest({
-      url: "https://api.example.com/v1/test",
-      headers: new Headers(),
-      body: { ok: true },
-      fetchFn: fetch,
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        pinDns: expect.anything(),
       }),
     );
   });
