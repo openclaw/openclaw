@@ -236,4 +236,28 @@ describe("clearAutoFailoverSessionModelStickyState", () => {
     expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(false);
     expect(entry.modelOverride).toBe("gpt-4o");
   });
+
+  it("preserves user auth profile overrides when clearing auto model failover", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-auto-user-profile",
+      updatedAt: Date.now(),
+      modelOverrideSource: "auto",
+      providerOverride: "azure",
+      modelOverride: "gpt-5.4",
+      modelProvider: "azure",
+      model: "gpt-5.4",
+      authProfileOverride: "user-picked-profile",
+      authProfileOverrideSource: "user",
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(true);
+
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.authProfileOverride).toBe("user-picked-profile");
+    expect(entry.authProfileOverrideSource).toBe("user");
+  });
 });

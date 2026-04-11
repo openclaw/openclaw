@@ -11,6 +11,9 @@ export type ModelOverrideSelection = {
  * Clears failover-persisted session model state (`modelOverrideSource: "auto"`) plus
  * sticky runtime `model` / `modelProvider` fields so the next inbound turn re-resolves
  * the agent primary from config instead of staying pinned on the last fallback model.
+ *
+ * Preserves `authProfileOverride*` when `authProfileOverrideSource === "user"` — failover
+ * can persist `modelOverrideSource: "auto"` alongside a user-selected auth profile.
  */
 export function clearAutoFailoverSessionModelStickyState(entry: SessionEntry): boolean {
   if (entry.modelOverrideSource !== "auto") {
@@ -26,9 +29,11 @@ export function clearAutoFailoverSessionModelStickyState(entry: SessionEntry): b
   del("providerOverride");
   del("modelOverride");
   del("modelOverrideSource");
-  del("authProfileOverride");
-  del("authProfileOverrideSource");
-  del("authProfileOverrideCompactionCount");
+  if (entry.authProfileOverrideSource !== "user") {
+    del("authProfileOverride");
+    del("authProfileOverrideSource");
+    del("authProfileOverrideCompactionCount");
+  }
   del("model");
   del("modelProvider");
   del("contextTokens");
