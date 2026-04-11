@@ -142,6 +142,11 @@ export function resolveEffectiveRuntimeModel(params: {
       { reason: "unknown", provider: params.provider, model: params.modelId },
     );
   }
+  if (ctxGuard.shouldWarnDefault) {
+    log.warn(
+      `context window resolved from hardcoded default (${ctxGuard.tokens}) for ${params.provider}/${params.modelId} — set contextWindow explicitly in models config to override`,
+    );
+  }
 
   return {
     ctxInfo,

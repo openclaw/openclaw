@@ -59,6 +59,9 @@ export function resolveContextWindowInfo(params: {
 export type ContextWindowGuardResult = ContextWindowInfo & {
   shouldWarn: boolean;
   shouldBlock: boolean;
+  /** Set when context window resolved to a hardcoded default (e.g. 32000 for Bedrock),
+   *  meaning the user's per-model config was not applied for this (provider, modelId). */
+  shouldWarnDefault: boolean;
 };
 
 export function evaluateContextWindowGuard(params: {
@@ -77,5 +80,6 @@ export function evaluateContextWindowGuard(params: {
     tokens,
     shouldWarn: tokens > 0 && tokens < warnBelow,
     shouldBlock: tokens > 0 && tokens < hardMin,
+    shouldWarnDefault: params.info.source === "default",
   };
 }
