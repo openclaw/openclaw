@@ -397,6 +397,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       flow: taskFlow,
     },
     taskFlow,
+    acp: {
+      spawn: vi.fn() as unknown as PluginRuntime["acp"]["spawn"],
+      prompt: vi.fn() as unknown as PluginRuntime["acp"]["prompt"],
+    },
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       getRuntimeAuthForModel:
