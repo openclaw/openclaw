@@ -23,13 +23,13 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import type { InternalHookHandler } from "../hooks/internal-hooks.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -70,6 +70,12 @@ import type {
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type {
+  CliBackendPlugin,
+  CliBundleMcpMode,
+  PluginTextReplacement,
+  PluginTextTransforms,
+} from "./cli-backend.types.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -165,6 +171,12 @@ export type {
   PluginConversationBindingResolvedEvent,
   PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
+export type {
+  CliBackendPlugin,
+  CliBundleMcpMode,
+  PluginTextReplacement,
+  PluginTextTransforms,
+} from "./cli-backend.types.js";
 
 export type ProviderAuthOptionBag = {
   token?: string;
@@ -1110,18 +1122,6 @@ export type ProviderTransformSystemPromptContext = ProviderSystemPromptContribut
   systemPrompt: string;
 };
 
-export type PluginTextReplacement = {
-  from: string | RegExp;
-  to: string;
-};
-
-export type PluginTextTransforms = {
-  /** Rewrites applied to outbound prompt text before provider/CLI transport. */
-  input?: PluginTextReplacement[];
-  /** Rewrites applied to inbound assistant text before OpenClaw consumes it. */
-  output?: PluginTextReplacement[];
-};
-
 export type PluginTextTransformRegistration = PluginTextTransforms;
 
 /** Text-inference provider capability registered by a plugin. */
@@ -1896,79 +1896,6 @@ export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
-};
-
-export type CliBundleMcpMode =
-  | "claude-config-file"
-  | "codex-config-overrides"
-  | "gemini-system-settings";
-
-/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
-export type CliBackendPlugin = {
-  /** Provider id used in model refs, for example `claude-cli/opus`. */
-  id: string;
-  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
-  config: CliBackendConfig;
-  /**
-   * Optional live-smoke metadata owned by the backend plugin.
-   *
-   * Keep provider-specific test wiring here instead of scattering it across
-   * Docker wrappers, docs, and gateway live tests.
-   */
-  liveTest?: {
-    defaultModelRef?: string;
-    defaultImageProbe?: boolean;
-    defaultMcpProbe?: boolean;
-    docker?: {
-      npmPackage?: string;
-      binaryName?: string;
-    };
-  };
-  /**
-   * Whether OpenClaw should inject bundle MCP config for this backend.
-   *
-   * Keep this opt-in. Only backends that explicitly consume OpenClaw's bundle
-   * MCP bridge should enable it.
-   */
-  bundleMcp?: boolean;
-  /**
-   * Provider-owned bundle MCP integration strategy.
-   *
-   * Different CLIs wire MCP through different surfaces:
-   * - Claude: `--strict-mcp-config --mcp-config`
-   * - Codex: `-c mcp_servers=...`
-   * - Gemini: system-level `settings.json`
-   */
-  bundleMcpMode?: CliBundleMcpMode;
-  /**
-   * Optional config normalizer applied after user overrides merge.
-   *
-   * Use this for backend-specific compatibility rewrites when old config
-   * shapes need to stay working.
-   */
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
-  /**
-   * Backend-owned final system-prompt transform.
-   *
-   * Use this for tiny CLI-specific compatibility rewrites without replacing
-   * the generic CLI runner or prompt builder.
-   */
-  transformSystemPrompt?: (ctx: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    provider: string;
-    modelId: string;
-    modelDisplay: string;
-    agentId?: string;
-    systemPrompt: string;
-  }) => string | null | undefined;
-  /**
-   * Backend-owned bidirectional text replacements.
-   *
-   * `input` applies to the system prompt and user prompt passed to the CLI.
-   * `output` applies to parsed/streamed assistant text from the CLI.
-   */
-  textTransforms?: PluginTextTransforms;
 };
 
 export type OpenClawPluginChannelRegistration = {
