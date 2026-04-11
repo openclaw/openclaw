@@ -53,4 +53,7 @@ export { createOpenClawCodingTools } from "../agents/pi-tools.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
-export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+export {
+  emitSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";

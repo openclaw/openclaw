@@ -129,12 +129,12 @@ vi.mock("openclaw/plugin-sdk/file-lock", async () => {
 });
 
 import { spawn as mockedSpawn } from "node:child_process";
+import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { emitSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
@@ -2985,7 +2985,7 @@ describe("QmdMemoryManager", () => {
     await vi.advanceTimersByTimeAsync(4_999);
     expect(runUpdateSpy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(runUpdateSpy).toHaveBeenCalledWith("session-delta");
+    expect(runUpdateSpy).toHaveBeenCalledWith("session-delta", true);
 
     runUpdateSpy.mockRestore();
     await manager.close();

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
+import { onSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
@@ -46,7 +47,6 @@ import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/text-runtime";
-import { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
@@ -1342,7 +1342,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
-      void this.runUpdate("session-delta").catch((err) => {
+      void this.runUpdate("session-delta", true).catch((err) => {
         log.warn(`qmd session-delta sync failed: ${String(err)}`);
       });
     }, QMD_SESSION_DIRTY_DEBOUNCE_MS);
