@@ -514,6 +514,7 @@ function createSetupEntryChannelPluginFixture(params: {
   setupBlurb: string;
   configured: boolean;
   setupEntryShape?: "direct" | "bundled";
+  setupEntryThrowMessage?: string;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 }) {
   useNoBundledPlugins();
@@ -544,7 +545,13 @@ function createSetupEntryChannelPluginFixture(params: {
     params.setupEntryShape === "bundled"
       ? `{
   kind: "bundled-channel-setup-entry",
-  loadSetupPlugin: () => (${setupPluginLiteral}),
+  loadSetupPlugin: () => {
+    ${
+      params.setupEntryThrowMessage
+        ? `throw new Error(${JSON.stringify(params.setupEntryThrowMessage)});`
+        : `return (${setupPluginLiteral});`
+    }
+  },
 }`
       : `{
   plugin: ${setupPluginLiteral},
@@ -2832,7 +2839,7 @@ module.exports = {
         fullBlurb: "full entry should not run while unconfigured",
         setupBlurb: "setup runtime bundled",
         configured: false,
-        setupEntryShape: "bundled",
+        setupEntryShape: "bundled" as const,
       },
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
@@ -2887,6 +2894,44 @@ module.exports = {
     expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
     expect(registry.channelSetups).toHaveLength(1);
     expect(registry.channels).toHaveLength(expectedChannels);
+  });
+
+  it("surfaces bundled setupEntry loadSetupPlugin failures", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-bundled-error-test",
+      label: "Setup Runtime Bundled Error Test",
+      packageName: "@openclaw/setup-runtime-bundled-error-test",
+      fullBlurb: "full entry should not run while unconfigured",
+      setupBlurb: "setup runtime bundled error",
+      configured: false,
+      setupEntryShape: "bundled",
+      setupEntryThrowMessage: "setup entry exploded",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-runtime-bundled-error-test"],
+        },
+      },
+    });
+
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "setup-runtime-bundled-error-test",
+    );
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("setup entry exploded");
+    expect(loaded?.error).not.toContain("missing register/activate");
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === "setup-runtime-bundled-error-test" &&
+          String(entry.message).includes("failed to load setup entry: Error: setup entry exploded"),
+      ),
+    ).toBe(true);
   });
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {

@@ -642,15 +642,11 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
     };
   }
   if (typeof setup.loadSetupPlugin === "function") {
-    try {
-      const loaded = setup.loadSetupPlugin();
-      if (loaded && typeof loaded === "object") {
-        return {
-          plugin: loaded as ChannelPlugin,
-        };
-      }
-    } catch {
-      return {};
+    const loaded = setup.loadSetupPlugin();
+    if (loaded && typeof loaded === "object") {
+      return {
+        plugin: loaded as ChannelPlugin,
+      };
     }
   }
   return {};
@@ -1618,23 +1614,39 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
         manifestRecord.setupSource
       ) {
-        const setupRegistration = resolveSetupChannelRegistration(mod);
-        if (setupRegistration.plugin) {
-          if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
-            pushPluginLoadError(
-              `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
-            );
+        try {
+          const setupRegistration = resolveSetupChannelRegistration(mod);
+          if (setupRegistration.plugin) {
+            if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+              pushPluginLoadError(
+                `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
+              );
+              continue;
+            }
+            const api = createApi(record, {
+              config: cfg,
+              pluginConfig: {},
+              hookPolicy: entry?.hooks,
+              registrationMode,
+            });
+            api.registerChannel(setupRegistration.plugin);
+            registry.plugins.push(record);
+            seenIds.set(pluginId, candidate.origin);
             continue;
           }
-          const api = createApi(record, {
-            config: cfg,
-            pluginConfig: {},
-            hookPolicy: entry?.hooks,
-            registrationMode,
+        } catch (err) {
+          recordPluginError({
+            logger,
+            registry,
+            record,
+            seenIds,
+            pluginId,
+            origin: candidate.origin,
+            phase: "load",
+            error: err,
+            logPrefix: `[plugins] ${record.id} failed to load setup entry from ${safeSource}: `,
+            diagnosticMessagePrefix: "failed to load setup entry: ",
           });
-          api.registerChannel(setupRegistration.plugin);
-          registry.plugins.push(record);
-          seenIds.set(pluginId, candidate.origin);
           continue;
         }
       }
