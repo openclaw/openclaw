@@ -3,13 +3,9 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import {
-  handleFeishuMessage,
-  parseFeishuMessageEvent,
-  type FeishuMessageEvent,
-  type FeishuBotAddedEvent,
-} from "./bot.js";
-import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
+import { parseFeishuMessageEvent } from "./message-parser.js";
+import type { FeishuCardActionEvent } from "./card-action.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
@@ -391,6 +387,43 @@ function registerEventHandlers(
   // Keep normal Feishu traffic FIFO per chat while allowing explicit out-of-band
   // commands like /btw and /stop to bypass the busy main-chat lane.
   const enqueue = createSequentialQueue();
+  // Lazy-load heavy handler modules to break circular initialization chains.
+  // handleFeishuMessage lives in bot.ts which pulls in a large transitive
+  // dependency tree (bot-content, reply-dispatcher, policy, …).  Importing it
+  // statically from monitor.account.ts causes the bundler to inline both
+  // modules into one chunk, and the shared utility bindings (text-runtime,
+  // comment-shared, etc.) may violate the Temporal Dead Zone when the chunk
+  // initializes — producing:
+  //
+  //   ReferenceError: Cannot access 'utils_1' before initialization
+  //
+  // Dynamic import() defers evaluation of bot.ts (and card-action.ts) until
+  // the first message/card event is actually dispatched, by which time all
+  // utility modules are guaranteed to have been initialized.
+  //
+  // Ref: https://github.com/openclaw/openclaw/issues/64783
+  let _handleFeishuMessage: typeof import("./bot.js").handleFeishuMessage | undefined;
+  const lazyHandleFeishuMessage = async (
+    ...args: Parameters<typeof import("./bot.js").handleFeishuMessage>
+  ) => {
+    if (!_handleFeishuMessage) {
+      const mod = await import("./bot.js");
+      _handleFeishuMessage = mod.handleFeishuMessage;
+    }
+    return _handleFeishuMessage(...args);
+  };
+
+  let _handleFeishuCardAction: typeof import("./card-action.js").handleFeishuCardAction | undefined;
+  const lazyHandleFeishuCardAction = async (
+    ...args: Parameters<typeof import("./card-action.js").handleFeishuCardAction>
+  ) => {
+    if (!_handleFeishuCardAction) {
+      const mod = await import("./card-action.js");
+      _handleFeishuCardAction = mod.handleFeishuCardAction;
+    }
+    return _handleFeishuCardAction(...args);
+  };
+
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
       void params.task().catch((err) => {
@@ -412,7 +445,7 @@ function registerEventHandlers(
       botName: botNames.get(accountId),
     });
     const task = () =>
-      handleFeishuMessage({
+      lazyHandleFeishuMessage({
         cfg,
         event,
         botOpenId: botOpenIds.get(accountId),
@@ -665,7 +698,7 @@ function registerEventHandlers(
           if (!syntheticEvent) {
             return;
           }
-          const promise = handleFeishuMessage({
+          const promise = lazyHandleFeishuMessage({
             cfg,
             event: syntheticEvent,
             botOpenId: myBotId,
@@ -695,7 +728,7 @@ function registerEventHandlers(
           if (!syntheticEvent) {
             return;
           }
-          const promise = handleFeishuMessage({
+          const promise = lazyHandleFeishuMessage({
             cfg,
             event: syntheticEvent,
             botOpenId: myBotId,
@@ -748,7 +781,7 @@ function registerEventHandlers(
           return;
         }
         const handleLegacyMenu = () =>
-          handleFeishuMessage({
+          lazyHandleFeishuMessage({
             cfg,
             event: syntheticEvent,
             botOpenId: botOpenIds.get(accountId),
@@ -796,7 +829,7 @@ function registerEventHandlers(
           error(`feishu[${accountId}]: ignoring malformed card action payload`);
           return;
         }
-        const promise = handleFeishuCardAction({
+        const promise = lazyHandleFeishuCardAction({
           cfg,
           event,
           botOpenId: botOpenIds.get(accountId),

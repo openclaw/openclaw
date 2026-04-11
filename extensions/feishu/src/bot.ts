@@ -22,11 +22,8 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
-  checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  normalizeMentions,
   parseMergeForwardContent,
-  parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
   toMessageResourceType,
@@ -43,7 +40,7 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
+import { parseFeishuMessageEvent } from "./message-parser.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -60,6 +57,7 @@ import type { FeishuMessageContext, FeishuMessageInfo } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export { toMessageResourceType } from "./bot-content.js";
+export { parseFeishuMessageEvent } from "./message-parser.js";
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -93,56 +91,6 @@ export function buildBroadcastSessionKey(
     return `agent:${targetAgentId}:${baseSessionKey.slice(prefix.length)}`;
   }
   return baseSessionKey;
-}
-
-/**
- * Build media payload for inbound context.
- * Similar to Discord's buildDiscordMediaPayload().
- */
-export function parseFeishuMessageEvent(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-  _botName?: string,
-): FeishuMessageContext {
-  const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
-  const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // Strip the bot's own mention so slash commands like @Bot /help retain
-  // the leading /. This applies in both p2p *and* group contexts — the
-  // mentionedBot flag already captures whether the bot was addressed, so
-  // keeping the mention tag in content only breaks command detection (#35994).
-  // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
-  const content = normalizeMentions(rawContent, event.message.mentions, botOpenId);
-  const senderOpenId = event.sender.sender_id.open_id?.trim();
-  const senderUserId = event.sender.sender_id.user_id?.trim();
-  const senderFallbackId = senderOpenId || senderUserId || "";
-
-  const ctx: FeishuMessageContext = {
-    chatId: event.message.chat_id,
-    messageId: event.message.message_id,
-    senderId: senderUserId || senderOpenId || "",
-    // Keep the historical field name, but fall back to user_id when open_id is unavailable
-    // (common in some mobile app deliveries).
-    senderOpenId: senderFallbackId,
-    chatType: event.message.chat_type,
-    mentionedBot,
-    hasAnyMention,
-    rootId: event.message.root_id || undefined,
-    parentId: event.message.parent_id || undefined,
-    threadId: event.message.thread_id || undefined,
-    content,
-    contentType: event.message.message_type,
-  };
-
-  // Detect mention forward request: message mentions bot + at least one other user
-  if (isMentionForwardRequest(event, botOpenId)) {
-    const mentionTargets = extractMentionTargets(event, botOpenId);
-    if (mentionTargets.length > 0) {
-      ctx.mentionTargets = mentionTargets;
-    }
-  }
-
-  return ctx;
 }
 
 export function buildFeishuAgentBody(params: {
