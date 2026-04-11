@@ -3,6 +3,7 @@ import {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
   resolveLocalVitestScheduling,
+  nonIsolatedRunnerPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
 
@@ -68,7 +69,7 @@ export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
-    runner: "./test/non-isolated-runner.ts",
+    runner: nonIsolatedRunnerPath,
     projects: [...rootVitestProjects],
   },
 });

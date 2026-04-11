@@ -1,7 +1,12 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import { repoRoot, sharedVitestConfig } from "./vitest.shared.config.ts";
+import {
+  nonIsolatedRunnerPath,
+  repoRoot,
+  resolveRepoRootPath,
+  sharedVitestConfig,
+} from "./vitest.shared.config.ts";
 import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
@@ -160,9 +165,9 @@ export function createScopedVitestConfig(
       ...(options?.setupFiles ?? []),
       ...(options?.includeOpenClawRuntimeSetup === false ? [] : ["test/setup-openclaw-runtime.ts"]),
     ]),
-  ];
+  ].map(resolveRepoRootPath);
   const useNonIsolatedRunner = options?.useNonIsolatedRunner ?? !isolate;
-  const runner = useNonIsolatedRunner ? "./test/non-isolated-runner.ts" : undefined;
+  const runner = useNonIsolatedRunner ? nonIsolatedRunnerPath : undefined;
   const scopedGroupOrder = resolveScopedProjectGroupOrder(options?.name, scopedDir, include);
 
   return defineConfig({

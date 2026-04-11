@@ -3,7 +3,6 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -34,6 +33,15 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+
+type AcpSpawnModule = typeof import("../acp-spawn.js");
+
+let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+
+async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
+  acpSpawnModulePromise ??= import("../acp-spawn.js");
+  return await acpSpawnModulePromise;
+}
 
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
@@ -207,6 +215,7 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",

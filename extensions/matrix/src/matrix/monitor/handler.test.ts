@@ -180,7 +180,7 @@ describe("matrix monitor handler pairing account scope", () => {
       await handler("!room:example.org", makeEvent("$event1"));
       await handler("!room:example.org", makeEvent("$event2"));
       expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(String(sendMessageMatrixMock.mock.calls[0]?.[1] ?? "")).toContain(
+      expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toContain(
         "Pairing request is still pending approval.",
       );
 

@@ -146,7 +146,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   browser: {
     enabled: true, // default: true
     ssrfPolicy: {
-      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowPrivateNetwork: true, // legacy alias
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
@@ -191,7 +191,7 @@ Notes:
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
 - In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled by default. Set it to `true` only when you intentionally trust private-network browser access.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.

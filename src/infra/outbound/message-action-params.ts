@@ -16,7 +16,14 @@ import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boo
 
 export const readBooleanParam = readBooleanParamShared;
 
-const SANDBOX_MEDIA_PARAM_KEYS = ["media", "path", "filePath", "mediaUrl", "fileUrl"] as const;
+const SANDBOX_MEDIA_PARAM_KEYS = [
+  "media",
+  "path",
+  "filePath",
+  "mediaUrl",
+  "fileUrl",
+  "image",
+] as const;
 
 function readMediaParam(
   args: Record<string, unknown>,

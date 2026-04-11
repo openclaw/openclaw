@@ -1,11 +1,15 @@
 import path from "node:path";
+import {
+  getRegisteredAgentHarness,
+  registerAgentHarness as registerGlobalAgentHarness,
+} from "../agents/harness/registry.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { HookEntry } from "../hooks/types.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -13,6 +17,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -48,6 +53,7 @@ import type {
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
+  PluginAgentHarnessRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -120,6 +126,7 @@ export type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
+  PluginAgentHarnessRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -519,6 +526,55 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       provider: normalizedProvider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
+    const id = harness.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent harness registration missing id",
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.agentHarnesses.find((entry) => entry.harness.id === id)
+        : getRegisteredAgentHarness(id);
+    if (existing) {
+      const ownerPluginId =
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
+      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness already registered: ${id}${ownerDetail}`,
+      });
+      return;
+    }
+    const normalizedHarness = {
+      ...harness,
+      id,
+      pluginId: harness.pluginId ?? record.id,
+    };
+    if (registryParams.activateGlobalSideEffects !== false) {
+      registerGlobalAgentHarness(normalizedHarness, { ownerPluginId: record.id });
+    }
+    record.agentHarnessIds.push(id);
+    registry.agentHarnesses.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      harness: normalizedHarness,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1075,6 +1131,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerRealtimeTranscriptionProvider: (provider) =>
                 registerRealtimeTranscriptionProvider(record, provider),
@@ -1335,6 +1392,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerAgentHarness,
     registerCliBackend,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,

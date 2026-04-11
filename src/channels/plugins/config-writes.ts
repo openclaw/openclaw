@@ -12,9 +12,9 @@ import {
   type ConfigWriteTargetLike,
 } from "./config-write-policy-shared.js";
 import type { ChannelId } from "./types.core.js";
-export type ConfigWriteScope = ConfigWriteScopeLike<ChannelId>;
-export type ConfigWriteTarget = ConfigWriteTargetLike<ChannelId>;
-export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike<ChannelId>;
+export type ConfigWriteScope = ConfigWriteScopeLike;
+export type ConfigWriteTarget = ConfigWriteTargetLike;
+export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 function isInternalConfigWriteMessageChannel(channel?: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(channel) === "webchat";

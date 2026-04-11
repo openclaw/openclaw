@@ -133,4 +133,32 @@ describe("cron service store seam coverage", () => {
     expect(raw.jobs[0]?.jobId).toBe("repro-stable-id");
     expect(raw.jobs[0]?.id).toBeUndefined();
   });
+
+  it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "disabled-string-job",
+      name: "disabled string job",
+      enabled: "false",
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    });
+
+    const before = await fs.readFile(storePath, "utf8");
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state);
+
+    const job = findJobOrThrow(state, "disabled-string-job");
+    expect(job.enabled).toBe(false);
+
+    const after = await fs.readFile(storePath, "utf8");
+    expect(after).toBe(before);
+  });
 });

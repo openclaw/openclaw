@@ -412,8 +412,8 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
-  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
+  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -729,17 +729,21 @@ export function renderApp(state: AppViewState) {
     }
     switch (state.agentsPanel) {
       case "files":
-        return void loadAgentFiles(state, agentId);
+        void loadAgentFiles(state, agentId);
+        return;
       case "skills":
-        return void loadAgentSkills(state, agentId);
+        void loadAgentSkills(state, agentId);
+        return;
       case "tools":
         void loadToolsCatalog(state, agentId);
-        return void refreshVisibleToolsEffectiveForCurrentSession(state);
+        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
     if (panel === "channels") {
-      return void loadChannels(state, false);
+      void loadChannels(state, false);
+      return;
     }
     if (panel === "cron") {
       void state.loadCron();

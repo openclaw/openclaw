@@ -175,10 +175,7 @@ describe("gateway e2e", () => {
         const sessionKey = "agent:dev:mock-openai";
 
         const runId = nextGatewayId("run");
-        const payload = await client.request<{
-          status?: unknown;
-          runId?: unknown;
-        }>(
+        const payload = await client.request(
           "agent",
           {
             sessionKey,

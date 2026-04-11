@@ -272,13 +272,17 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
   void loadAgentIdentity(app, agentId);
   switch (host.agentsPanel) {
     case "files":
-      return void loadAgentFiles(app, agentId);
+      void loadAgentFiles(app, agentId);
+      return;
     case "skills":
-      return void loadAgentSkills(app, agentId);
+      void loadAgentSkills(app, agentId);
+      return;
     case "channels":
-      return void loadChannels(app, false);
+      void loadChannels(app, false);
+      return;
     case "cron":
-      return void loadCron(host);
+      void loadCron(host);
+      return;
   }
 }
 

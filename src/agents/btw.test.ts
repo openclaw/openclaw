@@ -29,6 +29,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 vi.mock("@mariozechner/pi-coding-agent", () => ({
+  generateSummary: vi.fn(async () => "summary"),
   SessionManager: {
     open: () => ({
       getLeafEntry: getLeafEntryMock,

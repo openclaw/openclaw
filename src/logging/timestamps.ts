@@ -64,6 +64,7 @@ export function formatTimestamp(date: Date, options?: FormatTimestampOptions): s
     case "long":
       return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
   }
+  throw new Error("Unsupported timestamp style");
 }
 
 /**

@@ -308,7 +308,7 @@ function applyConfigTargetMutations(params: {
         scrubbedValues,
       });
       if (authStoreChanged) {
-        const agentId = String(target.agentId ?? "").trim();
+        const agentId = (target.agentId ?? "").trim();
         if (!agentId) {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
@@ -441,7 +441,7 @@ function resolveAuthStoreForTarget(params: {
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
 }): { path: string; store: MutableAuthProfileStore } {
-  const agentId = String(params.target.agentId ?? "").trim();
+  const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
@@ -520,7 +520,7 @@ function ensureAuthProfileContainer(params: {
       `Auth profile target ${params.target.path} is missing auth profile type metadata.`,
     );
   }
-  const provider = String(params.target.authProfileProvider ?? "").trim();
+  const provider = (params.target.authProfileProvider ?? "").trim();
   if (!provider) {
     throw new Error(
       `Cannot create auth profile "${profileId}" for ${params.target.path} without authProfileProvider.`,

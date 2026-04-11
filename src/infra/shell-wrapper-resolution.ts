@@ -195,6 +195,7 @@ function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): str
     case "powershell":
       return extractPowerShellInlineCommand(argv);
   }
+  throw new Error("Unsupported shell wrapper kind");
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(

@@ -15,6 +15,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
@@ -104,6 +105,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    replayInvalid: params.initialReplayInvalid === true,
+    hadPotentialSideEffects: params.initialHadPotentialSideEffects === true,
+    livenessState: "working",
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -691,6 +695,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
+    state.replayInvalid = state.replayInvalid || params.initialReplayInvalid === true;
+    state.hadPotentialSideEffects =
+      state.hadPotentialSideEffects || params.initialHadPotentialSideEffects === true;
+    state.livenessState = "working";
     resetAssistantMessageState(0);
   };
 
@@ -772,12 +780,25 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts,
     toolMetas,
     unsubscribe,
+    setTerminalLifecycleMeta: (meta: {
+      replayInvalid?: boolean;
+      livenessState?: EmbeddedRunLivenessState;
+    }) => {
+      if (typeof meta.replayInvalid === "boolean") {
+        state.replayInvalid = meta.replayInvalid;
+      }
+      if (meta.livenessState) {
+        state.livenessState = meta.livenessState;
+      }
+    },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
+    getReplayInvalid: () => state.replayInvalid === true,
+    getHadPotentialSideEffects: () => state.hadPotentialSideEffects === true,
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.

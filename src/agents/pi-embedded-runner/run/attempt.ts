@@ -611,9 +611,7 @@ export async function runEmbeddedAttempt(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities
-          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
-          .filter(Boolean),
+        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
       );
       for (const capability of promptCapabilities) {
         const normalizedCapability = normalizeOptionalLowercaseString(capability);
@@ -655,6 +653,7 @@ export async function runEmbeddedAttempt(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
+            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;
@@ -1409,6 +1408,8 @@ export async function runEmbeddedAttempt(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
           runId: params.runId,
+          initialReplayInvalid: params.initialReplayInvalid,
+          initialHadPotentialSideEffects: params.initialHadPotentialSideEffects,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
@@ -1446,8 +1447,11 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
+        getReplayInvalid,
+        getHadPotentialSideEffects,
         didSendViaMessagingTool,
         getLastToolError,
+        setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
       } = subscription;
@@ -2271,13 +2275,21 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const observedReplayMetadata = buildAttemptReplayMetadata({
+        toolMetas: toolMetasNormalized,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        successfulCronAdds: getSuccessfulCronAdds(),
+      });
+      const replayMetadata = {
+        hadPotentialSideEffects:
+          observedReplayMetadata.hadPotentialSideEffects || getHadPotentialSideEffects(),
+        replaySafe: observedReplayMetadata.replaySafe && !getReplayInvalid(),
+      };
+
       return {
-        replayMetadata: buildAttemptReplayMetadata({
-          toolMetas: toolMetasNormalized,
-          didSendViaMessagingTool: didSendViaMessagingTool(),
-          successfulCronAdds: getSuccessfulCronAdds(),
-        }),
+        replayMetadata,
         itemLifecycle: getItemLifecycle(),
+        setTerminalLifecycleMeta,
         aborted,
         timedOut,
         idleTimedOut,

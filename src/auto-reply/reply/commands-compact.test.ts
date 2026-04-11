@@ -105,6 +105,9 @@ describe("handleCompactCommand", () => {
           CommandBody: "/compact: focus on decisions",
           From: "+15550001",
           To: "+15550002",
+          SenderName: "Alice",
+          SenderUsername: "alice_u",
+          SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
         sessionEntry: {
@@ -134,6 +137,10 @@ describe("handleCompactCommand", () => {
         groupChannel: "#general",
         groupSpace: "workspace-1",
         spawnedBy: "agent:main:parent",
+        senderId: "owner",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
         agentDir: "/tmp/openclaw-agent-compact",
       }),
     );

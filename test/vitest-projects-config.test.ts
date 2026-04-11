@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import bundledConfig from "./vitest/vitest.bundled.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
@@ -29,7 +30,7 @@ describe("projects vitest config", () => {
   it("keeps the contracts lane on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig();
     expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
@@ -37,15 +38,16 @@ describe("projects vitest config", () => {
     expect(config.test.environment).toBe("jsdom");
     expect(config.test.isolate).toBe(true);
     expect(config.test.runner).toBeUndefined();
-    expect(config.test.setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
-    expect(config.test.setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
+    const setupFiles = normalizeConfigPaths(config.test.setupFiles);
+    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
+    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {
     const config = createUnitVitestConfig();
     expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps the unit-fast lane on shared workers without the reset-heavy runner", () => {
@@ -57,6 +59,6 @@ describe("projects vitest config", () => {
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
     expect(bundledConfig.test?.pool).toBe("threads");
     expect(bundledConfig.test?.isolate).toBe(false);
-    expect(bundledConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(bundledConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const {
+  applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
@@ -8,6 +9,19 @@ const {
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
 } = (await import("../../scripts/test-projects.test-support.mjs")) as unknown as {
+  applyParallelVitestCachePaths: (
+    specs: Array<{
+      config: string;
+      env: NodeJS.ProcessEnv;
+    }>,
+    params?: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+    },
+  ) => Array<{
+    config: string;
+    env: NodeJS.ProcessEnv;
+  }>;
   buildFullSuiteVitestRunPlans: (
     args: string[],
     cwd?: string,
@@ -468,6 +482,60 @@ describe("test-projects args", () => {
         OPENCLAW_VITEST_MAX_WORKERS: "1",
       }),
     ).toBe(3);
+  });
+
+  it("uses a bounded local default for full-suite project parallelism", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(58, {
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: "1",
+      }),
+    ).toBe(4);
+  });
+
+  it("gives parallel Vitest shards separate filesystem module caches", () => {
+    const specs = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: { KEEP_ME: "1" },
+        },
+        {
+          config: "test/vitest/vitest.gateway-server.config.ts",
+          env: {},
+        },
+      ],
+      {
+        cwd: "/repo",
+        env: {},
+      },
+    );
+
+    expect(specs[0]?.env).toMatchObject({
+      KEEP_ME: "1",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    });
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
+    );
+  });
+
+  it("preserves explicit Vitest filesystem module cache paths", () => {
+    const specs = [
+      {
+        config: "test/vitest/vitest.gateway.config.ts",
+        env: {},
+      },
+    ];
+
+    expect(
+      applyParallelVitestCachePaths(specs, {
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
+        },
+      }),
+    ).toBe(specs);
   });
 
   it("routes cli targets to the cli config", () => {

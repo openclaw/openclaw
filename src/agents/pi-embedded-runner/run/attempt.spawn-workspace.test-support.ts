@@ -47,6 +47,7 @@ type AttemptSpawnWorkspaceHoisted = {
   createAgentSessionMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
+  buildEmbeddedMessageActionDiscoveryInputMock: UnknownMock;
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
   installToolResultContextGuardMock: UnknownMock;
@@ -70,6 +71,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
+  const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
   const releaseWsSessionMock = vi.fn(() => {});
@@ -79,11 +81,14 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
         assistantTexts: [] as string[],
         toolMetas: [] as Array<{ toolName: string; meta?: string }>,
         unsubscribe: () => {},
+        setTerminalLifecycleMeta: () => {},
         waitForCompactionRetry: async () => {},
         getMessagingToolSentTexts: () => [] as string[],
         getMessagingToolSentMediaUrls: () => [] as string[],
         getMessagingToolSentTargets: () => [] as MessagingToolSend[],
         getSuccessfulCronAdds: () => 0,
+        getReplayInvalid: () => false,
+        getHadPotentialSideEffects: () => false,
         didSendViaMessagingTool: () => false,
         didSendDeterministicApprovalPrompt: () => false,
         getLastToolError: () => undefined,
@@ -128,6 +133,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     createAgentSessionMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
+    buildEmbeddedMessageActionDiscoveryInputMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     installToolResultContextGuardMock,
@@ -527,7 +533,8 @@ vi.mock("../logger.js", () => ({
 }));
 
 vi.mock("../message-action-discovery-input.js", () => ({
-  buildEmbeddedMessageActionDiscoveryInput: () => undefined,
+  buildEmbeddedMessageActionDiscoveryInput: (...args: unknown[]) =>
+    hoisted.buildEmbeddedMessageActionDiscoveryInputMock(...args),
 }));
 
 vi.mock("../model.js", () => ({
@@ -616,11 +623,14 @@ export function createSubscriptionMock(): SubscriptionMock {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
+    setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getSuccessfulCronAdds: () => 0,
+    getReplayInvalid: () => false,
+    getHadPotentialSideEffects: () => false,
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
@@ -669,6 +679,9 @@ export function resetEmbeddedAttemptHarness(
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.buildEmbeddedMessageActionDiscoveryInputMock
+    .mockReset()
+    .mockImplementation((params) => params);
   hoisted.subscribeEmbeddedPiSessionMock
     .mockReset()
     .mockImplementation(() => createSubscriptionMock());

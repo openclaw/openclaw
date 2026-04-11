@@ -8,6 +8,7 @@ import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.js";
 
@@ -17,6 +18,8 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  initialReplayInvalid?: boolean;
+  initialHadPotentialSideEffects?: boolean;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
@@ -78,6 +81,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  toolMediaUrls?: string[];
+  toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
@@ -96,4 +101,8 @@ export type EmbeddedRunAttemptResult = {
     completedCount: number;
     activeCount: number;
   };
+  setTerminalLifecycleMeta?: (meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+  }) => void;
 };

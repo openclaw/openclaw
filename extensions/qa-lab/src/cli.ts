@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { collectString } from "./cli-options.js";
+import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
@@ -64,11 +66,6 @@ async function runQaManualLane(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaManualLaneCommand(opts);
-}
-
-function collectString(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
 }
 
 async function runQaUi(opts: {
@@ -201,6 +198,10 @@ export function registerQaLabCli(program: Command) {
         });
       },
     );
+
+  for (const lane of LIVE_TRANSPORT_QA_CLI_REGISTRATIONS) {
+    lane.register(qa);
+  }
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

@@ -11,6 +11,7 @@ import {
 import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -119,7 +120,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     return { text: "❌ No active session found." };
   }
 
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
+  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
+  const storePath = resolveDefaultSessionStorePath(targetAgentId);
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[params.sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
@@ -131,7 +133,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionFile = resolveSessionFilePath(
       entry.sessionId,
       entry,
-      resolveSessionFilePathOptions({ agentId: params.agentId, storePath }),
+      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
     );
   } catch (err) {
     return {
