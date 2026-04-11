@@ -1,12 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createWritableTransportEventStream,
   finalizeTransportStream,
   failTransportStream,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+const log = createSubsystemLogger("google-genai");
 
 export function createGoogleGenAiStreamFnForModel(
   model: { id: string; provider: string; baseUrl?: string; vertexai?: { project?: string; location?: string } },
@@ -138,7 +141,7 @@ export function createGoogleGenAiStreamFnForModel(
 
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error: unknown) {
-        console.error("Stream error:", error);
+        log.error("Stream error:", error);
         let processedError = error;
         const errorMessage = error instanceof Error ? error.message : String(error);
 
