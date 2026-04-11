@@ -4,9 +4,9 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import type { enqueueCommand } from "../../../process/command-queue.js";
+import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
@@ -113,7 +113,7 @@ export type RunEmbeddedPiAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
-  enqueue?: typeof enqueueCommand;
+  enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

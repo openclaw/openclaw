@@ -1,4 +1,4 @@
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
   ADMIN_SCOPE,
@@ -185,7 +185,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
+  const pluginScope = getPluginRegistryState()?.activeRegistry?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
   }
