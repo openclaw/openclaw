@@ -238,6 +238,7 @@ function createChatContext(): Pick<
   | "chatRunBuffers"
   | "chatDeltaSentAt"
   | "chatAbortedRuns"
+  | "addChatRun"
   | "removeChatRun"
   | "dedupe"
   | "loadGatewayModelCatalog"
@@ -252,6 +253,7 @@ function createChatContext(): Pick<
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatAbortedRuns: new Map(),
+    addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     loadGatewayModelCatalog: async () => [
@@ -364,6 +366,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.saveMediaWait = null;
     mockState.activeSaveMediaCalls = 0;
     mockState.maxActiveSaveMediaCalls = 0;
+  });
+
+  it("maps started agent runs back to the client chat run", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-run-mapping-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-run-mapping",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+          },
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(context.addChatRun).toHaveBeenCalledWith("run-current", {
+      sessionKey: "main",
+      clientRunId: "idem-webchat-run-mapping",
+    });
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {

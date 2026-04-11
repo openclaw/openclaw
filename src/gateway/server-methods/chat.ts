@@ -1773,6 +1773,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
+            if (isWebchatClient(clientInfo) && runId !== clientRunId) {
+              context.addChatRun(runId, { sessionKey, clientRunId });
+            }
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
