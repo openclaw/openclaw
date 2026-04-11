@@ -12,6 +12,9 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
     plugins: [
       {
         id: "fixture-provider",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["fixture-provider"],
         providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
       },
     ],

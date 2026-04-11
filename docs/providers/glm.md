@@ -43,6 +43,10 @@ openclaw onboard --auth-choice zai-cn
 apply the correct base URL automatically. Use the explicit regional choices when
 you want to force a specific Coding Plan or general API surface.
 
+For rate-limit key rotation, OpenClaw also accepts `ZAI_API_KEYS`
+(comma/semicolon list), `ZAI_API_KEY_1`, `ZAI_API_KEY_2`, legacy `Z_AI_API_KEY`,
+and `OPENCLAW_LIVE_ZAI_KEY` as a single override.
+
 ## Current bundled GLM models
 
 OpenClaw currently seeds the bundled `zai` provider with these GLM refs:
@@ -65,4 +69,6 @@ OpenClaw currently seeds the bundled `zai` provider with these GLM refs:
 
 - GLM versions and availability can change; check Z.AI's docs for the latest.
 - Default bundled model ref is `zai/glm-5.1`.
+- When multiple env-backed Z.AI keys are present, gateway runs can rotate to the
+  next key on rate-limit failures.
 - For provider details, see [/providers/zai](/providers/zai).

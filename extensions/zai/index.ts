@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -6,6 +7,7 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { listProfilesForProvider, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -31,10 +33,149 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const ENV_ROTATION_PROFILE_ID_PREFIX = "zai:runtime-env";
+const LIVE_OVERRIDE_PROFILE_ID = "zai:runtime-live-override";
+const KEY_SPLIT_RE = /[\s,;]+/g;
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
 const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
+
+function parseApiKeyList(raw?: string): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(KEY_SPLIT_RE)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function collectNamedApiKeys(env: NodeJS.ProcessEnv, names: readonly string[]): string[] {
+  const keys: string[] = [];
+  for (const name of names) {
+    const value = env[name];
+    const resolved = normalizeOptionalSecretInput(value);
+    if (resolved) {
+      keys.push(resolved);
+    }
+  }
+  return keys;
+}
+
+function listStoredZaiApiKeyProfileIds(store: AuthProfileStore): string[] {
+  return listProfilesForProvider(store, PROVIDER_ID).filter((profileId) => {
+    if (
+      profileId === LIVE_OVERRIDE_PROFILE_ID ||
+      profileId.startsWith(`${ENV_ROTATION_PROFILE_ID_PREFIX}-`)
+    ) {
+      return false;
+    }
+    return store.profiles[profileId]?.type === "api_key";
+  });
+}
+
+function resolveStoredZaiApiKey(params: {
+  credential: AuthProfileStore["profiles"][string];
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const { credential, env } = params;
+  if (credential?.type !== "api_key") {
+    return undefined;
+  }
+  const inlineKey = normalizeOptionalSecretInput(credential.key);
+  if (inlineKey) {
+    return inlineKey;
+  }
+  if (credential.keyRef?.source === "env" && typeof credential.keyRef.id === "string") {
+    return normalizeOptionalSecretInput(env[credential.keyRef.id]);
+  }
+  return undefined;
+}
+
+function collectExistingZaiApiKeys(store: AuthProfileStore, env: NodeJS.ProcessEnv): Set<string> {
+  const existing = new Set<string>();
+  for (const profileId of listStoredZaiApiKeyProfileIds(store)) {
+    const credential = store.profiles[profileId];
+    const key = resolveStoredZaiApiKey({ credential, env });
+    if (key) {
+      existing.add(key);
+    }
+  }
+  return existing;
+}
+
+function collectZaiRotationApiKeys(params: {
+  env: NodeJS.ProcessEnv;
+  store: AuthProfileStore;
+}): string[] {
+  const seen = collectExistingZaiApiKeys(params.store, params.env);
+  const apiKeys: string[] = [];
+  const add = (value?: string) => {
+    const resolved = normalizeOptionalSecretInput(value);
+    if (!resolved || seen.has(resolved)) {
+      return;
+    }
+    seen.add(resolved);
+    apiKeys.push(resolved);
+  };
+
+  for (const value of parseApiKeyList(params.env.ZAI_API_KEYS)) {
+    add(value);
+  }
+  add(params.env.ZAI_API_KEY);
+  for (const value of collectNamedApiKeys(params.env, ["ZAI_API_KEY_1", "ZAI_API_KEY_2"])) {
+    add(value);
+  }
+  add(params.env.Z_AI_API_KEY);
+
+  return apiKeys;
+}
+
+function resolveZaiEnvRotationProfileId(apiKey: string): string {
+  // Keep runtime overlay ids stable per key so persisted cooldown/usage state
+  // does not get reassigned when env list ordering changes between runs.
+  const keyFingerprint = createHash("sha256").update(apiKey, "utf8").digest("hex").slice(0, 12);
+  return `${ENV_ROTATION_PROFILE_ID_PREFIX}-${keyFingerprint}`;
+}
+
+function resolveZaiEnvRotationProfiles(ctx: { env: NodeJS.ProcessEnv; store: AuthProfileStore }) {
+  const liveOverride = normalizeOptionalSecretInput(ctx.env.OPENCLAW_LIVE_ZAI_KEY);
+  if (liveOverride) {
+    return [
+      {
+        profileId: LIVE_OVERRIDE_PROFILE_ID,
+        persistence: "runtime-only" as const,
+        selectionPriority: "highest" as const,
+        credential: {
+          type: "api_key" as const,
+          provider: PROVIDER_ID,
+          key: liveOverride,
+          displayName: "Z.AI live override",
+        },
+      },
+    ];
+  }
+
+  const apiKeys = collectZaiRotationApiKeys(ctx);
+  const existingApiKeyCount = listStoredZaiApiKeyProfileIds(ctx.store).length;
+  if (apiKeys.length === 0) {
+    return undefined;
+  }
+  if (existingApiKeyCount > 0 && existingApiKeyCount + apiKeys.length < 2) {
+    return undefined;
+  }
+  return apiKeys.map((apiKey, index) => ({
+    profileId: resolveZaiEnvRotationProfileId(apiKey),
+    persistence: "runtime-only" as const,
+    credential: {
+      type: "api_key" as const,
+      provider: PROVIDER_ID,
+      key: apiKey,
+      displayName: `Z.AI env key ${index + 1}`,
+    },
+  }));
+}
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -166,12 +307,24 @@ async function runZaiApiKeyAuthNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
   endpoint?: ZaiEndpointId,
 ) {
-  const resolved = await ctx.resolveApiKey({
+  let resolved = await ctx.resolveApiKey({
     provider: PROVIDER_ID,
     flagValue: normalizeOptionalSecretInput(ctx.opts.zaiApiKey),
     flagName: "--zai-api-key",
     envVar: "ZAI_API_KEY",
   });
+  const singleListEnvKey = parseApiKeyList(process.env.ZAI_API_KEYS);
+  if (
+    !normalizeOptionalSecretInput(ctx.opts.zaiApiKey) &&
+    (!resolved || resolved.source === "profile") &&
+    singleListEnvKey.length === 1
+  ) {
+    resolved = {
+      key: singleListEnvKey[0] ?? "",
+      source: "env",
+      envVarName: "ZAI_API_KEYS",
+    };
+  }
   if (!resolved) {
     return null;
   }
@@ -243,7 +396,14 @@ export default definePluginEntry({
       label: "Z.AI",
       aliases: ["z-ai", "z.ai"],
       docsPath: "/providers/models",
-      envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+      envVars: [
+        "ZAI_API_KEY",
+        "ZAI_API_KEYS",
+        "ZAI_API_KEY_1",
+        "ZAI_API_KEY_2",
+        "Z_AI_API_KEY",
+        "OPENCLAW_LIVE_ZAI_KEY",
+      ],
       auth: [
         buildZaiApiKeyMethod({
           id: "api-key",
@@ -279,6 +439,7 @@ export default definePluginEntry({
           endpoint: "cn",
         }),
       ],
+      resolveExternalAuthProfiles: (ctx) => resolveZaiEnvRotationProfiles(ctx),
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       prepareExtraParams: (ctx) => {

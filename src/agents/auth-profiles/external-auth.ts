@@ -1,8 +1,13 @@
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
-type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
+type NormalizedExternalAuthProfile = ProviderExternalAuthProfile & {
+  persistence: "runtime-only" | "persisted";
+  selectionPriority: "default" | "highest";
+};
+
+type ExternalAuthProfileMap = Map<string, NormalizedExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
@@ -18,13 +23,14 @@ export const __testing = {
 
 function normalizeExternalAuthProfile(
   profile: ProviderExternalAuthProfile,
-): ProviderExternalAuthProfile | null {
+): NormalizedExternalAuthProfile | null {
   if (!profile?.profileId || !profile.credential) {
     return null;
   }
   return {
     ...profile,
     persistence: profile.persistence ?? "runtime-only",
+    selectionPriority: profile.selectionPriority ?? "default",
   };
 }
 
@@ -58,20 +64,48 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean {
-  return (
-    a.type === b.type &&
-    a.provider === b.provider &&
-    a.access === b.access &&
-    a.refresh === b.refresh &&
-    a.expires === b.expires &&
-    a.clientId === b.clientId &&
-    a.email === b.email &&
-    a.displayName === b.displayName &&
-    a.enterpriseUrl === b.enterpriseUrl &&
-    a.projectId === b.projectId &&
-    a.accountId === b.accountId
-  );
+function authCredentialMatches(a: AuthProfileCredential, b: AuthProfileCredential): boolean {
+  if (a.type !== b.type || a.provider !== b.provider) {
+    return false;
+  }
+
+  if (a.type === "oauth" && b.type === "oauth") {
+    return (
+      a.access === b.access &&
+      a.refresh === b.refresh &&
+      a.expires === b.expires &&
+      a.clientId === b.clientId &&
+      a.email === b.email &&
+      a.displayName === b.displayName &&
+      a.enterpriseUrl === b.enterpriseUrl &&
+      a.projectId === b.projectId &&
+      // `managedBy` is persistence/runtime metadata, not credential identity.
+      // Runtime overlays may omit it while synced stored credentials include it.
+      a.accountId === b.accountId
+    );
+  }
+
+  if (a.type === "api_key" && b.type === "api_key") {
+    return (
+      a.key === b.key &&
+      a.email === b.email &&
+      a.displayName === b.displayName &&
+      JSON.stringify(a.keyRef ?? null) === JSON.stringify(b.keyRef ?? null) &&
+      JSON.stringify(a.metadata ?? null) === JSON.stringify(b.metadata ?? null)
+    );
+  }
+
+  if (a.type === "token" && b.type === "token") {
+    return (
+      a.token === b.token &&
+      a.expires === b.expires &&
+      a.email === b.email &&
+      a.displayName === b.displayName &&
+      JSON.stringify(a.tokenRef ?? null) === JSON.stringify(b.tokenRef ?? null)
+    );
+  }
+
+  return false;
 }
 
 export function overlayExternalAuthProfiles(
@@ -94,10 +128,37 @@ export function overlayExternalAuthProfiles(
   return next;
 }
 
+export function listRuntimeOnlyExternalAuthProfileIds(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  return listRuntimeOnlyExternalAuthProfiles(params).map((profile) => profile.profileId);
+}
+
+export function listRuntimeOnlyExternalAuthProfiles(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Array<{ profileId: string; selectionPriority: "default" | "highest" }> {
+  return Array.from(
+    resolveExternalAuthProfileMap({
+      store: params.store,
+      agentDir: params.agentDir,
+      env: params.env,
+    }).entries(),
+  )
+    .filter(([, profile]) => profile.persistence !== "persisted")
+    .map(([profileId, profile]) => ({
+      profileId,
+      selectionPriority: profile.selectionPriority,
+    }));
+}
+
 export function shouldPersistExternalAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;
-  credential: OAuthCredential;
+  credential: AuthProfileCredential;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
@@ -109,7 +170,7 @@ export function shouldPersistExternalAuthProfile(params: {
   if (!external || external.persistence === "persisted") {
     return true;
   }
-  return !oauthCredentialMatches(external.credential, params.credential);
+  return !authCredentialMatches(external.credential, params.credential);
 }
 
 // Compat aliases while file/function naming catches up.

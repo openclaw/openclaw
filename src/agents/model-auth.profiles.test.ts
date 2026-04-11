@@ -278,6 +278,21 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("resolveEnvApiKey('zai') ignores ZAI_API_KEYS list vars", async () => {
+    await withEnvAsync(
+      {
+        ZAI_API_KEY: undefined,
+        ZAI_API_KEYS: "zai-test-key-1,zai-test-key-2", // pragma: allowlist secret
+        ZAI_API_KEY_1: undefined,
+        ZAI_API_KEY_2: undefined,
+        Z_AI_API_KEY: undefined,
+      },
+      async () => {
+        expect(resolveEnvApiKey("zai")).toBeNull();
+      },
+    );
+  });
+
   it("keeps stored provider auth ahead of env by default", async () => {
     await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({

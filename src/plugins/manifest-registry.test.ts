@@ -382,6 +382,9 @@ describe("loadPluginManifestRegistry", () => {
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      providerSecretEnvVars: {
+        openai: ["OPENAI_API_KEYS"],
+      },
       providerAuthAliases: {
         "openai-codex": "openai",
       },
@@ -406,6 +409,9 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
+    });
+    expect(registry.plugins[0]?.providerSecretEnvVars).toEqual({
+      openai: ["OPENAI_API_KEYS"],
     });
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
       "openai-codex": "openai",

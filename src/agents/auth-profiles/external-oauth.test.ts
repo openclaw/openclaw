@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import {
   __testing,
+  listRuntimeOnlyExternalAuthProfileIds,
+  listRuntimeOnlyExternalAuthProfiles,
+  overlayExternalAuthProfiles,
   overlayExternalOAuthProfiles,
+  shouldPersistExternalAuthProfile,
   shouldPersistExternalOAuthProfile,
 } from "./external-auth.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { ApiKeyCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
@@ -22,6 +26,15 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
     access: "access-token",
     refresh: "refresh-token",
     expires: 123,
+    ...overrides,
+  };
+}
+
+function createApiKeyCredential(overrides: Partial<ApiKeyCredential> = {}): ApiKeyCredential {
+  return {
+    type: "api_key",
+    provider: "zai",
+    key: "sk-zai-1",
     ...overrides,
   };
 }
@@ -51,6 +64,23 @@ describe("auth external oauth helpers", () => {
       type: "oauth",
       provider: "openai-codex",
       access: "access-token",
+    });
+  });
+
+  it("overlays runtime-only api-key profiles onto the store", () => {
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+      {
+        profileId: "zai:runtime-env-1",
+        credential: createApiKeyCredential(),
+      },
+    ]);
+
+    const store = overlayExternalAuthProfiles(createStore());
+
+    expect(store.profiles["zai:runtime-env-1"]).toMatchObject({
+      type: "api_key",
+      provider: "zai",
+      key: "sk-zai-1",
     });
   });
 
@@ -107,5 +137,119 @@ describe("auth external oauth helpers", () => {
     });
 
     expect(shouldPersist).toBe(true);
+  });
+
+  it("omits runtime-only oauth overlays when managedBy is the only difference", () => {
+    const persistedCredential = createCredential({ managedBy: "codex-cli" });
+    const runtimeCredential = createCredential();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+      {
+        profileId: "openai-codex:default",
+        credential: runtimeCredential,
+      },
+    ]);
+
+    const shouldPersist = shouldPersistExternalOAuthProfile({
+      store: createStore({ "openai-codex:default": runtimeCredential }),
+      profileId: "openai-codex:default",
+      credential: persistedCredential,
+    });
+
+    expect(shouldPersist).toBe(false);
+  });
+
+  it("omits exact runtime-only api-key overlays from persisted store writes", () => {
+    const credential = createApiKeyCredential();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+      {
+        profileId: "zai:runtime-env-1",
+        credential,
+      },
+    ]);
+
+    const shouldPersist = shouldPersistExternalAuthProfile({
+      store: createStore({ "zai:runtime-env-1": credential }),
+      profileId: "zai:runtime-env-1",
+      credential,
+    });
+
+    expect(shouldPersist).toBe(false);
+  });
+
+  it("lists runtime-only external auth profile ids", () => {
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+      {
+        profileId: "zai:runtime-env-1",
+        credential: createApiKeyCredential(),
+      },
+      {
+        profileId: "zai:persisted",
+        credential: createApiKeyCredential({ key: "sk-zai-persisted" }),
+        persistence: "persisted",
+      },
+    ]);
+
+    const profileIds = listRuntimeOnlyExternalAuthProfileIds({
+      store: createStore({
+        "zai:runtime-env-1": createApiKeyCredential(),
+        "zai:persisted": createApiKeyCredential({ key: "sk-zai-persisted" }),
+      }),
+    });
+
+    expect(profileIds).toEqual(["zai:runtime-env-1"]);
+  });
+
+  it("exposes runtime-only external auth profile priority metadata", () => {
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+      {
+        profileId: "zai:runtime-live-override",
+        credential: createApiKeyCredential({ key: "sk-zai-live" }),
+        selectionPriority: "highest",
+      },
+    ]);
+
+    const profiles = listRuntimeOnlyExternalAuthProfiles({
+      store: createStore({
+        "zai:runtime-live-override": createApiKeyCredential({ key: "sk-zai-live" }),
+      }),
+    });
+
+    expect(profiles).toEqual([
+      {
+        profileId: "zai:runtime-live-override",
+        selectionPriority: "highest",
+      },
+    ]);
+  });
+
+  it("keeps persisted profiles when a live override uses a separate runtime-only id", () => {
+    const persistedCredential = createApiKeyCredential({ key: "sk-zai-default" });
+    const runtimeCredential = createApiKeyCredential({ key: "sk-zai-live" });
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([
+      {
+        profileId: "zai:runtime-live-override",
+        credential: runtimeCredential,
+        selectionPriority: "highest",
+      },
+    ]);
+
+    const shouldPersistPersisted = shouldPersistExternalAuthProfile({
+      store: createStore({
+        "zai:default": persistedCredential,
+        "zai:runtime-live-override": runtimeCredential,
+      }),
+      profileId: "zai:default",
+      credential: persistedCredential,
+    });
+    const shouldPersistRuntime = shouldPersistExternalAuthProfile({
+      store: createStore({
+        "zai:default": persistedCredential,
+        "zai:runtime-live-override": runtimeCredential,
+      }),
+      profileId: "zai:runtime-live-override",
+      credential: runtimeCredential,
+    });
+    expect(shouldPersistPersisted).toBe(true);
+    expect(shouldPersistRuntime).toBe(false);
   });
 });

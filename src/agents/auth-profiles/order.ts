@@ -5,6 +5,7 @@ import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { listRuntimeOnlyExternalAuthProfiles } from "./external-auth.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import {
@@ -89,9 +90,26 @@ export function resolveAuthProfileOrder(params: {
         )
         .map(([profileId]) => profileId)
     : [];
+  const providerStoreProfiles = listProfilesForProvider(store, provider);
+  const runtimeOnlyExternalProfiles = listRuntimeOnlyExternalAuthProfiles({ store }).filter(
+    (profile) => providerStoreProfiles.includes(profile.profileId),
+  );
+  const highestPriorityExternalProfiles = runtimeOnlyExternalProfiles
+    .filter((profile) => profile.selectionPriority === "highest")
+    .map((profile) => profile.profileId);
+  const defaultPriorityExternalProfiles = runtimeOnlyExternalProfiles
+    .filter((profile) => profile.selectionPriority !== "highest")
+    .map((profile) => profile.profileId);
+  const baseCandidates =
+    explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : providerStoreProfiles);
   const baseOrder =
-    explicitOrder ??
-    (explicitProfiles.length > 0 ? explicitProfiles : listProfilesForProvider(store, provider));
+    runtimeOnlyExternalProfiles.length > 0
+      ? dedupeProfileIds([
+          ...highestPriorityExternalProfiles,
+          ...baseCandidates,
+          ...defaultPriorityExternalProfiles,
+        ])
+      : baseCandidates;
   if (baseOrder.length === 0) {
     return [];
   }
@@ -108,11 +126,13 @@ export function resolveAuthProfileOrder(params: {
 
   // Repair config/store profile-id drift from older setup flows:
   // if configured profile ids no longer exist in auth-profiles.json, scan the
-  // provider's stored credentials and use any valid entries.
-  const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
+  // provider's stored credentials and use any valid entries. Base candidates
+  // intentionally exclude runtime overlays so those do not mask drift repair.
+  const allBaseCandidatesMissing =
+    baseCandidates.length > 0 && baseCandidates.every((profileId) => !store.profiles[profileId]);
+  if (explicitProfiles.length > 0 && allBaseCandidatesMissing) {
     const storeProfiles = listProfilesForProvider(store, provider);
-    filtered = storeProfiles.filter(isValidProfile);
+    filtered = dedupeProfileIds([...filtered, ...storeProfiles.filter(isValidProfile)]);
   }
 
   const deduped = dedupeProfileIds(filtered);
@@ -140,7 +160,10 @@ export function resolveAuthProfileOrder(params: {
       .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
       .map((entry) => entry.profileId);
 
-    const ordered = [...available, ...cooldownSorted];
+    const ordered = [
+      ...prioritizeProfiles(available, highestPriorityExternalProfiles),
+      ...cooldownSorted,
+    ];
 
     // Still put preferredProfile first if specified
     if (preferredProfile && ordered.includes(preferredProfile)) {
@@ -152,7 +175,7 @@ export function resolveAuthProfileOrder(params: {
   // Otherwise, use round-robin: sort by lastUsed (oldest first)
   // preferredProfile goes first if specified (for explicit user choice)
   // lastGood is NOT prioritized - that would defeat round-robin
-  const sorted = orderProfilesByMode(deduped, store);
+  const sorted = orderProfilesByMode(deduped, store, highestPriorityExternalProfiles);
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
     return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
@@ -161,7 +184,21 @@ export function resolveAuthProfileOrder(params: {
   return sorted;
 }
 
-function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
+function prioritizeProfiles(order: string[], prioritized: string[]): string[] {
+  if (prioritized.length === 0 || order.length === 0) {
+    return order;
+  }
+  const prioritizedSet = new Set(prioritized);
+  const front = prioritized.filter((profileId) => order.includes(profileId));
+  const rest = order.filter((profileId) => !prioritizedSet.has(profileId));
+  return [...front, ...rest];
+}
+
+function orderProfilesByMode(
+  order: string[],
+  store: AuthProfileStore,
+  prioritized: string[] = [],
+): string[] {
   const now = Date.now();
 
   // Partition into available and in-cooldown
@@ -186,16 +223,19 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
 
   // Primary sort: type preference (oauth > token > api_key).
   // Secondary sort: lastUsed (oldest first for round-robin within type).
-  const sorted = scored
-    .toSorted((a, b) => {
-      // First by type (oauth > token > api_key)
-      if (a.typeScore !== b.typeScore) {
-        return a.typeScore - b.typeScore;
-      }
-      // Then by lastUsed (oldest first)
-      return a.lastUsed - b.lastUsed;
-    })
-    .map((entry) => entry.profileId);
+  const sorted = prioritizeProfiles(
+    scored
+      .toSorted((a, b) => {
+        // First by type (oauth > token > api_key)
+        if (a.typeScore !== b.typeScore) {
+          return a.typeScore - b.typeScore;
+        }
+        // Then by lastUsed (oldest first)
+        return a.lastUsed - b.lastUsed;
+      })
+      .map((entry) => entry.profileId),
+    prioritized,
+  );
 
   // Append cooldown profiles at the end (sorted by cooldown expiry, soonest first)
   const cooldownSorted = inCooldown

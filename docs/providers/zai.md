@@ -44,6 +44,10 @@ openclaw onboard --auth-choice zai-cn
 apply the correct base URL automatically. Use the explicit regional choices when
 you want to force a specific Coding Plan or general API surface.
 
+For key rotation on rate-limit responses, OpenClaw also supports `ZAI_API_KEYS`
+(comma/semicolon list), `ZAI_API_KEY_1`, `ZAI_API_KEY_2`, legacy `Z_AI_API_KEY`,
+and `OPENCLAW_LIVE_ZAI_KEY` as a single override.
+
 ## Bundled GLM catalog
 
 OpenClaw currently seeds the bundled `zai` provider with:
@@ -71,5 +75,7 @@ OpenClaw currently seeds the bundled `zai` provider with:
   matches the current GLM-5 family shape.
 - `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
   `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
+- When multiple env-backed Z.AI keys are present, gateway runs can rotate to the
+  next key on rate-limit failures.
 - See [/providers/glm](/providers/glm) for the model family overview.
 - Z.AI uses Bearer auth with your API key.

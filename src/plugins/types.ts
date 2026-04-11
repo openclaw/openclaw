@@ -297,6 +297,7 @@ export type ProviderAuthMethodNonInteractiveContext = {
   baseConfig: OpenClawConfig;
   opts: ProviderAuthOptionBag;
   runtime: RuntimeEnv;
+  secretInputMode?: SecretInputMode;
   agentDir?: string;
   workspaceDir?: string;
   resolveApiKey: (
@@ -1054,7 +1055,6 @@ export type ProviderModelSelectedContext = {
   agentDir?: string;
   workspaceDir?: string;
 };
-
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
   provider: string;

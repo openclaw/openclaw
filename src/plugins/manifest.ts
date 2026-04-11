@@ -161,6 +161,11 @@ export type PluginManifest = {
   commandAliases?: PluginManifestCommandAlias[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
+  /**
+   * Additional provider-owned secret env vars that should be scrubbed and
+   * offered for setup flows, but must not be treated as direct auth candidates.
+   */
+  providerSecretEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
   /** Cheap channel env lookup without booting plugin runtime. */
@@ -668,6 +673,7 @@ export function loadPluginManifest(
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerSecretEnvVars = normalizeStringListRecord(raw.providerSecretEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -701,6 +707,7 @@ export function loadPluginManifest(
       cliBackends,
       commandAliases,
       providerAuthEnvVars,
+      providerSecretEnvVars,
       providerAuthAliases,
       channelEnvVars,
       providerAuthChoices,

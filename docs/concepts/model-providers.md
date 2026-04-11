@@ -379,6 +379,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
+- Optional rotation: `ZAI_API_KEYS`, `ZAI_API_KEY_1`, `ZAI_API_KEY_2`, legacy `Z_AI_API_KEY`, plus `OPENCLAW_LIVE_ZAI_KEY` (single override)
 - Example model: `zai/glm-5.1`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`

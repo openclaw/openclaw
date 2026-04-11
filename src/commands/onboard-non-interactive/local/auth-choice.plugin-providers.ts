@@ -35,6 +35,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  secretInputMode?: "plaintext" | "ref";
   resolveApiKey: (input: ProviderResolveNonInteractiveApiKeyParams) => Promise<{
     key: string;
     source: "profile" | "env" | "flag";
@@ -145,6 +146,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     baseConfig: params.baseConfig,
     opts: params.opts as ProviderAuthOptionBag,
     runtime: params.runtime,
+    secretInputMode: params.secretInputMode,
     agentDir,
     workspaceDir,
     resolveApiKey: params.resolveApiKey,
