@@ -45,7 +45,9 @@ def sanitize_hcl(value):
     """Escape a user-provided string for safe interpolation into HCL templates."""
     if not isinstance(value, str):
         return str(value)
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+    value = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+    value = value.replace("${", "$${").replace("%{", "%%{")
+    return value
 
 
 def validate_dir(path_str):
