@@ -172,6 +172,7 @@ function setFallbackSelectionStateField(
       }
       return false;
   }
+  throw new Error("Unsupported fallback selection state key");
 }
 
 function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
@@ -638,7 +639,13 @@ export async function runAgentTurnWithFallback(params: {
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
-      return;
+      return undefined;
+    }
+
+    const activeSessionEntry =
+      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
+    if (!activeSessionEntry) {
+      return undefined;
     }
 
     // Auth failures are configuration errors, not model health issues.  A
@@ -651,13 +658,27 @@ export async function runAgentTurnWithFallback(params: {
       previousReasons.length > 0 &&
       previousReasons.every((r) => r === "auth" || r === "auth_permanent");
     if (allAuthFailures) {
-      return;
+      return undefined;
     }
 
-    const activeSessionEntry =
-      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
-    if (!activeSessionEntry) {
-      return;
+    // Don't overwrite a user-initiated model override (e.g. from /models or
+    // /model) with the fallback model.  The user's explicit selection should
+    // survive transient primary-model failures so subsequent messages still
+    // target the model the user chose.  Fallback persistence is only
+    // appropriate when the override was itself set by a previous fallback
+    // ("auto") or when there is no override yet.
+    //
+    // `modelOverrideSource` was added later, so older persisted sessions can
+    // carry a user-selected override without the source field.  Treat any
+    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
+    // user state, matching the backward-compat treatment in
+    // session-reset-service.
+    const isUserModelOverride =
+      activeSessionEntry.modelOverrideSource === "user" ||
+      (activeSessionEntry.modelOverrideSource === undefined &&
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+    if (isUserModelOverride) {
+      return undefined;
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
@@ -669,7 +690,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
-      return;
+      return undefined;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 
@@ -866,6 +887,7 @@ export async function runAgentTurnWithFallback(params: {
                   skillsSnapshot: params.followupRun.run.skillsSnapshot,
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
@@ -1234,12 +1256,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: String(attempt.provider ?? ""),
-            model: String(attempt.model ?? ""),
-            error: String(attempt.error ?? ""),
-            reason: attempt.reason ? String(attempt.reason) : undefined,
+            provider: attempt.provider,
+            model: attempt.model,
+            error: attempt.error,
+            reason: attempt.reason || undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code ? String(attempt.code) : undefined,
+            code: attempt.code || undefined,
           }))
         : [];
 
