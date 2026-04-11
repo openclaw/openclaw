@@ -70,12 +70,22 @@ describe("compaction token accounting sanitization", () => {
           toolCallId: "call_2",
           content: "legacy inline tool output",
         },
+        {
+          type: "tool_result",
+          toolUseId: "call_3",
+          content: [{ type: "text", text: "snake case inline tool output" }],
+        },
       ],
       timestamp: 1,
     } as unknown as AgentMessage;
 
     expect(estimateMessageTokens(message)).toBe(
-      Math.ceil(("inline tool output".length + "legacy inline tool output".length) / 4),
+      Math.ceil(
+        ("inline tool output".length +
+          "legacy inline tool output".length +
+          "snake case inline tool output".length) /
+          4,
+      ),
     );
   });
 

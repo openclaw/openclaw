@@ -146,7 +146,7 @@ function isFallbackThinkingType(type: unknown): boolean {
 }
 
 function isFallbackToolResultType(type: unknown): boolean {
-  return type === "toolResult" || type === "tool";
+  return type === "toolResult" || type === "tool_result" || type === "tool";
 }
 
 function estimateSafeUnknownChars(value: unknown): number {
