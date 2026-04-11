@@ -15,7 +15,9 @@ describe("doctor config flow steps", () => {
         issues: [],
         raw: "{}",
         resolved: {},
+        sourceConfig: {},
         config: {},
+        runtimeConfig: {},
         warnings: [],
       } satisfies DoctorConfigPreflightResult["snapshot"],
       state: {
@@ -31,7 +33,46 @@ describe("doctor config flow steps", () => {
     expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
     expect(result.changeLines).not.toEqual([]);
     expect(result.state.fixHints).toContain(
-      'Run "openclaw doctor --fix" to apply compatibility migrations.',
+      'Run "openclaw doctor --fix" to migrate legacy config keys.',
+    );
+    expect(result.state.pendingChanges).toBe(true);
+  });
+
+  it("keeps pending repair state for legacy issues even when the snapshot is already normalized", () => {
+    const result = applyLegacyCompatibilityStep({
+      snapshot: {
+        exists: true,
+        parsed: { talk: { voiceId: "voice-1", modelId: "eleven_v3" } },
+        legacyIssues: [
+          {
+            path: "talk",
+            message: "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
+          },
+        ],
+        path: "/tmp/config.json",
+        valid: true,
+        issues: [],
+        raw: "{}",
+        resolved: {},
+        sourceConfig: {},
+        config: {},
+        runtimeConfig: {},
+        warnings: [],
+      } satisfies DoctorConfigPreflightResult["snapshot"],
+      state: {
+        cfg: {},
+        candidate: {},
+        pendingChanges: false,
+        fixHints: [],
+      },
+      shouldRepair: false,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeLines).toEqual([]);
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.fixHints).toContain(
+      'Run "openclaw doctor --fix" to migrate legacy config keys.',
     );
   });
 

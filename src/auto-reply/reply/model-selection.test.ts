@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
+import { loadModelCatalog } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
-vi.mock("../../agents/model-catalog.js", () => ({
+vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
     { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
@@ -15,6 +16,15 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
 }));
+
+vi.mock("../../channels/plugins/session-conversation.js", () => ({
+  resolveSessionParentSessionKey: (sessionKey?: string) =>
+    sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
+}));
+
+afterEach(() => {
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+});
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
@@ -126,6 +136,22 @@ describe("createModelSelectionState catalog loading", () => {
   });
 });
 
+describe("resolveContextTokens", () => {
+  it("prefers provider-qualified cache keys over bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(1_000_000);
+  });
+});
+
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
@@ -176,7 +202,7 @@ describe("createModelSelectionState parent inheritance", () => {
       defaultProvider,
       defaultModel,
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       hasModelDirective: false,
       hasResolvedHeartbeatModelOverride,
     });
@@ -253,7 +279,7 @@ describe("createModelSelectionState parent inheritance", () => {
     });
     const sessionEntry = makeEntry({
       providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-5",
+      modelOverride: "claude-opus-4-6",
     });
     const state = await resolveStateWithParent({
       cfg,
@@ -264,7 +290,7 @@ describe("createModelSelectionState parent inheritance", () => {
     });
 
     expect(state.provider).toBe("anthropic");
-    expect(state.model).toBe("claude-opus-4-5");
+    expect(state.model).toBe("claude-opus-4-6");
   });
 
   it("ignores parent override when disallowed", async () => {
@@ -281,7 +307,7 @@ describe("createModelSelectionState parent inheritance", () => {
     const sessionKey = "agent:main:slack:channel:c1:thread:123";
     const parentEntry = makeEntry({
       providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-5",
+      modelOverride: "claude-opus-4-6",
     });
     const state = await resolveStateWithParent({
       cfg,
@@ -305,7 +331,7 @@ describe("createModelSelectionState parent inheritance", () => {
     const state = await resolveHeartbeatStoredOverrideState(true);
 
     expect(state.provider).toBe("anthropic");
-    expect(state.model).toBe("claude-opus-4-5");
+    expect(state.model).toBe("claude-opus-4-6");
   });
 });
 
@@ -359,12 +385,12 @@ describe("createModelSelectionState respects session model override", () => {
         modelProvider: "kimi",
         contextTokens: 262_000,
         providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-5",
+        modelOverride: "claude-opus-4-6",
       }),
     );
 
     expect(state.provider).toBe("anthropic");
-    expect(state.model).toBe("claude-opus-4-5");
+    expect(state.model).toBe("claude-opus-4-6");
   });
 
   it("uses default provider when providerOverride is not set but modelOverride is", async () => {
@@ -376,6 +402,17 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
+  });
+
+  it("splits legacy combined modelOverride when providerOverride is missing", async () => {
+    const state = await resolveState(
+      makeEntry({
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+      }),
+    );
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
   it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
@@ -413,7 +450,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-reasoning");
+    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
     expect(state.resetModelOverride).toBe(false);
   });
 
@@ -452,11 +489,49 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
+
+  it("keeps allowed legacy combined session overrides after normalization", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: {
+            "anthropic/claude-opus-4-6": {},
+            "ollama-beelink2/qwen2.5-coder:7b": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:2";
+    const sessionEntry = makeEntry({
+      modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("ollama-beelink2/qwen2.5-coder:7b");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("returns on when catalog model has reasoning true", async () => {
-    const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+    const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
     ]);

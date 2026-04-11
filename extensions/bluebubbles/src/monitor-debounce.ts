@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -10,6 +11,23 @@ type BlueBubblesDebounceEntry = {
   message: NormalizedWebhookMessage;
   target: WebhookTarget;
 };
+
+function normalizeDebounceMessageText(text: unknown): string {
+  return typeof text === "string" ? text : "";
+}
+
+function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebounceEntry {
+  if (typeof entry.message.text === "string") {
+    return entry;
+  }
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      text: "",
+    },
+  };
+}
 
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
@@ -48,12 +66,12 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    const text = normalizeDebounceMessageText(entry.message.text).trim();
     if (!text) {
       continue;
     }
     // Skip duplicate text (URL might be in both text message and balloon)
-    const normalizedText = text.toLowerCase();
+    const normalizedText = normalizeLowercaseStringOrEmpty(text);
     if (seenTexts.has(normalizedText)) {
       continue;
     }
@@ -71,9 +89,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const latestTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : first.timestamp;
 
   // Collect all message IDs for reference
-  const messageIds = entries
-    .map((e) => e.message.messageId)
-    .filter((id): id is string => Boolean(id));
+  const messageId = entries.map((e) => e.message.messageId).find((id): id is string => Boolean(id));
 
   // Prefer reply context from any entry that has it
   const entryWithReply = entries.find((e) => e.message.replyToId);
@@ -84,7 +100,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
     attachments: allAttachments.length > 0 ? allAttachments : first.attachments,
     timestamp: latestTimestamp,
     // Use first message's ID as primary (for reply reference), but we've coalesced others
-    messageId: messageIds[0] ?? first.messageId,
+    messageId: messageId ?? first.messageId,
     // Preserve reply context if present
     replyToId: entryWithReply?.message.replyToId ?? first.replyToId,
     replyToBody: entryWithReply?.message.replyToBody ?? first.replyToBody,
@@ -120,7 +136,7 @@ export function createBlueBubblesDebounceRegistry(params: {
       }
 
       const { account, config, runtime, core } = target;
-      const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
+      const baseDebouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
         debounceMs: resolveBlueBubblesDebounceMs(config, core),
         buildKey: (entry) => {
           const msg = entry.message;
@@ -133,7 +149,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           const balloonBundleId = msg.balloonBundleId?.trim();
           const associatedMessageGuid = msg.associatedMessageGuid?.trim();
           if (balloonBundleId && associatedMessageGuid) {
-            return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+            return `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`;
           }
 
           const messageId = msg.messageId?.trim();
@@ -194,6 +210,13 @@ export function createBlueBubblesDebounceRegistry(params: {
           );
         },
       });
+
+      const debouncer: BlueBubblesDebouncer = {
+        enqueue: async (item) => {
+          await baseDebouncer.enqueue(sanitizeDebounceEntry(item));
+        },
+        flushKey: (key) => baseDebouncer.flushKey(key),
+      };
 
       targetDebouncers.set(target, debouncer);
       return debouncer;

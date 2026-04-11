@@ -1,15 +1,16 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
+import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import { authorizeSlackSystemEventSender } from "../auth.js";
+import type { SlackMonitorContext } from "../context.js";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
-import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
-import { authorizeSlackSystemEventSender } from "../auth.js";
-import type { SlackMonitorContext } from "../context.js";
+} from "../conversation.runtime.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -326,7 +327,8 @@ function formatInteractionConfirmationText(params: {
   selectedLabel: string;
   userId?: string;
 }): string {
-  const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
+  const userId = normalizeOptionalString(params.userId);
+  const actor = userId ? ` by <@${userId}>` : "";
   return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
 }
 
@@ -334,18 +336,32 @@ function buildSlackPluginInteractionData(params: {
   actionId: string;
   summary: SlackActionSummary;
 }): string | null {
-  const actionId = params.actionId.trim();
+  const actionId = normalizeOptionalString(params.actionId) ?? "";
   if (!actionId) {
     return null;
   }
   const payload =
-    params.summary.value?.trim() ||
-    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    normalizeOptionalString(params.summary.value) ||
+    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
     "";
-  if (actionId === SLACK_REPLY_BUTTON_ACTION_ID || actionId === SLACK_REPLY_SELECT_ACTION_ID) {
+  if (
+    actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
+    actionId === SLACK_REPLY_SELECT_ACTION_ID ||
+    actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
+    actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
+  ) {
     return payload || null;
   }
   return payload ? `${actionId}:${payload}` : actionId;
+}
+
+function isSlackReplyActionId(actionId: string): boolean {
+  return (
+    actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
+    actionId === SLACK_REPLY_SELECT_ACTION_ID ||
+    actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
+    actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
+  );
 }
 
 function buildSlackPluginInteractionId(params: {
@@ -357,15 +373,15 @@ function buildSlackPluginInteractionId(params: {
   summary: SlackActionSummary;
 }): string {
   const primaryValue =
-    params.summary.value?.trim() ||
-    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    normalizeOptionalString(params.summary.value) ||
+    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
     "";
   return [
-    params.userId?.trim() || "",
-    params.channelId?.trim() || "",
-    params.messageTs?.trim() || "",
-    params.triggerId?.trim() || "",
-    params.actionId.trim(),
+    normalizeOptionalString(params.userId) ?? "",
+    normalizeOptionalString(params.channelId) ?? "",
+    normalizeOptionalString(params.messageTs) ?? "",
+    normalizeOptionalString(params.triggerId) ?? "",
+    normalizeOptionalString(params.actionId) ?? "",
     primaryValue,
   ].join(":");
 }
@@ -522,8 +538,7 @@ async function dispatchSlackPluginInteraction(params: {
   ) {
     return true;
   }
-  const pluginResult = await dispatchPluginInteractiveHandler({
-    channel: "slack",
+  const pluginResult = await dispatchSlackPluginInteractiveHandler({
     data: params.pluginInteractionData,
     interactionId: pluginInteractionId,
     ctx: {
@@ -729,7 +744,17 @@ async function handleSlackBlockAction(params: {
     actionId: parsed.actionId,
     summary: parsed.actionSummary,
   });
-  if (pluginInteractionData) {
+  if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
+    const handledBindingApproval = await handleSlackPluginBindingApproval({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      respond,
+    });
+    if (handledBindingApproval) {
+      return;
+    }
+  } else if (pluginInteractionData) {
     const handled = await dispatchSlackPluginInteraction({
       ctx: params.ctx,
       parsed,

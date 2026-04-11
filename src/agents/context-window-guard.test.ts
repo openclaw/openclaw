@@ -85,6 +85,82 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(true);
   });
 
+  it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                contextTokens: 12_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "tiny",
+      modelContextWindow: 64_000,
+      modelContextTokens: 48_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 12_000,
+    });
+  });
+
+  it("normalizes provider aliases when reading models config context windows", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "z.ai": {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "glm-5",
+                name: "glm-5",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 12_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "z-ai",
+      modelId: "glm-5",
+      modelContextWindow: 64_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 12_000,
+    });
+  });
+
   it("caps with agents.defaults.contextTokens", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 20_000 } },

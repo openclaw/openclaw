@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const {
   enqueueSystemEventMock,
@@ -11,12 +12,14 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
+  cleanupBrowserSessionsForLifecycleEndMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -31,9 +34,16 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow,
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
+    () => ({
+      requestHeartbeatNow,
+    }),
+  );
+});
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -49,6 +59,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
+}));
+
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -72,6 +86,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+    cleanupBrowserSessionsForLifecycleEndMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -192,6 +207,55 @@ describe("buildGatewayCronService", () => {
           sessionKey: "project-alpha-monitor",
         }),
       );
+      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+        sessionKeys: ["project-alpha-monitor"],
+        onWarn: expect.any(Function),
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("uses a dedicated cron session key for isolated jobs with model overrides", async () => {
+    const cfg = createCronConfig("server-cron-isolated-key");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-model-override",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: "run report",
+          model: "ollama/kimi-k2.5:cloud",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          sessionKey: `cron:${job.id}`,
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "main",
+        }),
+      );
+      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+        sessionKeys: [`cron:${job.id}`],
+        onWarn: expect.any(Function),
+      });
     } finally {
       state.cron.stop();
     }

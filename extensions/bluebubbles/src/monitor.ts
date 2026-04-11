@@ -1,7 +1,14 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  asRecord,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
@@ -15,18 +22,31 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   registerWebhookTargetWithPluginRoute,
   readWebhookBodyOrReject,
+  resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
-} from "./runtime-api.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+} from "./webhook-ingress.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
+const webhookRateLimiter = createFixedWindowRateLimiter({
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+});
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const debounceRegistry = createBlueBubblesDebounceRegistry({ processMessage });
+
+export function clearBlueBubblesWebhookSecurityStateForTest(): void {
+  webhookRateLimiter.clear();
+  webhookInFlightLimiter.clear();
+}
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
   const registered = registerWebhookTargetWithPluginRoute({
@@ -74,15 +94,9 @@ function parseBlueBubblesWebhookPayload(
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: formatErrorMessage(error) };
     }
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function maskSecret(value: string): string {
@@ -97,38 +111,77 @@ function normalizeAuthToken(raw: string): string {
   if (!value) {
     return "";
   }
-  if (value.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(value).startsWith("bearer ")) {
     return value.slice("bearer ".length).trim();
   }
   return value;
 }
 
-function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   const a = normalizeAuthToken(aRaw);
   const b = normalizeAuthToken(bRaw);
   if (!a || !b) {
     return false;
   }
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    return false;
+  return safeEqualSecret(a, b);
+}
+
+function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
+  const proxies = new Set<string>();
+  for (const target of targets) {
+    for (const proxy of target.config.gateway?.trustedProxies ?? []) {
+      const normalized = proxy.trim();
+      if (normalized) {
+        proxies.add(normalized);
+      }
+    }
   }
-  return timingSafeEqual(bufA, bufB);
+  return [...proxies];
+}
+
+function resolveWebhookAllowRealIpFallback(targets: readonly WebhookTarget[]): boolean {
+  return targets.some((target) => target.config.gateway?.allowRealIpFallback === true);
+}
+
+function resolveWebhookClientIp(
+  req: IncomingMessage,
+  trustedProxies: readonly string[],
+  allowRealIpFallback: boolean,
+): string {
+  if (!req.headers["x-forwarded-for"] && !(allowRealIpFallback && req.headers["x-real-ip"])) {
+    return req.socket.remoteAddress ?? "unknown";
+  }
+
+  // Mirror gateway client-IP trust rules so limiter buckets follow configured proxy hops.
+  return (
+    resolveRequestClientIp(req, [...trustedProxies], allowRealIpFallback) ??
+    req.socket.remoteAddress ??
+    "unknown"
+  );
 }
 
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
+  const requestUrl = new URL(req.url ?? "/", "http://localhost");
+  const normalizedPath = normalizeWebhookPath(requestUrl.pathname);
+  const pathTargets = webhookTargets.get(normalizedPath) ?? [];
+  const trustedProxies = collectTrustedProxies(pathTargets);
+  const allowRealIpFallback = resolveWebhookAllowRealIpFallback(pathTargets);
+  const clientIp = resolveWebhookClientIp(req, trustedProxies, allowRealIpFallback);
+  const rateLimitKey = `${normalizedPath}:${clientIp}`;
   return await withResolvedWebhookRequestPipeline({
     req,
     res,
     targetsByPath: webhookTargets,
     allowMethods: ["POST"],
+    rateLimiter: webhookRateLimiter,
+    rateLimitKey,
     inFlightLimiter: webhookInFlightLimiter,
+    inFlightKey: `${normalizedPath}:${clientIp}`,
     handle: async ({ path, targets }) => {
-      const url = new URL(req.url ?? "/", "http://localhost");
+      const url = requestUrl;
       const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
       const headerToken =
         req.headers["x-guid"] ??
@@ -141,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         res,
         isMatch: (target) => {
           const token = target.account.config.password?.trim() ?? "";
-          return safeEqualSecret(guid, token);
+          return safeEqualAuthToken(guid, token);
         },
       });
       if (!target) {
@@ -268,6 +321,10 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+  const allowPrivateNetwork = resolveBlueBubblesEffectiveAllowPrivateNetwork({
+    baseUrl: account.baseUrl,
+    config: account.config,
+  });
 
   // Fetch and cache server info (for macOS version detection in action gating)
   const serverInfo = await fetchBlueBubblesServerInfo({
@@ -275,6 +332,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
+    allowPrivateNetwork,
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);

@@ -178,6 +178,82 @@ describe("resolveMentions", () => {
       });
       expect(result.wasMentioned).toBe(true);
     });
+
+    it("detects mention when the visible label matches the bot's displayName", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "Wonderful Bot: hello",
+          formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">Wonderful Bot</a>: hello',
+        },
+        userId,
+        displayName: "Wonderful Bot",
+        text: "Wonderful Bot: hello",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+    });
+
+    it("detects mention when the visible label encodes the bot's displayName", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "R&D Bot: hello",
+          formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">R&amp;D Bot</a>: hello',
+        },
+        userId,
+        displayName: "R&D Bot",
+        text: "R&D Bot: hello",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+    });
+
+    it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {
+      expect(() =>
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body: "hello",
+            formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">&#x110000;</a>: hello',
+          },
+          userId,
+          text: "hello",
+          mentionRegexes: [],
+        }),
+      ).not.toThrow();
+    });
+
+    it("ignores oversized decimal HTML entities in visible labels", () => {
+      expect(() =>
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body: "hello",
+            formatted_body:
+              '<a href="https://matrix.to/#/@bot:matrix.org">&#9999999999999999999999999999999999999999;</a>: hello',
+          },
+          userId,
+          text: "hello",
+          mentionRegexes: [],
+        }),
+      ).not.toThrow();
+    });
+
+    it("does not detect mention when displayName is spoofed", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "Spoofed Bot: hello",
+          formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">Spoofed Bot</a>: hello',
+        },
+        userId,
+        displayName: "Alice",
+        text: "Spoofed Bot: hello",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(false);
+    });
   });
 
   describe("regex patterns", () => {

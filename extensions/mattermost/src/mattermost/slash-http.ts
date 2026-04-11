@@ -6,22 +6,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
-import {
-  buildModelsProviderData,
-  createChannelReplyPipeline,
-  isRequestBodyLimitError,
-  logTypingFailure,
-  readRequestBodyWithLimit,
-  type OpenClawConfig,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
-  normalizeMattermostBaseUrl,
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
@@ -37,6 +28,16 @@ import {
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  buildModelsProviderData,
+  createChannelReplyPipeline,
+  isRequestBodyLimitError,
+  logTypingFailure,
+  readRequestBodyWithLimit,
+  type OpenClawConfig,
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   parseSlashCommandPayload,
@@ -76,6 +77,18 @@ function sendJsonResponse(
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+function matchesRegisteredCommandToken(
+  commandTokens: ReadonlySet<string>,
+  candidate: string,
+): boolean {
+  for (const token of commandTokens) {
+    if (safeEqualSecret(candidate, token)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type SlashInvocationAuth = {
@@ -242,7 +255,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     // Validate token — fail closed: reject when no tokens are registered
     // (e.g. registration failed or startup was partial)
-    if (commandTokens.size === 0 || !commandTokens.has(payload.token)) {
+    if (commandTokens.size === 0 || !matchesRegisteredCommandToken(commandTokens, payload.token)) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -260,6 +273,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
+      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
     });
 
     const auth = await authorizeSlashInvocation({
@@ -316,6 +330,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
+          cfg,
           accountId: account.accountId,
         });
       } catch {
@@ -356,7 +371,7 @@ async function handleSlashCommandAsync(params: {
     teamId,
     kind,
     chatType,
-    channelName,
+    channelName: _channelName,
     channelDisplay,
     roomLabel,
     commandAuthorized,
@@ -387,6 +402,7 @@ async function handleSlashCommandAsync(params: {
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(to, "No models available.", {
+        cfg,
         accountId: account.accountId,
       });
       return;
@@ -418,6 +434,7 @@ async function handleSlashCommandAsync(params: {
             });
 
     await sendMessageMattermost(to, view.text, {
+      cfg,
       accountId: account.accountId,
       buttons: view.buttons,
     });

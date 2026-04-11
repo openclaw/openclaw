@@ -1,27 +1,19 @@
 import os from "node:os";
 import path from "node:path";
+import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
+import { forwardConsumedCliRootOption } from "./root-option-forward.js";
+import { takeCliRootOptionValue } from "./root-option-value.js";
 
 export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
-
-function takeValue(
-  raw: string,
-  next: string | undefined,
-): {
-  value: string | null;
-  consumedNext: boolean;
-} {
-  if (raw.includes("=")) {
-    const [, value] = raw.split("=", 2);
-    const trimmed = (value ?? "").trim();
-    return { value: trimmed || null, consumedNext: false };
-  }
-  const trimmed = (next ?? "").trim();
-  return { value: trimmed || null, consumedNext: Boolean(next) };
-}
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (argv.length < 2) {
@@ -31,7 +23,6 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   const out: string[] = argv.slice(0, 2);
   let profile: string | null = null;
   let sawDev = false;
-  let sawCommand = false;
 
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
@@ -39,13 +30,16 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     if (arg === undefined) {
       continue;
     }
-
-    if (sawCommand) {
-      out.push(arg);
-      continue;
+    if (arg === FLAG_TERMINATOR) {
+      out.push(arg, ...args.slice(i + 1));
+      break;
     }
 
     if (arg === "--dev") {
+      if (resolveCliArgvInvocation(out).primary === "gateway") {
+        out.push(arg);
+        continue;
+      }
       if (profile && profile !== "dev") {
         return { ok: false, error: "Cannot combine --dev with --profile" };
       }
@@ -59,7 +53,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
         return { ok: false, error: "Cannot combine --dev with --profile" };
       }
       const next = args[i + 1];
-      const { value, consumedNext } = takeValue(arg, next);
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (consumedNext) {
         i += 1;
       }
@@ -76,9 +70,9 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    if (!arg.startsWith("-")) {
-      sawCommand = true;
-      out.push(arg);
+    const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
+    if (consumedRootOption > 0) {
+      i += consumedRootOption - 1;
       continue;
     }
 
@@ -93,7 +87,7 @@ function resolveProfileStateDir(
   env: Record<string, string | undefined>,
   homedir: () => string,
 ): string {
-  const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
+  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
   return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
 }
 
@@ -112,12 +106,13 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
-  if (!env.OPENCLAW_STATE_DIR?.trim()) {
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
+  if (!existingStateDir) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 

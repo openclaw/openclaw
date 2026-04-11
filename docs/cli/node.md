@@ -31,6 +31,11 @@ Node hosts automatically advertise a browser proxy if `browser.enabled` is not
 disabled on the node. This lets the agent use browser automation on that node
 without extra configuration.
 
+By default, the proxy exposes the node's normal browser profile surface. If you
+set `nodeHost.browserProxy.allowProfiles`, the proxy becomes restrictive:
+non-allowlisted profile targeting is rejected, and persistent profile
+create/delete routes are blocked through the proxy.
+
 Disable it on the node if needed:
 
 ```json5
@@ -125,3 +130,8 @@ The node host stores its node id, token, display name, and gateway connection in
 - `~/.openclaw/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
+
+For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
+before prompting. The later approved `system.run` forward reuses that stored
+plan, so edits to command/cwd/session fields after the approval request was
+created are rejected instead of changing what the node executes.

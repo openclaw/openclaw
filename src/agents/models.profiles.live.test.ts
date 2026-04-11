@@ -2,37 +2,41 @@ import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isModernModelRef } from "./live-model-filter.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import {
+  isHighSignalLiveModelRef,
+  resolveHighSignalLiveModelLimit,
+  selectHighSignalLiveItems,
+} from "./live-model-filter.js";
+import { createLiveTargetMatcher } from "./live-target-matcher.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
+const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
+const LIVE_SETUP_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
+);
 
 const describeLive = LIVE ? describe : describe.skip;
 
 function parseCsvFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length ? new Set(ids) : null;
+  return parseLiveCsvFilter(raw, { lowercase: false });
 }
 
 function parseProviderFilter(raw?: string): Set<string> | null {
@@ -65,6 +69,32 @@ async function withLiveHeartbeat<T>(operation: Promise<T>, context: string): Pro
     clearInterval(timer);
     if (heartbeatCount > 0) {
       logProgress(`${context}: completed after ${formatElapsedSeconds(Date.now() - startedAt)}`);
+    }
+  }
+}
+
+async function withLiveStageTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+  timeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): Promise<T> {
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await withLiveHeartbeat(
+      Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          hardTimer = setTimeout(() => {
+            reject(new Error(`${context} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          hardTimer.unref?.();
+        }),
+      ]),
+      context,
+    );
+  } finally {
+    if (hardTimer) {
+      clearTimeout(hardTimer);
     }
   }
 }
@@ -106,23 +136,6 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   return false;
 }
 
-function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
-  if (!msg) {
-    return false;
-  }
-  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/not_found_error/i.test(msg)) {
-    return true;
-  }
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  return false;
-}
-
 describe("isModelNotFoundErrorMessage", () => {
   it("matches whitespace-separated not found errors", () => {
     expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
@@ -132,6 +145,20 @@ describe("isModelNotFoundErrorMessage", () => {
   it("still matches underscore and hyphen variants", () => {
     expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
+  });
+
+  it("matches deprecated free model transition messages", () => {
+    expect(
+      isModelNotFoundErrorMessage(
+        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches OpenRouter no-endpoints wording", () => {
+    expect(
+      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
+    ).toBe(true);
   });
 });
 
@@ -158,8 +185,36 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google")
+    msg.includes("upstream error from google") ||
+    msg.includes("temporarily rate-limited upstream") ||
+    msg.includes("unable to access non-serverless model") ||
+    msg.includes("create and start a new dedicated endpoint") ||
+    msg.includes("no available capacity was found for the model")
   );
+}
+
+function isOllamaUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("ollama could not be reached") ||
+    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
+    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
+  );
+}
+
+function isAudioOnlyModelErrorMessage(raw: string): boolean {
+  return /requires that either input content or output modality contain audio/i.test(raw);
+}
+
+function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
+  return (
+    /does not support parameter reasoningeffort/i.test(raw) ||
+    /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
+  );
+}
+
+function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
+  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -171,49 +226,6 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function capByProviderSpread<T>(
-  items: T[],
-  maxItems: number,
-  providerOf: (item: T) => string,
-): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
-  }
-  const providerOrder: string[] = [];
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const provider = providerOf(item);
-    const bucket = grouped.get(provider);
-    if (bucket) {
-      bucket.push(item);
-      continue;
-    }
-    providerOrder.push(provider);
-    grouped.set(provider, [item]);
-  }
-
-  const selected: T[] = [];
-  while (selected.length < maxItems && grouped.size > 0) {
-    for (const provider of providerOrder) {
-      const bucket = grouped.get(provider);
-      if (!bucket || bucket.length === 0) {
-        continue;
-      }
-      const item = bucket.shift();
-      if (item) {
-        selected.push(item);
-      }
-      if (bucket.length === 0) {
-        grouped.delete(provider);
-      }
-      if (selected.length >= maxItems) {
-        break;
-      }
-    }
-  }
-  return selected;
-}
-
 function resolveTestReasoning(
   model: Model<Api>,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
@@ -221,6 +233,18 @@ function resolveTestReasoning(
     return undefined;
   }
   const id = model.id.toLowerCase();
+  if (id.includes("deep-research")) {
+    return "medium";
+  }
+  if (id === "gpt-5.4-pro") {
+    return "medium";
+  }
+  if (model.provider === "openrouter" && id.startsWith("qwq")) {
+    return undefined;
+  }
+  if (model.provider === "xai" && id.startsWith("grok-4")) {
+    return undefined;
+  }
   if (model.provider === "openai" || model.provider === "openai-codex") {
     if (id.includes("pro")) {
       return "high";
@@ -341,8 +365,16 @@ describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
     async () => {
-      const cfg = loadConfig();
-      await ensureOpenClawModelsJson(cfg);
+      logProgress("[live-models] loading config");
+      const cfg = await withLiveStageTimeout(
+        Promise.resolve().then(() => loadConfig()),
+        "[live-models] load config",
+      );
+      logProgress("[live-models] preparing models.json");
+      await withLiveStageTimeout(
+        ensureOpenClawModelsJson(cfg),
+        "[live-models] prepare models.json",
+      );
       if (!DIRECT_ENABLED) {
         logProgress(
           "[live-models] skipping (set OPENCLAW_LIVE_MODELS=modern|all|<list>; all=modern)",
@@ -357,8 +389,11 @@ describeLive("live models (profile keys)", () => {
 
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const models = modelRegistry.getAll();
+      logProgress("[live-models] loading model registry");
+      const models = await withLiveStageTimeout(
+        Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
+        "[live-models] load model registry",
+      );
 
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
@@ -367,7 +402,16 @@ describeLive("live models (profile keys)", () => {
       const allowNotFoundSkip = useModern;
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
-      const maxModels = toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0);
+      const maxModels = resolveHighSignalLiveModelLimit({
+        rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
+        useExplicitModels: useExplicit,
+      });
+      const targetMatcher = createLiveTargetMatcher({
+        providerFilter: providers,
+        modelFilter: filter,
+        config: cfg,
+        env: process.env,
+      });
 
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
@@ -380,20 +424,24 @@ describeLive("live models (profile keys)", () => {
         if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
           continue;
         }
-        if (providers && !providers.has(model.provider)) {
+        if (!targetMatcher.matchesProvider(model.provider)) {
           continue;
         }
         const id = `${model.provider}/${model.id}`;
-        if (filter && !filter.has(id)) {
+        if (!targetMatcher.matchesModel(model.provider, model.id)) {
           continue;
         }
         if (!filter && useModern) {
-          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
+          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
         }
         try {
-          const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+          const apiKeyInfo = await getApiKeyForModel({
+            model,
+            cfg,
+            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          });
           if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
             skipped.push({
               model: id,
@@ -412,12 +460,13 @@ describeLive("live models (profile keys)", () => {
         return;
       }
 
-      const selectedCandidates = capByProviderSpread(
+      const selectedCandidates = selectHighSignalLiveItems(
         candidates,
         maxModels > 0 ? maxModels : candidates.length,
+        (entry) => ({ provider: entry.model.provider, id: entry.model.id }),
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,
@@ -448,7 +497,7 @@ describeLive("live models (profile keys)", () => {
             if (
               model.provider === "openai" &&
               model.api === "openai-responses" &&
-              model.id === "gpt-5.2"
+              model.id === "gpt-5.4"
             ) {
               logProgress(`${progressLabel}: tool-only regression`);
               const noopTool = {
@@ -723,6 +772,35 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (model not found)`);
+              break;
+            }
+            if (allowNotFoundSkip && isAudioOnlyModelErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (audio-only model)`);
+              break;
+            }
+            if (allowNotFoundSkip && isUnsupportedReasoningEffortErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+              break;
+            }
+            if (allowNotFoundSkip && isUnsupportedThinkingToggleErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "ollama" &&
+              isOllamaUnavailableErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (ollama unavailable)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

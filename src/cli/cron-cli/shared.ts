@@ -4,13 +4,23 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
+import {
+  isOffsetlessIsoDateTime,
+  parseOffsetlessIsoDateTimeInTimeZone,
+} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
-export const getCronChannelOptions = () =>
-  ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+export const getCronChannelOptions = () => {
+  // Keep help truthful even before the plugin registry is bootstrapped.
+  const pluginIds = listChannelPlugins()
+    .map((plugin) => plugin.id)
+    .filter(Boolean);
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+};
 
 export function printCronJson(value: unknown) {
   defaultRuntime.writeJson(value);
@@ -58,7 +68,7 @@ export function parseDurationMs(input: string): number | null {
   if (!Number.isFinite(n) || n <= 0) {
     return null;
   }
-  const unit = (match[2] ?? "").toLowerCase();
+  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
   const factor =
     unit === "ms"
       ? 1
@@ -89,11 +99,25 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
-export function parseAt(input: string): string | null {
+/**
+ * Parse a one-shot `--at` value into an ISO string (UTC).
+ *
+ * When `tz` is provided and the input is an offset-less datetime
+ * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
+ * that IANA timezone instead of UTC.
+ */
+export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
   }
+
+  // If a timezone is provided and the input looks like an offset-less ISO datetime,
+  // resolve it in the given IANA timezone so users get the time they expect.
+  if (tz && isOffsetlessIsoDateTime(raw)) {
+    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+  }
+
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
     return new Date(absolute).toISOString();

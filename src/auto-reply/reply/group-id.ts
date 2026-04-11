@@ -1,0 +1,32 @@
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
+
+export { extractSimpleExplicitGroupId };
+
+export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const simple = extractSimpleExplicitGroupId(trimmed);
+  if (simple) {
+    return simple;
+  }
+  const firstPart = trimmed.split(":").find(Boolean);
+  const channelId =
+    normalizeChannelId(firstPart ?? "") ?? normalizeOptionalLowercaseString(firstPart);
+  const messaging = channelId
+    ? (getLoadedChannelPlugin(channelId)?.messaging ??
+      getBundledChannelPlugin(channelId)?.messaging)
+    : undefined;
+  const parsed = messaging?.parseExplicitTarget?.({ raw: trimmed }) ?? null;
+  if (parsed && parsed.chatType && parsed.chatType !== "direct") {
+    return parsed.to.replace(/:topic:.*$/, "") || undefined;
+  }
+  return undefined;
+}

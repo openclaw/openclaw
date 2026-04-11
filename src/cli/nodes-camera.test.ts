@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchResponse,
@@ -35,9 +35,7 @@ async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T
 }
 
 describe("nodes camera helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({
       cameraTempPath,
       parseCameraClipPayload,
@@ -47,6 +45,10 @@ describe("nodes camera helpers", () => {
       writeUrlToFile,
     } = await import("./nodes-camera.js"));
     ({ parseScreenRecordPayload, screenRecordTempPath } = await import("./nodes-screen.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("parses camera.snap payload", () => {
@@ -185,51 +187,44 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/must match node host/i);
   });
 
-  it("rejects invalid url payload responses", async () => {
-    const cases: Array<{
-      name: string;
-      url: string;
-      response?: Response;
-      expectedMessage: RegExp;
-    }> = [
-      {
-        name: "non-https url",
-        url: "http://198.51.100.42/x.bin",
-        expectedMessage: /only https/i,
-      },
-      {
-        name: "oversized content-length",
-        url: "https://198.51.100.42/huge.bin",
-        response: new Response("tiny", {
-          status: 200,
-          headers: { "content-length": String(999_999_999) },
-        }),
-        expectedMessage: /exceeds max/i,
-      },
-      {
-        name: "non-ok status",
-        url: "https://198.51.100.42/down.bin",
-        response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
-        expectedMessage: /503/i,
-      },
-      {
-        name: "empty response body",
-        url: "https://198.51.100.42/empty.bin",
-        response: new Response(null, { status: 200 }),
-        expectedMessage: /empty response body/i,
-      },
-    ];
-
-    for (const testCase of cases) {
-      if (testCase.response) {
-        stubFetchResponse(testCase.response);
+  it.each([
+    {
+      name: "non-https url",
+      url: "http://198.51.100.42/x.bin",
+      expectedMessage: /only https/i,
+    },
+    {
+      name: "oversized content-length",
+      url: "https://198.51.100.42/huge.bin",
+      response: new Response("tiny", {
+        status: 200,
+        headers: { "content-length": String(999_999_999) },
+      }),
+      expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "non-ok status",
+      url: "https://198.51.100.42/down.bin",
+      response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
+      expectedMessage: /503/i,
+    },
+    {
+      name: "empty response body",
+      url: "https://198.51.100.42/empty.bin",
+      response: new Response(null, { status: 200 }),
+      expectedMessage: /empty response body/i,
+    },
+  ] as const)(
+    "rejects invalid url payload response: $name",
+    async ({ url, response, expectedMessage }) => {
+      if (response) {
+        stubFetchResponse(response);
       }
       await expect(
-        writeUrlToFile("/tmp/ignored", testCase.url, { expectedHost: "198.51.100.42" }),
-        testCase.name,
-      ).rejects.toThrow(testCase.expectedMessage);
-    }
-  });
+        writeUrlToFile("/tmp/ignored", url, { expectedHost: "198.51.100.42" }),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
 
   it("removes partially written file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({

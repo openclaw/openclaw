@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -17,6 +17,15 @@ type WarningParams = {
 const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
 let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
+
+function resetSessionMaintenanceWarningForTests() {
+  warnedContexts.clear();
+  deliverRuntimePromise = null;
+}
+
+export const __testing = {
+  resetSessionMaintenanceWarningForTests,
+} as const;
 
 function loadDeliverRuntime() {
   deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");

@@ -1,6 +1,7 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle } from "./drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -16,7 +17,7 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
 });
 
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
     return undefined;
   }
@@ -44,9 +45,11 @@ function isRunAlreadyQueued(
     item.originatingAccountId === run.originatingAccountId &&
     item.originatingThreadId === run.originatingThreadId;
 
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.some(
+      (item) => normalizeOptionalString(item.messageId) === messageId && hasSameRouting(item),
+    );
   }
   if (!allowPromptFallback) {
     return false;
@@ -59,6 +62,8 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -82,7 +87,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
   });
   if (!shouldEnqueue) {
     return false;
@@ -92,10 +97,13 @@ export function enqueueFollowupRun(
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
   // Use the cached callback to restart the drain now.
-  if (!queue.draining) {
+  if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
   return true;

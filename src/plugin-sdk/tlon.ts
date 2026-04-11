@@ -1,5 +1,5 @@
 // Private helper surface for the bundled tlon plugin.
-// Keep this list additive and scoped to symbols used under extensions/tlon.
+// Keep this list additive and scoped to the bundled Tlon surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -13,7 +13,7 @@ export type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
   ChannelSetupInput,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";

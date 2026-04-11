@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
@@ -20,8 +20,11 @@ import type { PinnedHostname } from "./ssrf.js";
 
 let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ createPinnedDispatcher } = await import("./ssrf.js"));
+});
+
+beforeEach(() => {
   agentCtor.mockClear();
   envHttpProxyAgentCtor.mockClear();
   proxyAgentCtor.mockClear();
@@ -29,13 +32,34 @@ beforeEach(async () => {
     Agent: agentCtor,
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
     ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
   };
-  ({ createPinnedDispatcher } = await import("./ssrf.js"));
 });
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
 });
+
+function createPinnedTelegramHost(lookup: PinnedHostname["lookup"]): PinnedHostname {
+  return {
+    hostname: "api.telegram.org",
+    addresses: ["149.154.167.221"],
+    lookup,
+  };
+}
+
+function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
+  createPinnedDispatcher(createPinnedTelegramHost(lookup), {
+    mode: "direct",
+    pinnedHostname: {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.220"],
+    },
+  });
+
+  return (agentCtor.mock.calls.at(-1)?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })
+    ?.connect?.lookup;
+}
 
 describe("createPinnedDispatcher", () => {
   it("uses pinned lookup without overriding global family policy", () => {
@@ -53,6 +77,7 @@ describe("createPinnedDispatcher", () => {
       connect: {
         lookup,
       },
+      allowH2: false,
     });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
       | { connect?: Record<string, unknown> }
@@ -84,31 +109,15 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      allowH2: false,
     });
   });
 
   it("replaces the pinned lookup when a dispatcher override hostname is provided", () => {
     const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "api.telegram.org",
-      addresses: ["149.154.167.221"],
-      lookup: originalLookup,
-    };
+    const lookup = createDispatcherWithPinnedOverride(originalLookup);
 
-    createPinnedDispatcher(pinned, {
-      mode: "direct",
-      pinnedHostname: {
-        hostname: "api.telegram.org",
-        addresses: ["149.154.167.220"],
-      },
-    });
-
-    const firstCallArg = agentCtor.mock.calls.at(-1)?.[0] as
-      | { connect?: { lookup?: PinnedHostname["lookup"] } }
-      | undefined;
-    expect(firstCallArg?.connect?.lookup).toBeTypeOf("function");
-
-    const lookup = firstCallArg?.connect?.lookup;
+    expect(lookup).toBeTypeOf("function");
     const callback = vi.fn();
     lookup?.("api.telegram.org", callback);
 
@@ -122,24 +131,7 @@ describe("createPinnedDispatcher", () => {
         callback(null, "93.184.216.34", 4);
       },
     ) as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "api.telegram.org",
-      addresses: ["149.154.167.221"],
-      lookup: originalLookup,
-    };
-
-    createPinnedDispatcher(pinned, {
-      mode: "direct",
-      pinnedHostname: {
-        hostname: "api.telegram.org",
-        addresses: ["149.154.167.220"],
-      },
-    });
-
-    const firstCallArg = agentCtor.mock.calls.at(-1)?.[0] as
-      | { connect?: { lookup?: PinnedHostname["lookup"] } }
-      | undefined;
-    const lookup = firstCallArg?.connect?.lookup;
+    const lookup = createDispatcherWithPinnedOverride(originalLookup);
     const callback = vi.fn();
     lookup?.("example.com", callback);
 
@@ -193,6 +185,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamily: true,
         lookup,
       },
+      allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
       },
@@ -217,6 +210,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      allowH2: false,
       requestTls: {
         autoSelectFamily: false,
         lookup,

@@ -3,6 +3,86 @@ import Observation
 import UserNotifications
 import WatchKit
 
+enum WatchPayloadType: String, Codable, Sendable, Equatable {
+    case notify = "watch.notify"
+    case reply = "watch.reply"
+    case execApprovalPrompt = "watch.execApproval.prompt"
+    case execApprovalResolve = "watch.execApproval.resolve"
+    case execApprovalResolved = "watch.execApproval.resolved"
+    case execApprovalExpired = "watch.execApproval.expired"
+    case execApprovalSnapshot = "watch.execApproval.snapshot"
+    case execApprovalSnapshotRequest = "watch.execApproval.snapshotRequest"
+}
+
+enum WatchRiskLevel: String, Codable, Sendable, Equatable {
+    case low
+    case medium
+    case high
+}
+
+enum WatchExecApprovalDecision: String, Codable, Sendable, Equatable {
+    case allowOnce = "allow-once"
+    case deny
+}
+
+enum WatchExecApprovalCloseReason: String, Codable, Sendable, Equatable {
+    case expired
+    case notFound = "not-found"
+    case unavailable
+    case replaced
+    case resolved
+}
+
+struct WatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
+    var id: String
+    var commandText: String
+    var commandPreview: String?
+    var host: String?
+    var nodeId: String?
+    var agentId: String?
+    var expiresAtMs: Int?
+    var allowedDecisions: [WatchExecApprovalDecision]
+    var risk: WatchRiskLevel?
+}
+
+struct WatchExecApprovalPromptMessage: Codable, Sendable, Equatable {
+    var approval: WatchExecApprovalItem
+    var sentAtMs: Int?
+    var deliveryId: String?
+    var resetResolvingState: Bool?
+}
+
+struct WatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
+    var approvalId: String
+    var decision: WatchExecApprovalDecision?
+    var resolvedAtMs: Int?
+    var source: String?
+}
+
+struct WatchExecApprovalExpiredMessage: Codable, Sendable, Equatable {
+    var approvalId: String
+    var reason: WatchExecApprovalCloseReason
+    var expiredAtMs: Int?
+}
+
+struct WatchExecApprovalSnapshotMessage: Codable, Sendable, Equatable {
+    var approvals: [WatchExecApprovalItem]
+    var sentAtMs: Int?
+    var snapshotId: String?
+}
+
+struct WatchExecApprovalSnapshotRequestMessage: Codable, Sendable, Equatable {
+    var requestId: String
+    var sentAtMs: Int?
+}
+
+struct WatchExecApprovalResolveMessage: Codable, Sendable, Equatable {
+    var approvalId: String
+    var decision: WatchExecApprovalDecision
+    var replyId: String
+    var sentAtMs: Int?
+}
+
 struct WatchPromptAction: Codable, Sendable, Equatable, Identifiable {
     var id: String
     var label: String
@@ -23,6 +103,18 @@ struct WatchNotifyMessage: Sendable {
     var actions: [WatchPromptAction]
 }
 
+struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
+    var approval: WatchExecApprovalItem
+    var transport: String
+    var updatedAt: Date
+    var isResolving: Bool
+    var pendingDecision: WatchExecApprovalDecision?
+    var statusText: String?
+    var statusAt: Date?
+
+    var id: String { self.approval.id }
+}
+
 @MainActor @Observable final class WatchInboxStore {
     private struct PersistedState: Codable {
         var title: String
@@ -39,13 +131,20 @@ struct WatchNotifyMessage: Sendable {
         var actions: [WatchPromptAction]?
         var replyStatusText: String?
         var replyStatusAt: Date?
+        var execApprovals: [WatchExecApprovalRecord]
+        var selectedExecApprovalID: String?
+        var lastExecApprovalSnapshotID: String?
+        var lastExecApprovalOutcomeText: String?
+        var lastExecApprovalOutcomeAt: Date?
     }
 
-    private static let persistedStateKey = "watch.inbox.state.v1"
+    private static let persistedStateKey = "watch.inbox.state.v2"
+    private static let defaultTitle = "OpenClaw"
+    private static let defaultBody = "Waiting for messages from your iPhone."
     private let defaults: UserDefaults
 
-    var title = "OpenClaw"
-    var body = "Waiting for messages from your iPhone."
+    var title = WatchInboxStore.defaultTitle
+    var body = WatchInboxStore.defaultBody
     var transport = "none"
     var updatedAt: Date?
     var promptId: String?
@@ -58,14 +157,86 @@ struct WatchNotifyMessage: Sendable {
     var replyStatusText: String?
     var replyStatusAt: Date?
     var isReplySending = false
+    var execApprovals: [WatchExecApprovalRecord] = []
+    var selectedExecApprovalID: String?
+    var lastExecApprovalOutcomeText: String?
+    var lastExecApprovalOutcomeAt: Date?
+    var isExecApprovalReviewLoading = false
+    var execApprovalReviewStatusText: String?
+    var execApprovalReviewStatusAt: Date?
+    private var lastExecApprovalSnapshotID: String?
+    private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.restorePersistedState()
+        self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
         Task {
             await self.ensureNotificationAuthorization()
         }
+    }
+
+    var sortedExecApprovals: [WatchExecApprovalRecord] {
+        self.execApprovals.sorted { lhs, rhs in
+            let lhsExpires = lhs.approval.expiresAtMs ?? Int.max
+            let rhsExpires = rhs.approval.expiresAtMs ?? Int.max
+            if lhsExpires != rhsExpires {
+                return lhsExpires < rhsExpires
+            }
+            return lhs.updatedAt > rhs.updatedAt
+        }
+    }
+
+    var activeExecApproval: WatchExecApprovalRecord? {
+        if let selectedExecApprovalID,
+           let selected = self.execApprovals.first(where: { $0.id == selectedExecApprovalID })
+        {
+            return selected
+        }
+        return self.sortedExecApprovals.first
+    }
+
+    var shouldAutoRequestExecApprovalSnapshot: Bool {
+        self.execApprovals.isEmpty
+            && self.actions.isEmpty
+            && self.title == Self.defaultTitle
+            && self.body == Self.defaultBody
+            && !self.hasCompletedExecApprovalSnapshotRefreshInSession
+    }
+
+    var hasCompletedExecApprovalSnapshotRefresh: Bool {
+        self.hasCompletedExecApprovalSnapshotRefreshInSession
+    }
+
+    var shouldShowExecApprovalReviewStatus: Bool {
+        self.execApprovals.isEmpty && !(self.execApprovalReviewStatusText?.isEmpty ?? true)
+    }
+
+    func beginExecApprovalReviewLoading() {
+        guard self.execApprovals.isEmpty else {
+            self.markExecApprovalReviewLoaded()
+            return
+        }
+        self.isExecApprovalReviewLoading = true
+        self.execApprovalReviewStatusText = "Loading approval from iPhone…"
+        self.execApprovalReviewStatusAt = Date()
+    }
+
+    func markExecApprovalReviewLoaded() {
+        self.isExecApprovalReviewLoading = false
+        self.execApprovalReviewStatusText = nil
+        self.execApprovalReviewStatusAt = nil
+    }
+
+    func markExecApprovalReviewUnavailable(_ message: String) {
+        guard self.execApprovals.isEmpty else {
+            self.markExecApprovalReviewLoaded()
+            return
+        }
+        self.isExecApprovalReviewLoading = false
+        self.execApprovalReviewStatusText = message
+        self.execApprovalReviewStatusAt = Date()
     }
 
     func consume(message: WatchNotifyMessage, transport: String) {
@@ -82,6 +253,7 @@ struct WatchNotifyMessage: Sendable {
         self.title = normalizedTitle
         self.body = message.body
         self.transport = transport
+        self.markExecApprovalReviewLoaded()
         self.updatedAt = Date()
         self.promptId = message.promptId
         self.sessionKey = message.sessionKey
@@ -105,6 +277,209 @@ struct WatchNotifyMessage: Sendable {
         }
     }
 
+    func consume(
+        execApprovalPrompt message: WatchExecApprovalPromptMessage,
+        transport: String)
+    {
+        self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
+        self.upsertExecApproval(
+            message.approval,
+            transport: transport,
+            keepSelectionIfPossible: true,
+            resetResolvingState: message.resetResolvingState == true)
+        self.markExecApprovalReviewLoaded()
+        self.lastExecApprovalOutcomeText = nil
+        self.lastExecApprovalOutcomeAt = nil
+
+        Task {
+            await self.postLocalNotification(
+                identifier: "watch.execApproval.\(message.approval.id)",
+                title: "Exec approval required",
+                body: message.approval.commandPreview ?? message.approval.commandText,
+                risk: message.approval.risk?.rawValue)
+        }
+    }
+
+    func consume(
+        execApprovalSnapshot message: WatchExecApprovalSnapshotMessage,
+        transport: String)
+    {
+        let snapshotID = message.snapshotId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let snapshotID, !snapshotID.isEmpty, snapshotID == self.lastExecApprovalSnapshotID {
+            return
+        }
+
+        let existingRecordsByID = Dictionary(
+            uniqueKeysWithValues: self.execApprovals.map { ($0.id, $0) })
+        self.execApprovals = message.approvals.map { approval in
+            self.mergedExecApprovalRecord(
+                approval: approval,
+                transport: transport,
+                existingRecord: existingRecordsByID[approval.id])
+        }
+        self.lastExecApprovalSnapshotID = snapshotID
+        self.hasCompletedExecApprovalSnapshotRefreshInSession = true
+        if let selectedExecApprovalID,
+           !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
+        {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        } else if self.selectedExecApprovalID == nil {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        }
+        self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
+        self.markExecApprovalReviewLoaded()
+        self.persistState()
+    }
+
+    func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
+        self.removeExecApproval(id: message.approvalId)
+        let statusText: String
+        switch message.decision {
+        case .allowOnce:
+            statusText = "Allowed once"
+        case .deny:
+            statusText = "Denied"
+        case nil:
+            statusText = "Approval resolved"
+        }
+        self.lastExecApprovalOutcomeText = statusText
+        self.lastExecApprovalOutcomeAt = Date()
+        self.persistState()
+    }
+
+    func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
+        self.removeExecApproval(id: message.approvalId)
+        let statusText: String
+        switch message.reason {
+        case .expired:
+            statusText = "Approval expired"
+        case .notFound:
+            statusText = "Approval no longer available"
+        case .resolved:
+            statusText = "Approval resolved elsewhere"
+        case .replaced:
+            statusText = "Approval replaced"
+        case .unavailable:
+            statusText = "Approval unavailable"
+        }
+        self.lastExecApprovalOutcomeText = statusText
+        self.lastExecApprovalOutcomeAt = Date()
+        self.persistState()
+    }
+
+    func selectExecApproval(id: String) {
+        let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty else { return }
+        guard self.execApprovals.contains(where: { $0.id == normalizedID }) else { return }
+        self.selectedExecApprovalID = normalizedID
+        self.persistState()
+    }
+
+    func markExecApprovalSending(approvalId: String, decision: WatchExecApprovalDecision) {
+        guard let index = self.execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
+        self.execApprovals[index].isResolving = true
+        self.execApprovals[index].pendingDecision = decision
+        self.execApprovals[index].statusText = "Sending \(Self.decisionLabel(decision))…"
+        self.execApprovals[index].statusAt = Date()
+        self.persistState()
+    }
+
+    func markExecApprovalSendResult(
+        approvalId: String,
+        decision: WatchExecApprovalDecision,
+        result: WatchReplySendResult)
+    {
+        guard let index = self.execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
+        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+            self.execApprovals[index].isResolving = false
+            self.execApprovals[index].statusText = "Failed: \(errorMessage)"
+        } else if result.deliveredImmediately {
+            self.execApprovals[index].isResolving = true
+            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): sent"
+        } else if result.queuedForDelivery {
+            self.execApprovals[index].isResolving = true
+            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): queued"
+        } else {
+            self.execApprovals[index].isResolving = true
+            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): sent"
+        }
+        self.execApprovals[index].pendingDecision = result.errorMessage == nil ? decision : nil
+        self.execApprovals[index].statusAt = Date()
+        self.persistState()
+    }
+
+    private func upsertExecApproval(
+        _ approval: WatchExecApprovalItem,
+        transport: String,
+        keepSelectionIfPossible: Bool,
+        resetResolvingState: Bool = false)
+    {
+        if let index = self.execApprovals.firstIndex(where: { $0.id == approval.id }) {
+            self.execApprovals[index] = self.mergedExecApprovalRecord(
+                approval: approval,
+                transport: transport,
+                existingRecord: self.execApprovals[index],
+                resetResolvingState: resetResolvingState)
+        } else {
+            self.execApprovals.append(
+                self.mergedExecApprovalRecord(
+                    approval: approval,
+                    transport: transport,
+                    existingRecord: nil,
+                    resetResolvingState: resetResolvingState))
+        }
+        if !keepSelectionIfPossible || self.selectedExecApprovalID == nil {
+            self.selectedExecApprovalID = approval.id
+        }
+        self.persistState()
+    }
+
+    private func mergedExecApprovalRecord(
+        approval: WatchExecApprovalItem,
+        transport: String,
+        existingRecord: WatchExecApprovalRecord?,
+        resetResolvingState: Bool = false) -> WatchExecApprovalRecord
+    {
+        // Preserve in-flight state across ordinary snapshot/prompt refreshes so duplicate
+        // submissions stay disabled, but clear it when the iPhone explicitly republishes a
+        // prompt after a failed resolve so the watch can retry.
+        let isResolving = resetResolvingState ? false : (existingRecord?.isResolving ?? false)
+        let pendingDecision = resetResolvingState ? nil : existingRecord?.pendingDecision
+        let statusText = resetResolvingState ? nil : existingRecord?.statusText
+        let statusAt = resetResolvingState ? nil : existingRecord?.statusAt
+        return WatchExecApprovalRecord(
+            approval: approval,
+            transport: transport,
+            updatedAt: Date(),
+            isResolving: isResolving,
+            pendingDecision: pendingDecision,
+            statusText: statusText,
+            statusAt: statusAt)
+    }
+
+    private func removeExecApproval(id: String) {
+        let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty else { return }
+        self.execApprovals.removeAll { $0.id == normalizedID }
+        if self.selectedExecApprovalID == normalizedID {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        }
+        self.persistState()
+    }
+
+    private func pruneExpiredExecApprovals(nowMs: Int) {
+        self.execApprovals.removeAll { record in
+            guard let expiresAtMs = record.approval.expiresAtMs else { return false }
+            return expiresAtMs <= nowMs
+        }
+        if let selectedExecApprovalID,
+           !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
+        {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        }
+        self.persistState()
+    }
+
     private func restorePersistedState() {
         guard let data = self.defaults.data(forKey: Self.persistedStateKey),
             let state = try? JSONDecoder().decode(PersistedState.self, from: data)
@@ -126,10 +501,15 @@ struct WatchNotifyMessage: Sendable {
         self.actions = state.actions ?? []
         self.replyStatusText = state.replyStatusText
         self.replyStatusAt = state.replyStatusAt
+        self.execApprovals = state.execApprovals
+        self.selectedExecApprovalID = state.selectedExecApprovalID
+        self.lastExecApprovalSnapshotID = state.lastExecApprovalSnapshotID
+        self.lastExecApprovalOutcomeText = state.lastExecApprovalOutcomeText
+        self.lastExecApprovalOutcomeAt = state.lastExecApprovalOutcomeAt
     }
 
     private func persistState() {
-        guard let updatedAt = self.updatedAt else { return }
+        let updatedAt = self.updatedAt ?? self.lastExecApprovalOutcomeAt ?? Date()
         let state = PersistedState(
             title: self.title,
             body: self.body,
@@ -144,7 +524,12 @@ struct WatchNotifyMessage: Sendable {
             risk: self.risk,
             actions: self.actions,
             replyStatusText: self.replyStatusText,
-            replyStatusAt: self.replyStatusAt)
+            replyStatusAt: self.replyStatusAt,
+            execApprovals: self.execApprovals,
+            selectedExecApprovalID: self.selectedExecApprovalID,
+            lastExecApprovalSnapshotID: self.lastExecApprovalSnapshotID,
+            lastExecApprovalOutcomeText: self.lastExecApprovalOutcomeText,
+            lastExecApprovalOutcomeAt: self.lastExecApprovalOutcomeAt)
         guard let data = try? JSONEncoder().encode(state) else { return }
         self.defaults.set(data, forKey: Self.persistedStateKey)
     }
@@ -187,7 +572,7 @@ struct WatchNotifyMessage: Sendable {
             actionLabel: action.label,
             sessionKey: self.sessionKey,
             note: nil,
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000))
+            sentAtMs: Self.nowMs())
     }
 
     func markReplySending(actionLabel: String) {
@@ -226,5 +611,18 @@ struct WatchNotifyMessage: Sendable {
 
         _ = try? await UNUserNotificationCenter.current().add(request)
         WKInterfaceDevice.current().play(self.mapHapticRisk(risk))
+    }
+
+    private static func decisionLabel(_ decision: WatchExecApprovalDecision) -> String {
+        switch decision {
+        case .allowOnce:
+            "Allow Once"
+        case .deny:
+            "Deny"
+        }
+    }
+
+    private static func nowMs() -> Int {
+        Int(Date().timeIntervalSince1970 * 1000)
     }
 }

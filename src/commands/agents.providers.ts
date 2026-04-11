@@ -1,12 +1,13 @@
+import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
   listChannelPlugins,
   normalizeChannelId,
 } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AgentBinding } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
@@ -104,7 +105,7 @@ function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConf
   if (!plugin) {
     return Boolean(entry.configured);
   }
-  if (plugin.meta.showConfigured === false) {
+  if (!isChannelVisibleInConfiguredLists(plugin.meta)) {
     const providerConfig = (cfg as Record<string, unknown>)[plugin.id];
     return Boolean(entry.configured) || Boolean(providerConfig);
   }

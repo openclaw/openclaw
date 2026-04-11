@@ -1,26 +1,37 @@
-import { afterEach, expect, test } from "vitest";
-import {
-  getFinishedSession,
-  getSession,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
-import { createExecTool } from "./bash-tools.exec.js";
-import { killProcessTree } from "./shell-utils.js";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { killProcessTree } from "../process/kill-tree.js";
 
 const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 5000)"';
 const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 25;
-const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 240;
+const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 1_200;
 const POLL_INTERVAL_MS = 15;
-const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 600;
+const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 3_000;
 const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.05;
 const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
 };
 
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
+let getSession: typeof import("./bash-process-registry.js").getSession;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
+
 const createTestExecTool = (
   defaults?: Parameters<typeof createExecTool>[0],
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
+
+beforeAll(async () => {
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ getFinishedSession, getSession, resetProcessRegistryForTests } =
+    await import("./bash-process-registry.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -54,7 +65,7 @@ function cleanupRunningSession(sessionId: string) {
 
 async function expectBackgroundSessionSurvivesAbort(params: {
   tool: ReturnType<typeof createExecTool>;
-  executeParams: Record<string, unknown>;
+  executeParams: ExecToolExecuteParams;
 }) {
   const abortController = new AbortController();
   const result = await params.tool.execute(
@@ -90,7 +101,7 @@ async function expectBackgroundSessionSurvivesAbort(params: {
 
 async function expectBackgroundSessionTimesOut(params: {
   tool: ReturnType<typeof createExecTool>;
-  executeParams: Record<string, unknown>;
+  executeParams: ExecToolExecuteParams;
   signal?: AbortSignal;
   abortAfterStart?: boolean;
 }) {

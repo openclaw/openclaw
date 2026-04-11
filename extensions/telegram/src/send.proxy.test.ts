@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
@@ -59,15 +59,13 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: class {},
+  InputFile: function InputFile() {},
 }));
 
-import {
-  deleteMessageTelegram,
-  reactMessageTelegram,
-  resetTelegramClientOptionsCacheForTests,
-  sendMessageTelegram,
-} from "./send.js";
+let deleteMessageTelegram: typeof import("./send.js").deleteMessageTelegram;
+let reactMessageTelegram: typeof import("./send.js").reactMessageTelegram;
+let resetTelegramClientOptionsCacheForTests: typeof import("./send.js").resetTelegramClientOptionsCacheForTests;
+let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 
 describe("telegram proxy client", () => {
   const proxyUrl = "http://proxy.test:8080";
@@ -90,6 +88,15 @@ describe("telegram proxy client", () => {
       }),
     );
   };
+
+  beforeAll(async () => {
+    ({
+      deleteMessageTelegram,
+      reactMessageTelegram,
+      resetTelegramClientOptionsCacheForTests,
+      sendMessageTelegram,
+    } = await import("./send.js"));
+  });
 
   beforeEach(() => {
     resetTelegramClientOptionsCacheForTests();

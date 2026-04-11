@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const loggerInfo = vi.hoisted(() => vi.fn());
+const loggerDebug = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -54,13 +56,66 @@ vi.mock("undici", () => ({
   setGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerInfo,
+    debug: loggerDebug,
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => ({
+      info: loggerInfo,
+      debug: loggerDebug,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+  }),
+  isTruthyEnvValue: (value?: string) => {
+    if (typeof value !== "string") {
+      return false;
+    }
+    switch (value.trim().toLowerCase()) {
+      case "":
+      case "0":
+      case "false":
+      case "no":
+      case "off":
+        return false;
+      default:
+        return true;
+    }
+  },
+  isWSL2Sync: () => false,
+}));
+
 let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
-beforeEach(async () => {
+type TelegramDispatcherPolicy = NonNullable<
+  ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
+>[number]["dispatcherPolicy"];
+
+beforeAll(async () => {
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  for (const key of [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+  loggerInfo.mockReset();
+  loggerDebug.mockReset();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -217,7 +272,6 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -268,8 +322,17 @@ describe("resolveTelegramFetch", () => {
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
+  it("emits default transport decisions at debug level", () => {
+    resolveTelegramFetchOrThrow();
+
+    expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+  });
+
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -300,7 +363,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("pins env-proxy transport policy onto proxyTls for proxied HTTPS requests", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -358,6 +421,58 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
+  it("exports fallback dispatcher attempts for Telegram media downloads", () => {
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(transport.sourceFetch).toBeDefined();
+    expect(transport.fetch).not.toBe(transport.sourceFetch);
+    expect(transport.dispatcherAttempts).toHaveLength(3);
+
+    const [defaultAttempt, ipv4Attempt, pinnedAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: TelegramDispatcherPolicy;
+    }>;
+
+    expect(defaultAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(ipv4Attempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(pinnedAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        pinnedHostname: {
+          hostname: "api.telegram.org",
+          addresses: ["149.154.167.220"],
+        },
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
@@ -379,7 +494,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("does not blind-retry when sticky IPv4 fallback is disallowed for env proxy paths", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     primeStickyFallbackRetry("EHOSTUNREACH", 1);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -430,7 +545,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
       throw new Error("invalid proxy config");
     });
@@ -448,8 +563,8 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("arms sticky IPv4 fallback when NO_PROXY bypasses telegram under env proxy", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
-    vi.stubEnv("NO_PROXY", "api.telegram.org");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
+    vi.stubEnv("no_proxy", "api.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
 
     expect(undiciFetch).toHaveBeenCalledTimes(3);
@@ -464,7 +579,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("uses no_proxy over NO_PROXY when deciding env-proxy bypass", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     vi.stubEnv("NO_PROXY", "");
     vi.stubEnv("no_proxy", "api.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
@@ -474,7 +589,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("matches whitespace and wildcard no_proxy entries like EnvHttpProxyAgent", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     vi.stubEnv("no_proxy", "localhost *.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
 
@@ -501,7 +616,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("falls back to Agent when env proxy dispatcher initialization fails", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
       throw new Error("invalid proxy config");
     });

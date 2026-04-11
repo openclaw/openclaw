@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 export type RegisteredRoute = {
   path: string;
@@ -91,9 +92,12 @@ vi.mock("./runtime.js", () => ({
       },
     },
   })),
+  setSynologyRuntime: vi.fn(),
 }));
 
-export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
+export function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -101,8 +105,8 @@ export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
     incomingUrl: "https://nas/incoming",
     nasHost: "h",
     webhookPath: "/w",
+    webhookPathSource: "default",
     dangerouslyAllowNameMatching: false,
-    hasExplicitWebhookPath: true,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],

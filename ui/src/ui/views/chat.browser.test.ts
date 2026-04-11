@@ -1,7 +1,24 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import "../../styles.css";
+import "../../test-helpers/load-styles.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
+
+const contextNoticeSessions: ChatProps["sessions"] = {
+  ts: 0,
+  path: "",
+  count: 1,
+  defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+  sessions: [
+    {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 3_800,
+      inputTokens: 3_800,
+      contextTokens: 4_000,
+    },
+  ],
+};
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
@@ -58,36 +75,30 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   };
 }
 
+async function renderContextNoticeChat() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(
+    renderChat(
+      createProps({
+        sessions: contextNoticeSessions,
+      }),
+    ),
+    container,
+  );
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  return container;
+}
+
 describe("chat context notice", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("keeps the warning icon badge-sized", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(renderChat(createProps()), container);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-
-    const icon = container.querySelector<SVGElement>(".context-notice__icon");
-    expect(icon).not.toBeNull();
-    if (!icon) {
-      return;
-    }
-
-    const iconStyle = getComputedStyle(icon);
-    expect(iconStyle.width).toBe("16px");
-    expect(iconStyle.height).toBe("16px");
-    expect(icon.getBoundingClientRect().width).toBeLessThan(24);
-  });
-
   it("falls back to default notice colors when theme vars are not hex", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
     document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
     document.documentElement.style.setProperty("--danger", "tomato");
-    render(renderChat(createProps()), container);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const container = await renderContextNoticeChat();
 
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
@@ -97,5 +108,21 @@ describe("chat context notice", () => {
 
     document.documentElement.style.removeProperty("--warn");
     document.documentElement.style.removeProperty("--danger");
+  });
+
+  it("keeps the warning icon badge-sized", async () => {
+    const container = await renderContextNoticeChat();
+
+    const icon = container.querySelector<SVGElement>(".context-notice__icon");
+    expect(icon).not.toBeNull();
+    if (!icon) {
+      return;
+    }
+
+    expect(icon.tagName.toLowerCase()).toBe("svg");
+    expect(icon.classList.contains("context-notice__icon")).toBe(true);
+    expect(icon.getAttribute("width")).toBe("16");
+    expect(icon.getAttribute("height")).toBe("16");
+    expect(icon.querySelector("path")).not.toBeNull();
   });
 });

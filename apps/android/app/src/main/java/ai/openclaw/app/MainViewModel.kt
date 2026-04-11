@@ -27,6 +27,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private var foreground = true
+  private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
+  val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _chatDraft = MutableStateFlow<String?>(null)
+  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
+  val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
@@ -56,6 +62,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val discoveryStatusText: StateFlow<String> = runtimeState(initial = "Searching…") { it.discoveryStatusText }
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
@@ -80,6 +97,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -186,6 +204,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     prefs.setGatewayPassword(value)
   }
 
+  fun resetGatewaySetupAuth() {
+    ensureRuntime().resetGatewaySetupAuth()
+  }
+
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
       ensureRuntime()
@@ -197,8 +219,64 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    ensureRuntime().setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    ensureRuntime().setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackagesCsv(csv: String) {
+    val packages =
+      csv
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    ensureRuntime().setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    ensureRuntime().setNotificationForwardingSessionKey(value)
+  }
+
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
+  }
+
+  fun handleAssistantLaunch(request: AssistantLaunchRequest) {
+    _requestedHomeDestination.value = HomeDestination.Chat
+    if (request.autoSend) {
+      _pendingAssistantAutoSend.value = request.prompt
+      _chatDraft.value = null
+      return
+    }
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = request.prompt
+  }
+
+  fun clearRequestedHomeDestination() {
+    _requestedHomeDestination.value = null
+  }
+
+  fun clearChatDraft() {
+    _chatDraft.value = null
+  }
+
+  fun clearPendingAssistantAutoSend() {
+    _pendingAssistantAutoSend.value = null
   }
 
   fun setMicEnabled(enabled: Boolean) {
@@ -215,6 +293,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun connect(endpoint: GatewayEndpoint) {
     ensureRuntime().connect(endpoint)
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    token: String?,
+    bootstrapToken: String?,
+    password: String?,
+  ) {
+    ensureRuntime().connect(
+      endpoint,
+      NodeRuntime.GatewayConnectAuth(
+        token = token,
+        bootstrapToken = bootstrapToken,
+        password = password,
+      ),
+    )
   }
 
   fun connectManual() {
@@ -235,6 +329,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
     ensureRuntime().handleCanvasA2UIActionFromWebView(payloadJson)
+  }
+
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
   }
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
@@ -271,5 +369,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
+  }
+
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return ensureRuntime().sendChatAwaitAcceptance(
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+    )
   }
 }

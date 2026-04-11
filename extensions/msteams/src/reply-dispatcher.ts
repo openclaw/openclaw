@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelReplyPipeline,
   logTypingFailure,
@@ -21,13 +22,17 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
+export { pickInformativeStatusText } from "./reply-stream-controller.js";
+
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  sessionKey: string;
   accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
@@ -38,21 +43,41 @@ export function createMSTeamsReplyDispatcher(params: {
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
   onSentMessageIds?: (ids: string[]) => void;
-  /** Token provider for OneDrive/SharePoint uploads in group chats/channels */
   tokenProvider?: MSTeamsAccessTokenProvider;
-  /** SharePoint site ID for file uploads in group chats/channels */
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
+  const msteamsCfg = params.cfg.channels?.msteams;
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
+  const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
   /**
-   * Send a typing indicator.
-   *
-   * First tries the live turn context (cheapest path).  When the context has
-   * been revoked (debounced messages) we fall back to proactive messaging via
-   * the stored conversation reference so the user still sees the "…" bubble.
+   * Keepalive cadence for the typing indicator while the bot is running
+   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
+   * expire after ~30s of inactivity; sending a typing activity every 8s
+   * keeps the proxy alive so the post-tool reply can still land via the
+   * turn context. Sits in the middle of the 5-10s range recommended in
+   * #59731.
    */
-  const sendTypingIndicator = async () => {
+  const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
+
+  /**
+   * TTL ceiling for the typing keepalive loop. The default in
+   * createTypingCallbacks is 60s, which is too short for the Teams long tool
+   * chains described in #59731 (60s+ total runs are common). Give tool
+   * chains up to 10 minutes before auto-stopping the keepalive.
+   */
+  const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+
+  // Forward reference: sendTypingIndicator is built before the stream
+  // controller exists, but the keepalive tick needs to check stream state so
+  // we don't overlay "..." typing on the visible streaming card. The ref is
+  // wired once the stream controller is constructed below.
+  const streamActiveRef: { current: () => boolean } = { current: () => false };
+
+  const rawSendTypingIndicator = async () => {
     await withRevokedProxyFallback({
       run: async () => {
         await params.context.sendActivity({ type: "typing" });
@@ -73,6 +98,20 @@ export function createMSTeamsReplyDispatcher(params: {
     });
   };
 
+  const sendTypingIndicator = isTypingSupported
+    ? async () => {
+        // While the streaming card is actively being updated the user
+        // already sees a live indicator in the stream — don't overlay a
+        // plain "..." typing on top of it. Between segments (tool chain)
+        // the stream is finalized, so typing indicators are appropriate
+        // and they are what keep the TurnContext alive. See #59731.
+        if (streamActiveRef.current()) {
+          return;
+        }
+        await rawSendTypingIndicator();
+      }
+    : async () => {};
+
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -80,6 +119,8 @@ export function createMSTeamsReplyDispatcher(params: {
     accountId: params.accountId,
     typing: {
       start: sendTypingIndicator,
+      keepaliveIntervalMs: TYPING_KEEPALIVE_INTERVAL_MS,
+      maxDurationMs: TYPING_KEEPALIVE_MAX_DURATION_MS,
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => params.log.debug?.(message),
@@ -90,6 +131,7 @@ export function createMSTeamsReplyDispatcher(params: {
       },
     },
   });
+
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
   const tableMode = core.channel.text.resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -99,12 +141,21 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
+  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
+  const streamController = createTeamsReplyStreamController({
+    conversationType,
+    context: params.context,
+    feedbackLoopEnabled,
+    log: params.log,
+  });
+  // Wire the forward-declared gate used by sendTypingIndicator.
+  streamActiveRef.current = () => streamController.isStreamActive();
 
-  // Accumulate rendered messages from all deliver() calls so the entire turn's
-  // reply is sent in a single sendMSTeamsMessages() call. This avoids Teams
-  // silently dropping blocks 2+ when each deliver() opened its own independent
-  // continueConversation() call — only the first proactive send per turn context
-  // window succeeds. (#29379)
+  const blockStreamingEnabled =
+    typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const typingIndicatorEnabled =
+    typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
+
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
   const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
@@ -115,7 +166,6 @@ export function createMSTeamsReplyDispatcher(params: {
       conversationRef: params.conversationRef,
       context: params.context,
       messages,
-      // Enable default retry/backoff for throttling/transient failures.
       retry: {},
       onRetry: (event) => {
         params.log.debug?.("retrying send", {
@@ -126,6 +176,33 @@ export function createMSTeamsReplyDispatcher(params: {
       tokenProvider: params.tokenProvider,
       sharePointSiteId: params.sharePointSiteId,
       mediaMaxBytes,
+      feedbackLoopEnabled,
+    });
+  };
+
+  const queueDeliveryFailureSystemEvent = (failure: {
+    failed: number;
+    total: number;
+    error: unknown;
+  }) => {
+    const classification = classifyMSTeamsSendError(failure.error);
+    const errorText = formatUnknownError(failure.error);
+    const failedAll = failure.failed >= failure.total;
+    const summary = failedAll
+      ? "the previous reply was not delivered"
+      : `${failure.failed} of ${failure.total} message blocks were not delivered`;
+    const sentences = [
+      `Microsoft Teams delivery failed: ${summary}.`,
+      `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
+      `Error: ${errorText}.`,
+      classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
+      classification.kind === "transient" || classification.kind === "throttled"
+        ? "Retrying later may succeed."
+        : undefined,
+    ].filter(Boolean);
+    core.system.enqueueSystemEvent(sentences.join(" "), {
+      sessionKey: params.sessionKey,
+      contextKey: `msteams:delivery-failure:${params.conversationRef.conversation?.id ?? "unknown"}`,
     });
   };
 
@@ -133,24 +210,22 @@ export function createMSTeamsReplyDispatcher(params: {
     if (pendingMessages.length === 0) {
       return;
     }
-    // Copy the buffer before draining so we have a reference for per-message
-    // retry if the batch send fails.
     const toSend = pendingMessages.splice(0);
     const total = toSend.length;
     let ids: string[];
     try {
       ids = await sendMessages(toSend);
-    } catch {
-      // Batch send failed (e.g. bad attachment on one message); retry each
-      // message individually so trailing blocks are not silently lost.
+    } catch (batchError) {
       ids = [];
       let failed = 0;
+      let lastFailedError: unknown = batchError;
       for (const msg of toSend) {
         try {
           const msgIds = await sendMessages([msg]);
           ids.push(...msgIds);
-        } catch {
+        } catch (msgError) {
           failed += 1;
+          lastFailedError = msgError;
           params.log.debug?.("individual message send failed, continuing with remaining blocks");
         }
       }
@@ -158,6 +233,11 @@ export function createMSTeamsReplyDispatcher(params: {
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+        });
+        queueDeliveryFailureSystemEvent({
+          failed,
+          total,
+          error: lastFailedError,
         });
       }
     }
@@ -173,12 +253,27 @@ export function createMSTeamsReplyDispatcher(params: {
   } = core.channel.reply.createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+    onReplyStart: async () => {
+      await streamController.onReplyStart();
+      // Always start the typing keepalive loop when typing is enabled and
+      // supported by this conversation type. The sendTypingIndicator gate
+      // skips actual sends while the stream card is visually active, so
+      // during the first text segment the user only sees the streaming UI.
+      // Once the stream finalizes (between segments / during tool chains),
+      // the loop starts sending typing activities and keeps the Bot Framework
+      // TurnContext alive so the post-tool reply can still land. See #59731.
+      if (typingIndicatorEnabled) {
+        await typingCallbacks?.onReplyStart?.();
+      }
+    },
     typingCallbacks,
     deliver: async (payload) => {
-      // Render the payload to messages and accumulate them. All messages from
-      // this turn are flushed together in markDispatchIdle() so they go out
-      // in a single continueConversation() call.
-      const messages = renderReplyPayloadsToMessages([payload], {
+      const preparedPayload = streamController.preparePayload(payload);
+      if (!preparedPayload) {
+        return;
+      }
+
+      const messages = renderReplyPayloadsToMessages([preparedPayload], {
         textChunkLimit: params.textLimit,
         chunkText: true,
         mediaMode: "split",
@@ -186,6 +281,12 @@ export function createMSTeamsReplyDispatcher(params: {
         chunkMode,
       });
       pendingMessages.push(...messages);
+
+      // When block streaming is enabled, flush immediately so blocks are
+      // delivered progressively instead of batching until markDispatchIdle.
+      if (blockStreamingEnabled) {
+        await flushPendingMessages();
+      }
     },
     onError: (err, info) => {
       const errMsg = formatUnknownError(err);
@@ -203,8 +304,6 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  // Wrap markDispatchIdle to flush all accumulated messages before signalling idle.
-  // Returns a promise so callers (e.g. onSettled) can await completion.
   const markDispatchIdle = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err) => {
@@ -218,6 +317,11 @@ export function createMSTeamsReplyDispatcher(params: {
           hint,
         });
       })
+      .then(() => {
+        return streamController.finalize().catch((err) => {
+          params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
+        });
+      })
       .finally(() => {
         baseMarkDispatchIdle();
       });
@@ -225,7 +329,18 @@ export function createMSTeamsReplyDispatcher(params: {
 
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected },
+    replyOptions: {
+      ...replyOptions,
+      ...(streamController.hasStream()
+        ? {
+            onPartialReply: (payload: { text?: string }) =>
+              streamController.onPartialReply(payload),
+          }
+        : {}),
+      disableBlockStreaming:
+        typeof msteamsCfg?.blockStreaming === "boolean" ? !msteamsCfg.blockStreaming : undefined,
+      onModelSelected,
+    },
     markDispatchIdle,
   };
 }

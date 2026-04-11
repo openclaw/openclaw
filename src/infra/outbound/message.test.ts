@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  resolveRuntimePluginRegistry: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -33,7 +33,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
-  loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -46,15 +46,23 @@ vi.mock("./deliver.js", () => ({
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { sendMessage } from "./message.js";
+
+let sendMessage: typeof import("./message.js").sendMessage;
+let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
 
 describe("sendMessage", () => {
+  beforeAll(async () => {
+    ({ sendMessage } = await import("./message.js"));
+    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
+  });
+
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
+    resetOutboundChannelResolutionStateForTest();
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
-    mocks.loadOpenClawPlugins.mockClear();
+    mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -77,6 +85,82 @@ describe("sendMessage", () => {
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
+      }),
+    );
+  });
+
+  it("forwards requesterSenderId into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:telegram:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:telegram:group:ops",
+          requesterSenderId: "attacker",
+        }),
+      }),
+    );
+  });
+
+  it("forwards non-id requester sender fields into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+      mirror: {
+        sessionKey: "agent:main:telegram:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:telegram:group:ops",
+          requesterSenderName: "Alice",
+          requesterSenderUsername: "alice_u",
+          requesterSenderE164: "+15551234567",
+        }),
+      }),
+    );
+  });
+
+  it("uses requester session/account for outbound delivery policy context", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSessionKey: "agent:main:whatsapp:group:ops",
+      requesterAccountId: "work",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:telegram:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:whatsapp:group:ops",
+          requesterAccountId: "work",
+          requesterSenderId: "attacker",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:dm:123456",
+        }),
       }),
     );
   });
@@ -126,6 +210,6 @@ describe("sendMessage", () => {
       via: "direct",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });

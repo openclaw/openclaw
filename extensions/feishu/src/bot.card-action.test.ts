@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   handleFeishuCardAction,
   resetProcessedFeishuCardActionTokensForTests,
@@ -11,9 +13,10 @@ import {
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
 
-// Mock resolveFeishuAccount
+// Mock account resolution
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
+  resolveFeishuRuntimeAccount: vi.fn().mockReturnValue({ accountId: "mock-account" }),
 }));
 
 // Mock bot.js to verify handleFeishuMessage call
@@ -32,8 +35,8 @@ vi.mock("./send.js", () => ({
 import { handleFeishuMessage } from "./bot.js";
 
 describe("Feishu Card Action Handler", () => {
-  const cfg = {} as any; // Minimal mock
-  const runtime = { log: vi.fn(), error: vi.fn() } as any;
+  const cfg: ClawdbotConfig = {};
+  const runtime: RuntimeEnv = createRuntimeEnv();
 
   function createCardActionEvent(params: {
     token: string;
@@ -192,6 +195,9 @@ describe("Feishu Card Action Handler", () => {
         to: "chat:chat1",
         accountId: "main",
         card: expect.objectContaining({
+          config: expect.objectContaining({
+            width_mode: "fill",
+          }),
           header: expect.objectContaining({
             title: expect.objectContaining({ content: "Confirm action" }),
           }),
@@ -217,6 +223,21 @@ describe("Feishu Card Action Handler", () => {
         }),
       }),
     );
+    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
+      | {
+          card?: {
+            config?: {
+              width_mode?: string;
+              wide_screen_mode?: boolean;
+              enable_forward?: boolean;
+            };
+          };
+        }
+      | undefined;
+    const sentCard = firstSendArg?.card;
+    expect(sentCard).toBeDefined();
+    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
+    expect(sentCard?.config?.enable_forward).toBeUndefined();
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 

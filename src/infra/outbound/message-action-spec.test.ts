@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (channel: string) =>
+    channel === "feishu"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              read: { aliases: ["messageId"] },
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+              "channel-info": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
+}));
 
 describe("actionRequiresTarget", () => {
   it.each([
@@ -13,40 +30,67 @@ describe("actionRequiresTarget", () => {
 });
 
 describe("actionHasTarget", () => {
-  it("detects canonical target fields", () => {
-    expect(actionHasTarget("send", { to: "  channel:C1  " })).toBe(true);
-    expect(actionHasTarget("channel-info", { channelId: "  C123  " })).toBe(true);
-    expect(actionHasTarget("send", { to: "   ", channelId: "" })).toBe(false);
-  });
-
-  it("detects alias targets for message and chat actions", () => {
-    expect(actionHasTarget("read", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
-    expect(actionHasTarget("edit", { messageId: "  msg_123  " })).toBe(true);
-    expect(actionHasTarget("pin", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
-    expect(actionHasTarget("unpin", { messageId: "msg_123" }, { channel: "feishu" })).toBe(true);
-    expect(actionHasTarget("list-pins", { chatId: "oc_123" }, { channel: "feishu" })).toBe(true);
-    expect(actionHasTarget("channel-info", { chatId: "oc_123" }, { channel: "feishu" })).toBe(true);
-    expect(actionHasTarget("react", { chatGuid: "chat-guid" })).toBe(true);
-    expect(actionHasTarget("react", { chatIdentifier: "chat-id" })).toBe(true);
-    expect(actionHasTarget("react", { chatId: 42 })).toBe(true);
-  });
-
-  it("scopes Feishu-only aliases to Feishu", () => {
-    expect(actionHasTarget("read", { messageId: "msg_123" })).toBe(false);
-    expect(actionHasTarget("pin", { messageId: "msg_123" }, { channel: "slack" })).toBe(false);
-    expect(actionHasTarget("channel-info", { chatId: "oc_123" }, { channel: "discord" })).toBe(
-      false,
-    );
-  });
-
-  it("rejects blank and non-finite alias targets", () => {
-    expect(actionHasTarget("edit", { messageId: "   " })).toBe(false);
-    expect(actionHasTarget("react", { chatGuid: "" })).toBe(false);
-    expect(actionHasTarget("react", { chatId: Number.NaN })).toBe(false);
-    expect(actionHasTarget("react", { chatId: Number.POSITIVE_INFINITY })).toBe(false);
-  });
-
-  it("ignores alias fields for actions without alias target support", () => {
-    expect(actionHasTarget("send", { messageId: "msg_123", chatId: 42 })).toBe(false);
+  it.each([
+    { action: "send", params: { to: "  channel:C1  " }, expected: true },
+    { action: "channel-info", params: { channelId: "  C123  " }, expected: true },
+    { action: "send", params: { to: "   ", channelId: "" }, expected: false },
+    {
+      action: "read",
+      params: { messageId: "msg_123" },
+      ctx: { channel: "feishu" },
+      expected: true,
+    },
+    { action: "edit", params: { messageId: "  msg_123  " }, expected: true },
+    {
+      action: "pin",
+      params: { messageId: "msg_123" },
+      ctx: { channel: "feishu" },
+      expected: true,
+    },
+    {
+      action: "unpin",
+      params: { messageId: "msg_123" },
+      ctx: { channel: "feishu" },
+      expected: true,
+    },
+    {
+      action: "list-pins",
+      params: { chatId: "oc_123" },
+      ctx: { channel: "feishu" },
+      expected: true,
+    },
+    {
+      action: "channel-info",
+      params: { chatId: "oc_123" },
+      ctx: { channel: "feishu" },
+      expected: true,
+    },
+    { action: "react", params: { chatGuid: "chat-guid" }, expected: true },
+    { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
+    { action: "react", params: { chatId: 42 }, expected: true },
+    { action: "read", params: { messageId: "msg_123" }, expected: false },
+    {
+      action: "pin",
+      params: { messageId: "msg_123" },
+      ctx: { channel: "slack" },
+      expected: false,
+    },
+    {
+      action: "channel-info",
+      params: { chatId: "oc_123" },
+      ctx: { channel: "discord" },
+      expected: false,
+    },
+    { action: "edit", params: { messageId: "   " }, expected: false },
+    { action: "react", params: { chatGuid: "" }, expected: false },
+    { action: "react", params: { chatId: Number.NaN }, expected: false },
+    { action: "react", params: { chatId: Number.POSITIVE_INFINITY }, expected: false },
+    {
+      action: "send",
+      params: { messageId: "msg_123", chatId: 42 },
+      expected: false,
+    },
+  ])("resolves target presence for %j", ({ action, params, ctx, expected }) => {
+    expect(actionHasTarget(action as never, params, ctx)).toBe(expected);
   });
 });

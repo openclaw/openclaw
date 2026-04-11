@@ -26,6 +26,46 @@ export function rewritePackageExtensions(entries) {
     });
 }
 
+function collectTopLevelPublicSurfaceEntries(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(pluginDir, { withFileTypes: true })
+    .flatMap((dirent) => {
+      if (!dirent.isFile()) {
+        return [];
+      }
+
+      if (!/\.(?:[cm]?[jt]s)$/u.test(dirent.name) || dirent.name.endsWith(".d.ts")) {
+        return [];
+      }
+
+      const normalizedName = dirent.name.toLowerCase();
+      if (
+        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+        normalizedName.includes(".test.") ||
+        normalizedName.includes(".spec.") ||
+        normalizedName.includes(".fixture.") ||
+        normalizedName.includes(".snap")
+      ) {
+        return [];
+      }
+
+      return [dirent.name];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isManifestlessBundledRuntimeSupportPackage(params) {
+  const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
+  if (packageName !== `@openclaw/${params.dirName}`) {
+    return false;
+  }
+  return params.topLevelPublicSurfaceEntries.length > 0;
+}
+
 function rewritePackageEntry(entry) {
   if (typeof entry !== "string" || entry.trim().length === 0) {
     return undefined;
@@ -189,43 +229,57 @@ export function copyBundledPluginMetadata(params = {}) {
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
-    if (!shouldBuildBundledCluster(dirent.name, env)) {
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const packageJson = fs.existsSync(packageJsonPath)
+      ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
+      : undefined;
+    const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
+    if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
       removePathIfExists(distPluginDir);
       continue;
     }
+
+    const isManifestlessSupportPackage =
+      !fs.existsSync(manifestPath) &&
+      isManifestlessBundledRuntimeSupportPackage({
+        dirName: dirent.name,
+        packageJson,
+        topLevelPublicSurfaceEntries,
+      });
 
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath)) {
+    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
       removePathIfExists(distPluginDir);
       continue;
     }
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    // Generated skill assets live under a dedicated dist-owned directory. Also
-    // remove the older bad node_modules tree so release packs cannot pick it up.
-    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-    removePathIfExists(path.join(distPluginDir, "node_modules"));
-    const copiedSkills = copyDeclaredPluginSkillPaths({
-      manifest,
-      pluginDir,
-      distPluginDir,
-      repoRoot,
-    });
-    const bundledManifest = Array.isArray(manifest.skills)
-      ? { ...manifest, skills: copiedSkills }
-      : manifest;
-    writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      // Generated skill assets live under a dedicated dist-owned directory. Also
+      // remove the older bad node_modules tree so release packs cannot pick it up.
+      removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
+      removePathIfExists(path.join(distPluginDir, "node_modules"));
+      const copiedSkills = copyDeclaredPluginSkillPaths({
+        manifest,
+        pluginDir,
+        distPluginDir,
+        repoRoot,
+      });
+      const bundledManifest = Array.isArray(manifest.skills)
+        ? { ...manifest, skills: copiedSkills }
+        : manifest;
+      writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+    } else {
+      removeFileIfExists(distManifestPath);
+    }
 
-    const packageJsonPath = path.join(pluginDir, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     if (packageJson.openclaw && "extensions" in packageJson.openclaw) {
       packageJson.openclaw = {
         ...packageJson.openclaw,

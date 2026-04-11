@@ -1,15 +1,29 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  type InboxMonitorOptions,
   InboxOnMessage,
   buildNotifyMessageUpsert,
   getAuthDir,
+  getSock,
   installWebMonitorInboxUnitTestHooks,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
+
+const { sleepWithAbortMock } = vi.hoisted(() => ({
+  sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
+}));
+
+vi.mock("./reconnect.js", async () => {
+  const actual = await vi.importActual<typeof import("./reconnect.js")>("./reconnect.js");
+  return {
+    ...actual,
+    sleepWithAbort: (ms: number, signal?: AbortSignal) => sleepWithAbortMock(ms, signal),
+  };
+});
 
 let nextMessageSequence = 0;
 
@@ -20,6 +34,11 @@ function nextMessageId(label: string): string {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+
+  beforeEach(() => {
+    sleepWithAbortMock.mockReset();
+    sleepWithAbortMock.mockImplementation(async (_ms: number, _signal?: AbortSignal) => undefined);
+  });
 
   async function expectQuotedReplyContext(quotedMessage: unknown) {
     const onMessage = vi.fn(async (msg) => {
@@ -60,6 +79,23 @@ describe("web monitor inbox", () => {
         replyToId: "q1",
         replyToBody: "original",
         replyToSender: "+111",
+        sender: expect.objectContaining({
+          e164: "+999",
+          name: "Tester",
+        }),
+        replyTo: expect.objectContaining({
+          id: "q1",
+          body: "original",
+          sender: expect.objectContaining({
+            jid: "111@s.whatsapp.net",
+            e164: "+111",
+            label: "+111",
+          }),
+        }),
+        self: expect.objectContaining({
+          jid: "123@s.whatsapp.net",
+          e164: "+123",
+        }),
       }),
     );
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
@@ -76,7 +112,7 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
     const upsert = buildNotifyMessageUpsert({
       id: messageId,
@@ -105,6 +141,269 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
+
+    await listener.close();
+  });
+
+  it("stays unavailable on connect in self-chat mode", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      selfChatMode: true,
+    });
+
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "unavailable");
+
+    await listener.close();
+  });
+
+  it("hydrates participating groups once after connect", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("continues when group hydration fails on connect", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
+
+    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+
+    await listener.close();
+  });
+
+  it("does not block inbound listeners while group hydration is pending", async () => {
+    let resolveHydration!: () => void;
+    const sock = getSock();
+    const pendingHydration = new Promise<Record<string, never>>((resolve) => {
+      resolveHydration = () => resolve({});
+    });
+    sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("pending-hydration"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    resolveHydration();
+    await listener.close();
+  });
+
+  it("uses a replacement socket for replies created before reconnect", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, { socketRef });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("replacement-socket"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = onMessage.mock.calls.at(0)?.at(0) as
+      | {
+          reply: (text: string) => Promise<void>;
+          sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+          sendComposing: () => Promise<void>;
+        }
+      | undefined;
+    expect(inbound).toBeDefined();
+
+    const replacementSock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    socketRef.current = replacementSock as unknown as NonNullable<
+      InboxMonitorOptions["socketRef"]
+    >["current"];
+
+    await inbound?.reply("pong");
+    await inbound?.sendMedia({ text: "after-reconnect" });
+    await inbound?.sendComposing();
+
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+      text: "after-reconnect",
+    });
+    expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith(
+      "composing",
+      "999@s.whatsapp.net",
+    );
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("waits for a replacement socket before sending replies", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      socketRef,
+      shouldRetryDisconnect: () => true,
+      disconnectRetryPolicy: {
+        initialMs: 10,
+        maxMs: 10,
+        factor: 1,
+        jitter: 0,
+        maxAttempts: 2,
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("reconnect-gap"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = onMessage.mock.calls.at(0)?.at(0) as
+      | {
+          reply: (text: string) => Promise<void>;
+        }
+      | undefined;
+    expect(inbound).toBeDefined();
+
+    const replacementSock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    socketRef.current = null;
+    sleepWithAbortMock.mockImplementationOnce(async () => {
+      socketRef.current = replacementSock as unknown as NonNullable<
+        InboxMonitorOptions["socketRef"]
+      >["current"];
+    });
+
+    await inbound?.reply("pong");
+
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(10, undefined);
+    expect(replacementSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      socketRef,
+      shouldRetryDisconnect: () => true,
+      disconnectRetryPolicy: {
+        initialMs: 1,
+        maxMs: 1,
+        factor: 1,
+        jitter: 0,
+        maxAttempts: 2,
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("timeout-retry"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = onMessage.mock.calls.at(0)?.at(0) as
+      | {
+          reply: (text: string) => Promise<void>;
+        }
+      | undefined;
+    expect(inbound).toBeDefined();
+
+    sock.sendMessage
+      .mockRejectedValueOnce(new Error("operation timed out"))
+      .mockResolvedValueOnce({ key: { id: "after-timeout" } });
+
+    await inbound?.reply("pong");
+
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(socketRef.current).toBe(sock);
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("bounds reconnect-gap retries even when reconnect attempts are unlimited", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };
+
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      socketRef,
+      shouldRetryDisconnect: () => true,
+      disconnectRetryPolicy: {
+        initialMs: 1,
+        maxMs: 1,
+        factor: 1,
+        jitter: 0,
+        maxAttempts: 0,
+      },
+    });
+    getSock().ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("unlimited-reconnect-send-bound"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = onMessage.mock.calls.at(0)?.at(0) as
+      | {
+          reply: (text: string) => Promise<void>;
+        }
+      | undefined;
+    expect(inbound).toBeDefined();
+
+    socketRef.current = null;
+
+    await expect(inbound?.reply("pong")).rejects.toThrow(
+      "no active socket - reconnection in progress",
+    );
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(11);
 
     await listener.close();
   });
@@ -264,6 +563,22 @@ describe("web monitor inbox", () => {
   it("captures reply context from wrapped quoted messages", async () => {
     await expectQuotedReplyContext({
       viewOnceMessageV2Extension: {
+        message: { conversation: "original" },
+      },
+    });
+  });
+
+  it("captures reply context from botInvokeMessage wrapped quoted messages", async () => {
+    await expectQuotedReplyContext({
+      botInvokeMessage: {
+        message: { conversation: "original" },
+      },
+    });
+  });
+
+  it("captures reply context from groupMentionedMessage wrapped quoted messages", async () => {
+    await expectQuotedReplyContext({
+      groupMentionedMessage: {
         message: { conversation: "original" },
       },
     });

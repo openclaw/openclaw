@@ -83,11 +83,13 @@ export async function fetchBlueBubblesHistory(
 
   let baseUrl: string;
   let password: string;
+  let allowPrivateNetwork = false;
   try {
-    ({ baseUrl, password } = resolveAccount(opts));
+    ({ baseUrl, password, allowPrivateNetwork } = resolveAccount(opts));
   } catch {
     return { entries: [], resolved: false };
   }
+  const ssrfPolicy = allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
 
   // Try different common API patterns for fetching messages
   const possiblePaths = [
@@ -103,6 +105,7 @@ export async function fetchBlueBubblesHistory(
         url,
         { method: "GET" },
         opts.timeoutMs ?? 10000,
+        ssrfPolicy,
       );
 
       if (!res.ok) {
@@ -166,7 +169,7 @@ export async function fetchBlueBubblesHistory(
         entries: historyEntries.slice(0, effectiveLimit), // Ensure we don't exceed the requested limit
         resolved: true,
       };
-    } catch (error) {
+    } catch {
       // Continue to next path
       continue;
     }

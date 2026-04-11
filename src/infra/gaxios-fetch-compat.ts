@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import type { ConnectionOptions } from "node:tls";
 import { pathToFileURL } from "node:url";
 import type { Dispatcher } from "undici";
+import { asNullableObjectRecord } from "../shared/record-coerce.js";
 
 type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];
@@ -44,20 +45,19 @@ type UndiciRuntimeDeps = {
   ProxyAgent: typeof import("undici").ProxyAgent;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function hasDispatcher(value: unknown): value is Dispatcher {
-  return isRecord(value) && typeof value.dispatch === "function";
+  const record = asNullableObjectRecord(value);
+  return record !== null && typeof record.dispatch === "function";
 }
 
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
-  return isRecord(value) && value.proxy instanceof URL;
+  const record = asNullableObjectRecord(value);
+  return record !== null && record.proxy instanceof URL;
 }
 
 function hasTlsAgentShape(value: unknown): value is TlsAgentLike {
-  return isRecord(value) && isRecord(value.options);
+  const record = asNullableObjectRecord(value);
+  return record !== null && asNullableObjectRecord(record.options) !== null;
 }
 
 function resolveTlsOptions(
@@ -185,14 +185,18 @@ function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | u
 }
 
 function isModuleNotFoundError(err: unknown): err is NodeJS.ErrnoException {
-  return isRecord(err) && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND");
+  const record = asNullableObjectRecord(err);
+  return (
+    record !== null &&
+    (record.code === "ERR_MODULE_NOT_FOUND" || record.code === "MODULE_NOT_FOUND")
+  );
 }
 
 function hasGaxiosConstructorShape(value: unknown): value is GaxiosConstructor {
   return (
     typeof value === "function" &&
     "prototype" in value &&
-    isRecord(value.prototype) &&
+    asNullableObjectRecord(value.prototype) !== null &&
     typeof value.prototype._defaultAdapter === "function"
   );
 }
@@ -233,7 +237,7 @@ async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
     const require = createRequire(import.meta.url);
     const resolvedPath = require.resolve("gaxios");
     const mod = await import(pathToFileURL(resolvedPath).href);
-    const candidate = isRecord(mod) ? mod.Gaxios : undefined;
+    const candidate = asNullableObjectRecord(mod)?.Gaxios;
     if (!hasGaxiosConstructorShape(candidate)) {
       throw new Error("gaxios: missing Gaxios export");
     }
@@ -321,3 +325,9 @@ export async function installGaxiosFetchCompat(): Promise<void> {
     throw err;
   }
 }
+
+export const __testing = {
+  resetGaxiosFetchCompatForTests(): void {
+    installState = "not-installed";
+  },
+};

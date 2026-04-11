@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -34,8 +35,13 @@ export function registerMatrixMonitorEvents(params: {
   cfg: CoreConfig;
   client: MatrixClient;
   auth: MatrixAuth;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
   directTracker?: {
     invalidateRoom: (roomId: string) => void;
+    rememberInvite?: (roomId: string, remoteUserId: string) => void;
   };
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
@@ -43,11 +49,16 @@ export function registerMatrixMonitorEvents(params: {
   logger: RuntimeLogger;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
+  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
 }): void {
   const {
     cfg,
     client,
     auth,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     directTracker,
     logVerboseMessage,
     warnedEncryptedRooms,
@@ -55,17 +66,38 @@ export function registerMatrixMonitorEvents(params: {
     logger,
     formatNativeDependencyHint,
     onRoomMessage,
+    runDetachedTask,
   } = params;
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     logVerboseMessage,
   });
+
+  const runMonitorTask = (label: string, task: () => Promise<void>) => {
+    if (runDetachedTask) {
+      return runDetachedTask(label, task);
+    }
+    return Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        logVerboseMessage(`matrix: ${label} failed (${String(error)})`);
+      });
+  };
 
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void onRoomMessage(roomId, event);
+    void runMonitorTask(
+      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+      async () => {
+        await onRoomMessage(roomId, event);
+      },
+    );
   });
 
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
@@ -107,14 +139,23 @@ export function registerMatrixMonitorEvents(params: {
   );
 
   client.on("verification.summary", (summary) => {
-    void routeVerificationSummary(summary);
+    void runMonitorTask("verification summary handler", async () => {
+      await routeVerificationSummary(summary);
+    });
   });
 
   client.on("room.invite", (roomId: string, event: MatrixRawEvent) => {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
+    const invitee = normalizeOptionalString(event?.state_key) ?? "";
+    const senderIsInvitee =
+      Boolean(invitee) && (normalizeOptionalString(event?.sender) ?? "") === invitee;
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
+    const rememberedSender = normalizeOptionalString(event?.sender);
+    if (rememberedSender && !senderIsInvitee) {
+      directTracker?.rememberInvite?.(roomId, rememberedSender);
+    }
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,
     );
@@ -158,7 +199,12 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void onRoomMessage(roomId, event);
+      void runMonitorTask(
+        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        async () => {
+          await onRoomMessage(roomId, event);
+        },
+      );
       return;
     }
 

@@ -13,18 +13,45 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
-import {
-  sendDiscordComponentMessage,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendWebhookMessageDiscord,
-} from "./send.js";
+import { sendDiscordComponentMessage } from "./send.components.js";
+import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+
+function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  return Boolean((channelData as { execApproval?: unknown }).execApproval);
+}
+
+function neutralizeDiscordApprovalMentions(value: string): string {
+  return value
+    .replace(/@everyone/gi, "@\u200beveryone")
+    .replace(/@here/gi, "@\u200bhere")
+    .replace(/<@/g, "<@\u200b")
+    .replace(/<#/g, "<#\u200b");
+}
+
+function normalizeDiscordApprovalPayload<T extends { text?: string; channelData?: unknown }>(
+  payload: T,
+): T {
+  return hasApprovalChannelData(payload) && payload.text
+    ? {
+        ...payload,
+        text: neutralizeDiscordApprovalMentions(payload.text),
+      }
+    : payload;
+}
 
 function resolveDiscordOutboundTarget(params: {
   to: string;
@@ -33,7 +60,7 @@ function resolveDiscordOutboundTarget(params: {
   if (params.threadId == null) {
     return params.to;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return params.to;
   }
@@ -44,10 +71,10 @@ function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
   binding: ThreadBindingRecord;
 }): { username?: string; avatarUrl?: string } {
-  const usernameRaw = params.identity?.name?.trim();
-  const fallbackUsername = params.binding.label?.trim() || params.binding.agentId;
+  const usernameRaw = normalizeOptionalString(params.identity?.name);
+  const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
   const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
-  const avatarUrl = params.identity?.avatarUrl?.trim() || undefined;
+  const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
 
@@ -62,7 +89,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (params.threadId == null) {
     return null;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return null;
   }
@@ -96,12 +123,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
+  normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
-    const payload = {
+    const payload = normalizeDiscordApprovalPayload({
       ...ctx.payload,
       text: ctx.payload.text ?? "",
-    };
+    });
     const discordData = payload.channelData?.discord as
       | { components?: DiscordComponentMessageSpec }
       | undefined;
@@ -144,7 +172,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
             mediaUrl,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             replyTo: ctx.replyToId ?? undefined,
             accountId: ctx.accountId ?? undefined,
             silent: ctx.silent ?? undefined,
@@ -154,7 +184,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return await send(target, text, {
           verbose: false,
           mediaUrl,
+          mediaAccess: ctx.mediaAccess,
           mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
           replyTo: ctx.replyToId ?? undefined,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
@@ -196,6 +228,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -208,6 +241,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,

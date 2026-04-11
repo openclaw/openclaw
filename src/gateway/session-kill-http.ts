@@ -4,34 +4,20 @@ import {
   killSubagentRunAdmin,
   resolveSubagentController,
 } from "../agents/subagent-control.js";
-import { getSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
+import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { loadConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
+import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import {
-  authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
-  type ResolvedGatewayAuth,
-} from "./auth.js";
-import { sendGatewayAuthFailure, sendJson, sendMethodNotAllowed } from "./http-common.js";
-import { getBearerToken } from "./http-utils.js";
-import { ADMIN_SCOPE, WRITE_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+  authorizeGatewayHttpRequestOrReply,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
-
-function canBearerTokenKillSessions(token: string | undefined, authOk: boolean): boolean {
-  if (!token || !authOk) {
-    return false;
-  }
-
-  // Authenticated HTTP bearer requests are operator-authenticated control-plane
-  // calls, so treat them as carrying the standard write/admin operator scopes.
-  const bearerScopes = [ADMIN_SCOPE, WRITE_SCOPE];
-  return (
-    authorizeOperatorScopesForMethod("sessions.delete", bearerScopes).allowed ||
-    authorizeOperatorScopesForMethod("sessions.abort", bearerScopes).allowed
-  );
-}
 
 function resolveSessionKeyFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
@@ -68,17 +54,48 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const token = getBearerToken(req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
+    res,
+    auth: opts.auth,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (!requestAuth) {
+    return true;
+  }
+
+  const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
+  const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
+  const requesterSessionKey = normalizeOptionalString(
+    req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString(),
+  );
+  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+
+  if (!requesterSessionKey && !allowLocalAdminKill) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "Session kills require a local admin request or requester session ownership.",
+      },
+    });
+    return true;
+  }
+
+  const requiredOperatorMethod =
+    requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
+  const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 
@@ -94,29 +111,9 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
-  const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
-  const requesterSessionKey = req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString().trim();
-  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
-  const allowBearerOperatorKill = canBearerTokenKillSessions(token, authResult.ok);
-
-  if (!requesterSessionKey && !allowLocalAdminKill && !allowBearerOperatorKill) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message:
-          "Session kills require a local admin request, requester session ownership, or an authorized operator token.",
-      },
-    });
-    return true;
-  }
-
-  const allowAdminKill = allowLocalAdminKill || allowBearerOperatorKill;
-
   let killed = false;
-  if (!allowAdminKill && requesterSessionKey) {
-    const runEntry = getSubagentRunByChildSessionKey(canonicalKey);
+  if (!allowLocalAdminKill && requesterSessionKey) {
+    const runEntry = getLatestSubagentRunByChildSessionKey(canonicalKey);
     if (runEntry) {
       const result = await killControlledSubagentRun({
         cfg,
