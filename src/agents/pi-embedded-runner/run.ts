@@ -941,6 +941,37 @@ export async function runEmbeddedPiAgent(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+
+            // Structured overflow diagnostic event (Patch 3A).
+            // One JSON event per overflow attempt with enough detail to compare
+            // runtime assembled prompt size with compaction estimate.
+            const toolResultMessages = attempt.messagesSnapshot?.filter(
+              (m: { role?: string }) => m.role === "tool",
+            ) ?? [];
+            const overflowDiagnostic = {
+              event: "context_overflow_diagnostic",
+              diagId: overflowDiagId,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              runtimeModel: `${provider}/${modelId}`,
+              contextWindowTokens: ctxInfo.tokens,
+              contextWindowSource: ctxInfo.source,
+              assembledPromptTokenEstimate: observedOverflowTokens ?? null,
+              messageCount: msgCount,
+              toolResultCount: toolResultMessages.length,
+              overflowSource: contextOverflowError.source,
+              compactionAttemptedBefore: overflowCompactionAttempts > 0,
+              compactionAttemptsSoFar: overflowCompactionAttempts,
+              attemptLevelCompactionCount: attemptCompactionCount,
+              preflightRecoveryRoute: preflightRecovery?.route ?? null,
+              preflightRecoveryHandled: preflightRecovery?.handled ?? false,
+              sessionFile: params.sessionFile,
+              error: errorText.slice(0, 500),
+              timestamp: new Date().toISOString(),
+            };
+            log.warn(
+              `[context-overflow-event] ${JSON.stringify(overflowDiagnostic)}`,
+            );
+
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
@@ -1052,6 +1083,25 @@ export async function runEmbeddedPiAgent(
                 };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+
+              // Structured compaction result diagnostic (Patch 3A)
+              const compactionDiagnostic = {
+                event: "overflow_compaction_result",
+                diagId: overflowDiagId,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                compactOk: compactResult.ok,
+                compacted: compactResult.compacted,
+                compactReason: compactResult.reason ?? null,
+                tokensBefore: compactResult.result?.tokensBefore ?? null,
+                tokensAfter: compactResult.result?.tokensAfter ?? null,
+                contextWindowTokens: ctxInfo.tokens,
+                attempt: overflowCompactionAttempts,
+                timestamp: new Date().toISOString(),
+              };
+              log.warn(
+                `[overflow-compaction-event] ${JSON.stringify(compactionDiagnostic)}`,
+              );
+
               if (compactResult.compacted) {
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
