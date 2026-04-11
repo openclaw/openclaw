@@ -6,6 +6,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
+import { normalizeCronRunErrorText } from "../execution/errors.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronRunRecord } from "../types.js";
 import {
   applyJobPatch,
@@ -33,7 +34,6 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
-  normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
   wake,
