@@ -239,35 +239,47 @@ function scopeSummaryToParityPack(
   };
 }
 
+type StructuredQaParityLabel = {
+  provider: string;
+  model: string;
+};
+
 /**
- * Normalize a provider label into the `provider` half of a `provider/model`
- * string. Accepts bare provider names (`"openai"`), provider/model tuples
- * (`"openai/gpt-5.4"`), and colon-separated forms (`"openai:gpt-5.4"`).
- * Returns the provider portion lowercased so comparisons against the
- * `run.primaryProvider` field don't get confused by case drift.
+ * Only treat caller labels as provenance-checked identifiers when they are
+ * exact lower-case provider/model refs. Human-facing display labels like
+ * "GPT-5.4 candidate" or "Candidate: GPT-5.4" should render in the report
+ * without being misread as structured provider ids.
  */
-function extractProviderFromLabel(label: string): string | null {
+function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
   const trimmed = label.trim();
   if (trimmed.length === 0) {
     return null;
   }
-  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
-  if (separatorMatch) {
-    return separatorMatch[1]?.toLowerCase() ?? null;
+  if (trimmed !== trimmed.toLowerCase()) {
+    return null;
   }
-  return null;
+  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
+  if (!separatorMatch) {
+    return null;
+  }
+  return {
+    provider: separatorMatch[1] ?? "",
+    model: separatorMatch[2] ?? "",
+  };
 }
 
 /**
- * Verify the `run.primaryProvider` field on a summary matches the caller-
- * supplied label. PR L #64789 ships the `run` block; before it lands, older
- * summaries don't have the field and this check is a no-op.
+ * Verify the `run.primaryProvider` + `run.primaryModel` fields on a summary
+ * match the caller-supplied label when that label is a structured
+ * `provider/model` or `provider:model` ref. PR L #64789 ships the `run`
+ * block; before it lands, older summaries don't have the field and this check
+ * is a no-op.
  *
  * Throws `QaParityLabelMismatchError` when the summary reports a different
- * provider than the caller claimed — this catches the "swapped candidate
- * and baseline summary paths" footgun the earlier adversarial review
- * flagged. Returns silently when the field is absent (legacy summaries) or
- * when the fields match.
+ * provider/model than the caller claimed — this catches the "swapped
+ * candidate and baseline summary paths" footgun the earlier adversarial
+ * review flagged. Returns silently when the fields are absent (legacy
+ * summaries) or when the fields match.
  */
 function verifySummaryLabelMatch(params: {
   summary: QaParitySuiteSummary;
@@ -275,20 +287,25 @@ function verifySummaryLabelMatch(params: {
   role: "candidate" | "baseline";
 }): void {
   const runProvider = params.summary.run?.primaryProvider?.trim();
-  if (!runProvider) {
+  const runModel = params.summary.run?.primaryModel?.trim();
+  if (!runProvider || !runModel) {
     return;
   }
-  const labelProvider = extractProviderFromLabel(params.label);
-  if (!labelProvider) {
+  const labelRef = parseStructuredLabelRef(params.label);
+  if (!labelRef) {
     return;
   }
-  if (runProvider.toLowerCase() === labelProvider) {
+  if (
+    runProvider.toLowerCase() === labelRef.provider &&
+    runModel.toLowerCase() === labelRef.model
+  ) {
     return;
   }
   throw new QaParityLabelMismatchError({
     role: params.role,
     label: params.label,
     runProvider,
+    runModel,
   });
 }
 
@@ -296,16 +313,23 @@ export class QaParityLabelMismatchError extends Error {
   readonly role: "candidate" | "baseline";
   readonly label: string;
   readonly runProvider: string;
+  readonly runModel: string;
 
-  constructor(params: { role: "candidate" | "baseline"; label: string; runProvider: string }) {
+  constructor(params: {
+    role: "candidate" | "baseline";
+    label: string;
+    runProvider: string;
+    runModel: string;
+  }) {
     super(
-      `${params.role} summary run.primaryProvider=${params.runProvider} does not match --${params.role}-label=${params.label}. ` +
+      `${params.role} summary run.primaryProvider=${params.runProvider} and run.primaryModel=${params.runModel} do not match --${params.role}-label=${params.label}. ` +
         `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
     );
     this.name = "QaParityLabelMismatchError";
     this.role = params.role;
     this.label = params.label;
     this.runProvider = params.runProvider;
+    this.runModel = params.runModel;
   }
 }
 
