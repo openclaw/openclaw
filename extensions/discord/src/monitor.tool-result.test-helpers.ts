@@ -4,9 +4,11 @@ import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { vi } from "vitest";
 import {
   dispatchMock,
+  installDiscordToolResultHarnessSpies,
   loadConfigMock,
   readAllowFromStoreMock,
   sendMock,
+  TOOL_RESULT_SESSION_STORE_PATH,
   updateLastRouteMock,
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
@@ -26,7 +28,7 @@ export const BASE_CFG: Config = {
   messages: {
     inbound: { debounceMs: 0 },
   },
-  session: { store: "/tmp/openclaw-sessions.json" },
+  session: { store: TOOL_RESULT_SESSION_STORE_PATH },
 };
 
 export const CATEGORY_GUILD_CFG = {
@@ -37,7 +39,7 @@ export const CATEGORY_GUILD_CFG = {
       guilds: {
         "*": {
           requireMention: false,
-          channels: { c1: { allow: true } },
+          channels: { c1: { enabled: true } },
         },
       },
     },
@@ -45,6 +47,7 @@ export const CATEGORY_GUILD_CFG = {
 } satisfies Config;
 
 export function resetDiscordToolResultHarness() {
+  installDiscordToolResultHarnessSpies();
   __resetDiscordChannelInfoCacheForTest();
   sendMock.mockClear().mockResolvedValue(undefined);
   updateLastRouteMock.mockClear();
@@ -122,7 +125,7 @@ export async function createCategoryGuildHandler(runtimeError?: (err: unknown) =
   return createGuildHandler({
     cfg: CATEGORY_GUILD_CFG,
     guildEntries: {
-      "*": { requireMention: false, channels: { c1: { allow: true } } },
+      "*": { requireMention: false, channels: { c1: { enabled: true } } },
     },
     runtimeError,
   });
@@ -298,13 +301,13 @@ export function createMentionRequiredGuildConfig(overrides?: Partial<Config>): C
         guilds: {
           "*": {
             requireMention: true,
-            channels: { c1: { allow: true } },
+            channels: { c1: { enabled: true } },
           },
         },
       },
     },
     ...overrides,
-  } as Config;
+  };
 }
 
 export function captureNextDispatchCtx<

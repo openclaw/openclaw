@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -30,7 +31,7 @@ function getProviderModelId(model: unknown): string {
     return "";
   }
   const id = (model as { id?: unknown }).id;
-  return typeof id === "string" ? id.trim() : "";
+  return normalizeOptionalString(id) ?? "";
 }
 
 export function mergeProviderModels(
@@ -85,6 +86,11 @@ export function mergeProviderModels(
       explicitValue: explicitModel.contextWindow,
       implicitValue: implicitModel.contextWindow,
     });
+    const contextTokens = resolvePreferredTokenLimit({
+      explicitPresent: "contextTokens" in explicitModel,
+      explicitValue: explicitModel.contextTokens,
+      implicitValue: implicitModel.contextTokens,
+    });
     const maxTokens = resolvePreferredTokenLimit({
       explicitPresent: "maxTokens" in explicitModel,
       explicitValue: explicitModel.maxTokens,
@@ -96,6 +102,7 @@ export function mergeProviderModels(
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextTokens === undefined ? {} : { contextTokens }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     };
   });
@@ -130,7 +137,7 @@ export function mergeProviders(params: {
 }): Record<string, ProviderConfig> {
   const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
   for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = key.trim();
+    const providerKey = normalizeOptionalString(key) ?? "";
     if (!providerKey) {
       continue;
     }
@@ -141,11 +148,7 @@ export function mergeProviders(params: {
 }
 
 function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  if (typeof entry?.api !== "string") {
-    return undefined;
-  }
-  const api = entry.api.trim();
-  return api || undefined;
+  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -159,7 +162,8 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
         return [];
       }
       const api = (model as { api?: unknown }).api;
-      return typeof api === "string" && api.trim() ? [api.trim()] : [];
+      const normalized = normalizeOptionalString(api);
+      return normalized ? [normalized] : [];
     })
     .toSorted();
 

@@ -5,7 +5,7 @@ import {
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,
@@ -23,7 +23,8 @@ describe("createDelegatedResolveConfigured", () => {
         status: {
           configuredLabel: "configured",
           unconfiguredLabel: "needs setup",
-          resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
+          resolveConfigured: async ({ cfg, accountId }) =>
+            Boolean(cfg.channels?.[accountId ?? "demo"]),
         },
         credentials: [],
       }),
@@ -32,7 +33,9 @@ describe("createDelegatedResolveConfigured", () => {
     const resolveConfigured = createDelegatedResolveConfigured(loadWizard);
 
     expect(await resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
+    expect(await resolveConfigured({ cfg: { channels: { work: {} } }, accountId: "work" })).toBe(
+      true,
+    );
   });
 });
 

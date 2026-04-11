@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { listBundledPluginBuildEntries } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import {
+  listBundledPluginBuildEntries,
+  listBundledPluginRuntimeDependencies,
+} from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -81,6 +84,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 }
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -108,6 +112,21 @@ function buildBundledHookEntries(): Record<string, string> {
 }
 
 const bundledHookEntries = buildBundledHookEntries();
+const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
+const bundledPluginFile = (pluginId: string, relativePath: string) =>
+  `${bundledPluginRoot(pluginId)}/${relativePath}`;
+const explicitNeverBundleDependencies = [
+  "@lancedb/lancedb",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "matrix-js-sdk",
+  ...bundledPluginRuntimeDependencies,
+].toSorted((left, right) => left.localeCompare(right));
+
+function shouldNeverBundleDependency(id: string): boolean {
+  return explicitNeverBundleDependencies.some((dependency) => {
+    return id === dependency || id.startsWith(`${dependency}/`);
+  });
+}
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -118,16 +137,24 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
+    "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
+    "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "telegram/audit": "extensions/telegram/src/audit.ts",
-    "telegram/token": "extensions/telegram/src/token.ts",
+    "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
+    "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
   };
 }
 
@@ -155,7 +182,7 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
+      neverBundle: shouldNeverBundleDependency,
     },
   }),
 ]);

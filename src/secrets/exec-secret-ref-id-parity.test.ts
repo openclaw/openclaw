@@ -7,9 +7,15 @@ import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan } from "./plan.js";
 import { isValidExecSecretRefId } from "./ref-contract.js";
 import { materializePathTokens, parsePathPattern } from "./target-registry-pattern.js";
+import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
@@ -41,9 +47,10 @@ describe("exec SecretRef id parity", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
           ref: { source: "exec", provider: "vault", id },
         },
       ],
@@ -63,46 +70,59 @@ describe("exec SecretRef id parity", () => {
   }
 
   function classifyTargetClass(id: string): string {
-    if (id.startsWith("auth-profiles.")) {
+    const canonicalId = canonicalizeSecretTargetCoverageId(id);
+    if (canonicalId.startsWith("auth-profiles.")) {
       return "auth-profiles";
     }
-    if (id.startsWith("agents.")) {
+    if (canonicalId.startsWith("agents.")) {
       return "agents";
     }
-    if (id.startsWith("channels.")) {
+    if (canonicalId.startsWith("channels.")) {
       return "channels";
     }
-    if (id.startsWith("cron.")) {
+    if (canonicalId.startsWith("cron.")) {
       return "cron";
     }
-    if (id.startsWith("gateway.auth.")) {
+    if (canonicalId.startsWith("gateway.auth.")) {
       return "gateway.auth";
     }
-    if (id.startsWith("gateway.remote.")) {
+    if (canonicalId.startsWith("gateway.remote.")) {
       return "gateway.remote";
     }
-    if (id.startsWith("messages.")) {
+    if (canonicalId.startsWith("messages.")) {
       return "messages";
     }
-    if (id.startsWith("models.providers.") && id.includes(".headers.")) {
+    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".headers.")) {
       return "models.headers";
     }
-    if (id.startsWith("models.providers.")) {
+    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".request.")) {
+      return "models.request";
+    }
+    if (canonicalId.startsWith("models.providers.")) {
       return "models.apiKey";
     }
-    if (id.startsWith("skills.entries.")) {
+    if (canonicalId.startsWith("skills.entries.")) {
       return "skills";
     }
-    if (id.startsWith("talk.")) {
+    if (canonicalId.startsWith("talk.")) {
       return "talk";
     }
-    if (id.startsWith("tools.web.fetch.")) {
+    if (canonicalId.startsWith("tools.web.fetch.")) {
       return "tools.web.fetch";
     }
-    if (id.startsWith("plugins.entries.") && id.includes(".config.webSearch.apiKey")) {
+    if (
+      canonicalId.startsWith("plugins.entries.") &&
+      canonicalId.includes(".config.webFetch.apiKey")
+    ) {
+      return "tools.web.fetch";
+    }
+    if (
+      canonicalId.startsWith("plugins.entries.") &&
+      canonicalId.includes(".config.webSearch.apiKey")
+    ) {
       return "tools.web.search";
     }
-    if (id.startsWith("tools.web.search.")) {
+    if (canonicalId.startsWith("tools.web.search.")) {
       return "tools.web.search";
     }
     return "unclassified";

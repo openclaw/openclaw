@@ -1,5 +1,6 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureOpenClawCliOnPath } from "./path-env.js";
 
 const state = vi.hoisted(() => ({
   dirs: new Set<string>(),
@@ -10,8 +11,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 
@@ -19,15 +20,21 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
     accessSync: (p: string, mode?: number) => {
-      // `mode` is ignored in tests; we only model "is executable" or "not".
-      if (!state.executables.has(absInMock(p))) {
-        throw new Error(`EACCES: permission denied, access '${p}' (mode=${mode ?? 0})`);
+      const resolved = absInMock(p);
+      if (state.executables.has(resolved)) {
+        return;
       }
+      actual.accessSync(p, mode);
     },
-    statSync: (p: string) => ({
-      // Avoid throws for non-existent paths; the code under test only cares about isDirectory().
-      isDirectory: () => state.dirs.has(absInMock(p)),
-    }),
+    statSync: (p: string) => {
+      const resolved = absInMock(p);
+      if (state.dirs.has(resolved)) {
+        return {
+          isDirectory: () => true,
+        };
+      }
+      return actual.statSync(p);
+    },
   };
 
   return { ...wrapped, default: wrapped };
@@ -36,8 +43,6 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("./env.js", () => ({
   isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
 }));
-
-let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
 
 describe("ensureOpenClawCliOnPath", () => {
   const envKeys = [
@@ -50,10 +55,6 @@ describe("ensureOpenClawCliOnPath", () => {
     "XDG_BIN_HOME",
   ] as const;
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
-
-  beforeAll(async () => {
-    ({ ensureOpenClawCliOnPath } = await import("./path-env.js"));
-  });
 
   beforeEach(() => {
     envSnapshot = Object.fromEntries(envKeys.map((k) => [k, process.env[k]])) as typeof envSnapshot;
@@ -128,6 +129,26 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "darwin",
     });
     expect(updated[0]).toBe(appBinDir);
+  });
+
+  it("keeps the current runtime directory ahead of system PATH hardening", () => {
+    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
+    const nodeBinDir = path.join(tmp, "node-bin");
+    const nodeExec = path.join(nodeBinDir, "node");
+    setDir(tmp);
+    setDir(nodeBinDir);
+    setExe(nodeExec);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: nodeExec,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expect(updated[0]).toBe(nodeBinDir);
+    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
   });
 
   it("is idempotent", () => {

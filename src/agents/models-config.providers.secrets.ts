@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -11,6 +13,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -43,6 +46,14 @@ export type ProviderAuthResolver = (
   profileId?: string;
 };
 
+type AuthProfileStoreInput =
+  | ReturnType<typeof ensureAuthProfileStore>
+  | (() => ReturnType<typeof ensureAuthProfileStore>);
+
+function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
+  return typeof input === "function" ? input() : input;
+}
+
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 export function normalizeApiKeyConfig(value: string): string {
@@ -52,7 +63,7 @@ export function normalizeApiKeyConfig(value: string): string {
 }
 
 export function toDiscoveryApiKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
     return undefined;
   }
@@ -71,8 +82,10 @@ export function resolveEnvApiKeyVarName(
   return match ? match[1] : undefined;
 }
 
-export function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
+export function resolveAwsSdkApiKeyVarName(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveAwsSdkEnvVarName(env);
 }
 
 export function normalizeHeaderValues(params: {
@@ -275,15 +288,28 @@ export function resolveMissingProviderApiKey(params: {
 
   const authMode = params.provider.auth;
   if (params.providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
+    const resolvedApiKey = params.providerApiKeyResolver(params.env);
+    if (!resolvedApiKey) {
+      // Resolver returned nothing (e.g. no AWS env vars on an instance-role setup).
+      // Don't inject an undefined/empty apiKey — let the sdk credential chain handle it.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: params.providerApiKeyResolver(params.env),
+      apiKey: resolvedApiKey,
     };
   }
   if (authMode === "aws-sdk") {
+    const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);
+    if (!awsEnvVar) {
+      // No AWS env vars found — don't inject a fake apiKey marker.
+      // The aws-sdk credential chain (instance roles, ECS task roles, etc.)
+      // will resolve credentials at request time without needing an apiKey field.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: resolveAwsSdkApiKeyVarName(params.env),
+      apiKey: awsEnvVar,
     };
   }
 
@@ -303,30 +329,52 @@ export function resolveMissingProviderApiKey(params: {
 
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
+  config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
-    return {
-      apiKey: fromProfiles?.apiKey,
-      discoveryApiKey: fromProfiles?.discoveryApiKey,
-    };
+    const fromConfig = resolveConfigBackedProviderAuth({
+      provider: authProvider,
+      config,
+    });
+    if (fromConfig?.apiKey) {
+      return {
+        apiKey: fromConfig.apiKey,
+        discoveryApiKey: fromConfig.discoveryApiKey,
+      };
+    }
+    const fromProfiles = resolveApiKeyFromProfiles({
+      provider: authProvider,
+      store: resolveAuthProfileStoreInput(authStoreInput),
+      env,
+    });
+    return fromProfiles?.apiKey
+      ? {
+          apiKey: fromProfiles.apiKey,
+          discoveryApiKey: fromProfiles.discoveryApiKey,
+        }
+      : { apiKey: undefined, discoveryApiKey: undefined };
   };
 }
 
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
+  config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const ids = listProfilesForProvider(authStore, provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
+    const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const ids = listProfilesForProvider(authStore, authProvider);
+
     let oauthCandidate:
       | {
           apiKey: string | undefined;
@@ -367,7 +415,7 @@ export function createProviderAuthResolver(
       return oauthCandidate;
     }
 
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
@@ -377,6 +425,18 @@ export function createProviderAuthResolver(
       };
     }
 
+    const fromConfig = resolveConfigBackedProviderAuth({
+      provider: authProvider,
+      config,
+    });
+    if (fromConfig) {
+      return {
+        apiKey: fromConfig.apiKey,
+        discoveryApiKey: fromConfig.discoveryApiKey,
+        mode: fromConfig.mode,
+        source: "none",
+      };
+    }
     return {
       apiKey: undefined,
       discoveryApiKey: undefined,
@@ -384,4 +444,44 @@ export function createProviderAuthResolver(
       source: "none" as const,
     };
   };
+}
+
+function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+  | {
+      apiKey: string;
+      discoveryApiKey?: string;
+      mode: "api_key";
+      source: "config";
+    }
+  | undefined {
+  // Providers own any provider-specific fallback auth logic via
+  // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
+  // non-secret markers from source config, but must never persist plaintext.
+  const authProvider = resolveProviderIdForAuth(params.provider, { config: params.config });
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: authProvider,
+    config: params.config,
+    context: {
+      config: params.config,
+      provider: authProvider,
+      providerConfig: params.config?.models?.providers?.[authProvider],
+    },
+  });
+  const apiKey = synthetic?.apiKey?.trim();
+  if (!apiKey) {
+    return undefined;
+  }
+  return isNonSecretApiKeyMarker(apiKey)
+    ? {
+        apiKey,
+        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        mode: "api_key",
+        source: "config",
+      }
+    : {
+        apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
+        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        mode: "api_key",
+        source: "config",
+      };
 }

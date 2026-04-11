@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
-} from "./audit-extra.sync.js";
+} from "./audit-extra.summary.js";
 import { safeEqualSecret } from "./secret-equal.js";
 
 describe("collectAttackSurfaceSummaryFindings", () => {
@@ -23,9 +23,16 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       expectedDetail: ["hooks.webhooks: enabled", "hooks.internal: enabled"],
     },
     {
-      name: "reports both hook systems as disabled when neither is configured",
+      name: "reports internal hooks as enabled by default and webhooks as disabled when neither is configured",
       cfg: {} satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
+      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
+    },
+    {
+      name: "reports internal hooks as disabled when explicitly set to false",
+      cfg: {
+        hooks: { internal: { enabled: false } },
+      } satisfies OpenClawConfig,
+      expectedDetail: ["hooks.internal: disabled"],
     },
   ])("$name", ({ cfg, expectedDetail }) => {
     const [finding] = collectAttackSurfaceSummaryFindings(cfg);
@@ -50,51 +57,32 @@ describe("safeEqualSecret", () => {
 });
 
 describe("collectSmallModelRiskFindings", () => {
-  const baseCfg = {
+  const browserOffCfg = {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     browser: { enabled: false },
+    tools: { web: { fetch: { enabled: false } } },
+  } satisfies OpenClawConfig;
+  const browserDefaultCfg = {
+    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     tools: { web: { fetch: { enabled: false } } },
   } satisfies OpenClawConfig;
 
   it.each([
     {
-      name: "gemini plugin config",
-      cfg: {
-        ...baseCfg,
-        plugins: {
-          entries: {
-            google: { enabled: true, config: { webSearch: { apiKey: "AIza-test" } } },
-          },
-        },
-      } satisfies OpenClawConfig,
+      name: "small model without sandbox all stays critical even when browser/web tools are off",
+      cfg: browserOffCfg,
       env: {},
+      detailIncludes: ["web=[off]", "No web/browser tools detected"],
+      detailExcludes: ["web=[browser]"],
     },
     {
-      name: "gemini env key",
-      cfg: baseCfg,
-      env: { GEMINI_API_KEY: "AIza-test" },
+      name: "treats browser as enabled by default when browser config is omitted",
+      cfg: browserDefaultCfg,
+      env: {},
+      detailIncludes: ["web=[browser]"],
+      detailExcludes: ["No web/browser tools detected"],
     },
-    {
-      name: "grok env key",
-      cfg: baseCfg,
-      env: { XAI_API_KEY: "xai-test" },
-    },
-    {
-      name: "kimi env key",
-      cfg: baseCfg,
-      env: { KIMI_API_KEY: "sk-kimi-test" },
-    },
-    {
-      name: "moonshot env key",
-      cfg: baseCfg,
-      env: { MOONSHOT_API_KEY: "sk-moonshot-test" },
-    },
-    {
-      name: "openrouter env fallback",
-      cfg: baseCfg,
-      env: { OPENROUTER_API_KEY: "sk-or-v1-test" },
-    },
-  ])("$name", ({ cfg, env }) => {
+  ])("$name", ({ cfg, env, detailIncludes, detailExcludes }) => {
     const [finding] = collectSmallModelRiskFindings({
       cfg,
       env,
@@ -102,6 +90,12 @@ describe("collectSmallModelRiskFindings", () => {
 
     expect(finding?.checkId).toBe("models.small_params");
     expect(finding?.severity).toBe("critical");
-    expect(finding?.detail).toContain("web_search");
+    expect(finding?.detail).toContain("ollama/mistral-8b");
+    for (const snippet of detailIncludes) {
+      expect(finding?.detail).toContain(snippet);
+    }
+    for (const snippet of detailExcludes) {
+      expect(finding?.detail).not.toContain(snippet);
+    }
   });
 });

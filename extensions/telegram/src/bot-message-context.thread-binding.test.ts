@@ -1,17 +1,21 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
   };
 });
-vi.mock("./conversation-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./conversation-route.js")>();
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
   return {
     ...actual,
     resolveTelegramConversationRoute: (...args: unknown[]) =>
@@ -19,13 +23,7 @@ vi.mock("./conversation-route.js", async (importOriginal) => {
   };
 });
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
-
-function createBoundRoute(params: {
-  accountId: string;
-  sessionKey: string;
-  agentId: string;
-}) {
+function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
   return {
     configuredBinding: null,
     configuredBindingSessionKey: "",
@@ -42,12 +40,6 @@ function createBoundRoute(params: {
 }
 
 describe("buildTelegramMessageContext thread binding override", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
-  });
-
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
     resolveTelegramConversationRouteMock.mockReset();

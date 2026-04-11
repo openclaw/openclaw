@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { expect, vi } from "vitest";
+import type { TranscriptPolicy } from "./transcript-policy.js";
 
 export type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn = (params: {
@@ -11,6 +12,7 @@ export type SanitizeSessionHistoryFn = (params: {
   sessionManager: SessionManager;
   sessionId: string;
   modelId?: string;
+  policy?: TranscriptPolicy;
 }) => Promise<AgentMessage[]>;
 export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {
@@ -63,7 +65,7 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
   vi.resetAllMocks();
   const mockedHelpers = await import("./pi-embedded-helpers.js");
   vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-  const mod = await import("./pi-embedded-runner/google.js");
+  const mod = await import("./pi-embedded-runner/replay-history.js");
   return {
     sanitizeSessionHistory: mod.sanitizeSessionHistory,
     mockedHelpers,
@@ -138,7 +140,7 @@ export function makeSnapshotChangedOpenAIReasoningScenario() {
   return {
     sessionManager: makeInMemorySessionManager(sessionEntries),
     messages: makeReasoningAssistantMessages({ thinkingSignature: "object" }),
-    modelId: "gpt-5.2-codex",
+    modelId: "gpt-5.4",
   };
 }
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -22,16 +22,20 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: async ({ fn }: { fn: () => Promise<unknown> }) => await fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    computeBackoff: computeBackoffMock,
-    sleepWithAbort: sleepWithAbortMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  computeBackoff: computeBackoffMock,
+  formatDurationPrecise: vi.fn((ms: number) => `${ms}ms`),
+  sleepWithAbort: sleepWithAbortMock,
+}));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+
+type TelegramApiMiddleware = (
+  prev: (...args: unknown[]) => Promise<unknown>,
+  method: string,
+  payload: unknown,
+) => Promise<unknown>;
+type AsyncVoidFn = () => Promise<void>;
 
 function makeBot() {
   return {
@@ -44,7 +48,10 @@ function makeBot() {
   };
 }
 
-function installPollingStallWatchdogHarness() {
+function installPollingStallWatchdogHarness(
+  dateNowSequence: readonly number[] = [0, 0],
+  fallbackDateNow = 120_001,
+) {
   let watchdog: (() => void) | undefined;
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
     watchdog = fn as () => void;
@@ -56,14 +63,18 @@ function installPollingStallWatchdogHarness() {
     return 1 as unknown as ReturnType<typeof setTimeout>;
   });
   const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
-  const dateNowSpy = vi
-    .spyOn(Date, "now")
-    .mockImplementationOnce(() => 0)
-    .mockImplementation(() => 120_001);
+  const dateNowSpy = vi.spyOn(Date, "now");
+  for (const value of dateNowSequence) {
+    dateNowSpy.mockImplementationOnce(() => value);
+  }
+  dateNowSpy.mockImplementation(() => fallbackDateNow);
 
   return {
     async waitForWatchdog() {
-      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (watchdog) {
+          break;
+        }
         await Promise.resolve();
       }
       expect(watchdog).toBeTypeOf("function");
@@ -117,6 +128,15 @@ function createPollingSessionWithTransportRestart(params: {
   telegramTransport: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport: () => ReturnType<typeof makeTelegramTransport>;
 }) {
+  return createPollingSession(params);
+}
+
+function createPollingSession(params: {
+  abortSignal: AbortSignal;
+  log?: (message: string) => void;
+  telegramTransport?: ReturnType<typeof makeTelegramTransport>;
+  createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+}) {
   return new TelegramPollingSession({
     token: "tok",
     config: {},
@@ -127,21 +147,58 @@ function createPollingSessionWithTransportRestart(params: {
     runnerOptions: {},
     getLastUpdateId: () => null,
     persistUpdateId: async () => undefined,
-    log: () => undefined,
+    log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
-    createTelegramTransport: params.createTelegramTransport,
+    ...(params.createTelegramTransport
+      ? { createTelegramTransport: params.createTelegramTransport }
+      : {}),
   });
 }
 
+function mockBotCapturingApiMiddleware(botStop: AsyncVoidFn) {
+  let apiMiddleware: TelegramApiMiddleware | undefined;
+  createTelegramBotMock.mockReturnValueOnce({
+    api: {
+      deleteWebhook: vi.fn(async () => true),
+      getUpdates: vi.fn(async () => []),
+      config: {
+        use: vi.fn((fn: TelegramApiMiddleware) => {
+          apiMiddleware = fn;
+        }),
+      },
+    },
+    stop: botStop,
+  });
+  return () => apiMiddleware;
+}
+
+function mockLongRunningPollingCycle(runnerStop: AsyncVoidFn) {
+  let firstTaskResolve: (() => void) | undefined;
+  runMock.mockReturnValue({
+    task: () =>
+      new Promise<void>((resolve) => {
+        firstTaskResolve = resolve;
+      }),
+    stop: async () => {
+      await runnerStop();
+      firstTaskResolve?.();
+    },
+    isRunning: () => true,
+  });
+  return () => firstTaskResolve?.();
+}
+
 describe("TelegramPollingSession", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
+  });
+
+  beforeEach(() => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -361,6 +418,228 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport2);
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
+    // t=120_001: watchdog fires (getUpdates stale for 120s)
+    // But right before watchdog, a sendMessage succeeded at t=120_000
+    // All subsequent Date.now calls return the same value, giving apiIdle = 0.
+    const watchdogHarness = installPollingStallWatchdogHarness();
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      // Simulate a sendMessage call through the middleware before watchdog fires.
+      // This updates lastApiActivityAt, proving the network is alive.
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const fakePrev = vi.fn(async () => ({ ok: true }));
+        await apiMiddleware(fakePrev, "sendMessage", { chat_id: 123, text: "hello" });
+      }
+
+      // Now fire the watchdog — getUpdates is stale (120s) but API was just active
+      watchdog?.();
+
+      // The watchdog should NOT have triggered a restart
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      // Clean up: abort to end the session
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("does not trigger stall restart while a recent non-getUpdates API call is in-flight", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 60_000]);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      // Start an in-flight sendMessage that has NOT yet resolved.
+      // This simulates a slow delivery where the API call is still pending.
+      let resolveSendMessage: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const slowPrev = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveSendMessage = resolve;
+            }),
+        );
+        // Fire-and-forget: the call is in-flight but not awaited yet
+        const sendPromise = apiMiddleware(slowPrev, "sendMessage", { chat_id: 123, text: "hello" });
+
+        // Fire the watchdog while sendMessage is still in-flight.
+        // The in-flight call started 60s ago, so API liveness is still recent.
+        watchdog?.();
+
+        // The watchdog should NOT have triggered a restart
+        expect(runnerStop).not.toHaveBeenCalled();
+        expect(botStop).not.toHaveBeenCalled();
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+        // Resolve the in-flight call to clean up
+        resolveSendMessage?.({ ok: true });
+        await sendPromise;
+      }
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("triggers stall restart when a non-getUpdates API call has been in-flight past the threshold", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1]);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      let resolveSendMessage: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const slowPrev = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveSendMessage = resolve;
+            }),
+        );
+        const sendPromise = apiMiddleware(slowPrev, "sendMessage", { chat_id: 123, text: "hello" });
+
+        // The in-flight send started at t=1 and is still stuck at t=120_001.
+        // That is older than the watchdog threshold, so restart should proceed.
+        watchdog?.();
+
+        expect(runnerStop).toHaveBeenCalledTimes(1);
+        expect(botStop).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+        resolveSendMessage?.({ ok: true });
+        await sendPromise;
+      }
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("does not trigger stall restart when a newer non-getUpdates API call starts while an older one is still in-flight", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1, 120_000]);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      let resolveFirstSend: ((v: unknown) => void) | undefined;
+      let resolveSecondSend: ((v: unknown) => void) | undefined;
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const firstSendPromise = apiMiddleware(
+          vi.fn(
+            () =>
+              new Promise((resolve) => {
+                resolveFirstSend = resolve;
+              }),
+          ),
+          "sendMessage",
+          { chat_id: 123, text: "older" },
+        );
+        const secondSendPromise = apiMiddleware(
+          vi.fn(
+            () =>
+              new Promise((resolve) => {
+                resolveSecondSend = resolve;
+              }),
+          ),
+          "sendMessage",
+          { chat_id: 123, text: "newer" },
+        );
+
+        // The older send is stale, but the newer send started just now.
+        // Watchdog liveness must follow the newest active non-getUpdates call.
+        watchdog?.();
+
+        expect(runnerStop).not.toHaveBeenCalled();
+        expect(botStop).not.toHaveBeenCalled();
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+        resolveFirstSend?.({ ok: true });
+        resolveSecondSend?.({ ok: true });
+        await firstSendPromise;
+        await secondSendPromise;
+      }
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
   });
 
   it("reuses the transport after a getUpdates conflict", async () => {

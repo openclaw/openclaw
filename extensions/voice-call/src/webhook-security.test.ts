@@ -369,7 +369,7 @@ describe("verifyPlivoWebhook", () => {
 describe("verifyTelnyxWebhook", () => {
   it("marks replayed valid requests as replay without failing auth", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = JSON.stringify({
       data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
@@ -389,6 +389,45 @@ describe("verifyTelnyxWebhook", () => {
 
     const first = verifyTelnyxWebhook(ctx, pemPublicKey);
     const second = verifyTelnyxWebhook(ctx, pemPublicKey);
+
+    expectReplayResultPair(first, second);
+  });
+
+  it("treats Base64 and Base64URL signatures as the same replayed request", () => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const rawBody = JSON.stringify({
+      data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
+      nonce: crypto.randomUUID(),
+    });
+    const signedPayload = `${timestamp}|${rawBody}`;
+    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
+    const urlSafeSignature = signature.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    const first = verifyTelnyxWebhook(
+      {
+        headers: {
+          "telnyx-signature-ed25519": signature,
+          "telnyx-timestamp": timestamp,
+        },
+        rawBody,
+        url: "https://example.com/voice/webhook",
+        method: "POST" as const,
+      },
+      pemPublicKey,
+    );
+    const second = verifyTelnyxWebhook(
+      {
+        headers: {
+          "telnyx-signature-ed25519": urlSafeSignature,
+          "telnyx-timestamp": timestamp,
+        },
+        rawBody,
+        url: "https://example.com/voice/webhook",
+        method: "POST" as const,
+      },
+      pemPublicKey,
+    );
 
     expectReplayResultPair(first, second);
   });

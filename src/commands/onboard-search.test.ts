@@ -1,8 +1,124 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { SEARCH_PROVIDER_OPTIONS, setupSearch } from "./onboard-search.js";
+import { listSearchProviderOptions, setupSearch } from "./onboard-search.js";
+
+type WebSearchConfigRecord = {
+  plugins?: {
+    entries?: Record<
+      string,
+      { enabled?: boolean; config?: { webSearch?: Record<string, unknown> } }
+    >;
+  };
+};
+
+const SEARCH_PROVIDER_PLUGINS: Record<
+  string,
+  { pluginId: string; envVars: string[]; label: string; credentialLabel?: string }
+> = {
+  brave: { pluginId: "brave", envVars: ["BRAVE_API_KEY"], label: "Brave Search" },
+  firecrawl: { pluginId: "firecrawl", envVars: ["FIRECRAWL_API_KEY"], label: "Firecrawl" },
+  gemini: { pluginId: "google", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], label: "Gemini" },
+  grok: { pluginId: "xai", envVars: ["XAI_API_KEY"], label: "Grok" },
+  kimi: {
+    pluginId: "moonshot",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    label: "Kimi",
+    credentialLabel: "Moonshot / Kimi API key",
+  },
+  perplexity: {
+    pluginId: "perplexity",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    label: "Perplexity",
+  },
+  tavily: { pluginId: "tavily", envVars: ["TAVILY_API_KEY"], label: "Tavily" },
+};
+
+function getWebSearchConfig(config: OpenClawConfig | undefined, pluginId: string) {
+  return (config as WebSearchConfigRecord | undefined)?.plugins?.entries?.[pluginId]?.config
+    ?.webSearch;
+}
+
+function ensureWebSearchConfig(config: OpenClawConfig, pluginId: string) {
+  const entries = ((config.plugins ??= {}).entries ??= {});
+  const pluginEntry = (entries[pluginId] ??= {}) as {
+    enabled?: boolean;
+    config?: { webSearch?: Record<string, unknown> };
+  };
+  pluginEntry.config ??= {};
+  pluginEntry.config.webSearch ??= {};
+  return pluginEntry.config.webSearch;
+}
+
+function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
+  const metadata = SEARCH_PROVIDER_PLUGINS[id];
+  if (!metadata) {
+    throw new Error(`missing search provider fixture: ${id}`);
+  }
+  const entry: PluginWebSearchProviderEntry = {
+    id: id as never,
+    pluginId: metadata.pluginId,
+    label: metadata.label,
+    hint: `${metadata.label} web search`,
+    onboardingScopes: ["text-inference"],
+    envVars: metadata.envVars,
+    placeholder: `${id}-key`,
+    signupUrl: `https://example.com/${id}`,
+    credentialLabel:
+      metadata.credentialLabel ??
+      (id === "gemini" ? "Google Gemini API key" : `${metadata.label} API key`),
+    credentialPath: `plugins.entries.${metadata.pluginId}.config.webSearch.apiKey`,
+    getCredentialValue: () => undefined,
+    setCredentialValue: () => {},
+    getConfiguredCredentialValue: (config) => getWebSearchConfig(config, metadata.pluginId)?.apiKey,
+    setConfiguredCredentialValue: (config, value) => {
+      ensureWebSearchConfig(config, metadata.pluginId).apiKey = value;
+    },
+    createTool: () => null,
+    applySelectionConfig: (config) => {
+      const next: OpenClawConfig = { ...config, plugins: { ...config.plugins } };
+      const entries = { ...next.plugins?.entries } as NonNullable<
+        NonNullable<OpenClawConfig["plugins"]>["entries"]
+      >;
+      entries[metadata.pluginId] = { ...entries[metadata.pluginId], enabled: true };
+      next.plugins = { ...next.plugins, entries };
+      return next;
+    },
+  };
+  if (id === "kimi") {
+    entry.runSetup = async ({ config, prompter }) => {
+      const baseUrl = await prompter.select({
+        message: "Moonshot endpoint",
+        options: [{ value: "https://api.moonshot.ai/v1", label: "Moonshot" }],
+        initialValue: "https://api.moonshot.ai/v1",
+      });
+      const modelChoice = await prompter.select({
+        message: "Moonshot web-search model",
+        options: [{ value: "__keep__", label: "Keep default" }],
+        initialValue: "__keep__",
+      });
+      const webSearch = ensureWebSearchConfig(config, metadata.pluginId);
+      webSearch.baseUrl = baseUrl;
+      webSearch.model = modelChoice === "__keep__" ? "kimi-k2.5" : modelChoice;
+      return config;
+    };
+  }
+  return entry;
+}
+
+const searchProviderFixture = vi.hoisted(() => ({
+  resolvePluginWebSearchProviders: vi.fn(() =>
+    ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "tavily"].map((id) =>
+      createSearchProviderEntry(id),
+    ),
+  ),
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: searchProviderFixture.resolvePluginWebSearchProviders,
+}));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -28,11 +144,16 @@ const SEARCH_PROVIDER_ENV_VARS = [
 let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
   {};
 
-function createPrompter(params: { selectValue?: string; textValue?: string }): {
+function createPrompter(params: {
+  selectValue?: string;
+  selectValues?: string[];
+  textValue?: string;
+}): {
   prompter: WizardPrompter;
   notes: Array<{ title?: string; message: string }>;
 } {
   const notes: Array<{ title?: string; message: string }> = [];
+  const remainingSelectValues = [...(params.selectValues ?? [])];
   const prompter: WizardPrompter = {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
@@ -40,7 +161,7 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
       notes.push({ title, message });
     }),
     select: vi.fn(
-      async () => params.selectValue ?? "perplexity",
+      async () => remainingSelectValues.shift() ?? params.selectValue ?? "perplexity",
     ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => params.textValue ?? ""),
@@ -57,7 +178,17 @@ function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConf
         search: {
           provider: "perplexity",
           ...(enabled === undefined ? {} : { enabled }),
-          perplexity: { apiKey },
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        perplexity: {
+          config: {
+            webSearch: {
+              apiKey,
+            },
+          },
         },
       },
     },
@@ -230,7 +361,6 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
   });
@@ -244,20 +374,29 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(pluginWebSearchApiKey(result, "xai")).toBe("xai-test");
+    expect(result.plugins?.entries?.xai?.enabled).toBe(true);
   });
 
   it("sets provider and key for kimi", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
-      selectValue: "kimi",
+      selectValues: ["kimi", "https://api.moonshot.ai/v1", "__keep__"],
       textValue: "sk-moonshot",
     });
     const result = await setupSearch(cfg, runtime, prompter);
+    const kimiWebSearchConfig = result.plugins?.entries?.moonshot?.config?.webSearch as
+      | {
+          baseUrl?: string;
+          model?: string;
+        }
+      | undefined;
     expect(result.tools?.web?.search?.provider).toBe("kimi");
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "moonshot")).toBe("sk-moonshot");
     expect(result.plugins?.entries?.moonshot?.enabled).toBe(true);
+    expect(kimiWebSearchConfig?.baseUrl).toBe("https://api.moonshot.ai/v1");
+    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.5");
   });
 
   it("sets provider and key for tavily and enables the plugin", async () => {
@@ -300,7 +439,7 @@ describe("setupSearch", () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
@@ -309,7 +448,7 @@ describe("setupSearch", () => {
       "existing-key", // pragma: allowlist secret
       false,
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -431,7 +570,6 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-configured-key");
   });
@@ -591,17 +729,20 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
-    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
-    expect(values).toEqual([
-      "brave",
-      "firecrawl",
-      "gemini",
-      "grok",
-      "kimi",
-      "perplexity",
-      "tavily",
-    ]);
+  it("exports search providers in alphabetical order", () => {
+    const providers = listSearchProviderOptions();
+    const values = providers.map((e) => e.id);
+    expect(values).toEqual([...values].toSorted());
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "brave",
+        "firecrawl",
+        "gemini",
+        "grok",
+        "kimi",
+        "perplexity",
+        "tavily",
+      ]),
+    );
   });
 });

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
+import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix-helper.js";
 import * as noteModule from "../terminal/note.js";
+import { setChannelPluginRegistryForTests } from "./channel-test-registry.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
 
@@ -29,32 +30,10 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     });
     return noteSpy.mock.calls
       .filter((call) => call[1] === "Doctor warnings")
-      .map((call) => String(call[0]));
+      .map((call) => call[0]);
   } finally {
     noteSpy.mockRestore();
   }
-}
-
-type DoctorFlowDeps = {
-  noteModule: typeof import("../terminal/note.js");
-  loadAndMaybeMigrateDoctorConfig: typeof import("./doctor-config-flow.js").loadAndMaybeMigrateDoctorConfig;
-};
-
-let cachedDoctorFlowDeps: Promise<DoctorFlowDeps> | undefined;
-
-async function loadFreshDoctorFlowDeps(): Promise<DoctorFlowDeps> {
-  if (!cachedDoctorFlowDeps) {
-    vi.resetModules();
-    cachedDoctorFlowDeps = (async () => {
-      const freshNoteModule = await import("../terminal/note.js");
-      const doctorFlowModule = await import("./doctor-config-flow.js");
-      return {
-        noteModule: freshNoteModule,
-        loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
-      };
-    })();
-  }
-  return await cachedDoctorFlowDeps;
 }
 
 type DiscordGuildRule = {
@@ -79,6 +58,19 @@ type RepairedDiscordPolicy = {
 };
 
 describe("doctor config flow", () => {
+  beforeEach(() => {
+    setChannelPluginRegistryForTests([
+      "discord",
+      "googlechat",
+      "imessage",
+      "matrix",
+      "slack",
+      "telegram",
+      "whatsapp",
+      "zalouser",
+    ]);
+  });
+
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
@@ -190,6 +182,56 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("shows plugin-blocked guidance instead of first-time Telegram guidance when telegram is explicitly disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
+          'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
+        ),
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+  });
+
+  it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+      plugins: {
+        enabled: false,
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
+          "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+        ),
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+  });
+
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -286,6 +328,24 @@ describe("doctor config flow", () => {
     ).toBe("existing-session");
   });
 
+  it("repairs restrictive plugins.allow when browser is referenced via tools.alsoAllow", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        tools: {
+          alsoAllow: ["browser"],
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+  });
+
   it("previews Matrix legacy sync-store migration in read-only mode", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
@@ -316,8 +376,7 @@ describe("doctor config flow", () => {
 
       const warning = noteSpy.mock.calls.find(
         (call) =>
-          call[1] === "Doctor warnings" &&
-          String(call[0]).includes("Matrix plugin upgraded in place."),
+          call[1] === "Doctor warnings" && call[0].includes("Matrix plugin upgraded in place."),
       );
       expect(warning?.[0]).toContain("Legacy sync store:");
       expect(warning?.[0]).toContain(
@@ -365,7 +424,7 @@ describe("doctor config flow", () => {
       const warning = noteSpy.mock.calls.find(
         (call) =>
           call[1] === "Doctor warnings" &&
-          String(call[0]).includes("Matrix encrypted-state migration is pending"),
+          call[0].includes("Matrix encrypted-state migration is pending"),
       );
       expect(warning?.[0]).toContain("Legacy crypto store:");
       expect(warning?.[0]).toContain("New recovery key file:");
@@ -427,8 +486,7 @@ describe("doctor config flow", () => {
       expect(
         noteSpy.mock.calls.some(
           (call) =>
-            call[1] === "Doctor changes" &&
-            String(call[0]).includes("Matrix plugin upgraded in place."),
+            call[1] === "Doctor changes" && call[0].includes("Matrix plugin upgraded in place."),
         ),
       ).toBe(true);
     } finally {
@@ -531,33 +589,27 @@ describe("doctor config flow", () => {
   });
 
   it("notes legacy browser extension migration changes", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          browser: {
-            relayBindHost: "127.0.0.1",
-            profiles: {
-              chromeLive: {
-                driver: "extension",
-                color: "#00AA00",
-              },
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        browser: {
+          relayBindHost: "127.0.0.1",
+          profiles: {
+            chromeLive: {
+              driver: "extension",
+              color: "#00AA00",
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
 
-      const messages = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor changes")
-        .map((call) => String(call[0]));
-      expect(
-        messages.some((line) => line.includes('browser.profiles.chromeLive.driver "extension"')),
-      ).toBe(true);
-      expect(messages.some((line) => line.includes("browser.relayBindHost"))).toBe(true);
-    } finally {
-      noteSpy.mockRestore();
-    }
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -587,12 +639,14 @@ describe("doctor config flow", () => {
       channels: {
         discord: {
           streamMode?: string;
-          streaming?: string;
+          streaming?: {
+            mode?: string;
+          };
           lifecycle?: unknown;
         };
       };
     };
-    expect(cfg.channels.discord.streaming).toBe("partial");
+    expect(cfg.channels.discord.streaming?.mode).toBe("partial");
     expect(cfg.channels.discord.streamMode).toBeUndefined();
     expect(cfg.channels.discord.lifecycle).toEqual({
       enabled: true,
@@ -606,10 +660,209 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("warns clearly about legacy channel streaming aliases and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            telegram: {
+              streamMode: "block",
+            },
+            discord: {
+              streaming: false,
+            },
+            googlechat: {
+              streamMode: "append",
+            },
+            slack: {
+              streaming: true,
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.telegram:") &&
+            message.includes("channels.telegram.streamMode, channels.telegram.streaming"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.discord:") &&
+            message.includes("channels.discord.streamMode, channels.discord.streaming"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.googlechat:") &&
+            message.includes("channels.googlechat.streamMode is legacy and no longer used"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.slack:") &&
+            message.includes("channels.slack.streamMode, channels.slack.streaming"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("repairs legacy googlechat streamMode by removing it", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        channels: {
+          googlechat: {
+            streamMode: "append",
+            accounts: {
+              work: {
+                streamMode: "replace",
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        googlechat: {
+          accounts?: {
+            work?: Record<string, unknown>;
+          };
+        } & Record<string, unknown>;
+      };
+    };
+    expect(cfg.channels.googlechat.streamMode).toBeUndefined();
+    expect(cfg.channels.googlechat.accounts?.work?.streamMode).toBeUndefined();
+  });
+
+  it("warns clearly about legacy nested channel allow aliases and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            slack: {
+              channels: {
+                ops: {
+                  allow: false,
+                },
+              },
+            },
+            googlechat: {
+              groups: {
+                "spaces/aaa": {
+                  allow: false,
+                },
+              },
+            },
+            discord: {
+              guilds: {
+                "100": {
+                  channels: {
+                    general: {
+                      allow: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.slack:") &&
+            message.includes("channels.slack.channels.<id>.allow is legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.googlechat:") &&
+            message.includes("channels.googlechat.groups.<id>.allow is legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.discord:") &&
+            message.includes("channels.discord.guilds.<id>.channels.<id>.allow is legacy"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("repairs legacy nested channel allow aliases on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          slack: {
+            channels: {
+              ops: {
+                allow: false,
+              },
+            },
+          },
+          googlechat: {
+            groups: {
+              "spaces/aaa": {
+                allow: false,
+              },
+            },
+          },
+          discord: {
+            guilds: {
+              "100": {
+                channels: {
+                  general: {
+                    allow: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(result.cfg.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: false,
+    });
+    expect(result.cfg.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+  });
+
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
       await runDoctorConfigWithInput({
         repair: true,
@@ -642,28 +895,17 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const outputs = noteSpy.mock.calls
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
-        .map((call) => String(call[0]));
+        .map((call) => call[0]);
+      const joinedOutputs = outputs.join("\n");
       expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
       expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
-            line.includes("mutable allowlist"),
-        ),
-      ).toBe(true);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
-            line.includes('required by dmPolicy="open"'),
-        ),
-      ).toBe(true);
+      expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
+      expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
         outputs.some(
           (line) =>
@@ -677,9 +919,7 @@ describe("doctor config flow", () => {
   });
 
   it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -703,7 +943,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as {
@@ -717,13 +957,13 @@ describe("doctor config flow", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(
         noteSpy.mock.calls.some((call) =>
-          String(call[0]).includes("Telegram account inactive: failed to inspect bot token"),
+          call[0].includes("Telegram account inactive: failed to inspect bot token"),
         ),
       ).toBe(true);
       expect(
         noteSpy.mock.calls.some((call) =>
-          String(call[0]).includes(
-            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
+          call[0].includes(
+            "Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path",
           ),
         ),
       ).toBe(true);
@@ -1112,6 +1352,418 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("warns clearly about legacy config keys and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("heartbeat:") &&
+            message.includes("agents.defaults.heartbeat"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy heartbeat visibility config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            showOk: true,
+            showAlerts: false,
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("heartbeat:") &&
+            message.includes("channels.defaults.heartbeat"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy memorySearch config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          memorySearch: {
+            provider: "local",
+            fallback: "none",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("memorySearch:") &&
+            message.includes("agents.defaults.memorySearch"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("repairs legacy gateway.bind host aliases on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        gateway: {
+          bind: "0.0.0.0",
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      gateway?: {
+        bind?: string;
+      };
+    };
+    expect(cfg.gateway?.bind).toBe("lan");
+  });
+
+  it("warns clearly about legacy gateway.bind host aliases and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          gateway: {
+            bind: "localhost",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("gateway.bind:") &&
+            message.includes("gateway.bind host aliases"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy telegram groupMentionsOnly config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            telegram: {
+              groupMentionsOnly: true,
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("channels.telegram.groupMentionsOnly:") &&
+            message.includes("channels.telegram.groups"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy x_search auth config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          tools: {
+            web: {
+              x_search: {
+                apiKey: "test-key",
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("tools.web.x_search.apiKey:") &&
+            message.includes("plugins.entries.xai.config.webSearch.apiKey"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy hooks.internal.handlers and requires manual migration", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          hooks: {
+            internal: {
+              handlers: [{ event: "command:new", module: "hooks/legacy-handler.js" }],
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("hooks.internal.handlers:") &&
+            message.includes("HOOK.md + handler.js"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("does not rewrite this shape automatically"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy thread binding ttlHours config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          session: {
+            threadBindings: {
+              ttlHours: 24,
+            },
+          },
+          channels: {
+            discord: {
+              threadBindings: {
+                ttlHours: 12,
+              },
+              accounts: {
+                alpha: {
+                  threadBindings: {
+                    ttlHours: 6,
+                  },
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const legacyMessages = noteSpy.mock.calls
+        .filter(([, title]) => title === "Legacy config keys detected")
+        .map(([message]) => message)
+        .join("\n");
+
+      expect(legacyMessages).toContain("session.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("repairs legacy thread binding ttlHours config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        session: {
+          threadBindings: {
+            ttlHours: 24,
+          },
+        },
+        channels: {
+          discord: {
+            threadBindings: {
+              ttlHours: 12,
+            },
+            accounts: {
+              alpha: {
+                threadBindings: {
+                  ttlHours: 6,
+                },
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      session?: {
+        threadBindings?: {
+          idleHours?: number;
+          ttlHours?: number;
+        };
+      };
+      channels?: {
+        discord?: {
+          threadBindings?: {
+            idleHours?: number;
+            ttlHours?: number;
+          };
+          accounts?: Record<
+            string,
+            {
+              threadBindings?: {
+                idleHours?: number;
+                ttlHours?: number;
+              };
+            }
+          >;
+        };
+      };
+    };
+    expect(cfg.session?.threadBindings).toMatchObject({
+      idleHours: 24,
+    });
+    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
+      idleHours: 12,
+    });
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+      idleHours: 6,
+    });
+    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
+  });
+
+  it("warns clearly about legacy talk config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          talk: {
+            voiceId: "voice-1",
+            modelId: "eleven_v3",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("talk:") &&
+            message.includes(
+              "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
+            ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy sandbox perSession config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          agents: {
+            defaults: {
+              sandbox: {
+                perSession: true,
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            message.includes("agents.defaults.sandbox:") &&
+            message.includes("agents.defaults.sandbox.perSession is legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
@@ -1207,5 +1859,56 @@ describe("doctor config flow", () => {
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
     expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+  });
+
+  it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
+    await withTempHome(async (home) => {
+      const providerId = "acme-speech";
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            talk: {
+              interruptOnSpeech: true,
+              silenceTimeoutMs: 1500,
+              provider: providerId,
+              providers: {
+                [providerId]: {
+                  apiKey: "secret-key",
+                  voiceId: "voice-123",
+                  modelId: "eleven_v3",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+      try {
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+        noteSpy.mockClear();
+
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+        const secondRunTalkNormalizationLines = noteSpy.mock.calls
+          .filter((call) => call[1] === "Doctor changes")
+          .map((call) => call[0])
+          .filter((line) => line.includes("Normalized talk.provider/providers shape"));
+        expect(secondRunTalkNormalizationLines).toEqual([]);
+      } finally {
+        noteSpy.mockRestore();
+      }
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -70,7 +71,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
       continue;
     }
     // Skip duplicate text (URL might be in both text message and balloon)
-    const normalizedText = text.toLowerCase();
+    const normalizedText = normalizeLowercaseStringOrEmpty(text);
     if (seenTexts.has(normalizedText)) {
       continue;
     }
@@ -88,9 +89,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const latestTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : first.timestamp;
 
   // Collect all message IDs for reference
-  const messageIds = entries
-    .map((e) => e.message.messageId)
-    .filter((id): id is string => Boolean(id));
+  const messageId = entries.map((e) => e.message.messageId).find((id): id is string => Boolean(id));
 
   // Prefer reply context from any entry that has it
   const entryWithReply = entries.find((e) => e.message.replyToId);
@@ -101,7 +100,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
     attachments: allAttachments.length > 0 ? allAttachments : first.attachments,
     timestamp: latestTimestamp,
     // Use first message's ID as primary (for reply reference), but we've coalesced others
-    messageId: messageIds[0] ?? first.messageId,
+    messageId: messageId ?? first.messageId,
     // Preserve reply context if present
     replyToId: entryWithReply?.message.replyToId ?? first.replyToId,
     replyToBody: entryWithReply?.message.replyToBody ?? first.replyToBody,
@@ -150,7 +149,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           const balloonBundleId = msg.balloonBundleId?.trim();
           const associatedMessageGuid = msg.associatedMessageGuid?.trim();
           if (balloonBundleId && associatedMessageGuid) {
-            return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+            return `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`;
           }
 
           const messageId = msg.messageId?.trim();

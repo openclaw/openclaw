@@ -1,13 +1,14 @@
-import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
+import path from "node:path";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  readJsonFileWithFallback,
   registerSessionBindingAdapter,
-  resolveAgentIdFromSessionKey,
   resolveThreadBindingFarewellText,
+  type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
-  writeJsonFileAtomically,
-} from "../runtime-api.js";
-import { resolveMatrixStateFilePath } from "./client/storage.js";
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
+import { claimCurrentTokenStorageState, resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
@@ -39,20 +40,11 @@ type StoredMatrixThreadBindingState = {
   bindings: MatrixThreadBindingRecord[];
 };
 
-function normalizeDurationMs(raw: unknown, fallback: number): number {
+function _normalizeDurationMs(raw: unknown, fallback: number): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return fallback;
   }
   return Math.max(0, Math.floor(raw));
-}
-
-function normalizeText(raw: unknown): string {
-  return typeof raw === "string" ? raw.trim() : "";
-}
-
-function normalizeConversationId(raw: unknown): string | undefined {
-  const trimmed = normalizeText(raw);
-  return trimmed || undefined;
 }
 
 function resolveBindingsPath(params: {
@@ -80,9 +72,9 @@ async function loadBindingsFromDisk(filePath: string, accountId: string) {
   }
   const loaded: MatrixThreadBindingRecord[] = [];
   for (const entry of value.bindings) {
-    const conversationId = normalizeConversationId(entry?.conversationId);
-    const parentConversationId = normalizeConversationId(entry?.parentConversationId);
-    const targetSessionKey = normalizeText(entry?.targetSessionKey);
+    const conversationId = normalizeOptionalString(entry?.conversationId);
+    const parentConversationId = normalizeOptionalString(entry?.parentConversationId);
+    const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
     if (!conversationId || !targetSessionKey) {
       continue;
     }
@@ -100,9 +92,9 @@ async function loadBindingsFromDisk(filePath: string, accountId: string) {
       ...(parentConversationId ? { parentConversationId } : {}),
       targetKind: entry?.targetKind === "subagent" ? "subagent" : "acp",
       targetSessionKey,
-      agentId: normalizeText(entry?.agentId) || undefined,
-      label: normalizeText(entry?.label) || undefined,
-      boundBy: normalizeText(entry?.boundBy) || undefined,
+      agentId: normalizeOptionalString(entry?.agentId) || undefined,
+      label: normalizeOptionalString(entry?.label) || undefined,
+      boundBy: normalizeOptionalString(entry?.boundBy) || undefined,
       boundAt,
       lastActivityAt: Math.max(lastActivityAt, boundAt),
       idleTimeoutMs:
@@ -123,7 +115,7 @@ function toStoredBindingsState(
 ): StoredMatrixThreadBindingState {
   return {
     version: STORE_VERSION,
-    bindings: [...bindings].sort((a, b) => a.boundAt - b.boundAt),
+    bindings: [...bindings].toSorted((a, b) => a.boundAt - b.boundAt),
   };
 }
 
@@ -132,19 +124,22 @@ async function persistBindingsSnapshot(
   bindings: MatrixThreadBindingRecord[],
 ): Promise<void> {
   await writeJsonFileAtomically(filePath, toStoredBindingsState(bindings));
+  claimCurrentTokenStorageState({
+    rootDir: path.dirname(filePath),
+  });
 }
 
 function buildMatrixBindingIntroText(params: {
   metadata?: Record<string, unknown>;
   targetSessionKey: string;
 }): string {
-  const introText = normalizeText(params.metadata?.introText);
+  const introText = normalizeOptionalString(params.metadata?.introText);
   if (introText) {
     return introText;
   }
-  const label = normalizeText(params.metadata?.label);
+  const label = normalizeOptionalString(params.metadata?.label);
   const agentId =
-    normalizeText(params.metadata?.agentId) ||
+    normalizeOptionalString(params.metadata?.agentId) ||
     resolveAgentIdFromSessionKey(params.targetSessionKey);
   const base = label || agentId || "session";
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
@@ -417,7 +412,7 @@ export async function createMatrixThreadBindingManager(params: {
     capabilities: { placements: ["current", "child"], bindSupported: true, unbindSupported: true },
     bind: async (input) => {
       const conversationId = input.conversation.conversationId.trim();
-      const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;
+      const parentConversationId = normalizeOptionalString(input.conversation.parentConversationId);
       const targetSessionKey = input.targetSessionKey.trim();
       if (!conversationId || !targetSessionKey) {
         return null;
@@ -453,9 +448,10 @@ export async function createMatrixThreadBindingManager(params: {
         targetKind: toMatrixBindingTargetKind(input.targetKind),
         targetSessionKey,
         agentId:
-          normalizeText(input.metadata?.agentId) || resolveAgentIdFromSessionKey(targetSessionKey),
-        label: normalizeText(input.metadata?.label) || undefined,
-        boundBy: normalizeText(input.metadata?.boundBy) || "system",
+          normalizeOptionalString(input.metadata?.agentId) ||
+          resolveAgentIdFromSessionKey(targetSessionKey),
+        label: normalizeOptionalString(input.metadata?.label) || undefined,
+        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,

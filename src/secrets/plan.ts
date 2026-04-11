@@ -35,9 +35,7 @@ export type SecretsPlanTarget = {
    * For provider targets, used to scrub auth-profile/static residues.
    */
   providerId?: string;
-  /**
-   * For googlechat account-scoped targets.
-   */
+  /** For account-scoped channel targets. */
   accountId?: string;
   /**
    * Optional auth-profile provider value used when creating new auth profile mappings.
@@ -92,7 +90,7 @@ export function resolveValidatedPlanTarget(candidate: {
   }
   const segments =
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
-      ? candidate.pathSegments.map((segment) => String(segment).trim()).filter(Boolean)
+      ? candidate.pathSegments.map((segment) => segment.trim()).filter(Boolean)
       : parseDotPath(path);
   if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
     return null;

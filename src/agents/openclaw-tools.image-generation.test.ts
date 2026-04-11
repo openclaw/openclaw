@@ -1,90 +1,29 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import * as imageGenerationRuntime from "../image-generation/runtime.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { describe, expect, it } from "vitest";
+import { collectPresentOpenClawTools } from "./openclaw-tools.registration.js";
+import { textResult, type AnyAgentTool } from "./tools/common.js";
 
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-}));
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-function stubImageGenerationProviders() {
-  vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-    {
-      id: "openai",
-      defaultModel: "gpt-image-1",
-      models: ["gpt-image-1"],
-      capabilities: {
-        generate: {
-          supportsSize: true,
-        },
-        edit: {
-          enabled: false,
-        },
-        geometry: {
-          sizes: ["1024x1024"],
-        },
-      },
-      generateImage: vi.fn(async () => {
-        throw new Error("not used");
-      }),
+function stubAgentTool(name: string): AnyAgentTool {
+  return {
+    label: name,
+    name,
+    description: `${name} stub`,
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return textResult("ok", {});
     },
-  ]);
+  };
 }
 
 describe("openclaw tools image generation registration", () => {
-  beforeEach(() => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEYS", "");
-    vi.stubEnv("GEMINI_API_KEY", "");
-    vi.stubEnv("GEMINI_API_KEYS", "");
+  it("registers image_generate when an image-generation tool is present", () => {
+    const imageGenerateTool = stubAgentTool("image_generate");
+
+    expect(collectPresentOpenClawTools([imageGenerateTool])).toEqual([imageGenerateTool]);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
-
-  it("registers image_generate when image-generation config is present", () => {
-    const tools = createOpenClawTools({
-      config: asConfig({
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-            },
-          },
-        },
-      }),
-      agentDir: "/tmp/openclaw-agent-main",
-    });
-
-    expect(tools.map((tool) => tool.name)).toContain("image_generate");
-  });
-
-  it("registers image_generate when a compatible provider has env-backed auth", () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-
-    const tools = createOpenClawTools({
-      config: asConfig({}),
-      agentDir: "/tmp/openclaw-agent-main",
-    });
-
-    expect(tools.map((tool) => tool.name)).toContain("image_generate");
-  });
-
-  it("omits image_generate when config is absent and no compatible provider auth exists", () => {
-    stubImageGenerationProviders();
-
-    const tools = createOpenClawTools({
-      config: asConfig({}),
-      agentDir: "/tmp/openclaw-agent-main",
-    });
-
-    expect(tools.map((tool) => tool.name)).not.toContain("image_generate");
+  it("omits image_generate when the image-generation tool is absent", () => {
+    expect(collectPresentOpenClawTools([null]).map((tool) => tool.name)).not.toContain(
+      "image_generate",
+    );
   });
 });

@@ -1,14 +1,15 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.3.27",
+  "version": "2026.4.10",
   "private": true,
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.27"
+    "openclaw": ">=2026.4.10"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -34,9 +35,8 @@
     },
     "install": {
       "npmSpec": "@openclaw/line",
-      "localPath": "extensions/line",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.27"
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

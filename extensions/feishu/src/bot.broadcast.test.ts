@@ -1,7 +1,5 @@
+import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvelopeFormatOptions } from "../../../src/auto-reply/envelope.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
@@ -33,6 +31,18 @@ vi.mock("./reply-dispatcher.js", () => ({
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
+
+function createRuntimeEnv() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn((code: number): never => {
+      throw new Error(`exit ${code}`);
+    }),
+  };
+}
 
 describe("broadcast dispatch", () => {
   const finalizeInboundContextCalls: Array<Record<string, unknown>> = [];
@@ -71,6 +81,43 @@ describe("broadcast dispatch", () => {
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
   });
+  const runtimeStub = {
+    system: {
+      enqueueSystemEvent: vi.fn(),
+    },
+    channel: {
+      routing: {
+        resolveAgentRoute: (params: unknown) => mockResolveAgentRoute(params),
+      },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+      },
+      reply: {
+        resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
+        formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+        finalizeInboundContext:
+          mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+        dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+        withReplyDispatcher:
+          mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+      },
+      commands: {
+        shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+      },
+      media: {
+        saveMediaBuffer: mockSaveMediaBuffer,
+      },
+      pairing: {
+        readAllowFromStore: vi.fn().mockResolvedValue([]),
+        upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
+        buildPairingReply: vi.fn(() => "Pairing response"),
+      },
+    },
+    media: {
+      detectMime: vi.fn(async () => "application/octet-stream"),
+    },
+  } as unknown as PluginRuntime;
 
   function createBroadcastConfig(): ClawdbotConfig {
     return {
@@ -136,42 +183,7 @@ describe("broadcast dispatch", () => {
         },
       },
     });
-    setFeishuRuntime(
-      createPluginRuntimeMock({
-        system: {
-          enqueueSystemEvent: vi.fn(),
-        },
-        channel: {
-          routing: {
-            resolveAgentRoute: (params) => mockResolveAgentRoute(params),
-          },
-          reply: {
-            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
-            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext:
-              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher:
-              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-          },
-          commands: {
-            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-          },
-          media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
-          },
-          pairing: {
-            readAllowFromStore: vi.fn().mockResolvedValue([]),
-            upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
-            buildPairingReply: vi.fn(() => "Pairing response"),
-          },
-        },
-        media: {
-          detectMime: vi.fn(async () => "application/octet-stream"),
-        },
-      }),
-    );
+    setFeishuRuntime(runtimeStub);
   });
 
   it("dispatches to all broadcast agents when bot is mentioned", async () => {
@@ -352,7 +364,10 @@ describe("broadcast dispatch", () => {
     });
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const sessionKey = String(finalizeInboundContextCalls[0]?.SessionKey ?? "");
+    const sessionKey =
+      typeof finalizeInboundContextCalls[0]?.SessionKey === "string"
+        ? finalizeInboundContextCalls[0].SessionKey
+        : "";
     expect(sessionKey).toBe("agent:susan:feishu:group:oc-broadcast-group");
   });
 });

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 
@@ -104,7 +105,7 @@ export async function applyResetModelOverride(params: {
   if (!params.resetTriggered) {
     return {};
   }
-  const rawBody = params.bodyStripped?.trim();
+  const rawBody = normalizeOptionalString(params.bodyStripped);
   if (!rawBody) {
     return {};
   }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
@@ -9,22 +9,37 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
+  | "realtimeTranscriptionProviders"
+  | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
-  | "imageGenerationProviders";
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityContractKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
+  | "realtimeTranscriptionProviders"
+  | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
-  | "imageGenerationProviders";
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
+  realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
+  realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
+  videoGenerationProviders: "videoGenerationProviders",
+  musicGenerationProviders: "musicGenerationProviders",
 };
 
 function resolveBundledCapabilityCompatPluginIds(params: {
@@ -72,12 +87,8 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   if (activeProviders.length > 0) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
-  const loadOptions =
-    params.cfg === undefined
-      ? undefined
-      : {
-          config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
-        };
+  const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
+  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,

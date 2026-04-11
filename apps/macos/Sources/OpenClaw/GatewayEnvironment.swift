@@ -193,7 +193,7 @@ enum GatewayEnvironment {
         let port = self.gatewayPort()
         if let gatewayBin {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = [gatewayBin, "gateway", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -201,7 +201,7 @@ enum GatewayEnvironment {
            case let .success(resolvedRuntime) = runtime
         {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [resolvedRuntime.path, entry, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = [resolvedRuntime.path, entry, "gateway", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -298,6 +298,10 @@ enum GatewayEnvironment {
         }
         if normalized.lowercased().hasPrefix("openclaw ") {
             normalized = String(normalized.dropFirst("openclaw ".count))
+        }
+        // Strip trailing commit metadata, e.g. "2026.4.2 (d74a122)" → "2026.4.2"
+        if let parenRange = normalized.range(of: #"\s*\([0-9a-fA-F]+\)\s*$"#, options: .regularExpression) {
+            normalized = String(normalized[normalized.startIndex..<parenRange.lowerBound])
         }
         return normalized
     }

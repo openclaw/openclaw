@@ -1,15 +1,19 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
+import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
+  listImportedRuntimePluginIds,
   pinActivePluginHttpRouteRegistry,
+  recordImportedPluginId,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 function createRegistryWithRoute(path: string) {
   const registry = createEmptyPluginRegistry();
@@ -130,5 +134,84 @@ describe("plugin runtime route registry", () => {
       explicitRegistry,
       expectedRegistry: expected,
     });
+  });
+});
+
+const makeRoute = (path: string): PluginHttpRouteRegistration => ({
+  path,
+  handler: () => {},
+  auth: "gateway",
+  match: "exact",
+});
+
+describe("setActivePluginRegistry", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("does not carry forward httpRoutes when new registry has none", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const fakeRoute = makeRoute("/test");
+    oldRegistry.httpRoutes.push(fakeRoute);
+    setActivePluginRegistry(oldRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+
+    const newRegistry = createEmptyPluginRegistry();
+    expect(newRegistry.httpRoutes).toHaveLength(0);
+    setActivePluginRegistry(newRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
+  });
+
+  it("does not carry forward when new registry already has routes", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    oldRegistry.httpRoutes.push(makeRoute("/old"));
+    setActivePluginRegistry(oldRegistry);
+
+    const newRegistry = createEmptyPluginRegistry();
+    const newRoute = makeRoute("/new");
+    newRegistry.httpRoutes.push(newRoute);
+    setActivePluginRegistry(newRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
+  });
+
+  it("does not carry forward when same registry is set again", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.httpRoutes.push(makeRoute("/test"));
+    setActivePluginRegistry(registry);
+    setActivePluginRegistry(registry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+  });
+
+  it("does not treat bundle-only loaded entries as imported runtime plugins", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "bundle-only",
+        name: "Bundle Only",
+        source: "/tmp/bundle",
+        origin: "bundled",
+        format: "bundle",
+        configSchema: true,
+      }),
+      createPluginRecord({
+        id: "runtime-plugin",
+        name: "Runtime Plugin",
+        source: "/tmp/runtime",
+        format: "openclaw",
+        configSchema: true,
+      }),
+    );
+
+    setActivePluginRegistry(registry);
+
+    expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
+  });
+
+  it("includes plugin ids imported before registration failed", () => {
+    recordImportedPluginId("broken-plugin");
+
+    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
   });
 });

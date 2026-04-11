@@ -1,5 +1,5 @@
 // Private helper surface for the bundled mattermost plugin.
-// Keep this list additive and scoped to symbols used under extensions/mattermost.
+// Keep this list additive and scoped to the bundled Mattermost surface.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -20,7 +20,7 @@ export {
   buildModelsProviderData,
   type ModelsProviderData,
 } from "../auto-reply/reply/commands-models.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -40,7 +40,7 @@ export {
   createSetupInputPresenceValidator,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
-export { createAccountStatusSink } from "./channel-lifecycle.js";
+export { createAccountStatusSink } from "./channel-lifecycle.core.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
@@ -96,4 +96,3 @@ export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
-export { isMattermostSenderAllowed } from "./mattermost-policy.js";

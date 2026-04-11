@@ -1,12 +1,22 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
-const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".gemini", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
+const requireFromHere = createRequire(import.meta.url);
+
+type LegacyConfigCompatApi =
+  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type ConfigValidationApi = typeof import("../src/config/validation.js");
+
+let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
+let cachedConfigValidationApi: ConfigValidationApi | undefined;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -34,6 +44,20 @@ function restoreEnv(entries: RestoreEntry[]): void {
   }
 }
 
+function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
+  cachedLegacyConfigCompatApi ??= requireFromHere(
+    "../src/commands/doctor/shared/legacy-config-migrate.js",
+  ) as LegacyConfigCompatApi;
+  return cachedLegacyConfigCompatApi;
+}
+
+function loadConfigValidationApi(): ConfigValidationApi {
+  cachedConfigValidationApi ??= requireFromHere(
+    "../src/config/validation.js",
+  ) as ConfigValidationApi;
+  return cachedConfigValidationApi;
+}
+
 function resolveHomeRelativePath(input: string, homeDir: string): string {
   const trimmed = input.trim();
   if (trimmed === "~") {
@@ -50,40 +74,85 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   if (!fs.existsSync(profilePath)) {
     return;
   }
+  const applyEntry = (entry: string) => {
+    const idx = entry.indexOf("=");
+    if (idx <= 0) {
+      return false;
+    }
+    const key = entry.slice(0, idx).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || (process.env[key] ?? "") !== "") {
+      return false;
+    }
+    process.env[key] = entry.slice(idx + 1);
+    return true;
+  };
+  const countAppliedEntries = (entries: Iterable<string>) => {
+    let applied = 0;
+    for (const entry of entries) {
+      if (applyEntry(entry)) {
+        applied += 1;
+      }
+    }
+    return applied;
+  };
   try {
     const output = execFileSync(
       "/bin/bash",
       ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
       { encoding: "utf8" },
     );
-    const entries = output.split("\0");
-    let applied = 0;
-    for (const entry of entries) {
-      if (!entry) {
-        continue;
-      }
-      const idx = entry.indexOf("=");
-      if (idx <= 0) {
-        continue;
-      }
-      const key = entry.slice(0, idx);
-      if (!key || (process.env[key] ?? "") !== "") {
-        continue;
-      }
-      process.env[key] = entry.slice(idx + 1);
-      applied += 1;
-    }
+    const applied = countAppliedEntries(output.split("\0").filter(Boolean));
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
       console.log(`[live] loaded ${applied} env vars from ~/.profile`);
     }
   } catch {
-    // ignore profile load failures
+    try {
+      const fallbackEntries = fs
+        .readFileSync(profilePath, "utf8")
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"))
+        .map((line) => line.replace(/^export\s+/u, ""))
+        .map((line) => {
+          const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
+          if (!match) {
+            return "";
+          }
+          let value = match[2].trim();
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          }
+          return `${match[1]}=${value}`;
+        })
+        .filter(Boolean);
+      const applied = countAppliedEntries(fallbackEntries);
+      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+      }
+    } catch {
+      // ignore profile load failures
+    }
   }
 }
 
 function resolveRestoreEntries(): RestoreEntry[] {
   return [
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
+    {
+      key: "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
+      value: process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG,
+    },
+    {
+      key: "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
+      value: process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS,
+    },
+    {
+      key: "OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG",
+      value: process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG,
+    },
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },
     { key: "XDG_CONFIG_HOME", value: process.env.XDG_CONFIG_HOME },
@@ -122,6 +191,8 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_TEST_HOME = tempHome;
   process.env.OPENCLAW_TEST_FAST = "1";
+  process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG = "1";
+  delete process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS;
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   delete process.env.OPENCLAW_CONFIG_PATH;
@@ -192,21 +263,44 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   fs.copyFileSync(sourcePath, targetPath);
 }
 
+function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
+  const targetPath = path.join(tempHome, ".claude.json");
+  if (fs.existsSync(targetPath)) {
+    return;
+  }
+  const backupsDir = path.join(tempHome, ".claude", "backups");
+  if (!fs.existsSync(backupsDir)) {
+    return;
+  }
+  const latestBackup = fs
+    .readdirSync(backupsDir)
+    .filter((entry) => entry.startsWith(".claude.json.backup."))
+    .toSorted()
+    .at(-1);
+  if (!latestBackup) {
+    return;
+  }
+  copyFileIfExists(path.join(backupsDir, latestBackup), targetPath);
+}
+
 function sanitizeLiveConfig(raw: string): string {
   try {
-    const parsed = JSON5.parse(raw) as {
+    const parsed: {
       agents?: {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
-    };
+    } = JSON5.parse(raw);
+
     if (!parsed || typeof parsed !== "object") {
       return raw;
     }
+
     if (parsed.agents?.defaults && typeof parsed.agents.defaults === "object") {
       delete parsed.agents.defaults.workspace;
       delete parsed.agents.defaults.agentDir;
     }
+
     if (Array.isArray(parsed.agents?.list)) {
       parsed.agents.list = parsed.agents.list.map((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -218,7 +312,20 @@ function sanitizeLiveConfig(raw: string): string {
         return nextEntry;
       });
     }
-    return `${JSON.stringify(parsed, null, 2)}\n`;
+
+    if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { applyLegacyDoctorMigrations } = loadLegacyConfigCompatApi();
+    const migrated = applyLegacyDoctorMigrations(parsed);
+    if (!migrated.next) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { validateConfigObjectWithPlugins } = loadConfigValidationApi();
+    const validated = validateConfigObjectWithPlugins(migrated.next);
+    return `${JSON.stringify(validated.ok ? validated.config : migrated.next, null, 2)}\n`;
   } catch {
     return raw;
   }
@@ -244,11 +351,23 @@ function stageLiveTestState(params: {
   realHome: string;
   tempHome: string;
 }): void {
-  const realStateDir = params.env.OPENCLAW_STATE_DIR?.trim()
-    ? resolveHomeRelativePath(params.env.OPENCLAW_STATE_DIR, params.realHome)
+  const rawStateDir = params.env.OPENCLAW_STATE_DIR?.trim();
+  let realStateDir = rawStateDir
+    ? resolveHomeRelativePath(rawStateDir, params.realHome)
     : path.join(params.realHome, ".openclaw");
+  const priorIsolatedHome = params.env.OPENCLAW_TEST_HOME?.trim();
+  const snapshotHome = params.env.HOME?.trim();
+  if (
+    priorIsolatedHome &&
+    snapshotHome &&
+    snapshotHome !== priorIsolatedHome &&
+    realStateDir === path.join(priorIsolatedHome, ".openclaw")
+  ) {
+    realStateDir = path.join(params.realHome, ".openclaw");
+  }
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
+  fs.mkdirSync(path.join(params.tempHome, ".gemini"), { recursive: true });
 
   const realConfigPath = params.env.OPENCLAW_CONFIG_PATH?.trim()
     ? resolveHomeRelativePath(params.env.OPENCLAW_CONFIG_PATH, params.realHome)
@@ -268,9 +387,16 @@ function stageLiveTestState(params: {
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
   }
+  for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
+    copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
+  }
+  restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
-export function installTestEnv(): { cleanup: () => void; tempHome: string } {
+export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
   const live =
     process.env.LIVE === "1" ||
     process.env.OPENCLAW_LIVE_TEST === "1" ||
@@ -279,7 +405,10 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  loadProfileEnv(realHome);
+  const shouldLoadProfileEnv = options?.loadProfileEnv ?? (live || allowRealHome);
+  if (shouldLoadProfileEnv) {
+    loadProfileEnv(realHome);
+  }
 
   if (live && allowRealHome) {
     return { cleanup: () => {}, tempHome: realHome };
@@ -295,6 +424,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   return testEnv;
 }
 
-export function withIsolatedTestHome(): { cleanup: () => void; tempHome: string } {
-  return installTestEnv();
+export function withIsolatedTestHome(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
+  return installTestEnv(options);
 }

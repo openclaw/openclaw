@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
@@ -9,6 +9,7 @@ import {
   buildFoundryAuthResult,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
+  supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 
@@ -69,6 +70,7 @@ function buildFoundryModel(
     name: string;
     api: "openai-responses" | "openai-completions";
     baseUrl: string;
+    input: Array<"text" | "image">;
   }> = {},
 ) {
   return {
@@ -412,6 +414,10 @@ describe("microsoft-foundry plugin", () => {
     expect(
       config.models?.providers?.["microsoft-foundry"]?.models.map((model) => model.id),
     ).toEqual(["alias-one", "alias-two"]);
+    expect(config.models?.providers?.["microsoft-foundry"]?.models[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
   });
 
   it("accepts tenant domains as valid tenant identifiers", () => {
@@ -428,6 +434,70 @@ describe("microsoft-foundry plugin", () => {
     expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("gpt-4o")).toBe(false);
+    expect(supportsFoundryImageInput("gpt-5.4")).toBe(true);
+    expect(supportsFoundryImageInput("gpt-4o")).toBe(true);
+    expect(supportsFoundryImageInput("MAI-DS-R1")).toBe(false);
+  });
+
+  it("records GPT-family Foundry deployments as image-capable during auth setup", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "deployment-gpt5",
+      modelNameHint: "gpt-5.4",
+      api: "openai-responses",
+      authMethod: "entra-id",
+    });
+
+    expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
+  });
+
+  it("normalizes stale resolved Foundry rows to provider-owned image capability metadata", () => {
+    const provider = registerProvider();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "deployment-gpt5",
+      model: buildFoundryModel({
+        id: "deployment-gpt5",
+        name: "gpt-5.4",
+        input: ["text"],
+      }),
+    });
+
+    expect(normalized).toMatchObject({
+      name: "gpt-5.4",
+      api: "openai-responses",
+      input: ["text", "image"],
+      baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      compat: {
+        supportsStore: false,
+        maxTokensField: "max_completion_tokens",
+      },
+    });
+  });
+
+  it("preserves explicit image capability for non-heuristic Foundry deployments", () => {
+    const provider = registerProvider();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "custom-vision-deployment",
+      model: buildFoundryModel({
+        id: "custom-vision-deployment",
+        name: "internal alias",
+        input: ["text", "image"],
+      }),
+    });
+
+    expect(normalized).toMatchObject({
+      name: "internal alias",
+      input: ["text", "image"],
+    });
   });
 
   it("writes Azure API key header overrides for API-key auth configs", () => {

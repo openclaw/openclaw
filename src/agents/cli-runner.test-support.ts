@@ -1,62 +1,76 @@
 import fs from "node:fs/promises";
+import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import type { enqueueSystemEvent } from "../infra/system-events.js";
+import type { CliBackendPlugin } from "../plugin-sdk/cli-backend.js";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
+} from "../plugin-sdk/cli-backend.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
+import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { setCliAuthEpochTestDeps } from "./cli-auth-epoch.js";
+import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-export const supervisorSpawnMock = vi.fn();
-export const enqueueSystemEventMock = vi.fn();
-export const requestHeartbeatNowMock = vi.fn();
+type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
+type SupervisorSpawnFn = ProcessSupervisor["spawn"];
+type EnqueueSystemEventFn = typeof enqueueSystemEvent;
+type RequestHeartbeatNowFn = typeof requestHeartbeatNow;
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type BootstrapContext = {
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  contextFiles: EmbeddedContextFile[];
+};
+type ResolveBootstrapContextForRunMock = Mock<() => Promise<BootstrapContext>>;
+
+export const supervisorSpawnMock: UnknownMock = vi.fn();
+export const enqueueSystemEventMock: UnknownMock = vi.fn();
+export const requestHeartbeatNowMock: UnknownMock = vi.fn();
 export const SMALL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+let cliRunnerModulePromise: Promise<typeof import("./cli-runner.js")> | undefined;
 
-const hoisted = vi.hoisted(() => {
-  type BootstrapContext = {
-    bootstrapFiles: WorkspaceBootstrapFile[];
-    contextFiles: EmbeddedContextFile[];
-  };
+const hoisted = vi.hoisted(
+  (): {
+    resolveBootstrapContextForRunMock: ResolveBootstrapContextForRunMock;
+  } => {
+    return {
+      resolveBootstrapContextForRunMock: vi.fn<() => Promise<BootstrapContext>>(async () => ({
+        bootstrapFiles: [],
+        contextFiles: [],
+      })),
+    };
+  },
+);
 
-  return {
-    resolveBootstrapContextForRunMock: vi.fn<() => Promise<BootstrapContext>>(async () => ({
-      bootstrapFiles: [],
-      contextFiles: [],
-    })),
-  };
-});
-
-vi.mock("../process/supervisor/index.js", () => ({
+setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => ({
-    spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
+    spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+      supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
     reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
-}));
-
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-}));
-
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
-  return await mergeMockedModule(
-    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
-    () => ({
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-    }),
-  );
+  enqueueSystemEvent: (
+    text: Parameters<EnqueueSystemEventFn>[0],
+    options: Parameters<EnqueueSystemEventFn>[1],
+  ) => enqueueSystemEventMock(text, options) as ReturnType<EnqueueSystemEventFn>,
+  requestHeartbeatNow: (options?: Parameters<RequestHeartbeatNowFn>[0]) =>
+    requestHeartbeatNowMock(options) as ReturnType<RequestHeartbeatNowFn>,
 });
 
-vi.mock("./bootstrap-files.js", () => ({
+setCliRunnerPrepareTestDeps({
   makeBootstrapWarn: () => () => {},
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-}));
+  resolveOpenClawDocsPath: async () => null,
+});
 
 type MockRunExit = {
   reason:
@@ -81,7 +95,199 @@ type TestCliBackendConfig = {
   clearEnv?: string[];
 };
 
-export function createManagedRun(exit: MockRunExit, pid = 1234) {
+type ManagedRunMock = {
+  runId: string;
+  pid: number;
+  startedAtMs: number;
+  stdin: undefined;
+  wait: Mock<() => Promise<MockRunExit>>;
+  cancel: Mock<() => void>;
+};
+
+function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
+  return {
+    id: "codex-cli",
+    bundleMcp: true,
+    bundleMcpMode: "codex-config-overrides",
+    config: {
+      command: "codex",
+      args: [
+        "exec",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+      ],
+      resumeArgs: [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "--color",
+        "never",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+      ],
+      output: "jsonl",
+      resumeOutput: "text",
+      input: "arg",
+      modelArg: "--model",
+      sessionIdFields: ["thread_id"],
+      sessionMode: "existing",
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first",
+      imageArg: "--image",
+      imageMode: "repeat",
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
+function buildAnthropicCliBackendFixture(): CliBackendPlugin {
+  const clearEnv = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEY_OLD",
+    "ANTHROPIC_API_TOKEN",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_OAUTH_TOKEN",
+    "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "CLAUDE_CODE_OAUTH_SCOPES",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+    "CLAUDE_CODE_PLUGIN_SEED_DIR",
+    "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_USE_COWORK_PLUGINS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_VERTEX",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_SDK_DISABLED",
+    "OTEL_TRACES_EXPORTER",
+  ] as const;
+  return {
+    id: "claude-cli",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      command: "claude",
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+      ],
+      resumeArgs: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+        "--resume",
+        "{sessionId}",
+      ],
+      output: "jsonl",
+      input: "stdin",
+      modelArg: "--model",
+      modelAliases: {
+        opus: "opus",
+        "claude-opus-4-6": "opus",
+        sonnet: "sonnet",
+        "claude-sonnet-4-6": "sonnet",
+        "claude-sonnet-4-5": "sonnet",
+        haiku: "haiku",
+      },
+      sessionArg: "--session-id",
+      sessionMode: "always",
+      sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+      systemPromptArg: "--append-system-prompt",
+      systemPromptMode: "append",
+      systemPromptWhen: "first",
+      clearEnv: [...clearEnv],
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
+function buildGoogleGeminiCliBackendFixture(): CliBackendPlugin {
+  return {
+    id: "google-gemini-cli",
+    bundleMcp: true,
+    bundleMcpMode: "gemini-system-settings",
+    config: {
+      command: "gemini",
+      args: ["--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
+      output: "json",
+      input: "arg",
+      imageArg: "@",
+      imagePathScope: "workspace",
+      modelArg: "--model",
+      modelAliases: {
+        pro: "gemini-3.1-pro-preview",
+        flash: "gemini-3.1-flash-preview",
+        "flash-lite": "gemini-3.1-flash-lite-preview",
+      },
+      sessionMode: "existing",
+      sessionIdFields: ["session_id", "sessionId"],
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
+export function createManagedRun(
+  exit: MockRunExit,
+  pid = 1234,
+): ManagedRunMock & Awaited<ReturnType<SupervisorSpawnFn>> {
   return {
     runId: "run-supervisor",
     pid,
@@ -125,21 +331,32 @@ export const EXISTING_CODEX_CONFIG = {
 } satisfies OpenClawConfig;
 
 export async function setupCliRunnerTestModule() {
+  setupCliRunnerTestRegistry();
+  cliRunnerModulePromise ??= import("./cli-runner.js");
+  return (await cliRunnerModulePromise).runCliAgent;
+}
+
+export function setupCliRunnerTestRegistry() {
+  setCliAuthEpochTestDeps({
+    readClaudeCliCredentialsCached: () => null,
+    readCodexCliCredentialsCached: () => null,
+    loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  });
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
       pluginId: "anthropic",
-      backend: buildAnthropicCliBackend(),
+      backend: buildAnthropicCliBackendFixture(),
       source: "test",
     },
     {
       pluginId: "openai",
-      backend: buildOpenAICodexCliBackend(),
+      backend: buildOpenAICodexCliBackendFixture(),
       source: "test",
     },
     {
       pluginId: "google",
-      backend: buildGoogleGeminiCliBackend(),
+      backend: buildGoogleGeminiCliBackendFixture(),
       source: "test",
     },
   ];
@@ -151,35 +368,6 @@ export async function setupCliRunnerTestModule() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-
-  vi.resetModules();
-  vi.doMock("../process/supervisor/index.js", () => ({
-    getProcessSupervisor: () => ({
-      spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
-      getRecord: vi.fn(),
-    }),
-  }));
-  vi.doMock("../infra/system-events.js", () => ({
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  }));
-  vi.doMock("../infra/heartbeat-wake.js", async () => {
-    return await mergeMockedModule(
-      await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-        "../infra/heartbeat-wake.js",
-      ),
-      () => ({
-        requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-      }),
-    );
-  });
-  vi.doMock("./bootstrap-files.js", () => ({
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-  }));
-  return (await import("./cli-runner.js")).runCliAgent;
 }
 
 export function stubBootstrapContext(params: {
@@ -187,6 +375,14 @@ export function stubBootstrapContext(params: {
   contextFiles: EmbeddedContextFile[];
 }) {
   hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
+}
+
+export function restoreCliRunnerPrepareTestDeps() {
+  setCliRunnerPrepareTestDeps({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+    resolveOpenClawDocsPath: async () => null,
+  });
 }
 
 export async function runCliAgentWithBackendConfig(params: {
@@ -209,7 +405,7 @@ export async function runCliAgentWithBackendConfig(params: {
     } satisfies OpenClawConfig,
     prompt: "hi",
     provider: "codex-cli",
-    model: "gpt-5.2-codex",
+    model: "gpt-5.4",
     timeoutMs: 1_000,
     runId: params.runId,
     cliSessionId: "thread-123",

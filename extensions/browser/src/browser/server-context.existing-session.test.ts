@@ -2,6 +2,21 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
 
+vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/browser-security-runtime")
+  >("openclaw/plugin-sdk/browser-security-runtime");
+  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
+    const result = { address: "93.184.216.34", family: 4 };
+    return options?.all === true ? [result] : result;
+  };
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
+  };
+});
+
 vi.mock("./chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => true),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
@@ -19,8 +34,8 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
-let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
-let chromeMcp: typeof import("./chrome-mcp.js");
+const { createBrowserRouteContext } = await import("./server-context.js");
+const chromeMcp = await import("./chrome-mcp.js");
 
 function makeState(): BrowserServerState {
   return {
@@ -58,14 +73,22 @@ function makeState(): BrowserServerState {
   };
 }
 
-afterEach(() => {
+beforeEach(() => {
+  for (const key of [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
   vi.clearAllMocks();
 });
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ createBrowserRouteContext } = await import("./server-context.js"));
-  chromeMcp = await import("./chrome-mcp.js");
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("browser server-context existing-session profile", () => {

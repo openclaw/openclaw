@@ -9,6 +9,7 @@ const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -22,8 +23,8 @@ type GatewayClientMock = {
 
 const gatewayClientInstances: GatewayClientMock[] = [];
 
-vi.mock("./gateway.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./gateway.ts")>();
+vi.mock("./gateway.ts", async () => {
+  const actual = await vi.importActual<typeof import("./gateway.ts")>("./gateway.ts");
 
   function resolveGatewayErrorDetailCode(
     error: { details?: unknown } | null | undefined,
@@ -39,6 +40,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
+    readonly request = vi.fn(async () => ({}));
 
     constructor(
       private opts: {
@@ -56,6 +58,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        request: this.request,
         options: { clientVersion: this.opts.clientVersion },
         emitHello: (hello) => {
           this.opts.onHello?.(
@@ -86,15 +89,23 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   return { ...actual, GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
-vi.mock("./controllers/chat.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+vi.mock("./controllers/chat.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("./controllers/chat.ts")>("./controllers/chat.ts");
   return {
     ...actual,
     loadChatHistory: loadChatHistoryMock,
   };
 });
 
-function createHost() {
+type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
+  chatSideResult: unknown;
+  chatSideResultTerminalRuns: Set<string>;
+  chatStream: string | null;
+  toolStreamOrder: string[];
+};
+
+function createHost(): TestGatewayHost {
   return {
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
@@ -131,20 +142,27 @@ function createHost() {
     assistantAgentId: null,
     serverVersion: null,
     sessionKey: "main",
+    basePath: "",
+    chatMessage: "",
     chatMessages: [],
+    chatAttachments: [],
+    chatQueue: [],
     chatToolMessages: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatSideResult: null,
+    chatSending: false,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
+    chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
-  } as unknown as Parameters<typeof connectGateway>[0];
+  } as unknown as TestGatewayHost;
 }
 
 function connectHostGateway() {
@@ -178,6 +196,7 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -195,9 +214,72 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
 
     secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+    expect(gatewayClientInstances).toHaveLength(3);
+    expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(host.lastError).toBeNull();
+  });
+
+  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    const chatHost = host as typeof host & {
+      chatRunId: string | null;
+      chatQueue: Array<{
+        id: string;
+        text: string;
+        createdAt: number;
+        pendingRunId?: string;
+      }>;
+    };
+    chatHost.chatRunId = "run-1";
+    chatHost.chatQueue = [
+      {
+        id: "pending",
+        text: "/steer tighten the plan",
+        createdAt: 1,
+        pendingRunId: "run-1",
+      },
+      {
+        id: "queued",
+        text: "follow up",
+        createdAt: 2,
+      },
+    ];
+    host.execApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "exec",
+        request: { command: "rm -rf /tmp/demo" },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      },
+    ];
+
+    client.emitGap(20, 24);
+
+    expect(gatewayClientInstances).toHaveLength(2);
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
+    expect(chatHost.chatQueue).toHaveLength(1);
+    expect(chatHost.chatQueue[0]?.text).toBe("follow up");
+
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+
+    reconnectClient.emitHello();
+
+    expect(reconnectClient.request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "follow up",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(chatHost.chatQueue).toHaveLength(0);
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
@@ -490,6 +572,149 @@ describe("connectGateway", () => {
     emitToolResultEvent(client);
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("stores BTW side results for the active session", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Only the UI layer is missing support.",
+        ts: 123,
+      },
+    });
+
+    expect(host.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-1",
+      question: "what changed?",
+      text: "Only the UI layer is missing support.",
+    });
+    expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
+  });
+
+  it("ignores tracked BTW terminal finals without tearing down the active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-1";
+    emitToolResultEvent(client);
+    host.chatStream = "still streaming";
+    expect(host.toolStreamOrder).toHaveLength(1);
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-2",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "A dedicated side-result card now renders in webchat.",
+        ts: 456,
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "btw-run-2",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-1");
+    expect(host.chatStream).toBe("still streaming");
+    expect(host.toolStreamOrder).toHaveLength(1);
+    expect(host.chatSideResultTerminalRuns.has("btw-run-2")).toBe(false);
+  });
+
+  it.each(["aborted", "error"] as const)(
+    "cleans up tracked BTW %s events without touching the active run",
+    (terminalState) => {
+      const { host, client } = connectHostGateway();
+      host.chatRunId = "main-run-2";
+      emitToolResultEvent(client);
+      host.chatStream = "stream in progress";
+
+      client.emitEvent({
+        event: "chat.side_result",
+        payload: {
+          kind: "btw",
+          runId: `btw-run-${terminalState}`,
+          sessionKey: "main",
+          question: "what changed?",
+          text: "Detached BTW response",
+          ts: 789,
+        },
+      });
+      client.emitEvent({
+        event: "chat",
+        payload: {
+          runId: `btw-run-${terminalState}`,
+          sessionKey: "main",
+          state: terminalState,
+          errorMessage: terminalState === "error" ? "btw failed" : undefined,
+        },
+      });
+
+      expect(host.chatSideResultTerminalRuns.has(`btw-run-${terminalState}`)).toBe(false);
+      expect(host.chatRunId).toBe("main-run-2");
+      expect(host.chatStream).toBe("stream in progress");
+      expect(host.toolStreamOrder).toHaveLength(1);
+      expect(host.lastError).toBeNull();
+    },
+  );
+
+  it("clears tracked BTW terminal runs after reconnect hello", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = gatewayClientInstances[0];
+    expect(firstClient).toBeDefined();
+
+    firstClient.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-reconnect",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Temporary BTW state",
+        ts: 987,
+      },
+    });
+    expect(host.chatSideResultTerminalRuns.has("btw-run-reconnect")).toBe(true);
+
+    connectGateway(host);
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+
+    reconnectClient.emitHello();
+
+    expect(host.chatSideResultTerminalRuns.size).toBe(0);
+  });
+
+  it("ignores BTW side results for other sessions", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-3",
+        sessionKey: "other-session",
+        question: "what changed?",
+        text: "Nothing here.",
+        ts: 789,
+      },
+    });
+
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.size).toBe(0);
   });
 
   it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {

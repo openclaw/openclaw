@@ -54,6 +54,16 @@ struct VoiceWakeSettings: View {
                     .disabled(!voiceWakeSupported)
 
                 SettingsToggleRow(
+                    title: "Trigger Talk Mode",
+                    subtitle: """
+                    When a wake phrase is detected, activate Talk Mode for a full voice \
+                    conversation (STT, LLM response, TTS playback) instead of sending a \
+                    text message to the chat.
+                    """,
+                    binding: self.$state.voiceWakeTriggersTalkMode)
+                    .disabled(!self.state.swabbleEnabled)
+
+                SettingsToggleRow(
                     title: "Hold Right Option to talk",
                     subtitle: """
                     Push-to-talk mode that starts listening while you hold the key
