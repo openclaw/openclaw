@@ -299,6 +299,88 @@ describe("buildQaRuntimeEnv", () => {
     });
   });
 
+  it("stages placeholder mock auth profiles per agent dir so mock-openai runs can resolve credentials", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-mock-auth-"));
+    cleanups.push(async () => {
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    const cfg = await __testing.stageQaMockAuthProfiles({
+      cfg: {},
+      stateDir,
+    });
+
+    // Config side: both providers should have a profile entry with mode
+    // "api_key" so the runtime picks up the staging without any further
+    // config mutation.
+    expect(cfg.auth?.profiles?.["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA mock openai credential",
+    });
+    expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toMatchObject({
+      provider: "anthropic",
+      mode: "api_key",
+      displayName: "QA mock anthropic credential",
+    });
+
+    // Store side: each agent dir should have its own auth-profiles.json
+    // containing the placeholder credential for each staged provider. This
+    // is what the scenario runner actually reads when it resolves auth
+    // before calling the mock.
+    for (const agentId of ["main", "qa"]) {
+      const storeRaw = await readFile(
+        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
+        "utf8",
+      );
+      const parsed = JSON.parse(storeRaw) as {
+        profiles: Record<string, { type: string; provider: string; key: string }>;
+      };
+      expect(parsed.profiles["qa-mock-openai"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-qa-mock",
+      });
+      expect(parsed.profiles["qa-mock-anthropic"]).toMatchObject({
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-qa-mock",
+      });
+    }
+  });
+
+  it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-mock-auth-override-"));
+    cleanups.push(async () => {
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    const cfg = await __testing.stageQaMockAuthProfiles({
+      cfg: {},
+      stateDir,
+      agentIds: ["qa"],
+      providers: ["openai"],
+    });
+
+    expect(cfg.auth?.profiles?.["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+    });
+    // Anthropic should NOT be staged when the caller restricts providers.
+    expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
+
+    const qaStore = JSON.parse(
+      await readFile(path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"), "utf8"),
+    ) as { profiles: Record<string, unknown> };
+    expect(qaStore.profiles["qa-mock-openai"]).toBeDefined();
+    expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
+
+    // main/agent should not exist because it wasn't in the agentIds list.
+    await expect(
+      readFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+    ).rejects.toThrow(/ENOENT/);
+  });
+
   it("allows loopback gateway health probes through the SSRF guard", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
