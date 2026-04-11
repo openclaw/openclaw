@@ -1,3 +1,4 @@
+import { createObservableWorkerStateObserver } from "./task-registry.observable-state.js";
 import {
   closeTaskRegistrySqliteStore,
   deleteTaskAndDeliveryStateFromSqlite,
@@ -65,7 +66,8 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
 };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
-let configuredTaskRegistryObservers: TaskRegistryObservers | null = null;
+let configuredTaskRegistryObservers: TaskRegistryObservers | null =
+  createObservableWorkerStateObserver();
 
 export function getTaskRegistryStore(): TaskRegistryStore {
   return configuredTaskRegistryStore;
@@ -90,5 +92,5 @@ export function configureTaskRegistryRuntime(params: {
 export function resetTaskRegistryRuntimeForTests() {
   configuredTaskRegistryStore.close?.();
   configuredTaskRegistryStore = defaultTaskRegistryStore;
-  configuredTaskRegistryObservers = null;
+  configuredTaskRegistryObservers = createObservableWorkerStateObserver();
 }

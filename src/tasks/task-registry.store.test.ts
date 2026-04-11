@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
@@ -39,6 +39,12 @@ function createStoredTask(): TaskRecord {
 }
 
 describe("task-registry store runtime", () => {
+  beforeEach(() => {
+    delete process.env.OPENCLAW_STATE_DIR;
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
+  });
+
   afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
     resetTaskRegistryForTests();
