@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -53,6 +54,9 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  /** When true, create an isolated subagent session (agent:<id>:subagent:<uuid>)
+   *  instead of reusing the agent's main session. */
+  spawn?: boolean;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -91,8 +95,8 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   if (!body) {
     throw new Error("Message (--message) is required");
   }
-  if (!opts.to && !opts.sessionId && !opts.agent) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+  if (!opts.to && !opts.sessionId && !opts.agent && !opts.spawn) {
+    throw new Error("Pass --to <E.164>, --session-id, --agent, or --spawn to choose a session");
   }
 
   const cfg = loadConfig();
@@ -112,12 +116,41 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
       ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
       : Math.max(10_000, (timeoutSeconds + 30) * 1000);
 
-  const sessionKey = resolveSessionKeyForRequest({
-    cfg,
-    agentId,
-    to: opts.to,
-    sessionId: opts.sessionId,
-  }).sessionKey;
+  // --spawn creates an isolated subagent session key that won't pollute
+  // the agent's main session. The key shape (agent:<id>:subagent:<uuid>)
+  // matches what the internal sessions_spawn tool produces.
+  let sessionKey: string | undefined;
+  let lane: string | undefined;
+  if (opts.spawn) {
+    const spawnAgentId = agentId ?? "main";
+    sessionKey = `agent:${spawnAgentId}:subagent:${crypto.randomUUID()}`;
+    lane = "subagent";
+    // Pre-patch the session so the gateway records spawnDepth and subagent
+    // role — otherwise the subagent thinks it's a top-level session and
+    // may attempt further spawns or access owner-only tools.
+    try {
+      await callGateway({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort: the session key is still valid without the patch,
+      // it just won't have subagent restrictions enforced.
+    }
+  } else {
+    sessionKey = resolveSessionKeyForRequest({
+      cfg,
+      agentId,
+      to: opts.to,
+      sessionId: opts.sessionId,
+    }).sessionKey;
+  }
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
@@ -145,7 +178,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           replyAccountId: opts.replyAccount,
           bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
-          lane: opts.lane,
+          lane: lane ?? opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
         },
