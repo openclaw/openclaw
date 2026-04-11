@@ -245,32 +245,25 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   if (!isRecord(value)) {
     return null;
   }
-  const operator = value.operator;
-  const action = value.action;
-  const context = value.context;
+  const header = isRecord(value.header) ? value.header : undefined;
+  const event = isRecord(value.event) ? value.event : value;
+  const operator = event.operator;
+  const action = event.action;
+  const context = event.context;
   if (!isRecord(operator) || !isRecord(action) || !isRecord(context)) {
     return null;
   }
-  const token = readString(value.token);
-  const openId = readString(operator.open_id);
-  const userId = readString(operator.user_id);
-  const unionId = readString(operator.union_id);
+  const operatorId = isRecord(operator.operator_id) ? operator.operator_id : undefined;
+  const token = readString(value.token) ?? readString(header?.token);
+  const openId = readString(operator.open_id) ?? readString(operatorId?.open_id);
+  const userId = readString(operator.user_id) ?? readString(operatorId?.user_id);
+  const unionId = readString(operator.union_id) ?? readString(operatorId?.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
   const contextOpenId = readString(context.open_id);
   const contextUserId = readString(context.user_id);
-  const chatId = readString(context.chat_id);
-  if (
-    !token ||
-    !openId ||
-    !userId ||
-    !unionId ||
-    !tag ||
-    !isRecord(actionValue) ||
-    !contextOpenId ||
-    !contextUserId ||
-    !chatId
-  ) {
+  const chatId = readString(context.chat_id) ?? readString(context.open_chat_id);
+  if (!token || !openId || !tag || !isRecord(actionValue) || !chatId) {
     return null;
   }
   return {

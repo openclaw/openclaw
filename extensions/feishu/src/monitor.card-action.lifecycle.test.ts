@@ -94,6 +94,47 @@ function createCardActionEvent(params: {
   };
 }
 
+function createNestedCardActionEvent(params: {
+  token: string;
+  action: string;
+  command: string;
+  chatId?: string;
+  chatType?: "group" | "p2p";
+}) {
+  const openId = "ou_user1";
+  const chatId = params.chatId ?? "p2p:ou_user1";
+  const chatType = params.chatType ?? "p2p";
+  return {
+    header: {
+      token: params.token,
+    },
+    event: {
+      operator: {
+        operator_id: {
+          open_id: openId,
+        },
+      },
+      action: {
+        tag: "button",
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: params.action,
+          q: params.command,
+          c: {
+            u: openId,
+            h: chatId,
+            t: chatType,
+            e: Date.now() + 60_000,
+          },
+        }),
+      },
+      context: {
+        open_chat_id: chatId,
+      },
+    },
+  };
+}
+
 async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
@@ -217,6 +258,40 @@ describe("Feishu card-action lifecycle", () => {
 
     expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
+  });
+
+  it("accepts nested card-action payloads that only provide header token and open_chat_id", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+    const event = createNestedCardActionEvent({
+      token: "tok-card-nested",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await expectFeishuReplyPipelineDedupedAcrossReplay({
+      handler: onCardAction,
+      event,
+      dispatchReplyFromConfigMock,
+      createFeishuReplyDispatcherMock,
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "acct-card",
+        chatId: "p2p:ou_user1",
+        replyToMessageId: "card-action-tok-card-nested",
+      }),
+    );
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        AccountId: "acct-card",
+        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        MessageSid: "card-action-tok-card-nested",
+      }),
+    );
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 });
