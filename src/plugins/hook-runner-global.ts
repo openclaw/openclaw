@@ -8,8 +8,8 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
+import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
-import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./types.js";
 
 type HookRunnerGlobalState = {
   hookRunner: HookRunner | null;

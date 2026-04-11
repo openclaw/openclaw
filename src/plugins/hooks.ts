@@ -65,7 +65,7 @@ import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
-} from "./types.js";
+} from "./hook-types.js";
 
 // Re-export types for consumers
 export type {
