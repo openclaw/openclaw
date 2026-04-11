@@ -97,7 +97,8 @@ describe("runQaCharacterEval", () => {
       expect.objectContaining({
         judgeModel: "openai/gpt-5.4",
         judgeThinkingDefault: "xhigh",
-        judgeFastMode: true,
+        judgeFastMode: false,
+        timeoutMs: 300_000,
       }),
     );
     expect(result.judgments).toHaveLength(1);
@@ -115,6 +116,7 @@ describe("runQaCharacterEval", () => {
     expect(report).toContain("reply from openai/gpt-5.4");
     expect(report).toContain("reply from codex-cli/test-model");
     expect(report).toContain("Judge thinking: xhigh");
+    expect(report).toContain("- Timeout: 5m");
     expect(report).toContain("Fast mode: on");
     expect(report).toContain("Duration:");
     expect(report).not.toContain("Duration ms:");
@@ -243,7 +245,7 @@ describe("runQaCharacterEval", () => {
       "xhigh",
       "high",
     ]);
-    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
+    expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([false, false]);
   });
 
   it("runs candidate models with bounded concurrency while preserving result order", async () => {

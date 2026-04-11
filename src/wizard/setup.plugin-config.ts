@@ -241,8 +241,8 @@ async function promptPluginFields(params: {
     });
     const trimmed = input.trim();
     if (trimmed !== currentStr) {
-      // Try to parse as number if schema says number
-      if (schemaProp?.type === "number") {
+      // Coerce numeric text input when the schema expects a JSON number or integer.
+      if (schemaProp?.type === "number" || schemaProp?.type === "integer") {
         if (trimmed === "") {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;

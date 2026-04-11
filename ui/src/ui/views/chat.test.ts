@@ -209,6 +209,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     compactionStatus: null,
     fallbackStatus: null,
     messages: [],
+    sideResult: null,
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -229,6 +230,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onDraftChange: () => undefined,
     onSend: () => undefined,
     onQueueRemove: () => undefined,
+    onDismissSideResult: () => undefined,
     onNewSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
@@ -291,6 +293,89 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("renders BTW side results outside transcript history", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Saved transcript message" }],
+              timestamp: 1,
+            },
+          ],
+          sideResult: {
+            kind: "btw",
+            runId: "btw-run-1",
+            sessionKey: "main",
+            question: "what changed?",
+            text: "The web UI now renders **BTW** separately.",
+            isError: false,
+            ts: 2,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-side-result")).not.toBeNull();
+    expect(container.textContent).toContain("BTW");
+    expect(container.textContent).toContain("what changed?");
+    expect(container.textContent).toContain("Not saved to chat history");
+    expect(container.textContent).toContain("Saved transcript message");
+    expect(container.querySelectorAll(".chat-side-result")).toHaveLength(1);
+  });
+
+  it("dismisses BTW side results from the dismiss button", () => {
+    const container = document.createElement("div");
+    const onDismissSideResult = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          sideResult: {
+            kind: "btw",
+            runId: "btw-run-2",
+            sessionKey: "main",
+            question: "what changed?",
+            text: "Dismiss me",
+            isError: false,
+            ts: 3,
+          },
+          onDismissSideResult,
+        }),
+      ),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
+    expect(button).not.toBeNull();
+    button?.click();
+    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders BTW errors with the error variant", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sideResult: {
+            kind: "btw",
+            runId: "btw-run-3",
+            sessionKey: "main",
+            question: "what failed?",
+            text: "The side question could not be answered.",
+            isError: true,
+            ts: 4,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-side-result--error")).not.toBeNull();
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(

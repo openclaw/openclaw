@@ -27,10 +27,7 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => ({
-  normalizeStoredOverrideModel: (params: {
-    providerOverride?: string;
-    modelOverride?: string;
-  }) => {
+  normalizeStoredOverrideModel: (params: { providerOverride?: string; modelOverride?: string }) => {
     const providerOverride = params.providerOverride?.trim();
     const modelOverride = params.modelOverride?.trim();
     if (!providerOverride || !modelOverride) {

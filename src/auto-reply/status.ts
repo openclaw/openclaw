@@ -17,6 +17,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
+  resolveSessionPluginDebugLines,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
@@ -466,7 +467,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
         normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(String(entry?.fallbackNoticeActiveModel ?? "")) ?? "",
+          normalizeOptionalString(entry?.fallbackNoticeActiveModel ?? "") ?? "",
         );
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
@@ -673,6 +674,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+  const pluginDebugLines = verboseLevel !== "off" ? resolveSessionPluginDebugLines(entry) : [];
+  const pluginStatusLine = pluginDebugLines.length > 0 ? pluginDebugLines.join(" · ") : null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -833,6 +836,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.subagentsLine,
     args.taskLine,
     `⚙️ ${optionsLine}`,
+    pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
   ]

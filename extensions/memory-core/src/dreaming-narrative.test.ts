@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import {
+  RequestScopedSubagentRuntimeError,
+  SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+} from "openclaw/plugin-sdk/error-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,
@@ -17,6 +21,10 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("buildNarrativePrompt", () => {
   it("builds a prompt from snippets only", () => {
@@ -312,6 +320,64 @@ describe("appendNarrativeEntry", () => {
     // Original content should still be there, after the diary.
     expect(content).toContain("# Existing");
   });
+
+  it("keeps existing diary content intact when the atomic replace fails", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
+    const renameError = Object.assign(new Error("replace failed"), { code: "ENOSPC" });
+    const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+
+    await expect(
+      appendNarrativeEntry({
+        workspaceDir,
+        narrative: "Appended dream.",
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+      }),
+    ).rejects.toThrow("replace failed");
+
+    expect(renameSpy).toHaveBeenCalledOnce();
+    await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toBe("# Existing\n");
+  });
+
+  it("preserves restrictive dreams file permissions across atomic replace", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf-8", mode: 0o600 });
+    await fs.chmod(dreamsPath, 0o600);
+
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Appended dream.",
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const stat = await fs.stat(dreamsPath);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("surfaces temp cleanup failure after atomic replace error", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(
+      Object.assign(new Error("replace failed"), { code: "ENOSPC" }),
+    );
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("cleanup failed"), { code: "EACCES" }),
+    );
+
+    await expect(
+      appendNarrativeEntry({
+        workspaceDir,
+        narrative: "Appended dream.",
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+      }),
+    ).rejects.toThrow("cleanup also failed");
+  });
 });
 
 describe("generateAndAppendDreamNarrative", () => {
@@ -341,6 +407,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+    const expectedSessionKey = `dreaming-narrative-light-${nowMs}`;
 
     await generateAndAppendDreamNarrative({
       subagent,
@@ -349,13 +417,15 @@ describe("generateAndAppendDreamNarrative", () => {
         phase: "light",
         snippets: ["API endpoints need authentication"],
       },
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      nowMs,
       timezone: "UTC",
       logger,
     });
 
     expect(subagent.run).toHaveBeenCalledOnce();
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
+      idempotencyKey: expectedSessionKey,
+      sessionKey: expectedSessionKey,
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
@@ -411,7 +481,11 @@ describe("generateAndAppendDreamNarrative", () => {
   it("handles subagent error gracefully", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
-    subagent.run.mockRejectedValue(new Error("connection failed"));
+    subagent.run.mockRejectedValue(
+      new Error("connection failed", {
+        cause: new RequestScopedSubagentRuntimeError(),
+      }),
+    );
     const logger = createMockLogger();
 
     await generateAndAppendDreamNarrative({
@@ -423,6 +497,80 @@ describe("generateAndAppendDreamNarrative", () => {
 
     // Should not throw.
     expect(logger.warn).toHaveBeenCalled();
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("falls back to a local narrative when subagent runtime is request-scoped", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["API endpoints need authentication"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("API endpoints need authentication");
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+  });
+
+  it("falls back when the request-scoped runtime error is detected by stable code", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    const crossBoundaryError = new Error("different wrapper text");
+    crossBoundaryError.name = "RequestScopedSubagentRuntimeError";
+    Object.assign(crossBoundaryError, {
+      code: SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+    });
+    subagent.run.mockRejectedValue(crossBoundaryError);
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "deep", snippets: [], promotions: ["A durable candidate surfaced."] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A durable candidate surfaced.");
+  });
+
+  it("does not fall back for non-Error objects that only spoof the stable code", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue({
+      code: SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+      name: "RequestScopedSubagentRuntimeError",
+      message: "spoofed",
+    });
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "deep", snippets: ["should not persist"] },
+      logger,
+    });
+
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("narrative generation failed"),
+    );
   });
 
   it("cleans up session even on failure", async () => {

@@ -151,6 +151,7 @@ function createCapabilityPluginRecord(params: {
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -328,6 +329,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.memoryEmbeddingProviderIds.push(
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
+      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
@@ -335,6 +337,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           backend,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.textTransforms.push(
+        ...captured.textTransforms.map((transforms) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          transforms,
           source: record.source,
           rootDir: record.rootDir,
         })),
@@ -434,6 +445,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.agentHarnesses.push(
+        ...captured.agentHarnesses.map((harness) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          harness,
           source: record.source,
           rootDir: record.rootDir,
         })),

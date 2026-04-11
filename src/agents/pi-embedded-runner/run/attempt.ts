@@ -24,7 +24,11 @@ import {
 } from "../../../plugin-sdk/ollama-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
-import { resolveProviderSystemPromptContribution } from "../../../plugins/provider-runtime.js";
+import {
+  resolveProviderSystemPromptContribution,
+  resolveProviderTextTransforms,
+  transformProviderSystemPrompt,
+} from "../../../plugins/provider-runtime.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -84,6 +88,7 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -125,6 +130,7 @@ import {
 } from "../prompt-cache-observability.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -611,9 +617,7 @@ export async function runEmbeddedAttempt(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities
-          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
-          .filter(Boolean),
+        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
       );
       for (const capability of promptCapabilities) {
         const normalizedCapability = normalizeOptionalLowercaseString(capability);
@@ -655,6 +659,7 @@ export async function runEmbeddedAttempt(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
+            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;
@@ -733,7 +738,7 @@ export async function runEmbeddedAttempt(
       },
     });
 
-    const appendPrompt =
+    const builtAppendPrompt =
       resolveSystemPromptOverride({
         config: params.config,
         agentId: sessionAgentId,
@@ -768,6 +773,23 @@ export async function runEmbeddedAttempt(
         memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
       });
+    const appendPrompt = transformProviderSystemPrompt({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      context: {
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: effectiveWorkspace,
+        provider: params.provider,
+        modelId: params.modelId,
+        promptMode: effectivePromptMode,
+        runtimeChannel,
+        runtimeCapabilities,
+        agentId: sessionAgentId,
+        systemPrompt: builtAppendPrompt,
+      },
+    });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1029,6 +1051,19 @@ export async function runEmbeddedAttempt(
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
       });
+      const providerTextTransforms = resolveProviderTextTransforms({
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+      });
+      if (providerTextTransforms) {
+        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
+          streamFn: activeSession.agent.streamFn,
+          input: providerTextTransforms.input,
+          output: providerTextTransforms.output,
+          transformSystemPrompt: false,
+        });
+      }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
@@ -1409,6 +1444,7 @@ export async function runEmbeddedAttempt(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
           runId: params.runId,
+          initialReplayState: params.initialReplayState,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
@@ -1446,8 +1482,10 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
+        getReplayState,
         didSendViaMessagingTool,
         getLastToolError,
+        setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
       } = subscription;
@@ -2271,13 +2309,19 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const observedReplayMetadata = buildAttemptReplayMetadata({
+        toolMetas: toolMetasNormalized,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        successfulCronAdds: getSuccessfulCronAdds(),
+      });
+      const replayMetadata = replayMetadataFromState(
+        observeReplayMetadata(getReplayState(), observedReplayMetadata),
+      );
+
       return {
-        replayMetadata: buildAttemptReplayMetadata({
-          toolMetas: toolMetasNormalized,
-          didSendViaMessagingTool: didSendViaMessagingTool(),
-          successfulCronAdds: getSuccessfulCronAdds(),
-        }),
+        replayMetadata,
         itemLifecycle: getItemLifecycle(),
+        setTerminalLifecycleMeta,
         aborted,
         timedOut,
         idleTimedOut,

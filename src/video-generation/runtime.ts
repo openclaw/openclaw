@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -156,7 +156,7 @@ export async function generateVideo(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "video generation",
     attempts,
     lastError,

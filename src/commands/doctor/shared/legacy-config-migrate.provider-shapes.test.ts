@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import type { OpenClawConfig } from "../../../config/types.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+
+function migrateLegacyConfig(raw: unknown): {
+  config: OpenClawConfig | null;
+  changes: string[];
+} {
+  const { next, changes } = applyLegacyDoctorMigrations(raw);
+  return { config: next as OpenClawConfig | null, changes };
+}
 
 describe("legacy migrate provider-shaped config", () => {
   it("moves messages.tts.<provider> keys into messages.tts.providers", () => {

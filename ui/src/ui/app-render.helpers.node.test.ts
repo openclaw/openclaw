@@ -336,12 +336,22 @@ describe("switchChatSession", () => {
       chatStreamSegments: [{ text: "segment", ts: 1 }],
       chatThinkingLevel: "high",
       chatStream: "stream",
+      chatSideResult: {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "draft answer",
+        isError: false,
+        ts: 1,
+      },
       lastError: "oops",
       compactionStatus: { phase: "active" },
       fallbackStatus: { phase: "active" },
       chatAvatarUrl: "/avatar/old",
       chatQueue: [{ id: "queued" }],
       chatRunId: "run-1",
+      chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
       settings,
       applySettings(next: typeof settings) {
@@ -359,6 +369,8 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultTerminalRuns.size).toBe(0);
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
