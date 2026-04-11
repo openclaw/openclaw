@@ -76,7 +76,9 @@ export function applyReplyTagsToPayload(
 }
 
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice });
+  return hasReplyPayloadContent(payload, {
+    extraContent: payload.audioAsVoice || Boolean(payload.sticker?.raw?.trim()),
+  });
 }
 
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {

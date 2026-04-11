@@ -124,7 +124,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     sticker: payload.sticker ?? parsed.sticker,
   };
-  if (!isRenderablePayload(normalizedPayload)) {
+  if (!isRenderablePayload(normalizedPayload) && !normalizedPayload.sticker) {
     return null;
   }
   const parts = resolveSendableOutboundReplyParts(normalizedPayload);

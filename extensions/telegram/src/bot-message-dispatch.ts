@@ -729,7 +729,7 @@ export const dispatchTelegramMessage = async ({
           // Telegram delivery supports text/media in this path. Ignore payload.sticker
           // and allow text fallback when both text and sticker are present.
           const hasText = typeof payload.text === "string" && payload.text.length > 0;
-          const canSendAsIs = hasMedia || hasText;
+          const canSendAsIs = _hasMedia || hasText;
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
