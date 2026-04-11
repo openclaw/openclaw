@@ -686,6 +686,49 @@ button.nav-item {
   width: 100%;
 }
 
+.sidebar-recent-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.sidebar-recent-session {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-recent-session:hover {
+  background: var(--nav-item-hover-bg, rgba(128, 128, 128, 0.1));
+  color: var(--text-primary);
+}
+
+.sidebar-recent-session--active {
+  background: var(--nav-item-active-bg, rgba(128, 128, 128, 0.15));
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.sidebar-recent-session__label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar--collapsed .sidebar-shell {
   padding: 12px 8px 10px;
 }

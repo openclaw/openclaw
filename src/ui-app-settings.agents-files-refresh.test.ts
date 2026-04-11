@@ -94,6 +94,12 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
+    wikiImportInsightsLoading: false,
+    wikiImportInsightsError: null,
+    wikiImportInsights: null,
+    wikiMemoryPalaceLoading: false,
+    wikiMemoryPalaceError: null,
+    wikiMemoryPalace: null,
   } as Parameters<typeof refreshActiveTab>[0];
 }
 

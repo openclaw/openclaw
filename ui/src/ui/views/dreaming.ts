@@ -491,6 +491,8 @@ function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "
       return "synthesis";
     case "report":
       return "report";
+    default:
+      return kind;
   }
   return kind;
 }
@@ -510,6 +512,8 @@ function formatImportBadge(item: {
     case "high":
       return "high risk";
     case "unknown":
+      return "unknown risk";
+    default:
       return "unknown risk";
   }
   return "unknown risk";
@@ -641,6 +645,8 @@ function renderDiarySubtabExplainer() {
           imported source chats.
         </p>
       `;
+    default:
+      return nothing;
   }
   return nothing;
 }

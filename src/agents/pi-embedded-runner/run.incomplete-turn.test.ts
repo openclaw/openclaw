@@ -114,6 +114,26 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ]);
   });
 
+  it("treats stop thinking-only turns as incomplete", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "openai",
+          model: "mock-1",
+          content: [{ type: "thinking", thinking: "internal-only" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(text).toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
   it("emits explicit replayInvalid + blocked liveness state at the strict-agentic blocked exit", async () => {
     // Criterion 4 of the GPT-5.4 parity gate requires every terminal exit path
     // to emit explicit replayInvalid + livenessState. The strict-agentic
