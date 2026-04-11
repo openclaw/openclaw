@@ -17,6 +17,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { assertRepoBoundPath } from "./cli-paths.js";
+import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
@@ -86,27 +87,6 @@ const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
 export type QaCliBackendAuthMode = "auto" | "api-key" | "subscription";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_EXIT_TIMEOUT_MS = 5_000;
-const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "AWS_ACCESS_KEY_ID",
-  "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "GEMINI_API_KEY",
-  "GEMINI_API_KEYS",
-  "GOOGLE_API_KEY",
-  "MISTRAL_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENAI_API_KEYS",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_LIVE_ANTHROPIC_KEY",
-  "OPENCLAW_LIVE_ANTHROPIC_KEYS",
-  "OPENCLAW_LIVE_GEMINI_KEY",
-  "OPENCLAW_LIVE_OPENAI_KEY",
-  "VOYAGE_API_KEY",
-]);
-
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -126,25 +106,6 @@ async function closeWriteStream(stream: WriteStream) {
   await new Promise<void>((resolve) => {
     stream.end(() => resolve());
   });
-}
-
-function redactQaGatewayDebugText(text: string) {
-  let redacted = text;
-  for (const envVar of QA_GATEWAY_DEBUG_SECRET_ENV_VARS) {
-    const escapedEnvVar = envVar.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    redacted = redacted.replace(
-      new RegExp(`\\b(${escapedEnvVar})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "g"),
-      `$1$2<redacted>`,
-    );
-    redacted = redacted.replace(
-      new RegExp(`("${escapedEnvVar}"\\s*:\\s*)"[^"]*"`, "g"),
-      `$1"<redacted>"`,
-    );
-  }
-  return redacted
-    .replaceAll(/\bsk-ant-oat01-[A-Za-z0-9_-]+\b/g, "<redacted>")
-    .replaceAll(/\bBearer\s+[A-Za-z0-9._-]{12,}\b/gi, "Bearer <redacted>")
-    .replaceAll(/([?#&]token=)[^&\s]+/gi, "$1<redacted>");
 }
 
 async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; targetPath: string }) {
@@ -1181,7 +1142,7 @@ export async function startQaGatewayChild(params: {
             const details = formatErrorMessage(error);
             lastDetails = details;
             if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
-              throw new Error(`${details}\nGateway logs:\n${logs()}`, { cause: error });
+              throw new Error(`${details}${formatQaGatewayLogsForError(logs())}`, { cause: error });
             }
             await waitForGatewayReady({
               baseUrl,
@@ -1191,7 +1152,7 @@ export async function startQaGatewayChild(params: {
             });
           }
         }
-        throw new Error(`${lastDetails}\nGateway logs:\n${logs()}`);
+        throw new Error(`${lastDetails}${formatQaGatewayLogsForError(logs())}`);
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
         await runningRpcClient.stop().catch(() => {});

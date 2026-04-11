@@ -64,11 +64,11 @@ describe("startQaGatewayRpcClient", () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
-      logs: () => "qa logs",
+      logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token\nAuthorization: Bearer secret-token-123456",
     });
 
     await expect(client.request("health")).rejects.toThrow(
-      "gateway not connected\nGateway logs:\nqa logs",
+      "gateway not connected\nGateway logs:\nOPENCLAW_GATEWAY_TOKEN=<redacted>\nAuthorization: Bearer <redacted>",
     );
   });
 
@@ -76,13 +76,13 @@ describe("startQaGatewayRpcClient", () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
-      logs: () => "qa logs",
+      logs: () => "url=http://127.0.0.1:18789/#token=abc123",
     });
 
     await client.stop();
 
     await expect(client.request("health")).rejects.toThrow(
-      "gateway rpc client already stopped\nGateway logs:\nqa logs",
+      "gateway rpc client already stopped\nGateway logs:\nurl=http://127.0.0.1:18789/#token=<redacted>",
     );
   });
 
