@@ -19,6 +19,7 @@ import {
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
+  registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
 import {
@@ -361,14 +362,13 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
-    const mod = await import(`./subagent-registry.ts?t=${Date.now()}`);
     vi.mocked(callGateway).mockResolvedValue({
       status: "ok",
       startedAt: 111,
       endedAt: 222,
     });
 
-    mod.registerSubagentRun({
+    registerSubagentRun({
       runId: " run-live ",
       childSessionKey: " agent:main:subagent:live-child ",
       controllerSessionKey: " agent:main:subagent:live-controller ",
@@ -378,7 +378,7 @@ describe("subagent registry persistence", () => {
       cleanup: "keep",
     });
 
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
       expect.objectContaining({
         runId: "run-live",
         childSessionKey: "agent:main:subagent:live-child",
@@ -386,7 +386,7 @@ describe("subagent registry persistence", () => {
         requesterSessionKey: "agent:main:main",
       }),
     ]);
-    expect(mod.getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
+    expect(getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
       runId: "run-live",
     });
   });

@@ -148,6 +148,7 @@ describe("handleBtwCommand", () => {
     const params = buildParams("/btw what changed?");
     params.agentId = "worker-1";
     params.agentDir = undefined;
+    delete (params as { sessionKey?: string }).sessionKey;
     params.sessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),
