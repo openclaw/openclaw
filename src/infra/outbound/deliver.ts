@@ -170,8 +170,17 @@ function createPluginHandler(
   const outboundPayloadTypes = Array.isArray(outbound.supportedPayloadTypes)
     ? outbound.supportedPayloadTypes
     : [];
-  const supportsStickerPayload =
+  const declaresStickerPayloadSupport =
     outbound.supportsStickerPayload === true || outboundPayloadTypes.includes("sticker");
+  if (declaresStickerPayloadSupport && !outbound.sendPayload) {
+    log.warn(
+      "Outbound adapter declares sticker payload support but sendPayload is not implemented; treating sticker payload as unsupported",
+      {
+        channel: params.channel,
+      },
+    );
+  }
+  const supportsStickerPayload = declaresStickerPayloadSupport && Boolean(outbound.sendPayload);
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {

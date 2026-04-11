@@ -42,6 +42,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     replyToId: payload.replyToId ?? null,
+    sticker: payload.sticker?.raw?.trim() ?? null,
   });
 }
 
