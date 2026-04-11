@@ -202,13 +202,10 @@ describe("info command handlers", () => {
   });
 
   it("preserves the shared session store path when routing /status", async () => {
-    const params = buildInfoParams(
-      "/status",
-      {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    );
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
     params.storePath = "/tmp/target-session-store.json";
 
     const statusResult = await handleStatusCommand(params, true);
@@ -222,13 +219,10 @@ describe("info command handlers", () => {
   });
 
   it("prefers the target session entry when routing /status", async () => {
-    const params = buildInfoParams(
-      "/status",
-      {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    );
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
     params.sessionEntry = {
       sessionId: "wrapper-session",
       updatedAt: Date.now(),

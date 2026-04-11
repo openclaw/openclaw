@@ -259,8 +259,18 @@ describe("subagents spawn action", () => {
     );
 
     spawnSubagentDirectMock.mockClear();
-    await handleSubagentsSpawnAction(
-      {
+    await handleSubagentsSpawnAction({
+      ...buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+      params: {
         ...buildContext({
           requesterKey: "agent:main:target",
           sessionEntry: {
@@ -270,30 +280,18 @@ describe("subagents spawn action", () => {
             groupChannel: "#wrapper",
             space: "wrapper-space",
           },
-        }),
-        params: {
-          ...buildContext({
-            requesterKey: "agent:main:target",
-            sessionEntry: {
-              sessionId: "wrapper-session",
-              updatedAt: Date.now(),
-              groupId: "wrapper-group",
-              groupChannel: "#wrapper",
-              space: "wrapper-space",
-            },
-          }).params,
-          sessionStore: {
-            "agent:main:target": {
-              sessionId: "target-session",
-              updatedAt: Date.now(),
-              groupId: "target-group",
-              groupChannel: "#target",
-              space: "target-space",
-            },
+        }).params,
+        sessionStore: {
+          "agent:main:target": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
           },
         },
       },
-    );
+    });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.anything(),

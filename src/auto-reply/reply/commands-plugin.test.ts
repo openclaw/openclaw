@@ -80,13 +80,10 @@ describe("handlePluginCommand", () => {
     });
     executePluginCommandMock.mockResolvedValue({ text: "from plugin" });
 
-    const params = buildPluginParams(
-      "/card",
-      {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    );
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
     params.sessionEntry = {
       sessionId: "wrapper-session",
       sessionFile: "/tmp/wrapper-session.jsonl",

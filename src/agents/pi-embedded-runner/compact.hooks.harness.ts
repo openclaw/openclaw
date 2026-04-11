@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { clearAgentHarnesses } from "../harness/registry.js";
 
 type MockResolvedModel = {
   model: { provider: string; api: string; id: string; input: unknown[] };
@@ -143,6 +144,7 @@ export function resetCompactSessionStateMocks(): void {
 }
 
 export function resetCompactHooksHarnessMocks(): void {
+  clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
   hookRunner.runBeforeCompaction.mockReset();
@@ -307,13 +309,10 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-    resolveContextEngine: resolveContextEngineMock,
-  }));
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
+
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
   }));

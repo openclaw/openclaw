@@ -166,7 +166,7 @@ function resolveProviderPluginsWithOwnedWebSearch(
   registry: PluginManifestRegistry,
 ): PluginManifestRecord[] {
   return registry.plugins
-    .filter((plugin) => plugin.providers.length > 0)
+    .filter((plugin) => (plugin.providers?.length ?? 0) > 0)
     .filter((plugin) => (plugin.contracts?.webSearchProviders?.length ?? 0) > 0);
 }
 

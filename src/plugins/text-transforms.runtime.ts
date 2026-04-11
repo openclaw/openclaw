@@ -25,9 +25,9 @@ function loadPluginRuntime(): PluginRuntimeModule | null {
 }
 
 export function resolveRuntimeTextTransforms(): PluginTextTransforms | undefined {
-  return mergePluginTextTransforms(
-    ...(loadPluginRuntime()
-      ?.getActivePluginRegistry()
-      ?.textTransforms?.map((entry) => entry.transforms) ?? []),
-  );
+  const registry = loadPluginRuntime()?.getActivePluginRegistry();
+  const pluginTextTransforms = Array.isArray(registry?.textTransforms)
+    ? registry.textTransforms.map((entry) => entry.transforms)
+    : [];
+  return mergePluginTextTransforms(...pluginTextTransforms);
 }
