@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 - Google/Veo: stop sending the unsupported `numberOfVideos` request field so Gemini Developer API Veo runs do not fail before OpenClaw can complete the intended Google video generation path. (#64723) thanks @velvet-shark
+- Gateway/proxy: install the env HTTP proxy dispatcher at gateway startup so requests honor `HTTP_PROXY`/`HTTPS_PROXY` environment variables on every fetch path, instead of only the LLM calls that happen to flow through the embedded pi runner. (#64636) Thanks @0xmariowu.
 
 ## 2026.4.10
 
