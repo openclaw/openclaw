@@ -112,7 +112,11 @@ import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import type {
+  EmbeddedPiAgentMeta,
+  EmbeddedPiRunResult,
+  EmbeddedRunLivenessState,
+} from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -1624,6 +1628,21 @@ export async function runEmbeddedPiAgent(
               `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
             );
+            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
+            // exit path to emit an explicit livenessState + replayInvalid so
+            // downstream observers never see "silent disappearance". The
+            // strict-agentic stall-exhausted path is abandonment by design:
+            // the run stopped without any concrete tool action advancing the
+            // task, so "abandoned" is the accurate terminal state. Replay
+            // validity is delegated to the shared resolver because the plan-
+            // only transcript itself is replay-safe even though the run is
+            // terminal.
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState: EmbeddedRunLivenessState = "abandoned";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
             return {
               payloads: [
                 {
@@ -1637,6 +1656,8 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                replayInvalid,
+                livenessState,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
