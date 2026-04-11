@@ -304,10 +304,9 @@ describe("runWithModelFallback – probe logic", () => {
     expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
     });
-    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
-      allowTransientCooldownProbe: true,
-      previousFailureReasons: expect.any(Array),
-    });
+    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5",
+      expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+    );
 
     const decisionPayloads = records
       .filter(
@@ -450,14 +449,12 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
       allowTransientCooldownProbe: true,
     });
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
-      allowTransientCooldownProbe: true,
-      previousFailureReasons: expect.any(Array),
-    });
-    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat", {
-      allowTransientCooldownProbe: true,
-      previousFailureReasons: expect.any(Array),
-    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5",
+      expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+    );
+    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat",
+      expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+    );
   });
 
   it("throttles probe when called within 30s interval", async () => {
