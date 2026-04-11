@@ -527,6 +527,56 @@ describe("provider-runtime", () => {
     ).toBe(wrappedStreamFn);
   });
 
+  it("chains wrapStreamFn from primary provider and hookAlias plugin, skipping unrelated providers", () => {
+    const baseStreamFn = vi.fn();
+    const builtinWrappedFn = vi.fn();
+    const pluginWrappedFn = vi.fn();
+    const unrelatedWrapStreamFn = vi.fn();
+
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        wrapStreamFn: ({ streamFn }) => {
+          // Built-in provider wraps the base stream
+          expect(streamFn).toBe(baseStreamFn);
+          return builtinWrappedFn;
+        },
+      },
+      {
+        id: "custom-anthropic",
+        label: "Custom Anthropic",
+        hookAliases: ["anthropic"],
+        auth: [],
+        wrapStreamFn: ({ streamFn }) => {
+          // External plugin should receive the built-in's wrapped stream
+          expect(streamFn).toBe(builtinWrappedFn);
+          return pluginWrappedFn;
+        },
+      },
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        auth: [],
+        wrapStreamFn: unrelatedWrapStreamFn,
+      },
+    ]);
+
+    const result = wrapProviderStreamFn({
+      provider: "anthropic",
+      context: createDemoResolvedModelContext({
+        provider: "anthropic",
+        streamFn: baseStreamFn,
+      }),
+    });
+
+    // The final result should be the external plugin's wrapped function
+    expect(result).toBe(pluginWrappedFn);
+    // Unrelated provider should NOT have been called
+    expect(unrelatedWrapStreamFn).not.toHaveBeenCalled();
+  });
+
   it("normalizes transport hooks without needing provider ownership", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
