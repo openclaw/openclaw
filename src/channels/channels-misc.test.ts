@@ -67,4 +67,45 @@ describe("WA_WEB_AUTH_DIR", () => {
     expect(readLazyString(webEntry.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
     expect(resolveWebChannelAuthDir).toHaveBeenCalledTimes(1);
   });
+
+  it("normalizes a lazy string-like plugin export to a cached primitive path", async () => {
+    class PluginLazyAuthPath {
+      readonly #path = "/tmp/openclaw-lazy-inner";
+      toString() {
+        return this.#path;
+      }
+      valueOf() {
+        return this.#path;
+      }
+      [Symbol.toPrimitive]() {
+        return this.#path;
+      }
+    }
+    const resolveWebChannelAuthDir = vi.fn(() => new PluginLazyAuthPath());
+
+    vi.resetModules();
+    vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
+      createWebChannelSocket: vi.fn(),
+      extractMediaPlaceholder: vi.fn(),
+      extractText: vi.fn(),
+      formatError: vi.fn(),
+      getStatusCode: vi.fn(),
+      logWebSelfId: vi.fn(),
+      loginWeb: vi.fn(),
+      logoutWeb: vi.fn(),
+      monitorWebChannel: vi.fn(),
+      monitorWebInbox: vi.fn(),
+      pickWebChannel: vi.fn(),
+      resolveHeartbeatRecipients: vi.fn(),
+      resolveWebChannelAuthDir,
+      runWebHeartbeatOnce: vi.fn(),
+      sendWebChannelMessage: vi.fn(),
+      sendWebChannelReaction: vi.fn(),
+      waitForWebChannelConnection: vi.fn(),
+      webAuthExists: vi.fn(),
+    }));
+
+    const channelWeb = await import("../channel-web.js");
+    expect(readLazyString(channelWeb.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-lazy-inner");
+  });
 });

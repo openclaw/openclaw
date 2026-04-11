@@ -31,7 +31,13 @@ class LazyWebChannelAuthDir {
   #value: string | null = null;
 
   #read(): string {
-    this.#value ??= resolveWebChannelAuthDir();
+    if (this.#value !== null) {
+      return this.#value;
+    }
+    const raw = resolveWebChannelAuthDir();
+    // Bundled web-channel plugins may expose a lazy/string-like export; always cache a
+    // primitive path so outer coercions (`String(...)`, template literals) stay safe.
+    this.#value = typeof raw === "string" ? raw : String(raw);
     return this.#value;
   }
 

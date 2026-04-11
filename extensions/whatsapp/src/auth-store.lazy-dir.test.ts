@@ -14,6 +14,7 @@ describe("WA_WEB_AUTH_DIR lazy resolution", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    vi.resetModules();
   });
 
   it("stringifies to credentials under OPENCLAW_STATE_DIR after import", async () => {
