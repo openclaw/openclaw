@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import {
@@ -1212,12 +1215,18 @@ describe("spawnAcpDirect", () => {
   it("normalizes canonical Discord conversation targets before child thread binding", async () => {
     setActivePluginRegistry(
       createTestRegistry([
-        createChannelTestPluginBase({
-          id: "discord",
-          messaging: {
-            resolveInboundConversation: () => ({ conversationId: "channel:parent-channel" }),
-          },
-        }),
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "discord",
+            messaging: {
+              resolveInboundConversation: () => ({
+                conversationId: "channel:parent-channel",
+              }),
+            },
+          }),
+        },
       ]),
     );
 
