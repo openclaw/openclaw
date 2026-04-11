@@ -132,7 +132,7 @@ describe("handleBtwCommand", () => {
     expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         question: "what changed?",
-        agentDir: "/tmp/agent",
+        agentDir: expect.stringContaining("/agents/main/agent"),
         sessionEntry: params.sessionEntry,
         resolvedThinkLevel: "off",
         resolvedReasoningLevel: "off",
