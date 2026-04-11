@@ -625,9 +625,11 @@ export function handleToolExecutionStart(
       });
     }
 
+    const shouldEmitStartSummary =
+      shouldEmitToolEvents || (toolName === "sessions_spawn" && ctx.params.onToolResult != null);
     if (
       ctx.params.onToolResult &&
-      shouldEmitToolEvents &&
+      shouldEmitStartSummary &&
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {
       ctx.state.toolSummaryById.add(toolCallId);

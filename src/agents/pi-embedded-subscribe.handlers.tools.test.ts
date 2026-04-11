@@ -67,6 +67,47 @@ function createTestContext(): {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("emits sessions_spawn start summary even when verbose-gated tool summaries are off", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "sessions_spawn",
+      toolCallId: "tool-spawn-1",
+      args: {
+        task: "review this patch",
+        agentId: "main",
+      },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.emitToolSummary).toHaveBeenCalledTimes(1);
+    expect(ctx.emitToolSummary).toHaveBeenCalledWith(
+      "sessions_spawn",
+      expect.stringContaining("prompt review this patch"),
+    );
+  });
+
+  it("keeps non-sessions_spawn summaries suppressed when verbose-gated tool summaries are off", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-suppressed",
+      args: {
+        path: "/tmp/example.txt",
+      },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.emitToolSummary).not.toHaveBeenCalled();
+  });
+
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush } = createTestContext();
 
