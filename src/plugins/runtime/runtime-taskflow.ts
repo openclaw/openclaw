@@ -29,7 +29,7 @@ import type {
   TaskRuntime,
 } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import type { OpenClawPluginToolContext } from "../types.js";
+import type { OpenClawPluginToolContext } from "../tool-types.js";
 
 export type ManagedTaskFlowRecord = TaskFlowRecord & {
   syncMode: "managed";

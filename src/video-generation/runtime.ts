@@ -1,7 +1,6 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -16,16 +15,14 @@ import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type {
-  GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
-  VideoGenerationNormalization,
   VideoGenerationProviderOptionType,
-  VideoGenerationResolution,
   VideoGenerationResult,
-  VideoGenerationSourceAsset,
 } from "./types.js";
+import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 
 const log = createSubsystemLogger("video-generation");
+export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 
 /**
  * Validate agent-supplied providerOptions against the candidate's declared
@@ -38,7 +35,7 @@ const log = createSubsystemLogger("video-generation");
  *   the safe default for legacy / not-yet-migrated providers.
  * - Provider explicitly declares an empty schema ({}): rejects any options.
  *   This is the opt-in signal that the provider has been audited and truly
- *   supports no provider-specific options.
+ *   supports no options.
  * - Provider declares a typed schema: validates each key name and value type,
  *   skipping the candidate on any mismatch.
  */
@@ -53,11 +50,9 @@ function validateProviderOptionsAgainstDeclaration(params: {
   if (keys.length === 0) {
     return undefined;
   }
-  // Undeclared schema: pass through for backward compatibility.
   if (declaration === undefined) {
     return undefined;
   }
-  // Explicitly declared empty schema: provider accepts no options.
   if (Object.keys(declaration).length === 0) {
     return `${providerId}/${model} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping`;
   }
@@ -82,35 +77,6 @@ function validateProviderOptionsAgainstDeclaration(params: {
   }
   return undefined;
 }
-
-export type GenerateVideoParams = {
-  cfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  durationSeconds?: number;
-  audio?: boolean;
-  watermark?: boolean;
-  inputImages?: VideoGenerationSourceAsset[];
-  inputVideos?: VideoGenerationSourceAsset[];
-  inputAudios?: VideoGenerationSourceAsset[];
-  /** Arbitrary provider-specific options forwarded as-is to provider.generateVideo. Core does not validate or log the contents. */
-  providerOptions?: Record<string, unknown>;
-};
-
-export type GenerateVideoRuntimeResult = {
-  videos: GeneratedVideoAsset[];
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-  normalization?: VideoGenerationNormalization;
-  metadata?: Record<string, unknown>;
-  ignoredOverrides: VideoGenerationIgnoredOverride[];
-};
 
 function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
   return buildNoCapabilityModelConfiguredMessage({
