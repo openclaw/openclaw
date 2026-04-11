@@ -247,7 +247,7 @@ describe("fetchWithTimeoutGuarded", () => {
     );
   });
 
-  it("forwards explicit pinDns overrides to transcription requests", async () => {
+  it("always passes pinDns: false to the SSRF guard for transcription requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
       finalUrl: "https://example.com",
