@@ -755,6 +755,7 @@ export async function prepareSlackMessage(params: {
     MediaPath: firstMedia?.path,
     MediaType: firstMedia?.contentType,
     MediaUrl: firstMedia?.path,
+    MediaFileId: firstMedia?.fileId,
     MediaPaths:
       effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
     MediaUrls:
@@ -762,6 +763,10 @@ export async function prepareSlackMessage(params: {
     MediaTypes:
       effectiveMedia && effectiveMedia.length > 0
         ? effectiveMedia.map((m) => m.contentType ?? "")
+        : undefined,
+    MediaFileIds:
+      effectiveMedia && effectiveMedia.length > 0
+        ? effectiveMedia.flatMap((m) => (m.fileId ? [m.fileId] : []))
         : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
