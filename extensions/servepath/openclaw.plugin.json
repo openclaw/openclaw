@@ -1,0 +1,28 @@
+{
+  "id": "servepath",
+  "enabledByDefault": true,
+  "providers": ["servepath"],
+  "providerAuthEnvVars": {
+    "servepath": ["SERVEPATH_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "servepath",
+      "method": "api-key",
+      "choiceId": "servepath-api-key",
+      "choiceLabel": "Servepath API key",
+      "groupId": "servepath",
+      "groupLabel": "Servepath",
+      "groupHint": "Unified model gateway",
+      "optionKey": "servepathApiKey",
+      "cliFlag": "--servepath-api-key",
+      "cliOption": "--servepath-api-key <key>",
+      "cliDescription": "Servepath API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

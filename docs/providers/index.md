@@ -59,6 +59,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qwen Cloud](/providers/qwen)
 - [Runway](/providers/runway)
 - [SGLang (local models)](/providers/sglang)
+- [Servepath](/providers/servepath)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Together AI](/providers/together)

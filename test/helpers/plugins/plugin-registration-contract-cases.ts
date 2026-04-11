@@ -118,6 +118,18 @@ export const pluginRegistrationContractCases = {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
   },
+  servepath: {
+    pluginId: "servepath",
+    providerIds: ["servepath"],
+    manifestAuthChoice: {
+      pluginId: "servepath",
+      choiceId: "servepath-api-key",
+      choiceLabel: "Servepath API key",
+      groupId: "servepath",
+      groupLabel: "Servepath",
+      groupHint: "Unified model gateway",
+    },
+  },
   tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],
