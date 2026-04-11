@@ -4256,6 +4256,58 @@ module.exports = {
     runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
   });
 
+  it("does not setup-load untrusted workspace channel plugins even when explicitly scoped", () => {
+    useNoBundledPlugins();
+    const markerDir = makeTempDir();
+    const marker = path.join(markerDir, "workspace-setup-only-loaded.txt");
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "workspace-shadow",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "workspace-shadow",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "workspace-shadow",
+        meta: {
+          id: "workspace-shadow",
+          label: "Workspace Shadow",
+          selectionLabel: "Workspace Shadow",
+          docsPath: "/channels/workspace-shadow",
+          blurb: "workspace shadow",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => undefined,
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["workspace-shadow"],
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(0);
+    expect(registry.channels).toHaveLength(0);
+    expect(registry.plugins.find((entry) => entry.id === "workspace-shadow")?.status).toBe(
+      "disabled",
+    );
+  });
+
   it("loads bundled plugins when manifest metadata opts into default enablement", () => {
     const { bundledDir, plugin } = writeBundledPlugin({
       id: "profile-aware",
