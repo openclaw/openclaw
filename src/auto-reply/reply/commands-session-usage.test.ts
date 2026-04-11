@@ -162,6 +162,28 @@ describe("handleUsageCommand", () => {
       }),
     );
   });
+
+  it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      responseUsage: "off",
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        responseUsage: "tokens",
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
+  });
 });
 
 describe("handleFastCommand", () => {
