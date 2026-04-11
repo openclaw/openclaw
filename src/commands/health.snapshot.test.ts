@@ -8,8 +8,12 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
+<<<<<<< HEAD
 let testStore: Record<string, { updatedAt?: number }> = {};
 let healthPluginsForTest: HealthTestPlugin[] = [];
+=======
+let testStore: Record<string, { sessionId?: string; updatedAt?: number }> = {};
+>>>>>>> 3b9fd77238 (fix: improve overflow guidance and dedupe session summaries)
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
@@ -497,6 +501,26 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe).toBeUndefined();
     expect(snap.sessions.count).toBe(2);
     expect(snap.sessions.recent[0]?.key).toBe("foo");
+  });
+
+  it("dedupes session summaries by the freshest entry for each session id", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {
+      "agent:main:stale": { sessionId: "shared-session", updatedAt: 1_000 },
+      "agent:main:fresh": { sessionId: "shared-session", updatedAt: 3_000 },
+      "agent:main:other": { sessionId: "other-session", updatedAt: 2_000 },
+    };
+
+    const snap = (await getHealthSnapshot({
+      timeoutMs: 10,
+      probe: false,
+    })) satisfies HealthSummary;
+
+    expect(snap.sessions.count).toBe(2);
+    expect(snap.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:fresh",
+      "agent:main:other",
+    ]);
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {

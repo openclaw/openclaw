@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -34,8 +35,21 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+=======
+vi.mock("../config/sessions/main-session.js", () => ({
+  resolveMainSessionKey: vi.fn(() => "agent:main:main"),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-test-main-sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
+>>>>>>> 3b9fd77238 (fix: improve overflow guidance and dedupe session summaries)
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -100,6 +114,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  DEFAULT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),
@@ -132,6 +147,7 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -166,6 +182,26 @@ describe("getStatusSummary", () => {
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("dedupes session rows by the freshest entry for each session id", async () => {
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:stale": { sessionId: "shared-session", updatedAt: 1_000 },
+      "agent:main:fresh": { sessionId: "shared-session", updatedAt: 3_000 },
+      "agent:main:other": { sessionId: "other-session", updatedAt: 2_000 },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.count).toBe(2);
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:fresh",
+      "agent:main:other",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual([
+      "agent:main:fresh",
+      "agent:main:other",
+    ]);
   });
 
   it("does not trigger async context warmup while building status summaries", async () => {
