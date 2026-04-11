@@ -16,6 +16,7 @@ let configOverride: Record<string, unknown> = {
 };
 let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentRunForTests;
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let subagentRegistryTesting: typeof import("./subagent-registry.js").__testing;
 let createSessionsSpawnTool: typeof import("./tools/sessions-spawn-tool.js").createSessionsSpawnTool;
 
 vi.mock("../config/config.js", async () => {
@@ -62,14 +63,26 @@ function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
 }
 
 beforeAll(async () => {
-  ({ addSubagentRunForTests, resetSubagentRegistryForTests } =
-    await import("./subagent-registry.js"));
+  ({
+    __testing: subagentRegistryTesting,
+    addSubagentRunForTests,
+    resetSubagentRegistryForTests,
+  } = await import("./subagent-registry.js"));
   ({ createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js"));
 });
 
 describe("sessions_spawn depth + child limits", () => {
   beforeEach(() => {
-    resetSubagentRegistryForTests();
+    subagentRegistryTesting.setDepsForTest({
+      captureSubagentCompletionReply: () => Promise.resolve(undefined),
+      cleanupBrowserSessionsForLifecycleEnd: () => Promise.resolve(),
+      ensureRuntimePluginsLoaded: () => {},
+      onAgentEvent: () => () => {},
+      persistSubagentRunsToDisk: () => {},
+      resolveAgentTimeoutMs: () => 1,
+      runSubagentAnnounceFlow: () => Promise.resolve(true),
+    });
+    resetSubagentRegistryForTests({ persist: false });
     callGatewayMock.mockClear();
     storeTemplatePath = path.join(
       os.tmpdir(),

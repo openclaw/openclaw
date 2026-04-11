@@ -51,11 +51,14 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     );
     return { shouldContinue: false };
   }
+  const agentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
   const skillCommands =
     params.skillCommands ??
     listSkillCommandsForAgents({
       cfg: params.cfg,
-      agentIds: params.agentId ? [params.agentId] : undefined,
+      agentIds: agentId ? [agentId] : undefined,
     });
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
@@ -66,7 +69,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
     currentPage: paginated.currentPage,
     totalPages: paginated.totalPages,
-    agentId: params.agentId,
+    agentId,
   });
   if (channelData) {
     return {
@@ -112,9 +115,9 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       ctx: params.ctx,
       command: params.command,
     });
-    const agentId =
-      params.agentId ??
-      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const agentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const threadingContext = buildThreadingToolContext({
       sessionCtx: params.ctx,
       config: params.cfg,
@@ -189,7 +192,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     command: params.command,
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
-    parentSessionKey: params.ctx.ParentSessionKey,
+    parentSessionKey: params.sessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
     provider: params.provider,
     model: params.model,

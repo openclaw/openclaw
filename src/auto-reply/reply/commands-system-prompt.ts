@@ -41,7 +41,7 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
+    sessionKey: params.sessionKey ?? params.ctx.SessionKey,
   });
   const skillsSnapshot = (() => {
     try {
@@ -69,7 +69,7 @@ export async function resolveCommandsSystemPromptBundle(
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
-        agentId: params.agentId,
+        agentId: sessionAgentId,
         workspaceDir,
         sessionKey: params.sessionKey,
         allowGatewaySubagentBinding: true,
@@ -78,6 +78,10 @@ export async function resolveCommandsSystemPromptBundle(
         groupChannel: params.sessionEntry?.groupChannel ?? undefined,
         groupSpace: params.sessionEntry?.space ?? undefined,
         spawnedBy: params.sessionEntry?.spawnedBy ?? undefined,
+        senderId: params.command.senderId,
+        senderName: params.ctx.SenderName,
+        senderUsername: params.ctx.SenderUsername,
+        senderE164: params.ctx.SenderE164,
         senderIsOwner: params.command.senderIsOwner,
         modelProvider: params.provider,
         modelId: params.model,

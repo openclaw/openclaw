@@ -77,7 +77,7 @@ vi.mock("../../agents/agent-scope.js", async () => {
   );
   return {
     ...actual,
-    resolveSessionAgentId: () => "main",
+    resolveSessionAgentId: vi.fn(() => "main"),
   };
 });
 
@@ -323,5 +323,27 @@ describe("handleToolsCommand", () => {
       shouldContinue: false,
       reply: { text: "Couldn't load available tools right now. Try again in a moment." },
     });
+  });
+
+  it("uses the canonical target session agent for /tools inventory", async () => {
+    const { resolveSessionAgentId } = await import("../../agents/agent-scope.js");
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+
+    const result = await handleToolsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(resolveToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        sessionKey: "agent:target:whatsapp:direct:12345",
+      }),
+    );
   });
 });

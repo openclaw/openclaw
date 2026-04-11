@@ -14,7 +14,11 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import {
+  hasConfiguredModelFallbacks,
+  resolveAgentExecutionContract,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -27,6 +31,7 @@ import {
   resolveStoredSessionKeyForSessionId,
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -72,8 +77,8 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
+import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import {
@@ -93,12 +98,15 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolveIncompleteTurnPayloadText,
   extractPlanningOnlyPlanDetails,
+  resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  STRICT_AGENTIC_BLOCKED_TEXT,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -385,6 +393,22 @@ export async function runEmbeddedPiAgent(
       });
 
       await initializeAuthProfile();
+      const { sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      const configuredExecutionContract =
+        resolveAgentExecutionContract(params.config, sessionAgentId) ?? "default";
+      const strictAgenticActive = isStrictAgenticExecutionContractActive({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        provider,
+        modelId,
+      });
+      const executionContract = strictAgenticActive ? "strict-agentic" : "default";
+      const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
@@ -595,7 +619,7 @@ export async function runEmbeddedPiAgent(
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
 
-          const attempt = await runEmbeddedAttempt({
+          const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
             trigger: params.trigger,
@@ -1444,11 +1468,16 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
+            payloads,
+            toolMediaUrls: attempt.toolMediaUrls,
+            toolAudioAsVoice: attempt.toolAudioAsVoice,
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+          if (timedOut && !timedOutDuringCompaction && !payloadsWithToolMedia?.length) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the LLM idle timeout. " +
                 "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
@@ -1480,7 +1509,7 @@ export async function runEmbeddedPiAgent(
           // Detect incomplete turns where prompt() resolved prematurely and the
           // runner would otherwise drop an empty reply.
           const incompleteTurnText = resolveIncompleteTurnPayloadText({
-            payloadCount: payloads.length,
+            payloadCount: payloadsWithToolMedia?.length ?? 0,
             aborted,
             timedOut,
             attempt,
@@ -1495,7 +1524,7 @@ export async function runEmbeddedPiAgent(
           if (
             !incompleteTurnText &&
             nextPlanningOnlyRetryInstruction &&
-            planningOnlyRetryAttempts < 1
+            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
           ) {
             const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
             const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
@@ -1526,9 +1555,37 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
             log.warn(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} — retrying once with act-now steer`,
+                `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
+                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
             );
             continue;
+          }
+          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            log.warn(
+              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
+            );
+            return {
+              payloads: [
+                {
+                  text: STRICT_AGENTIC_BLOCKED_TEXT,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
           }
           if (incompleteTurnText) {
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
@@ -1586,7 +1643,7 @@ export async function runEmbeddedPiAgent(
             });
           }
           return {
-            payloads: payloads.length ? payloads : undefined,
+            payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,

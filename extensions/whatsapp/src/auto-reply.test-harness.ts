@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
@@ -38,7 +40,36 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 
-export const TEST_NET_IP = "203.0.113.10";
+export const TEST_NET_IP = "93.184.216.34";
+
+function mockPinnedHostnameResolution(addresses: string[] = [TEST_NET_IP]) {
+  const resolvePinnedHostname = ssrfRuntime.resolvePinnedHostname;
+  const resolvePinnedHostnameWithPolicy = ssrfRuntime.resolvePinnedHostnameWithPolicy;
+  const lookupFn = (async (hostname: string, options?: { all?: boolean }) => {
+    const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
+    const resolved = addresses.map((address) => ({
+      address,
+      family: address.includes(":") ? 6 : 4,
+      hostname: normalized,
+    }));
+    return options?.all === true ? resolved : resolved[0];
+  }) as LookupFn;
+  // Keep the extension harness on public SDK seams; contract tests reject core test-helper imports.
+  const pinned = vi
+    .spyOn(ssrfRuntime, "resolvePinnedHostname")
+    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupFn));
+  const pinnedWithPolicy = vi
+    .spyOn(ssrfRuntime, "resolvePinnedHostnameWithPolicy")
+    .mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn }),
+    );
+  return {
+    mockRestore: () => {
+      pinned.mockRestore();
+      pinnedWithPolicy.mockRestore();
+    },
+  };
+}
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -148,19 +179,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      const ssrf = await import("../../../src/infra/net/ssrf.js");
-      resolvePinnedHostnameSpy = vi
-        .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 

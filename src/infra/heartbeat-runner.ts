@@ -942,6 +942,8 @@ export async function runHeartbeatOnce(opts: {
   try {
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const timeoutOverrideSeconds =
+      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
     // Event-driven heartbeats (exec completion, cron, hook/wake, node
@@ -970,20 +972,15 @@ export async function runHeartbeatOnce(opts: {
     // are enqueued without requestHeartbeatNow and are meant for the next
     // user turn.
     const isEventDriven = !isPeriodicHeartbeat || hasCronEvents;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          isEventDrivenHeartbeat: isEventDriven,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : {
-          isHeartbeat: true,
-          isEventDrivenHeartbeat: isEventDriven,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        };
+    const replyOpts = {
+      isHeartbeat: true,
+      isEventDrivenHeartbeat: isEventDriven,
+      ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      suppressToolErrorWarnings,
+      // Heartbeat timeout is a per-run override so user turns keep the global default.
+      timeoutOverrideSeconds,
+      bootstrapContextMode,
+    };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);

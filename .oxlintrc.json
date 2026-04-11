@@ -59,7 +59,6 @@
       ],
       "rules": {
         "typescript/no-explicit-any": "off",
-        "typescript/no-redundant-type-constituents": "off",
         "typescript/unbound-method": "off",
         "eslint/no-unsafe-optional-chaining": "off"
       }

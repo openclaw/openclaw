@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
@@ -54,12 +56,17 @@ function makeParams(): HandleCommandsParams {
   return {
     ctx: {
       SessionKey: "agent:main:default",
+      SenderId: "sender-1",
+      SenderName: "Alice",
+      SenderUsername: "alice_u",
+      SenderE164: "+15551234567",
     },
     cfg: {},
     command: {
       surface: "telegram",
       channel: "telegram",
       ownerList: [],
+      senderId: "sender-1",
       senderIsOwner: true,
       isAuthorizedSender: true,
       rawBodyNormalized: "/context",
@@ -117,6 +124,44 @@ describe("resolveCommandsSystemPromptBundle", () => {
         sessionKey: "agent:main:default",
         workspaceDir: "/tmp/workspace",
         messageProvider: "telegram",
+        senderId: "sender-1",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("uses the canonical target session for sandbox runtime resolution", async () => {
+    const params = makeParams();
+    params.ctx.SessionKey = "agent:main:telegram:slash-session";
+    params.sessionKey = "agent:main:telegram:direct:target-session";
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(resolveSandboxRuntimeStatus)).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      sessionKey: "agent:main:telegram:direct:target-session",
+    });
+  });
+
+  it("uses the canonical target session agent for tool creation", async () => {
+    const params = makeParams();
+    params.agentId = "main";
+    params.sessionKey = "agent:target:telegram:direct:target-session";
+    vi.mocked(resolveSessionAgentIds).mockReturnValue({
+      sessionAgentId: "target",
+      defaultAgentId: "main",
+    });
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        sessionKey: "agent:target:telegram:direct:target-session",
       }),
     );
   });

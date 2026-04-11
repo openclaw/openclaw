@@ -5,10 +5,12 @@ import {
   getSessionsSpawnTool,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import {
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { listRunsForRequesterFromRuns } from "./subagent-registry-queries.js";
+
+function listSubagentRunsForRequester(requesterSessionKey: string) {
+  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey);
+}
 
 describe("sessions_spawn requesterOrigin threading", () => {
   const spawnAndReadRequesterRun = async (opts?: { agentThreadId?: number }) => {
@@ -31,7 +33,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
 
   beforeEach(() => {
     const callGatewayMock = getCallGatewayMock();
-    resetSubagentRegistryForTests();
+    subagentRuns.clear();
     callGatewayMock.mockClear();
     setSessionsSpawnConfigOverride({
       session: {

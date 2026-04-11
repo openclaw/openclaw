@@ -17,9 +17,13 @@ Docs: https://docs.openclaw.ai
 - Gateway: split startup and runtime seams so gateway lifecycle sequencing, reload state, and shutdown behavior stay easier to maintain without changing observed behavior. (#63975) Thanks @gumadeiras.
 - Matrix/partial streaming: add MSC4357 live markers to draft preview sends and edits so supporting Matrix clients can render a live/typewriter animation and stop it when the final edit lands. (#63513) Thanks @TigerInYourDream.
 - QA/Telegram: add a live `openclaw qa telegram` lane for private-group bot-to-bot checks, harden its artifact handling, and preserve native Telegram command reply threading for QA verification. (#64303) Thanks @obviyus.
+- Models/Codex: add the bundled Codex provider and plugin-owned app-server harness so `codex/gpt-*` models use Codex-managed auth, native threads, model discovery, and compaction while `openai/gpt-*` stays on the normal OpenAI provider path. (#64298) Thanks @steipete.
+- Agents: add an opt-in strict-agentic embedded Pi execution contract for GPT-5-family runs so plan-only or filler turns keep acting until they hit a real blocker. (#64241) Thanks @100yenadmin.
+- QA/Matrix: add a live `openclaw qa matrix` lane backed by a disposable Matrix homeserver, shared live-transport seams, and Matrix-specific transport coverage for threading, reactions, restart, and allowlist behavior. (#64489) Thanks @gumadeiras.
 
 ### Fixes
 
+- CLI/WhatsApp media sends: route gateway-mode outbound sends with `--media` through the channel `sendMedia` path and preserve media access context, so WhatsApp document and attachment sends stop silently dropping the file while still delivering the caption. (#64478) Thanks @ShionEria.
 - fix(nostr): require operator.admin scope for profile mutation routes [AI]. (#63553) Thanks @pgondhi987.
 - Gateway/startup: keep WebSocket RPC available while channels and plugin sidecars start, hold `chat.history` unavailable until startup sidecars finish so synchronous history reads cannot stall startup (reported in #63450), refresh advertised gateway methods after deferred plugin reloads, and enforce the pre-auth WebSocket upgrade budget before the no-handler 503 path so upgrade floods cannot bypass connection limits during that window. (#63480) Thanks @neeravmakwana.
 - Gateway/tailscale: start Tailscale exposure and the gateway update check before awaiting channel and plugin sidecar startup so remote operators are not locked out when startup sidecars stall.
@@ -43,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Security/nodes: keep `nodes` tool output paths inside the workspace boundary so model-driven node writes cannot escape the intended workspace. (#63551) Thanks @pgondhi987.
 - Security/QQBot: enforce media storage boundaries for all outbound local file paths and route image-size probes through SSRF-guarded media fetching instead of raw `fetch()`. (#63271, #63495) Thanks @pgondhi987.
 - Channel setup: ignore workspace plugin shadows when resolving trusted channel setup catalog entries so onboarding and setup flows keep using the bundled, trusted setup contract.
+- Gateway/memory startup: load the explicitly selected memory-slot plugin during gateway startup, while keeping restrictive allowlists and implicit default memory slots from auto-starting unrelated memory plugins. (#64423) Thanks @EronFan.
 - Config/plugins: let config writes keep disabled plugin entries without forcing required plugin config schemas or crashing raw plugin validation, and avoid re-activating plugin registry state during schema checks. (#54971, #63296) Thanks @fuller-stack-dev.
 - Config validation: surface the actual offending field for strict-schema union failures in bindings, including top-level unexpected keys on the matching ACP branch. (#40841) Thanks @Hollychou924.
 - Wizard/plugin config: coerce integer-typed plugin config fields from interactive text input so integer schema values persist as numbers instead of failing validation. (#63346) Thanks @jalehman.
@@ -119,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: deduplicate delivered completion announces so retry or re-entry cleanup does not inject duplicate internal-context completion turns into the parent session. (#61525) Thanks @100yenadmin.
 - Agents/exec: keep sandboxed `tools.exec.host=auto` sessions from honoring per-call `host=node` or `host=gateway` overrides while a sandbox runtime is active, and stop advertising node routing in that state so exec stays on the sandbox host. (#63880)
 - Gateway/restart sentinel: route restart notices only from stored canonical delivery metadata and skip outbound guessing from lossy session keys, avoiding misdelivery on case-sensitive channels like Matrix. (#64391) Thanks @gumadeiras.
+- Agents/subagents: preserve archived delete-mode runs until `sessions.delete` succeeds and prevent overlapping archive sweeps from duplicating in-flight cleanup attempts. (#61801) Thanks @100yenadmin.
 
 - Cron/isolated agent: run scheduled agent turns as non-owner senders so owner-only tools stay unavailable during cron execution. (#63878)
 - Voice Call/realtime: reject oversized realtime WebSocket frames before bridge setup so large pre-start payloads cannot crash the gateway. (#63890) Thanks @mmaps.
@@ -135,6 +141,18 @@ Docs: https://docs.openclaw.ai
 - Hooks/security: mark agent hook system events as untrusted and sanitize hook display names before cron metadata reuse. (#64372) Thanks @eleqtrizit.
 - Media/security: honor sender-scoped `toolsBySender` policy for outbound host-media reads so denied senders cannot trigger host file disclosure via attachment hydration. (#64459) Thanks @eleqtrizit.
 - Browser/security: reject strict-policy hostname navigation unless the hostname is an explicit allowlist exception or IP literal, and route CDP HTTP discovery through the pinned SSRF fetch path. (#64367) Thanks @eleqtrizit.
+- Plugins/ACPX: wrap plugin tools on the MCP bridge with the shared `before_tool_call` handler so block and approval hooks fire consistently across all execution paths. (#63886) Thanks @eleqtrizit.
+
+- Logging/security: redact Gmail watcher `--hook-token` values from startup logging and `logs.tail` output. (#62661) Thanks @eleqtrizit.
+- Models/fallback: preserve `/models` selection across transient primary-model failures and config reloads so the fallback chain no longer permanently clobbers a user-chosen model. (#64471) Thanks @hoyyeva.
+
+- Sandbox/security: auto-derive CDP source-range from Docker network gateway and refuse to start the socat relay without one, so peer containers cannot reach CDP unauthenticated. (#61404) Thanks @dims.
+- Daemon/launchd: keep `openclaw gateway stop` persistent without uninstalling the macOS LaunchAgent, re-enable it on explicit restart or repair, and harden launchd label handling. (#64447) Thanks @ngutman.
+- Agents/Slack: preserve threaded announce delivery when `sessions.list` rows lack stored thread metadata by falling back to the thread id encoded in the session key. (#63143) Thanks @mariosousa-finn.
+- Plugins/context engines: preserve `plugins.slots.contextEngine` through normalization and keep explicitly selected workspace context-engine plugins enabled, so loader diagnostics and plugin activation stop dropping that slot selection. (#64192) Thanks @hclsys.
+- Heartbeat: stop top-level `interval:` and `prompt:` fields outside the `tasks:` block from bleeding into the last parsed heartbeat task. (#64488) Thanks @Rahulkumar070.
+- Agents/OpenAI replay: preserve malformed function-call arguments in stored assistant history, avoid double-encoding preserved raw strings on replay, and coerce replayed string args back to objects at Anthropic and Google provider boundaries. (#61956) Thanks @100yenadmin.
+- Heartbeat/config: accept and honor `agents.defaults.heartbeat.timeoutSeconds` and per-agent heartbeat timeout overrides for heartbeat agent turns. (#64491) Thanks @cedillarack.
 
 ## 2026.4.9
 

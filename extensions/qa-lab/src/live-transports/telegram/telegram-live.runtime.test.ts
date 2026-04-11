@@ -1,9 +1,34 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  findMissingLiveTransportStandardScenarios,
+} from "../shared/live-transport-scenarios.js";
 import { __testing } from "./telegram-live.runtime.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
+    response: await fetch(params.url, {
+      ...params.init,
+      signal: params.signal,
+    }),
+    release: async () => {},
+  })),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
 
 describe("telegram live qa runtime", () => {
   afterEach(() => {
+    fetchWithSsrFGuardMock.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -197,6 +222,16 @@ describe("telegram live qa runtime", () => {
     expect(() => __testing.findScenario(["telegram-help-command", "typo-scenario"])).toThrow(
       "unknown Telegram QA scenario id(s): typo-scenario",
     );
+  });
+
+  it("tracks Telegram live coverage against the shared transport contract", () => {
+    expect(__testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "help-command"]);
+    expect(
+      findMissingLiveTransportStandardScenarios({
+        coveredStandardScenarioIds: __testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
+        expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+      }),
+    ).toEqual(["mention-gating", "allowlist-block", "top-level-reply-shape", "restart-resume"]);
   });
 
   it("adds an abort deadline to Telegram API requests", async () => {
