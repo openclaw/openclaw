@@ -307,12 +307,25 @@ async function runZaiApiKeyAuthNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
   endpoint?: ZaiEndpointId,
 ) {
-  const resolved = await ctx.resolveApiKey({
+  let resolved = await ctx.resolveApiKey({
     provider: PROVIDER_ID,
     flagValue: normalizeOptionalSecretInput(ctx.opts.zaiApiKey),
     flagName: "--zai-api-key",
     envVar: "ZAI_API_KEY",
   });
+  const singleListEnvKey = parseApiKeyList(process.env.ZAI_API_KEYS);
+  if (
+    ctx.secretInputMode === "ref" &&
+    !normalizeOptionalSecretInput(ctx.opts.zaiApiKey) &&
+    (!resolved || resolved.source === "profile") &&
+    singleListEnvKey.length === 1
+  ) {
+    resolved = {
+      key: singleListEnvKey[0] ?? "",
+      source: "env",
+      envVarName: "ZAI_API_KEYS",
+    };
+  }
   if (!resolved) {
     return null;
   }

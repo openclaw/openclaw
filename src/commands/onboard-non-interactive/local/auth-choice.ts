@@ -134,6 +134,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     opts,
     runtime,
     baseConfig,
+    secretInputMode: requestedSecretInputMode,
     resolveApiKey: (input) =>
       resolveApiKey({
         ...input,

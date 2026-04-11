@@ -1,9 +1,30 @@
 import { createHash } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
+
+const detectZaiEndpoint = vi.hoisted(() => vi.fn(async () => undefined));
+const upsertAuthProfile = vi.hoisted(() => vi.fn());
+
+vi.mock("./detect.js", async () => {
+  const actual = await vi.importActual<typeof import("./detect.js")>("./detect.js");
+  return {
+    ...actual,
+    detectZaiEndpoint,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/provider-auth-api-key", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth-api-key")>(
+    "openclaw/plugin-sdk/provider-auth-api-key",
+  );
+  return {
+    ...actual,
+    upsertAuthProfile,
+  };
+});
 
 function resolveRuntimeEnvProfileId(apiKey: string): string {
   return `zai:runtime-env-${createHash("sha256").update(apiKey, "utf8").digest("hex").slice(0, 12)}`;
@@ -19,6 +40,12 @@ function resolveProfileApiKey(profile: {
   }
   return profile.credential.key;
 }
+
+beforeEach(() => {
+  detectZaiEndpoint.mockReset();
+  detectZaiEndpoint.mockResolvedValue(undefined);
+  upsertAuthProfile.mockReset();
+});
 
 describe("zai provider plugin", () => {
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
@@ -569,5 +596,84 @@ describe("zai provider plugin", () => {
         ?.map((profile) => [resolveProfileApiKey(profile), profile.profileId] as const)
         .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
     );
+  });
+
+  it("keeps ZAI_API_KEYS as an env ref in non-interactive ref mode", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const method = provider.auth.find((entry) => entry.id === "api-key");
+    expect(method?.runNonInteractive).toBeDefined();
+
+    const resolveApiKey = vi.fn(async () => ({ key: "sk-zai-single", source: "profile" as const }));
+    const toApiKeyCredential = vi.fn(({ provider, resolved }) => ({
+      type: "api_key" as const,
+      provider,
+      ...(resolved.source === "env" && resolved.envVarName
+        ? {
+            keyRef: {
+              source: "env" as const,
+              provider: "default",
+              id: resolved.envVarName,
+            },
+          }
+        : { key: resolved.key }),
+    }));
+    const previousZaiApiKeys = process.env.ZAI_API_KEYS;
+    process.env.ZAI_API_KEYS = "sk-zai-single";
+
+    try {
+      const result = await method?.runNonInteractive?.({
+        authChoice: "zai-api-key",
+        config: { agents: { defaults: {} } },
+        baseConfig: { agents: { defaults: {} } },
+        opts: {},
+        runtime: {
+          error: vi.fn(),
+          exit: vi.fn(),
+          log: vi.fn(),
+        } as never,
+        secretInputMode: "ref",
+        resolveApiKey,
+        toApiKeyCredential,
+      } as never);
+
+      expect(resolveApiKey).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "zai",
+          envVar: "ZAI_API_KEY",
+        }),
+      );
+      expect(toApiKeyCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "zai",
+          resolved: {
+            key: "sk-zai-single",
+            source: "env",
+            envVarName: "ZAI_API_KEYS",
+          },
+        }),
+      );
+      expect(upsertAuthProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: "zai:default",
+          credential: expect.objectContaining({
+            keyRef: {
+              source: "env",
+              provider: "default",
+              id: "ZAI_API_KEYS",
+            },
+          }),
+        }),
+      );
+      expect(result?.auth?.profiles?.["zai:default"]).toEqual({
+        provider: "zai",
+        mode: "api_key",
+      });
+    } finally {
+      if (previousZaiApiKeys === undefined) {
+        delete process.env.ZAI_API_KEYS;
+      } else {
+        process.env.ZAI_API_KEYS = previousZaiApiKeys;
+      }
+    }
   });
 });
