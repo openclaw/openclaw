@@ -21,10 +21,7 @@ const FULL_PARITY_PASS_SCENARIOS: QaParityReportScenario[] = [
   { name: "Config restart capability flip", status: "pass" as const },
 ];
 
-function withScenarioOverride(
-  name: string,
-  override: Partial<QaParityReportScenario>,
-) {
+function withScenarioOverride(name: string, override: Partial<QaParityReportScenario>) {
   return FULL_PARITY_PASS_SCENARIOS.map((scenario) =>
     scenario.name === name ? { ...scenario, ...override } : scenario,
   );
@@ -455,6 +452,25 @@ status=done`,
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
+  it("does not flag positive-tone prose on non-tool scenarios", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Memory recall after context switch",
+          status: "pass",
+          details: "Successfully completed the recall and returned the remembered fact.",
+        },
+        {
+          name: "Image understanding from attachment",
+          status: "pass",
+          details: "Done. Successfully identified the attachment contents.",
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
+  });
+
   it("flags positive-tone passes alongside failure-tone passes when both occur", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [
@@ -667,6 +683,32 @@ status=done`,
           primaryProvider: "anthropic",
           primaryModel: "anthropic/claude-opus-4-6",
           primaryModelName: "claude-opus-4-6",
+        },
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(true);
+  });
+
+  it("accepts structured labels whose model ref contains nested path segments", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4/reasoning",
+      baselineLabel: "anthropic/claude-opus-4-6/extended",
+      candidateSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: {
+          primaryProvider: "openai",
+          primaryModel: "openai/gpt-5.4/reasoning",
+          primaryModelName: "gpt-5.4/reasoning",
+        },
+      },
+      baselineSummary: {
+        scenarios: FULL_PARITY_PASS_SCENARIOS,
+        run: {
+          primaryProvider: "anthropic",
+          primaryModel: "anthropic/claude-opus-4-6/extended",
+          primaryModelName: "claude-opus-4-6/extended",
         },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
