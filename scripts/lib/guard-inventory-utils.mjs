@@ -83,6 +83,9 @@ export async function collectTypeScriptInventory(params) {
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
       const source = await fs.readFile(filePath, "utf8");
+      if (params.shouldParseSource && !params.shouldParseSource(source, filePath)) {
+        continue;
+      }
       sourceFile = params.ts.createSourceFile(
         filePath,
         source,
