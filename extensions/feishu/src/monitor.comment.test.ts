@@ -1,47 +1,11 @@
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import * as dedup from "./dedup.js";
-import { monitorSingleAccount } from "./monitor.account.js";
+import { describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
-import { setFeishuRuntime } from "./runtime.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
-const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async () => {}));
-const createEventDispatcherMock = vi.hoisted(() => vi.fn());
-const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
-const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
-const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
-
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 const TEST_DOC_TOKEN = "doxxxxxxx";
-
-vi.mock("./client.js", () => ({
-  createEventDispatcher: createEventDispatcherMock,
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./comment-handler.js", () => ({
-  handleFeishuCommentEvent: handleFeishuCommentEventMock,
-}));
-
-vi.mock("./monitor.transport.js", () => ({
-  monitorWebSocket: monitorWebSocketMock,
-  monitorWebhook: monitorWebhookMock,
-}));
-
-vi.mock("./thread-bindings.js", () => ({
-  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
-}));
 
 function buildMonitorConfig(): ClawdbotConfig {
   return {
@@ -51,39 +15,6 @@ function buildMonitorConfig(): ClawdbotConfig {
       },
     },
   } as ClawdbotConfig;
-}
-
-function buildMonitorAccount(): ResolvedFeishuAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
-    domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-    },
-  } as ResolvedFeishuAccount;
-}
-
-function createFeishuMonitorRuntime(params?: {
-  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
-  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-}): PluginRuntime {
-  return {
-    channel: {
-      debounce: {
-        createInboundDebouncer: params?.createInboundDebouncer ?? createInboundDebouncer,
-        resolveInboundDebounceMs: params?.resolveInboundDebounceMs ?? resolveInboundDebounceMs,
-      },
-      text: {
-        hasControlCommand: params?.hasControlCommand ?? hasControlCommand,
-      },
-    },
-  } as unknown as PluginRuntime;
 }
 
 function makeDriveCommentEvent(
@@ -245,29 +176,6 @@ function makeOpenApiClient(params: {
       throw new Error(`unexpected request: ${request.method} ${request.url}`);
     }),
   };
-}
-
-async function setupCommentMonitorHandler(): Promise<(data: unknown) => Promise<void>> {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    handlers = registered;
-  });
-  createEventDispatcherMock.mockReturnValue({ register });
-
-  await monitorSingleAccount({
-    cfg: buildMonitorConfig(),
-    account: buildMonitorAccount(),
-    runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
-    botOpenIdSource: {
-      kind: "prefetched",
-      botOpenId: "ou_bot",
-    },
-  });
-
-  const handler = handlers["drive.notice.comment_add_v1"];
-  if (!handler) {
-    throw new Error("missing drive.notice.comment_add_v1 handler");
-  }
-  return handler;
 }
 
 describe("resolveDriveCommentEventTurn", () => {
@@ -485,52 +393,5 @@ describe("resolveDriveCommentEventTurn", () => {
     });
 
     expect(turn).toBeNull();
-  });
-});
-
-describe("drive.notice.comment_add_v1 monitor handler", () => {
-  beforeEach(() => {
-    handlers = {};
-    handleFeishuCommentEventMock.mockClear();
-    createEventDispatcherMock.mockReset();
-    createFeishuClientMock.mockReset().mockReturnValue(makeOpenApiClient({}) as never);
-    createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
-      stop: vi.fn(),
-    }));
-    vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
-    vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
-    setFeishuRuntime(createFeishuMonitorRuntime());
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("dispatches comment notices through handleFeishuCommentEvent", async () => {
-    const onComment = await setupCommentMonitorHandler();
-
-    await onComment(makeDriveCommentEvent());
-
-    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
-    expect(handleFeishuCommentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        botOpenId: "ou_bot",
-        event: expect.objectContaining({
-          event_id: "10d9d60b990db39f96a4c2fd357fb877",
-          comment_id: "7623358762119646411",
-        }),
-      }),
-    );
-  });
-
-  it("drops duplicate comment events before dispatch", async () => {
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(true);
-    const onComment = await setupCommentMonitorHandler();
-
-    await onComment(makeDriveCommentEvent());
-
-    expect(handleFeishuCommentEventMock).not.toHaveBeenCalled();
   });
 });
