@@ -458,6 +458,62 @@ describe("thread binding lifecycle", () => {
     }
   });
 
+  it("preserves explicit lifecycle windows when rebinding the same thread", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
+      const manager = createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+        idleTimeoutMs: 24 * 60 * 60 * 1000,
+        maxAgeMs: 0,
+      });
+
+      await manager.bindTarget({
+        threadId: "thread-1",
+        channelId: "parent-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
+
+      setThreadBindingIdleTimeoutBySessionKey({
+        accountId: "default",
+        targetSessionKey: "agent:main:subagent:child",
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+      });
+      setThreadBindingMaxAgeBySessionKey({
+        accountId: "default",
+        targetSessionKey: "agent:main:subagent:child",
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
+
+      vi.setSystemTime(new Date("2026-02-20T10:30:00.000Z"));
+      const rebound = await manager.bindTarget({
+        threadId: "thread-1",
+        channelId: "parent-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
+
+      expect(rebound).toMatchObject({
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
+      expect(requireBinding(manager, "thread-1")).toMatchObject({
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps binding when idle timeout is disabled per session key", async () => {
     vi.useFakeTimers();
     try {

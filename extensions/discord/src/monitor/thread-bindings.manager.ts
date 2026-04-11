@@ -474,8 +474,9 @@ export function createThreadBindingManager(
           "system",
         boundAt: now,
         lastActivityAt: now,
-        idleTimeoutMs,
-        maxAgeMs,
+        idleTimeoutMs:
+          typeof existing?.idleTimeoutMs === "number" ? existing.idleTimeoutMs : idleTimeoutMs,
+        maxAgeMs: typeof existing?.maxAgeMs === "number" ? existing.maxAgeMs : maxAgeMs,
         metadata:
           bindParams.metadata && typeof bindParams.metadata === "object"
             ? { ...existing?.metadata, ...bindParams.metadata }
