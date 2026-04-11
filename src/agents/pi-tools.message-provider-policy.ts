@@ -1,5 +1,18 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
+// Dangerous tools that must not be exposed to channel auto-reply by default.
+// Prevents prompt-injection attacks from triggering RCE or credential theft.
+const DEFAULT_DENIED_TOOLS: readonly string[] = [
+  "edit",
+  "edit_file",
+  "exec",
+  "multi_edit",
+  "read",
+  "read_file",
+  "write",
+  "write_file",
+];
+
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
@@ -21,8 +34,9 @@ export function filterToolNamesByMessageProvider(
     const allowedSet = new Set(allowedTools);
     return toolNames.filter((toolName) => allowedSet.has(toolName));
   }
-  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
-  if (!deniedTools || deniedTools.length === 0) {
+  // Use provider-specific deny list if present, otherwise fall back to default deny list.
+  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider] ?? DEFAULT_DENIED_TOOLS;
+  if (deniedTools.length === 0) {
     return [...toolNames];
   }
   const deniedSet = new Set(deniedTools);
