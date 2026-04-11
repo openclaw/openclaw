@@ -293,7 +293,7 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 <Card title="AI Organism Architecture" icon="dna" href="https://github.com/TerryFYL/ai-organism">
   **@TerryFYL** • `architecture` `memory` `personal-ai-os`
 
-  A framework for designing your AI assistant as a living organism with six biological systems: Skeleton (rules/skills), Neural (memory/wiki), Immune (red lines/guardrails), Metabolism (knowledge lifecycle), Sensory (email/messaging), and Autonomic (nightly hippocampus consolidation @02:00). Built on OpenClaw with real deployment evidence.
+A framework for designing your AI assistant as a living organism with six biological systems: Skeleton (rules/skills), Neural (memory/wiki), Immune (red lines/guardrails), Metabolism (knowledge lifecycle), Sensory (email/messaging), and Autonomic (nightly hippocampus consolidation @02:00). Built on OpenClaw with real deployment evidence.
 </Card>
 
 <Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
