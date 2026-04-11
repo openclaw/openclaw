@@ -238,6 +238,11 @@ export function formatNarrativeDate(epochMs: number, timezone?: string): string 
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    // Always include the timezone abbreviation so the reader knows which
+    // timezone the timestamp refers to.  Without this, users who haven't
+    // configured a timezone see bare times that look local but are actually
+    // UTC, causing confusion (see #65027).
+    timeZoneName: "short",
   };
   return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
 }
