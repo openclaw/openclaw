@@ -583,6 +583,7 @@ describe("gateway hot reload", () => {
           restartCron: true,
           restartHeartbeat: true,
           restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
+          restartChannelAccounts: new Map(),
           noopPaths: [],
         },
         nextConfig,
@@ -631,6 +632,7 @@ describe("gateway hot reload", () => {
           restartCron: false,
           restartHeartbeat: false,
           restartChannels: new Set(),
+          restartChannelAccounts: new Map(),
           noopPaths: [],
         },
         {},
@@ -638,6 +640,39 @@ describe("gateway hot reload", () => {
       await Promise.resolve(restartResult);
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("restarts only the impacted channel account on hot reload", async () => {
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      hoisted.providerManager.stopChannel.mockClear();
+      hoisted.providerManager.startChannel.mockClear();
+
+      await onHotReload?.(
+        {
+          changedPaths: ["channels.telegram.accounts.botA.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.telegram.accounts.botA.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartBrowserControl: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(),
+          restartChannelAccounts: new Map([["telegram", new Set(["botA"])]]),
+          noopPaths: [],
+        },
+        {},
+      );
+
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(1);
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", "botA");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram", "botA");
     });
   });
 
@@ -728,6 +763,7 @@ describe("gateway hot reload", () => {
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
+        restartChannelAccounts: new Map(),
         noopPaths: [],
       };
       const nextConfig = {
@@ -774,6 +810,7 @@ describe("gateway hot reload", () => {
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
+        restartChannelAccounts: new Map(),
         noopPaths: [],
       };
       const degradedConfig = {
