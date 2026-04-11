@@ -107,4 +107,68 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
       }),
     );
   });
+
+  it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    let lastFormattedAssistant: unknown;
+    mockedFormatAssistantErrorText.mockImplementation((...args: unknown[]) => {
+      lastFormattedAssistant = args[0];
+      if (!isCurrentAttemptAssistant(lastFormattedAssistant)) {
+        return String(lastFormattedAssistant);
+      }
+      return `${lastFormattedAssistant.provider}/${lastFormattedAssistant.model}: ${lastFormattedAssistant.errorMessage}`;
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "429 deepseek rate limit",
+          provider: "deepseek",
+          model: "deepseek-chat",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-compaction-fallback-error-context",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("deepseek/deepseek-chat: 429 deepseek rate limit");
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+    expect(lastFormattedAssistant).toEqual(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+  });
 });

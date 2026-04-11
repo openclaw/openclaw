@@ -1340,7 +1340,7 @@ export async function runEmbeddedPiAgent(
             throw promptError;
           }
 
-          const assistantForFailover = currentAttemptAssistant;
+          const assistantForFailover = currentAttemptAssistant ?? sessionLastAssistant;
           const fallbackThinking = pickFallbackThinkingLevel({
             message: assistantForFailover?.errorMessage,
             attempted: attemptedThinking,
