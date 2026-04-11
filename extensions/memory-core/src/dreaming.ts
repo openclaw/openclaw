@@ -11,6 +11,7 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { getPluginRuntimeGatewayRequestScope } from "../../../src/plugins/runtime/gateway-request-scope.js";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
@@ -332,6 +333,11 @@ function resolveCronServiceFromStartupSource(
 
 function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | null {
   return resolveCronServiceFromStartupSource(resolveStartupCronSourceFromEvent(event));
+}
+
+function resolveCronServiceFromRuntimeScope(): CronServiceLike | null {
+  const gatewayContext = getPluginRuntimeGatewayRequestScope()?.context;
+  return resolveCronServiceFromCandidate(gatewayContext?.cron);
 }
 
 function resolveStartupConfigFromEvent(event: unknown, fallback: OpenClawConfig): OpenClawConfig {
@@ -657,7 +663,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (params.reason === "startup" && params.startupEvent !== undefined) {
       startupCronSource = resolveStartupCronSourceFromEvent(params.startupEvent);
     }
-    const cron = resolveCronServiceFromStartupSource(startupCronSource);
+    const cron =
+      resolveCronServiceFromStartupSource(startupCronSource) ??
+      resolveCronServiceFromRuntimeScope();
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       api.logger.warn(

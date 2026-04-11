@@ -8,6 +8,7 @@ import {
   registerInternalHook,
   triggerInternalHook,
 } from "../../../src/hooks/internal-hooks.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../src/plugins/runtime/gateway-request-scope.js";
 import {
   __testing,
   reconcileShortTermDreamingCronJob,
@@ -826,6 +827,71 @@ describe("gateway startup reconciliation", () => {
       await beforeAgentReply(
         { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
         { trigger: "heartbeat", workspaceDir: "." },
+      );
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]?.schedule).toMatchObject({
+        kind: "cron",
+        expr: "30 6 * * *",
+        tz: "America/New_York",
+      });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("recovers runtime cron reconciliation from the live gateway request scope when startup had no cron", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "30 6 * * *",
+                  timezone: "America/New_York",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: {},
+        }),
+      );
+
+      expect(harness.addCalls).toHaveLength(0);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context: { cron: harness.cron } as never,
+          isWebchatConnect: () => false,
+        },
+        async () =>
+          await beforeAgentReply(
+            { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+            { trigger: "heartbeat", workspaceDir: "." },
+          ),
       );
 
       expect(harness.addCalls).toHaveLength(1);
