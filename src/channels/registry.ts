@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+export { getChatChannelMeta, listChatChannels } from "./chat-meta.js";
 import {
   CHANNEL_IDS,
   CHAT_CHANNEL_ALIASES,

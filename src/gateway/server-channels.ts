@@ -17,6 +17,7 @@ import {
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+export type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 
 const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,

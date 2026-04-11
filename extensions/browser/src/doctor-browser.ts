@@ -5,7 +5,7 @@ import {
   readBrowserVersion,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
-import type { OpenClawConfig } from "./config/types.openclaw.js";
+import type { OpenClawConfig } from "./config/config.js";
 import { asRecord } from "./record-shared.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;

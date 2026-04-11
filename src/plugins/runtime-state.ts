@@ -8,10 +8,13 @@ export type RuntimeTrackedPluginRecord = {
 
 export type RuntimeTrackedChannelEntry = {
   plugin: {
-    id?: string | null;
+    id: string;
     meta?: {
-      aliases?: string[];
+      aliases?: readonly string[];
       markdownCapable?: boolean;
+    } | null;
+    conversationBindings?: {
+      supportsCurrentConversationBinding?: boolean;
     } | null;
   };
 };
