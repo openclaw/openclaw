@@ -6,7 +6,7 @@ import type {
   SandboxBackendCommandResult,
   SandboxBackendHandle,
   SandboxBackendManager,
-} from "./backend.js";
+} from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   createRemoteShellSandboxFsBridge,

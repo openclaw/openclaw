@@ -7,7 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -33,7 +33,7 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
-import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -42,7 +42,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
@@ -95,11 +94,11 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
-  type SkillSnapshot,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
+import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -151,68 +150,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-
-export type CompactEmbeddedPiSessionParams = {
-  sessionId: string;
-  runId?: string;
-  sessionKey?: string;
-  messageChannel?: string;
-  messageProvider?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  /** Trusted sender id from inbound context for scoped message-tool discovery. */
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-  authProfileId?: string;
-  /** Group id for channel-level tool policy resolution. */
-  groupId?: string | null;
-  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
-  groupChannel?: string | null;
-  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
-  groupSpace?: string | null;
-  /** Parent session key for subagent policy inheritance. */
-  spawnedBy?: string | null;
-  /** Whether the sender is an owner (required for owner-only tools). */
-  senderIsOwner?: boolean;
-  sessionFile: string;
-  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
-  currentTokenCount?: number;
-  workspaceDir: string;
-  agentDir?: string;
-  config?: OpenClawConfig;
-  skillsSnapshot?: SkillSnapshot;
-  provider?: string;
-  model?: string;
-  thinkLevel?: ThinkLevel;
-  reasoningLevel?: ReasoningLevel;
-  bashElevated?: ExecElevatedDefaults;
-  customInstructions?: string;
-  tokenBudget?: number;
-  force?: boolean;
-  trigger?: "budget" | "overflow" | "manual";
-  diagId?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  lane?: string;
-  enqueue?: typeof enqueueCommand;
-  extraSystemPrompt?: string;
-  ownerNumbers?: string[];
-  abortSignal?: AbortSignal;
-  /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
-  allowGatewaySubagentBinding?: boolean;
-};
-
-type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
-};
+export type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 
 function hasRealConversationContent(
   msg: AgentMessage,
