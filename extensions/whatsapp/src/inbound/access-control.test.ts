@@ -124,6 +124,31 @@ describe("WhatsApp group allowlist matching", () => {
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
+
+  it("allows owner's own group messages (isFromMe) via group JID allowlist", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["120363408470954295@g.us"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "120363408470954295@g.us",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: true,
+      pushName: "Owner",
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363408470954295@g.us",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
 });
 
 describe("WhatsApp dmPolicy precedence", () => {
