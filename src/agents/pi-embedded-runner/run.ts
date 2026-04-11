@@ -1129,6 +1129,75 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
+
+              // Circuit breaker (Patch 3B): if compaction explicitly says context
+              // is already under target but runtime still overflows, there is a
+              // budget mismatch. Attempt tool result truncation as a last resort
+              // but do NOT keep retrying the prompt — that creates the reset/replay
+              // loop seen in the incident.
+              const compactionSaysUnderTarget =
+                !compactResult.compacted &&
+                typeof compactResult.reason === "string" &&
+                /under.target|below.threshold|nothing.to.compact/i.test(compactResult.reason);
+              if (compactionSaysUnderTarget) {
+                log.warn(
+                  `[circuit-breaker] compaction reports under target but runtime still overflows for ` +
+                    `${provider}/${modelId}. Forcing tool result truncation and stopping retry loop.`,
+                );
+                // Force tool result truncation as last resort
+                if (!toolResultTruncationAttempted) {
+                  toolResultTruncationAttempted = true;
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: params.sessionFile,
+                    contextWindowTokens: ctxInfo.tokens,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[circuit-breaker] Truncated ${truncResult.truncatedCount} tool result(s) as fallback; retrying once.`,
+                    );
+                    // Allow exactly one more attempt after truncation
+                    continue;
+                  }
+                }
+                // Truncation didn't help or was already attempted — hard stop
+                log.warn(
+                  `[circuit-breaker] Overflow persists after compaction + truncation. Stopping retry loop.`,
+                );
+                attempt.setTerminalLifecycleMeta?.({
+                  replayInvalid: resolveReplayInvalidForAttempt(),
+                  livenessState: "blocked",
+                });
+                return {
+                  payloads: [
+                    {
+                      text:
+                        "⚠️ Context overflow: compaction reports context is within budget, but the assembled " +
+                        "prompt still exceeds the model's limit. This indicates a budget mismatch between " +
+                        "compaction and runtime assembly. Try /reset or /new, or use a larger-context model.\n\n" +
+                        "Diagnostic: check `openclaw logs --follow` for `[context-overflow-event]` entries.",
+                      isError: true,
+                    },
+                  ],
+                  meta: {
+                    durationMs: Date.now() - started,
+                    agentMeta: buildErrorAgentMeta({
+                      sessionId: sessionIdUsed,
+                      provider,
+                      model: model.id,
+                      usageAccumulator,
+                      lastRunPromptUsage,
+                      lastAssistant,
+                      lastTurnTotal,
+                    }),
+                    error: {
+                      message: "Circuit breaker: compaction/assembly budget mismatch",
+                      kind: "context_overflow",
+                    },
+                  },
+                };
+              }
             }
             if (!toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
