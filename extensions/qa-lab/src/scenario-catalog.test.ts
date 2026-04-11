@@ -5,6 +5,7 @@ import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
+  validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
 describe("qa scenario catalog", () => {
@@ -77,5 +78,13 @@ describe("qa scenario catalog", () => {
     expect(
       characterConfig?.turns?.some((turn) => turn.expectFile?.path === "precious-status.html"),
     ).toBe(true);
+  });
+
+  it("rejects malformed string matcher lists before running a flow", () => {
+    expect(() =>
+      validateQaScenarioExecutionConfig({
+        gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
+      }),
+    ).toThrow(/gracefulFallbackAny entries must be strings/);
   });
 });
