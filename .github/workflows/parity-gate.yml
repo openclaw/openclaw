@@ -8,6 +8,7 @@ on:
       - "qa/scenarios/**"
       - "src/agents/**"
       - "src/context-engine/**"
+      - "src/gateway/**"
       - ".github/workflows/parity-gate.yml"
 
 permissions:
