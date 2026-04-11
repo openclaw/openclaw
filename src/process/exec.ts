@@ -5,6 +5,11 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+// keep import: resolveWindowsConsoleEncoding and decodeCapturedOutputBuffer are used below
+import {
+  decodeCapturedOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -135,19 +140,28 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
         };
+  const windowsEncoding = resolveWindowsConsoleEncoding();
   try {
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
-    const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+    const result = await execFileAsync(invocation.command, invocation.args, {
       ...options,
+      encoding: "buffer",
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    const stdout = decodeCapturedOutputBuffer({
+      buffer: result.stdout instanceof Buffer ? result.stdout : Buffer.from(result.stdout ?? ""),
+      windowsEncoding,
+    });
+    const stderr = decodeCapturedOutputBuffer({
+      buffer: result.stderr instanceof Buffer ? result.stderr : Buffer.from(result.stderr ?? ""),
+      windowsEncoding,
     });
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
@@ -274,8 +288,8 @@ export async function runCommandWithTimeout(
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -283,6 +297,7 @@ export async function runCommandWithTimeout(
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    const windowsEncoding = resolveWindowsConsoleEncoding();
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
@@ -337,12 +352,12 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
-    child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+    child.stdout?.on("data", (d: Buffer) => {
+      stdoutChunks.push(d);
       armNoOutputTimer();
     });
-    child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+    child.stderr?.on("data", (d: Buffer) => {
+      stderrChunks.push(d);
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -376,6 +391,14 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      const stdout = decodeCapturedOutputBuffer({
+        buffer: Buffer.concat(stdoutChunks),
+        windowsEncoding,
+      });
+      const stderr = decodeCapturedOutputBuffer({
+        buffer: Buffer.concat(stderrChunks),
+        windowsEncoding,
+      });
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
       const resolvedCode = resolveProcessExitCode({
         explicitCode: childExitState?.code ?? code,

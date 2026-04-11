@@ -10,6 +10,7 @@ const execFileMock = vi.hoisted(() =>
     __promisify__: vi.fn(),
   }),
 );
+const resolveWindowsConsoleEncodingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -20,6 +21,14 @@ vi.mock("node:child_process", async () => {
       execFile: execFileMock as unknown as typeof execFileType,
     },
   );
+});
+
+vi.mock("../infra/windows-encoding.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../infra/windows-encoding.js")>();
+  return {
+    ...original,
+    resolveWindowsConsoleEncoding: resolveWindowsConsoleEncodingMock,
+  };
 });
 
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
@@ -98,6 +107,7 @@ describe("windows command wrapper behavior", () => {
   beforeEach(() => {
     spawnMock.mockReset();
     execFileMock.mockReset();
+    resolveWindowsConsoleEncodingMock.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -347,6 +357,91 @@ describe("windows command wrapper behavior", () => {
       expect(captured[2].windowsVerbatimArguments).toBeUndefined();
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("decodes GBK output in runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    resolveWindowsConsoleEncodingMock.mockReturnValue("gbk");
+
+    const gbkBuffer = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, result: { stdout: Buffer; stderr: Buffer }) => void,
+      ) => {
+        cb(null, { stdout: gbkBuffer, stderr: Buffer.alloc(0) });
+      },
+    );
+
+    try {
+      const result = await runExec("echo", ["test"], 1000);
+      expect(result.stdout).toBe("\u6d4b\u8bd5");
+    } finally {
+      platformSpy.mockRestore();
+      resolveWindowsConsoleEncodingMock.mockReset();
+    }
+  });
+
+  it("decodes Shift_JIS output in runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    resolveWindowsConsoleEncodingMock.mockReturnValue("shift_jis");
+    let supportsShiftJis = true;
+    try {
+      void new TextDecoder("shift_jis");
+    } catch {
+      supportsShiftJis = false;
+    }
+
+    const shiftJisBuffer = Buffer.from([
+      0x82, 0xb1, 0x82, 0xf1, 0x82, 0xc9, 0x82, 0xbf, 0x82, 0xcd,
+    ]);
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, result: { stdout: Buffer; stderr: Buffer }) => void,
+      ) => {
+        cb(null, { stdout: shiftJisBuffer, stderr: Buffer.alloc(0) });
+      },
+    );
+
+    try {
+      const result = await runExec("echo", ["test"], 1000);
+      if (supportsShiftJis) {
+        expect(result.stdout).toBe("\u3053\u3093\u306b\u3061\u306f");
+      }
+    } finally {
+      platformSpy.mockRestore();
+      resolveWindowsConsoleEncodingMock.mockReset();
+    }
+  });
+
+  it("returns UTF-8 output unchanged on non-Windows in runExec", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    resolveWindowsConsoleEncodingMock.mockReturnValue(null);
+
+    const utf8Buffer = Buffer.from("hello world");
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, result: { stdout: Buffer; stderr: Buffer }) => void,
+      ) => {
+        cb(null, { stdout: utf8Buffer, stderr: Buffer.alloc(0) });
+      },
+    );
+
+    try {
+      const result = await runExec("echo", ["test"], 1000);
+      expect(result.stdout).toBe("hello world");
+    } finally {
+      platformSpy.mockRestore();
+      resolveWindowsConsoleEncodingMock.mockReset();
     }
   });
 });

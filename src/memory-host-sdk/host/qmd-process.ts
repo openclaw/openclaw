@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import {
+  decodeCapturedOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../../infra/windows-encoding.js";
+import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../../plugin-sdk/windows-spawn.js";
@@ -124,16 +128,25 @@ export async function runCliCommand(params: {
           reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
         }, params.timeoutMs)
       : null;
-    child.stdout.on("data", (data) => {
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    child.stdout.on("data", (data: Buffer) => {
       if (discardStdout) {
         return;
       }
-      const next = appendOutputWithCap(stdout, data.toString("utf8"), params.maxOutputChars);
+      const next = appendOutputWithCap(
+        stdout,
+        decodeCapturedOutputBuffer({ buffer: data, windowsEncoding }),
+        params.maxOutputChars,
+      );
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
-    child.stderr.on("data", (data) => {
-      const next = appendOutputWithCap(stderr, data.toString("utf8"), params.maxOutputChars);
+    child.stderr.on("data", (data: Buffer) => {
+      const next = appendOutputWithCap(
+        stderr,
+        decodeCapturedOutputBuffer({ buffer: data, windowsEncoding }),
+        params.maxOutputChars,
+      );
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
