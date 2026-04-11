@@ -29,6 +29,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  CommandCatalogResult,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -88,6 +89,11 @@ export type AppViewState = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  chatCommandCatalogLoading: boolean;
+  chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogRequestId: number;
+  chatCommandCatalogError: string | null;
+  chatCommandCatalogResult: CommandCatalogResult | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;

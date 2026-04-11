@@ -20,6 +20,7 @@ import {
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { resolveSlashCommands } from "./chat/slash-commands.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -34,6 +35,7 @@ import {
 } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatCommandCatalog } from "./controllers/commands.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -853,6 +855,7 @@ export function renderApp(state: AppViewState) {
       open: state.paletteOpen,
       query: state.paletteQuery,
       activeIndex: state.paletteActiveIndex,
+      commandCatalog: state.chatCommandCatalogResult?.commands ?? null,
       onToggle: () => {
         state.paletteOpen = !state.paletteOpen;
       },
@@ -1880,7 +1883,11 @@ export function renderApp(state: AppViewState) {
               onRefresh: () => {
                 state.chatSideResult = null;
                 state.resetToolStream();
-                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                return Promise.all([
+                  loadChatHistory(state),
+                  refreshChatAvatar(state),
+                  loadChatCommandCatalog(state, resolveAgentIdFromSessionKey(state.sessionKey)),
+                ]);
               },
               onToggleFocusMode: () => {
                 if (state.onboarding) {
@@ -1895,6 +1902,7 @@ export function renderApp(state: AppViewState) {
               getDraft: () => state.chatMessage,
               onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,
+              slashCommands: resolveSlashCommands(state.chatCommandCatalogResult?.commands),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),

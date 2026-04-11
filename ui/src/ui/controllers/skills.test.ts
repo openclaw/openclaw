@@ -40,6 +40,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> 
     clawhubDetailError: null,
     clawhubInstallSlug: null,
     clawhubInstallMessage: null,
+    refreshChatCommandCatalog: vi.fn(),
   };
   return { state, request };
 }
@@ -221,6 +222,7 @@ describe("skill mutations", () => {
     const [method, params] = expectedRequest;
     expect(request).toHaveBeenCalledWith(method, params);
     expect(state.skillMessages.github).toEqual({ kind: "success", message: expectedMessage });
+    expect(state.refreshChatCommandCatalog).toHaveBeenCalled();
     expect(state.skillsBusyKey).toBeNull();
     expect(state.skillsError).toBeNull();
   });

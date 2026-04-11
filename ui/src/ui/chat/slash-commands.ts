@@ -5,6 +5,7 @@ import type {
 } from "../../../../src/auto-reply/commands-registry.types.js";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { CommandCatalogEntry, CommandCatalogResult } from "../types.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -134,6 +135,10 @@ function normalizeUiKey(command: ChatCommandDefinition): string {
   return command.key.replace(/[:.-]/g, "_");
 }
 
+function normalizeCatalogKey(key: string): string {
+  return key.replace(/[:.-]/g, "_");
+}
+
 function getSlashAliases(command: ChatCommandDefinition): string[] {
   return command.textAliases
     .map((alias) => alias.trim())
@@ -149,7 +154,17 @@ function getPrimarySlashName(command: ChatCommandDefinition): string | null {
   return aliases[0] ?? null;
 }
 
-function formatArgs(command: ChatCommandDefinition): string | undefined {
+function getCatalogAliases(entry: CommandCatalogEntry): string[] {
+  return (entry.textAliases ?? [])
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.startsWith("/"))
+    .map((alias) => alias.slice(1))
+    .filter((alias) => alias !== entry.name);
+}
+
+function formatArgs(command: {
+  args?: Array<{ name: string; required?: boolean }>;
+}): string | undefined {
   if (!command.args?.length) {
     return undefined;
   }
@@ -174,12 +189,28 @@ function getArgOptions(command: ChatCommandDefinition): string[] | undefined {
   return options?.length ? options : undefined;
 }
 
+function getCatalogArgOptions(entry: CommandCatalogEntry): string[] | undefined {
+  const options = entry.args?.[0]?.choices?.map((choice) => choice.value).filter(Boolean);
+  return options?.length ? options : undefined;
+}
+
 function mapCategory(command: ChatCommandDefinition): SlashCommandCategory {
   return CATEGORY_OVERRIDES[normalizeUiKey(command)] ?? "tools";
 }
 
+function mapCategoryFromCatalogEntry(entry: CommandCatalogEntry): SlashCommandCategory {
+  return (
+    CATEGORY_OVERRIDES[normalizeCatalogKey(entry.name)] ??
+    (entry.category === "session" ? "session" : entry.category === "options" ? "model" : "tools")
+  );
+}
+
 function mapIcon(command: ChatCommandDefinition): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
+}
+
+function mapIconFromCatalogEntry(entry: CommandCatalogEntry): IconName | undefined {
+  return COMMAND_ICON_OVERRIDES[normalizeCatalogKey(entry.name)] ?? "terminal";
 }
 
 function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null {
@@ -200,12 +231,26 @@ function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null 
   };
 }
 
-export const SLASH_COMMANDS: SlashCommandDef[] = [
-  ...buildBuiltinChatCommands()
-    .map(toSlashCommand)
-    .filter((command): command is SlashCommandDef => command !== null),
-  ...UI_ONLY_COMMANDS,
-];
+function toSlashCommandFromCatalogEntry(entry: CommandCatalogEntry): SlashCommandDef {
+  const normalizedKey = normalizeCatalogKey(entry.name);
+  return {
+    key: entry.name,
+    name: entry.name,
+    aliases: getCatalogAliases(entry),
+    description: COMMAND_DESCRIPTION_OVERRIDES[normalizedKey] ?? entry.description,
+    args: COMMAND_ARGS_OVERRIDES[normalizedKey] ?? formatArgs(entry),
+    icon: mapIconFromCatalogEntry(entry),
+    category: mapCategoryFromCatalogEntry(entry),
+    executeLocal: LOCAL_COMMANDS.has(entry.name),
+    argOptions: getCatalogArgOptions(entry),
+  };
+}
+
+const BUILTIN_SLASH_COMMANDS: SlashCommandDef[] = buildBuiltinChatCommands()
+  .map(toSlashCommand)
+  .filter((command): command is SlashCommandDef => command !== null);
+
+export const SLASH_COMMANDS: SlashCommandDef[] = [...BUILTIN_SLASH_COMMANDS, ...UI_ONLY_COMMANDS];
 
 const CATEGORY_ORDER: SlashCommandCategory[] = ["session", "model", "tools", "agents"];
 
@@ -216,16 +261,52 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
   tools: "Tools",
 };
 
-export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
+function dedupeSlashCommands(commands: SlashCommandDef[]): SlashCommandDef[] {
+  const seen = new Set<string>();
+  const deduped: SlashCommandDef[] = [];
+  for (const command of commands) {
+    const key = normalizeLowercaseStringOrEmpty(command.name);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
+}
+
+export function resolveSlashCommands(
+  commandCatalog?: readonly CommandCatalogEntry[] | CommandCatalogResult | null,
+): SlashCommandDef[] {
+  let commands: readonly CommandCatalogEntry[] | undefined;
+  if (Array.isArray(commandCatalog)) {
+    commands = commandCatalog;
+  } else if (commandCatalog && "commands" in commandCatalog) {
+    commands = commandCatalog.commands;
+  }
+  if (!commands?.length) {
+    return SLASH_COMMANDS;
+  }
+  return dedupeSlashCommands([
+    ...commands.map(toSlashCommandFromCatalogEntry),
+    ...UI_ONLY_COMMANDS,
+  ]);
+}
+
+export function getSlashCommandCompletions(
+  filter: string,
+  availableCommands?: readonly SlashCommandDef[] | null,
+): SlashCommandDef[] {
+  const available = availableCommands?.length ? [...availableCommands] : SLASH_COMMANDS;
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const commands = lower
-    ? SLASH_COMMANDS.filter(
+    ? available.filter(
         (cmd) =>
           cmd.name.startsWith(lower) ||
           cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
           normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
       )
-    : SLASH_COMMANDS;
+    : available;
   return commands.toSorted((a, b) => {
     const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
     const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
@@ -248,7 +329,10 @@ export type ParsedSlashCommand = {
   args: string;
 };
 
-export function parseSlashCommand(text: string): ParsedSlashCommand | null {
+export function parseSlashCommand(
+  text: string,
+  availableCommands?: readonly SlashCommandDef[] | null,
+): ParsedSlashCommand | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) {
     return null;
@@ -268,7 +352,8 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   }
 
   const normalizedName = normalizeLowercaseStringOrEmpty(name);
-  const command = SLASH_COMMANDS.find(
+  const commands = availableCommands?.length ? availableCommands : SLASH_COMMANDS;
+  const command = commands.find(
     (cmd) =>
       cmd.name === normalizedName ||
       cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedName),

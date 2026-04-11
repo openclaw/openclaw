@@ -11,10 +11,11 @@ import {
 } from "./chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadChatCommandCatalog } from "./controllers/commands.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import {
@@ -548,6 +549,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     true,
   );
   void loadChatHistory(state as unknown as ChatState);
+  void loadChatCommandCatalog(state, resolveAgentIdFromSessionKey(nextSessionKey));
   void refreshSessionOptions(state);
 }
 

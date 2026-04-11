@@ -630,6 +630,45 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
+export type CommandCatalogCategory =
+  | "session"
+  | "options"
+  | "status"
+  | "management"
+  | "media"
+  | "tools"
+  | "docks";
+
+export type CommandCatalogArgChoice = {
+  value: string;
+  label: string;
+};
+
+export type CommandCatalogArg = {
+  name: string;
+  description: string;
+  type: "string" | "number" | "boolean";
+  required?: boolean;
+  choices?: CommandCatalogArgChoice[];
+  dynamic?: boolean;
+};
+
+export type CommandCatalogEntry = {
+  name: string;
+  nativeName?: string;
+  textAliases?: string[];
+  description: string;
+  source: "native" | "skill" | "plugin";
+  scope: "text" | "native" | "both";
+  acceptsArgs: boolean;
+  category?: CommandCatalogCategory;
+  args?: CommandCatalogArg[];
+};
+
+export type CommandCatalogResult = {
+  commands: CommandCatalogEntry[];
+};
+
 export type SkillsStatusConfigCheck = {
   path: string;
   satisfied: boolean;

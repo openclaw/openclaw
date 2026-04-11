@@ -1,9 +1,14 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";
-import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
+import {
+  resolveSlashCommands,
+  SLASH_COMMANDS,
+  type SlashCommandDef,
+} from "../chat/slash-commands.ts";
 import { icons, type IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { CommandCatalogEntry, CommandCatalogResult } from "../types.ts";
 
 type PaletteItem = {
   id: string;
@@ -14,17 +19,7 @@ type PaletteItem = {
   description?: string;
 };
 
-const SLASH_PALETTE_ITEMS: PaletteItem[] = SLASH_COMMANDS.map((command) => ({
-  id: `slash:${command.name}`,
-  label: `/${command.name}`,
-  icon: command.icon ?? "terminal",
-  category: "search",
-  action: `/${command.name}`,
-  description: command.description,
-}));
-
-const PALETTE_ITEMS: PaletteItem[] = [
-  ...SLASH_PALETTE_ITEMS,
+const STATIC_PALETTE_ITEMS: PaletteItem[] = [
   {
     id: "nav-overview",
     label: "Overview",
@@ -79,14 +74,30 @@ const PALETTE_ITEMS: PaletteItem[] = [
   },
 ];
 
-export function getPaletteItems(): readonly PaletteItem[] {
-  return PALETTE_ITEMS;
+function toSlashPaletteItem(command: SlashCommandDef): PaletteItem {
+  return {
+    id: `slash:${command.name}`,
+    label: `/${command.name}`,
+    icon: command.icon ?? "terminal",
+    category: "search",
+    action: `/${command.name}`,
+    description: command.description,
+  };
+}
+
+export function getPaletteItems(
+  commandCatalog?: readonly CommandCatalogEntry[] | CommandCatalogResult | null,
+): readonly PaletteItem[] {
+  const slashCommands =
+    commandCatalog === undefined ? SLASH_COMMANDS : resolveSlashCommands(commandCatalog);
+  return [...slashCommands.map(toSlashPaletteItem), ...STATIC_PALETTE_ITEMS];
 }
 
 export type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
+  commandCatalog?: readonly CommandCatalogEntry[] | CommandCatalogResult | null;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
@@ -94,12 +105,16 @@ export type CommandPaletteProps = {
   onSlashCommand: (command: string) => void;
 };
 
-function filteredItems(query: string): PaletteItem[] {
+function filteredItems(
+  query: string,
+  commandCatalog?: readonly CommandCatalogEntry[] | CommandCatalogResult | null,
+): PaletteItem[] {
+  const items = getPaletteItems(commandCatalog);
   if (!query) {
-    return PALETTE_ITEMS;
+    return [...items];
   }
   const q = normalizeLowercaseStringOrEmpty(query);
-  return PALETTE_ITEMS.filter(
+  return items.filter(
     (item) =>
       normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
       normalizeLowercaseStringOrEmpty(item.description).includes(q),
@@ -147,7 +162,7 @@ function scrollActiveIntoView() {
 }
 
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(props.query);
+  const items = filteredItems(props.query, props.commandCatalog);
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
@@ -194,7 +209,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
     return nothing;
   }
 
-  const items = filteredItems(props.query);
+  const items = filteredItems(props.query, props.commandCatalog);
   const grouped = groupItems(items);
 
   return html`

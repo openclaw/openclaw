@@ -61,6 +61,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadChatCommandCatalog as loadChatCommandCatalogInternal } from "./controllers/commands.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
@@ -86,6 +87,7 @@ import type {
   ConfigSnapshot,
   ConfigUiHints,
   ChatModelOverride,
+  CommandCatalogResult,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -184,6 +186,11 @@ export class OpenClawApp extends LitElement {
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
+  @state() chatCommandCatalogLoading = false;
+  @state() chatCommandCatalogLoadingAgentId: string | null = null;
+  @state() chatCommandCatalogRequestId = 0;
+  @state() chatCommandCatalogError: string | null = null;
+  @state() chatCommandCatalogResult: CommandCatalogResult | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
@@ -685,6 +692,10 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  async refreshChatCommandCatalog() {
+    await loadChatCommandCatalogInternal(this, resolveAgentIdFromSessionKey(this.sessionKey));
   }
 
   async handleWhatsAppStart(force: boolean) {

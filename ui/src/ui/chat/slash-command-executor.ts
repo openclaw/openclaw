@@ -32,7 +32,7 @@ import type {
   SessionsPatchResult,
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
-import { SLASH_COMMANDS } from "./slash-commands.ts";
+import { SLASH_COMMANDS, type SlashCommandDef } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -61,6 +61,7 @@ export type SlashCommandContext = {
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  slashCommands?: readonly SlashCommandDef[] | null;
 };
 
 function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
@@ -89,7 +90,7 @@ export async function executeSlashCommand(
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
-      return executeHelp();
+      return executeHelp(context);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -129,11 +130,12 @@ export async function executeSlashCommand(
 
 // ── Command Implementations ──
 
-function executeHelp(): SlashCommandResult {
+function executeHelp(context: SlashCommandContext): SlashCommandResult {
+  const commands = context.slashCommands?.length ? context.slashCommands : SLASH_COMMANDS;
   const lines = ["**Available Commands**\n"];
   let currentCategory = "";
 
-  for (const cmd of SLASH_COMMANDS) {
+  for (const cmd of commands) {
     const cat = cmd.category ?? "session";
     if (cat !== currentCategory) {
       currentCategory = cat;

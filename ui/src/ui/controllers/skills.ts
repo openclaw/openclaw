@@ -54,6 +54,7 @@ export type SkillsState = {
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
   clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+  refreshChatCommandCatalog?: () => Promise<void> | void;
 };
 
 export type SkillMessage = {
@@ -141,6 +142,7 @@ async function runSkillMutation(
   try {
     const message = await run(client);
     await loadSkills(state);
+    await state.refreshChatCommandCatalog?.();
     setSkillMessage(state, skillKey, message);
   } catch (err) {
     const message = getErrorMessage(err);

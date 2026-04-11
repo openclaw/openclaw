@@ -20,6 +20,38 @@ function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessio
 }
 
 describe("executeSlashCommand /kill", () => {
+  it("includes runtime skill commands in local /help output", async () => {
+    const result = await executeSlashCommand(
+      { request: vi.fn() } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "help",
+      "",
+      {
+        slashCommands: [
+          {
+            key: "help",
+            name: "help",
+            aliases: [],
+            description: "Show available commands.",
+            executeLocal: true,
+            category: "tools",
+          },
+          {
+            key: "office_hours",
+            name: "office_hours",
+            aliases: ["office-hours"],
+            description: "Run office hours workflow.",
+            executeLocal: false,
+            category: "tools",
+          },
+        ],
+      } as never,
+    );
+
+    expect(result.content).toContain("/office_hours");
+    expect(result.content).toContain("Run office hours workflow.");
+  });
+
   it("aborts every sub-agent session for /kill all", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

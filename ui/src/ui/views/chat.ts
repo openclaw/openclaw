@@ -94,6 +94,7 @@ export type ChatProps = {
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
+  slashCommands?: readonly SlashCommandDef[] | null;
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -727,13 +728,18 @@ function resetSlashMenuState(): void {
   vs.slashMenuItems = [];
 }
 
-function updateSlashMenu(value: string, requestUpdate: () => void): void {
+function updateSlashMenu(
+  value: string,
+  requestUpdate: () => void,
+  availableCommands?: readonly SlashCommandDef[] | null,
+): void {
+  const commands = availableCommands?.length ? availableCommands : SLASH_COMMANDS;
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
-    const cmdName = argMatch[1].toLowerCase();
-    const argFilter = argMatch[2].toLowerCase();
-    const cmd = SLASH_COMMANDS.find((c) => c.name === cmdName);
+    const cmdName = normalizeLowercaseStringOrEmpty(argMatch[1]);
+    const argFilter = normalizeLowercaseStringOrEmpty(argMatch[2]);
+    const cmd = commands.find((c) => c.name === cmdName);
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
         ? cmd.argOptions.filter((opt) => opt.toLowerCase().startsWith(argFilter))
@@ -758,7 +764,7 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Command mode: /partial-command
   const match = value.match(/^\/(\S*)$/);
   if (match) {
-    const items = getSlashCommandCompletions(match[1]);
+    const items = getSlashCommandCompletions(match[1], commands);
     vs.slashMenuItems = items;
     vs.slashMenuOpen = items.length > 0;
     vs.slashMenuIndex = 0;
@@ -1413,7 +1419,7 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
-    updateSlashMenu(target.value, requestUpdate);
+    updateSlashMenu(target.value, requestUpdate, props.slashCommands);
     inputHistory.reset();
     props.onDraftChange(target.value);
   };

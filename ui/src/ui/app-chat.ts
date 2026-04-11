@@ -3,7 +3,7 @@ import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import { parseSlashCommand } from "./chat/slash-commands.ts";
+import { parseSlashCommand, resolveSlashCommands } from "./chat/slash-commands.ts";
 import {
   abortChatRun,
   loadChatHistory,
@@ -11,13 +11,14 @@ import {
   sendDetachedChatMessage,
   type ChatState,
 } from "./controllers/chat.ts";
+import { loadChatCommandCatalog } from "./controllers/commands.ts";
 import { loadModels } from "./controllers/models.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, CommandCatalogResult, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -42,6 +43,11 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  chatCommandCatalogLoading: boolean;
+  chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogRequestId: number;
+  chatCommandCatalogError: string | null;
+  chatCommandCatalogResult: CommandCatalogResult | null;
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
@@ -295,7 +301,7 @@ export async function handleSendChat(
   }
 
   // Intercept local slash commands (/status, /model, /compact, etc.)
-  const parsed = parseSlashCommand(message);
+  const parsed = parseSlashCommand(message, resolveSlashCommands(host.chatCommandCatalogResult));
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
       if (messageOverride == null) {
@@ -390,6 +396,7 @@ async function dispatchSlashCommand(
   const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
     chatModelCatalog: host.chatModelCatalog,
     sessionsResult: host.sessionsResult,
+    slashCommands: resolveSlashCommands(host.chatCommandCatalogResult),
   });
 
   if (result.content) {
@@ -461,6 +468,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
+    refreshChatCommandCatalog(host),
   ]);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
@@ -479,6 +487,17 @@ async function refreshChatModels(host: ChatHost) {
   } finally {
     host.chatModelsLoading = false;
   }
+}
+
+async function refreshChatCommandCatalog(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    host.chatCommandCatalogLoading = false;
+    host.chatCommandCatalogLoadingAgentId = null;
+    host.chatCommandCatalogError = null;
+    host.chatCommandCatalogResult = null;
+    return;
+  }
+  await loadChatCommandCatalog(host, resolveAgentIdFromSessionKey(host.sessionKey));
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
