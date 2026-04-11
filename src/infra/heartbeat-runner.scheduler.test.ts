@@ -240,7 +240,16 @@ describe("startHeartbeatRunner", () => {
 
     // Simulate a long-running heartbeat: the first 5 calls return
     // requests-in-flight (retries from the wake layer), then the 6th succeeds.
-    const runSpy = createRequestsInFlightRunSpy(5);
+    const callTimes: number[] = [];
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callTimes.push(Date.now());
+      callCount++;
+      if (callCount <= 5) {
+        return { status: "skipped", reason: "requests-in-flight" } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
 
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
@@ -259,12 +268,12 @@ describe("startHeartbeatRunner", () => {
       requestHeartbeatNow({ reason: "retry", coalesceMs: 0 });
       await vi.advanceTimersByTimeAsync(1_000);
     }
-    const callsBeforeNextInterval = runSpy.mock.calls.length;
+    expect(callTimes.some((time) => time >= firstDueMs + intervalMs)).toBe(false);
 
     // The next interval tick at the next scheduled slot should still fire —
     // the retries must not push the phase out by multiple intervals.
     await vi.advanceTimersByTimeAsync(firstDueMs + intervalMs - Date.now() + 1);
-    expect(runSpy.mock.calls.length).toBeGreaterThan(callsBeforeNextInterval);
+    expect(callTimes.some((time) => time >= firstDueMs + intervalMs)).toBe(true);
 
     runner.stop();
   });
