@@ -1,6 +1,6 @@
 # GPT-5.4 / Codex Parity Maintainer Notes
 
-This note explains how to review the GPT-5.4 / Codex parity program as a two-wave closeout without losing the original six-contract architecture.
+This note explains how to review the GPT-5.4 / Codex parity program as ten merge units without losing the original six-contract architecture. The program shipped as four initial PRs (A through D) that established the runtime contract, parity harness, and first-wave scenario pack, plus six follow-up PRs (E, F, H, J, K, L) that doubled the parity pack, auto-activated strict-agentic on GPT-5, tightened tool-call enforcement, covered the baseline provider for offline runs, and self-described each run in its summary artifact.
 
 ## Merge units
 
@@ -49,42 +49,108 @@ Does not own:
 - generic Codex dialect behavior outside provider hooks
 - benchmark gating
 
-### PR D: parity harness
+### PR D: first-wave parity harness
 
 Owns:
 
-- first-wave GPT-5.4 vs Opus 4.6 scenario pack
-- parity documentation
+- first-wave GPT-5.4 vs Opus 4.6 scenario pack (five scenarios)
+- parity documentation baseline
 - parity report and release-gate mechanics
 
 Does not own:
 
+- second-wave scenarios
+- dual-provider mock routing
 - runtime behavior changes outside QA-lab
-- auth/proxy/DNS simulation inside the harness
 
-### PR E: second-wave parity expansion
+### PR E: second-wave parity pack
 
 Owns:
 
-- second-wave parity scenario expansion
-- merged-main proof packaging
-- goal-to-evidence parity documentation
+- five additional parity scenarios (`subagent-handoff`, `subagent-fanout-synthesis`, `memory-recall`, `thread-memory-isolation`, `config-restart-capability-flip`)
+- parity report header parametrization so non-default model pairs render accurate labels
+- parity gate failure when any required scenario fails on either candidate or baseline, so “both models fail” no longer leaks through the relative metric comparison
 
 Does not own:
 
-- runtime behavior changes outside QA-lab
-- auth/proxy/DNS truthfulness logic
+- dual-provider mock routing (PR K)
+- self-describing run metadata (PR L)
+- tool-call assertions (PR J)
+
+### PR F: post-parity main stabilization (closed as superseded)
+
+Owned three inherited red-CI fixes against `target-resolver.test.ts`, `memory-wiki/index.test.ts`, and `config.pruning-defaults.test.ts`. All three failures were resolved upstream through independent commits while the parity loop was in progress, and the PR was closed as superseded after verification. No review action needed.
+
+### PR H: strict-agentic auto-activation for GPT-5 + blocked-exit liveness
+
+Owns:
+
+- auto-activation of the strict-agentic contract for unconfigured GPT-5-family `openai` and `openai-codex` runs
+- explicit `"blocked"` liveness state at the strict-agentic blocked exit
+- regression coverage pinning both behaviors
+
+Does not own:
+
+- the `executionContract` mechanism itself (that's PR A)
+- non-GPT-5 provider defaults
+
+### PR J: parity scenario tool-call enforcement
+
+Owns:
+
+- tool-call assertions on the `source-docs-discovery-report` and `subagent-handoff` parity scenarios
+- `/debug/requests` seam consumption from scenario YAML flows
+- matching on scenario-unique prompt substrings to keep assertions scoped to their own scenario
+
+Does not own:
+
+- the `/debug/requests` store itself (part of the mock server)
+- tool schemas or tool execution
+
+### PR K: Anthropic `/v1/messages` mock route
+
+Owns:
+
+- the `/v1/messages` route on the qa-lab mock server
+- Anthropic messages → shared `ResponsesInputItem[]` conversion
+- empty-model and streaming-request edge cases (empty string defaults to `claude-opus-4-6`; `stream: true` returns a 400 so the failure mode is visible)
+
+Does not own:
+
+- real Anthropic API compatibility beyond what the scenario dispatcher reads
+- live Anthropic credential wiring
+
+### PR L: qa-suite-summary.json run metadata
+
+Owns:
+
+- the `run` block in `qa-suite-summary.json` (`primaryProvider`, `primaryModel`, `providerMode`, `scenarioIds`)
+- reuse of the canonical `QaProviderMode` union in `writeQaSuiteArtifacts` instead of a re-declared string-literal union
+
+Does not own:
+
+- parity report consumption of the run block (that's PR D's report helper)
+- scenario catalog filtering
+
+### PR M: documentation catch-up
+
+Owns:
+
+- the 10-PR rewrite of `docs/help/gpt54-codex-agentic-parity.md` and `docs/help/gpt54-codex-agentic-parity-maintainers.md`
+- three new mermaid diagrams (dual-provider mock, parity run orchestration, tool-call assertion seam)
+- the end-to-end parity runbook section
+- the goal-to-evidence matrix update covering all 10 PRs
 
 ## Mapping back to the original six contracts
 
-| Original contract                        | Merge unit |
-| ---------------------------------------- | ---------- |
-| Provider transport/auth correctness      | PR B       |
-| Tool contract/schema compatibility       | PR C       |
-| Same-turn execution                      | PR A       |
-| Permission truthfulness                  | PR B       |
-| Replay/continuation/liveness correctness | PR C       |
-| Benchmark/release gate                   | PR D       |
+| Original contract                        | Merge units                             |
+| ---------------------------------------- | --------------------------------------- |
+| Provider transport/auth correctness      | PR B                                    |
+| Tool contract/schema compatibility       | PR C                                    |
+| Same-turn execution                      | PR A + PR H                             |
+| Permission truthfulness                  | PR B                                    |
+| Replay/continuation/liveness correctness | PR C + PR H                             |
+| Benchmark/release gate                   | PR D + PR E + PR J + PR K + PR L + PR M |
 
 ## Review order
 
@@ -92,9 +158,14 @@ Does not own:
 2. PR B
 3. PR C
 4. PR D
-5. PR E
+5. PR H (runtime follow-up, parallelizable with D)
+6. PR E (parity pack expansion, depends on D)
+7. PR K (Anthropic mock route, parallelizable with E/J)
+8. PR J (tool-call enforcement, depends on E)
+9. PR L (run metadata, parallelizable with J)
+10. PR M (documentation catch-up, depends on E/H/J/K/L)
 
-PR D establishes the proof base. PR E expands scenario breadth and merged-main proof depth. Neither should be the reason runtime-correctness PRs are delayed.
+PR D is the proof layer. It should not be the reason runtime-correctness PRs are delayed. PRs E/H/J/K/L are independent refinements that can land in any order as long as their individual dependency callouts are respected. PR M is documentation-only and can land in parallel with the last code PR.
 
 ## What to look for
 
@@ -118,16 +189,10 @@ PR D establishes the proof base. PR E expands scenario breadth and merged-main p
 
 ### PR D
 
-- the scenario pack is understandable and reproducible
+- the first-wave scenario pack is understandable and reproducible
 - the pack includes a mutating replay-safety lane, not only read-only flows
 - reports are readable by humans and automation
 - parity claims are evidence-backed, not anecdotal
-
-### PR E
-
-- the parity pack widens beyond the first wave without adding runtime-scope behavior
-- subagent, memory, thread-isolation, and restart-capability lanes are covered
-- merged-main parity proof is explicitly documented and traceable
 
 Expected artifacts from PR D:
 
@@ -135,12 +200,55 @@ Expected artifacts from PR D:
 - `qa-agentic-parity-report.md` with aggregate and scenario-level comparison
 - `qa-agentic-parity-summary.json` with a machine-readable verdict
 
+### PR E
+
+- the parity pack is now ten scenarios, not five
+- the parity report Markdown header reflects the candidate and baseline labels instead of a hardcoded legacy string
+- a required scenario that fails on either side fails the gate, even if both sides fail the same scenario (this closes the relative-metric loophole)
+- the five new scenarios exercise delegation, fanout synthesis, memory recall, thread-memory isolation, and a capability flip across config restart
+
+### PR H
+
+- unconfigured GPT-5-family `openai` / `openai-codex` runs auto-activate strict-agentic without per-agent configuration
+- the strict-agentic blocked exit emits an explicit `"blocked"` liveness state on the final turn
+- `executionContract: "default"` still opts out, and explicit `executionContract: "strict-agentic"` is always honored
+- the regression test title matches the asserted liveness state
+
+### PR J
+
+- the `source-docs-discovery-report` scenario gates on a real `read` tool call via `/debug/requests`, not just the prose shape of the reply
+- the `subagent-handoff` scenario gates on a real `sessions_spawn` call before accepting the three labeled sections
+- both assertions use a scenario-unique prompt substring so neighboring scenarios (for example `subagent-fanout-synthesis`) cannot accidentally satisfy them
+
+### PR K
+
+- the `/v1/messages` mock route routes through the same scenario dispatcher as `/v1/responses` so one scenario plan drives both providers
+- streaming requests return a 400 with an Anthropic-shaped error body, not a silent non-streaming fallback
+- empty-string `model` is treated the same as absent and defaults to `claude-opus-4-6`
+- `/debug/requests` snapshots record the same `plannedToolName` / `allInputText` / `toolOutput` fields that the OpenAI route exposes, so a single parity run can diff assertions across both lanes
+
+### PR L
+
+- each `qa-suite-summary.json` carries a `run` block with `primaryProvider`, `primaryModel`, `providerMode`, and `scenarioIds`
+- `writeQaSuiteArtifacts` reuses the canonical `QaProviderMode` union instead of a re-declared string-literal union
+- parity consumers can verify the provider, model, and mode of each input summary without relying on filenames
+
+### PR M
+
+- the parity docs cover all ten PRs, not just the first four
+- the three new mermaid diagrams are present (dual-provider mock, parity run orchestration, tool-call assertion seam)
+- the end-to-end parity runbook is reproducible offline
+- the goal-to-evidence matrix matches the ten-PR program
+
 ## Release gate
 
 Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:
 
-- PR A, PR B, and PR C are merged
-- PR D and PR E run the full parity pack cleanly
+- PR A, PR B, PR C, and PR H are merged (runtime contract enforced by default for GPT-5)
+- PR D and PR E run the ten-scenario parity pack cleanly on both providers
+- PR J tool-call assertions pass on the tool-mediated scenarios
+- PR K offline dual-provider mock is exercised in CI
+- PR L run metadata is present in both summary artifacts
 - runtime-truthfulness regression suites remain green
 - the parity report shows no fake-success cases and no regression in stop behavior
 
@@ -160,25 +268,28 @@ flowchart LR
 
 The parity harness is not the only evidence source. Keep this split explicit in review:
 
-- PR D and PR E own the scenario-based GPT-5.4 vs Opus 4.6 comparison
+- PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
 - PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
 
 ## Goal-to-evidence map
 
-| Completion gate item                     | Primary owner      | Review artifact                                                                    |
-| ---------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| No plan-only stalls                      | PR A               | strict-agentic runtime tests and `approval-turn-tool-followthrough`                |
-| No fake progress or fake tool completion | PR A + PR D + PR E | parity fake-success count plus scenario-level report details                       |
-| No false `/elevated full` guidance       | PR B               | deterministic runtime-truthfulness suites                                          |
-| Replay/liveness failures remain explicit | PR C + PR D + PR E | lifecycle/replay suites plus `compaction-retry-mutating-tool` and continuity lanes |
-| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`                 |
+| Completion gate item                     | Primary owners            | Review artifact                                                                                                       |
+| ---------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| No plan-only stalls                      | PR A + PR H               | strict-agentic runtime tests, `approval-turn-tool-followthrough`, PR H auto-activation regression                     |
+| No fake progress or fake tool completion | PR A + PR D + PR J        | parity fake-success count, scenario-level report details, `/debug/requests` tool-call assertions                      |
+| No false `/elevated full` guidance       | PR B                      | deterministic runtime-truthfulness suites                                                                             |
+| Replay/liveness failures remain explicit | PR C + PR H               | lifecycle/replay suites plus PR H strict-agentic blocked-exit liveness regression                                     |
+| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E + PR K + PR L | `qa-agentic-parity-report.md`, `qa-agentic-parity-summary.json`, full ten-scenario coverage on both providers offline |
 
 ## Reviewer shorthand: before vs after
 
-| User-visible problem before                                 | Review signal after                                                                     |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| GPT-5.4 stopped after planning                              | PR A shows act-or-block behavior instead of commentary-only completion                  |
-| Tool use felt brittle with strict OpenAI/Codex schemas      | PR C keeps tool registration and parameter-free invocation predictable                  |
-| `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
-| Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
-| Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
+| User-visible problem before                                 | Review signal after                                                                               |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| GPT-5.4 stopped after planning                              | PR A + PR H: GPT-5 runs auto-activate act-or-block instead of commentary-only completion          |
+| Tool use felt brittle with strict OpenAI/Codex schemas      | PR C keeps tool registration and parameter-free invocation predictable                            |
+| `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                               |
+| Long tasks could disappear into replay/compaction ambiguity | PR C + PR H emit explicit paused, blocked, abandoned, and replay-invalid state                    |
+| Parity claims were anecdotal                                | PR D + PR E produce a ten-scenario report plus JSON verdict with the same coverage on both models |
+| Parity scenarios could pass with prose alone                | PR J adds `/debug/requests` tool-call assertions on the tool-mediated scenarios                   |
+| Baseline parity needed live Anthropic credentials           | PR K adds an Anthropic `/v1/messages` route on the qa-lab mock so the gate runs offline           |
+| Parity consumers had to trust file paths for provenance     | PR L records `run.primaryProvider` / `run.primaryModel` / `run.providerMode` in each summary      |
