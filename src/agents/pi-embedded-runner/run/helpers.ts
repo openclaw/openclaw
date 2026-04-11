@@ -77,14 +77,10 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
-export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
+export function resolveActiveErrorContext(params: { provider: string; model: string }): {
   provider: string;
   model: string;
-}): { provider: string; model: string } {
-  // Always prefer the current attempt's provider/model for error attribution.
-  // lastAssistant may come from session history (a previous provider's error turn)
-  // and must not contaminate the current attempt's error context.
+} {
   return {
     provider: params.provider,
     model: params.model,
