@@ -177,31 +177,45 @@ function getRiffChunkSpan(chunkSize: number): number {
 }
 
 function parseWavChunk(buffer: Buffer): WavChunkInfo {
-  if (buffer.length < 44) {
+  if (buffer.length < 12) {
     throw new Error("Mistral TTS WAV response too short");
   }
   if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
     throw new Error("Mistral TTS WAV response is not a valid RIFF/WAVE file");
   }
-  if (buffer.toString("ascii", 12, 16) !== "fmt ") {
-    throw new Error("Mistral TTS WAV response missing fmt chunk");
-  }
-  const fmtSize = buffer.readUInt32LE(16);
-  const audioFormat = buffer.readUInt16LE(20);
-  const numChannels = buffer.readUInt16LE(22);
-  const sampleRate = buffer.readUInt32LE(24);
-  const bitsPerSample = buffer.readUInt16LE(34);
 
-  // Scan for the data chunk (there may be additional chunks between fmt and data)
-  let offset = 12 + getRiffChunkSpan(fmtSize);
+  // Scan all chunks from byte 12 — fmt may not be first (e.g. JUNK/LIST may precede it)
+  let fmt:
+    | { audioFormat: number; numChannels: number; sampleRate: number; bitsPerSample: number }
+    | undefined;
+  let offset = 12;
   while (offset + 8 <= buffer.length) {
     const chunkId = buffer.toString("ascii", offset, offset + 4);
     const chunkSize = buffer.readUInt32LE(offset + 4);
-    if (chunkId === "data") {
+    if (chunkId === "fmt ") {
+      // fmt chunk data layout: audioFormat(2) numChannels(2) sampleRate(4)
+      //   byteRate(4) blockAlign(2) bitsPerSample(2) — 16 bytes minimum
+      if (chunkSize < 16 || buffer.length < offset + 24) {
+        throw new Error("Mistral TTS WAV response fmt chunk too short");
+      }
+      fmt = {
+        audioFormat: buffer.readUInt16LE(offset + 8),
+        numChannels: buffer.readUInt16LE(offset + 10),
+        sampleRate: buffer.readUInt32LE(offset + 12),
+        bitsPerSample: buffer.readUInt16LE(offset + 22),
+      };
+    } else if (chunkId === "data") {
+      if (!fmt) {
+        throw new Error("Mistral TTS WAV response data chunk before fmt chunk");
+      }
       const audioData = buffer.subarray(offset + 8, offset + 8 + chunkSize);
-      return { audioData, sampleRate, numChannels, bitsPerSample, audioFormat };
+      return { audioData, ...fmt };
     }
     offset += getRiffChunkSpan(chunkSize);
+  }
+
+  if (!fmt) {
+    throw new Error("Mistral TTS WAV response missing fmt chunk");
   }
   throw new Error("Mistral TTS WAV response missing data chunk");
 }

@@ -56,6 +56,18 @@ function buildS16leWav(samples: Int16Array, sampleRate: number): Buffer {
   return buf;
 }
 
+function insertChunkBeforeFmt(buffer: Buffer, chunkId: string, payload: Buffer): Buffer {
+  const padBytes = payload.length % 2;
+  const chunk = Buffer.alloc(8 + payload.length + padBytes);
+  chunk.write(chunkId, 0, "ascii");
+  chunk.writeUInt32LE(payload.length, 4);
+  payload.copy(chunk, 8);
+  // Insert after the 12-byte RIFF/WAVE header, before the fmt chunk
+  const result = Buffer.concat([buffer.subarray(0, 12), chunk, buffer.subarray(12)]);
+  result.writeUInt32LE(result.length - 8, 4); // update RIFF size
+  return result;
+}
+
 function insertChunkBeforeData(buffer: Buffer, chunkId: string, payload: Buffer): Buffer {
   const padBytes = payload.length % 2;
   const chunk = Buffer.alloc(8 + payload.length + padBytes);
@@ -440,6 +452,16 @@ describe("decodeMistralWavToS16le", () => {
   it("converts f32le mono WAV to s16le and returns the sample rate from the header", () => {
     const samples = new Float32Array([1.0, -1.0, 0.5, 0.0]);
     const wav = buildF32leWav(samples, 24_000);
+    const { audioBuffer, sampleRate } = decodeMistralWavToS16le(wav);
+    expect(sampleRate).toBe(24_000);
+    expect(audioBuffer.byteLength).toBe(samples.length * 2);
+    expect(audioBuffer.readInt16LE(0)).toBe(32767);
+    expect(audioBuffer.readInt16LE(2)).toBe(-32767);
+  });
+
+  it("finds the fmt chunk when a JUNK chunk precedes it", () => {
+    const samples = new Float32Array([1.0, -1.0]);
+    const wav = insertChunkBeforeFmt(buildF32leWav(samples, 24_000), "JUNK", Buffer.alloc(4));
     const { audioBuffer, sampleRate } = decodeMistralWavToS16le(wav);
     expect(sampleRate).toBe(24_000);
     expect(audioBuffer.byteLength).toBe(samples.length * 2);
