@@ -398,6 +398,7 @@ type MessageToolOptions = {
   sessionId?: string;
   config?: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
+  getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
@@ -616,6 +617,8 @@ function appendMessageToolReadHint(
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const loadConfigForTool = options?.loadConfig ?? loadConfig;
+  const getScopedSecretTargetsForTool =
+    options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
@@ -693,7 +696,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           accountId: params.accountId,
           fallbackAccountId: agentAccountId,
         });
-        const scopedTargets = getScopedChannelsCommandSecretTargets({
+        const scopedTargets = getScopedSecretTargetsForTool({
           config: loadedRaw,
           channel: scope.channel,
           accountId: scope.accountId,
