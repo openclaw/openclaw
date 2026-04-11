@@ -22,6 +22,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -1387,6 +1388,12 @@ export function createExecTool(
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifyDeliveryContext = normalizeDeliveryContext({
+    channel: defaults?.messageProvider,
+    to: defaults?.currentChannelId,
+    accountId: defaults?.accountId,
+    threadId: defaults?.currentThreadTs,
+  });
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1733,6 +1740,7 @@ export function createExecTool(
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
       });
