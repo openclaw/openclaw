@@ -141,6 +141,10 @@ function isFallbackImageType(type: unknown): boolean {
   return type === "image" || type === "input_image";
 }
 
+function isFallbackThinkingType(type: unknown): boolean {
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function isFallbackToolResultType(type: unknown): boolean {
   return type === "toolResult" || type === "tool";
 }
@@ -183,6 +187,30 @@ function estimateSafeToolResultChars(block: unknown): number {
   return estimateSafeUnknownChars(block);
 }
 
+function estimateSafeThinkingChars(block: unknown): number {
+  if (!block || typeof block !== "object") {
+    return 0;
+  }
+  const record = block as {
+    type?: unknown;
+    thinking?: unknown;
+    thinkingSignature?: unknown;
+    data?: unknown;
+  };
+
+  let chars = 0;
+  if (typeof record.thinking === "string") {
+    chars += record.thinking.length;
+  }
+  if (typeof record.thinkingSignature === "string") {
+    chars += record.thinkingSignature.length;
+  }
+  if (record.type === "redacted_thinking" && typeof record.data === "string") {
+    chars += record.data.length;
+  }
+  return chars;
+}
+
 function estimateSafeArrayContentChars(content: unknown): number {
   if (!Array.isArray(content)) {
     return 0;
@@ -196,14 +224,13 @@ function estimateSafeArrayContentChars(content: unknown): number {
     const record = block as {
       type?: unknown;
       text?: unknown;
-      thinking?: unknown;
     };
     if (isFallbackTextType(record.type) && typeof record.text === "string") {
       chars += record.text.length;
       continue;
     }
-    if (record.type === "thinking" && typeof record.thinking === "string") {
-      chars += record.thinking.length;
+    if (isFallbackThinkingType(record.type)) {
+      chars += estimateSafeThinkingChars(block);
       continue;
     }
     if (isFallbackToolCallType(record.type)) {

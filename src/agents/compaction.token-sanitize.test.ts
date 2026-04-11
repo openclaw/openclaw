@@ -79,6 +79,39 @@ describe("compaction token accounting sanitization", () => {
     );
   });
 
+  it("counts reasoning signatures and redacted thinking payloads when fallback estimation is used", () => {
+    piCodingAgentMocks.estimateTokens.mockImplementation(() => {
+      throw new TypeError("boom");
+    });
+
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "draft reasoning",
+          thinkingSignature: "sig_payload",
+        },
+        {
+          type: "redacted_thinking",
+          data: "redacted_reasoning_blob",
+          thinkingSignature: "sig_redacted",
+        },
+      ],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageTokens(message)).toBe(
+      Math.ceil(
+        ("draft reasoning".length +
+          "sig_payload".length +
+          "redacted_reasoning_blob".length +
+          "sig_redacted".length) /
+          4,
+      ),
+    );
+  });
+
   it("does not pass toolResult.details into per-message token estimates", () => {
     const messages: AgentMessage[] = [
       {
