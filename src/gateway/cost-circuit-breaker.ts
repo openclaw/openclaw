@@ -113,6 +113,8 @@ export function createCostCircuitBreaker(
     },
 
     recordCost(cost: number): void {
+      if (!config.enabled) return;
+
       clearProbeTimer();
       entries.push({ timestamp: Date.now(), cost });
 
@@ -131,6 +133,8 @@ export function createCostCircuitBreaker(
     },
 
     recordFailure(): void {
+      if (!config.enabled) return;
+
       clearProbeTimer();
       if (state === "half-open") trip();
     },

@@ -1,3 +1,5 @@
+import { resolveClientIp } from "./net.js";
+
 /**
  * Adds X-RateLimit-* response headers to HTTP responses.
  *
@@ -47,16 +49,20 @@ export function createRateLimitHeaders(
   if (cleanupTimer.unref) cleanupTimer.unref();
 
   function getClientKey(req: any): string {
-    const peerIp = req.socket?.remoteAddress || "unknown";
-
-    if (trustedProxies.length > 0 && trustedProxies.includes(peerIp)) {
-      const forwarded = req.headers["x-forwarded-for"];
-      if (typeof forwarded === "string") {
-        return forwarded.split(",")[0].trim();
-      }
-    }
-
-    return peerIp;
+    const remoteAddr = req.socket?.remoteAddress;
+    const forwardedHeader = req.headers?.["x-forwarded-for"];
+    const forwardedFor =
+      typeof forwardedHeader === "string"
+        ? forwardedHeader
+        : Array.isArray(forwardedHeader)
+          ? forwardedHeader.join(",")
+          : undefined;
+    const resolved = resolveClientIp({
+      remoteAddr,
+      forwardedFor,
+      trustedProxies,
+    });
+    return resolved ?? remoteAddr ?? "unknown";
   }
 
   return {
@@ -76,7 +82,8 @@ export function createRateLimitHeaders(
       client.timestamps = client.timestamps.filter((t) => t > cutoff);
       client.timestamps.push(now);
 
-      const remaining = Math.max(0, config.limit - client.timestamps.length);
+      const usedInWindow = client.timestamps.length;
+      const remaining = Math.max(0, config.limit - usedInWindow);
 
       const oldestInWindow = client.timestamps[0];
       const resetAt = oldestInWindow + windowMs;
@@ -86,7 +93,7 @@ export function createRateLimitHeaders(
       res.setHeader("X-RateLimit-Remaining", String(remaining));
       res.setHeader("X-RateLimit-Reset", String(resetSecs));
 
-      if (remaining === 0) {
+      if (usedInWindow > config.limit) {
         res.setHeader("Retry-After", String(resetSecs));
         return false;
       }

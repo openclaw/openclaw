@@ -1,3 +1,5 @@
+import { resolveClientIp } from "./net.js";
+
 /**
  * Pre-auth WebSocket connection limiter.
  *
@@ -22,16 +24,20 @@ const DEFAULT_CONFIG: WsLimitConfig = {
 };
 
 function getIp(req: any, trustedProxies: string[]): string {
-  const peerIp = req.socket?.remoteAddress || "unknown";
-
-  if (trustedProxies.length > 0 && trustedProxies.includes(peerIp)) {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string") {
-      return forwarded.split(",")[0].trim();
-    }
-  }
-
-  return peerIp;
+  const remoteAddr = req.socket?.remoteAddress;
+  const forwardedHeader = req.headers?.["x-forwarded-for"];
+  const forwardedFor =
+    typeof forwardedHeader === "string"
+      ? forwardedHeader
+      : Array.isArray(forwardedHeader)
+        ? forwardedHeader.join(",")
+        : undefined;
+  const resolved = resolveClientIp({
+    remoteAddr,
+    forwardedFor,
+    trustedProxies,
+  });
+  return resolved ?? remoteAddr ?? "unknown";
 }
 
 export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
@@ -68,7 +74,11 @@ export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
         } else {
           pending.set(ip, count - 1);
         }
-        onTimeout();
+        try {
+          onTimeout();
+        } catch {
+          // Swallow callback exceptions to avoid crashing the process from timer context.
+        }
       }, config.challengeTimeoutMs);
 
       if (timer.unref) timer.unref();
