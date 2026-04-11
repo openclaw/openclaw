@@ -76,5 +76,25 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("deepseek/deepseek-chat: 429 deepseek rate limit");
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+    const lastFormattedCall = mockedFormatAssistantErrorText.mock.calls.at(-1) as
+      | unknown[]
+      | undefined;
+    const lastFormattedAssistant = lastFormattedCall?.[0] as
+      | EmbeddedRunAttemptResult["currentAttemptAssistant"]
+      | undefined;
+    expect(lastFormattedAssistant).toEqual(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
   });
 });
