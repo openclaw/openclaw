@@ -118,6 +118,16 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
+    const scenario = readQaScenarioById("image-understanding-attachment");
+    const imageRequestExpr = scenario.execution.flow?.steps
+      .flatMap((step) => step.actions ?? [])
+      .find((action) => action.set === "imageRequest")?.value?.expr;
+
+    expect(imageRequestExpr).toContain("env.mock ?");
+    expect(imageRequestExpr).toContain("/debug/requests");
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({
