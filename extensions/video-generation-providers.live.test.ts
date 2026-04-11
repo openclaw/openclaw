@@ -158,7 +158,11 @@ function expectBufferedVideo(
     throw new Error("expected generated video buffer");
   }
   expect(video.buffer.byteLength).toBeGreaterThan(1024);
-  return video;
+  return {
+    buffer: video.buffer,
+    mimeType: video.mimeType,
+    ...(video.fileName ? { fileName: video.fileName } : {}),
+  };
 }
 
 describeLive("video generation provider live", () => {

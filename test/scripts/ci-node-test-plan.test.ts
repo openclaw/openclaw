@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
-  it("names the node shard checks as core test lanes", () => {
+  it("names the node shard checks as normalized node lanes", () => {
     const shards = createNodeTestShards();
 
     expect(shards).not.toHaveLength(0);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard) => `checks-node-core-test-${shard.shardName}`),
+      shards.map((shard) => {
+        const normalizedShardName = shard.shardName.startsWith("core-unit-")
+          ? `core-${shard.shardName.slice("core-unit-".length)}`
+          : shard.shardName;
+        return `checks-node-${normalizedShardName}`;
+      }),
     );
   });
 
