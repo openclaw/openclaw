@@ -6,6 +6,7 @@ import {
 } from "./import-boundary.test-helpers.js";
 
 const ALLOWED_IMPORTERS = new Set([
+  "octo/adapters/openclaw/task-ledger.ts",
   "tasks/runtime-internal.ts",
   "tasks/task-owner-access.ts",
   "tasks/task-status-access.ts",

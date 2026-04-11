@@ -22480,6 +22480,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
       },
+      octo: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+        },
+        additionalProperties: {},
+      },
     },
     required: ["commands"],
     additionalProperties: false,
