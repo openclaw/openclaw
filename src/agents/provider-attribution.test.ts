@@ -304,7 +304,22 @@ describe("provider attribution", () => {
     ).toBeUndefined();
   });
 
-  it("summarizes proxy-like, local, and native routing compactly", () => {
+  it("summarizes proxy-like, local, invalid, default, and native routing compactly", () => {
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=default route=default policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "javascript:alert(1)",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=invalid route=invalid policy=none");
+
     expect(
       describeProviderRequestRoutingSummary({
         provider: "openai",
@@ -348,6 +363,16 @@ describe("provider attribution", () => {
     ).toBe(
       "provider=openrouter api=openai-responses endpoint=openrouter route=proxy-like policy=documented",
     );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "groq",
+        api: "openai-completions",
+        baseUrl: "https://api.groq.com/openai/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=groq api=openai-completions endpoint=groq-native route=native policy=none");
   });
 
   it("models other provider families without enabling hidden attribution", () => {

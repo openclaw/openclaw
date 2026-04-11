@@ -1733,7 +1733,7 @@ export async function runEmbeddedAttempt(
         });
         log.debug(
           `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId} ` +
-            `routing=${routingSummary}`,
+            routingSummary,
         );
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,

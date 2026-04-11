@@ -647,7 +647,7 @@ function describeProviderRequestRouteClass(
   if (policy.endpointClass === "local") {
     return "local";
   }
-  if (policy.usesExplicitProxyLikeEndpoint) {
+  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
     return "proxy-like";
   }
   return "native";
