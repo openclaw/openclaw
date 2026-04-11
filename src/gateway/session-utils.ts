@@ -1037,6 +1037,58 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
   };
 }
 
+function normalizeResolvedSessionModelRef(params: {
+  cfg: OpenClawConfig;
+  ref: { provider: string; model: string };
+  entry?: Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+}): { provider: string; model: string } {
+  const normalizedModel = params.ref.model.trim();
+  if (!normalizedModel) {
+    return params.ref;
+  }
+  if (normalizedModel.includes("/")) {
+    const parsed = parseModelRef(normalizedModel, params.ref.provider || DEFAULT_PROVIDER);
+    if (parsed) {
+      return parsed;
+    }
+    return params.ref;
+  }
+
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: normalizedModel,
+  });
+  if (!inferredProvider) {
+    return params.ref;
+  }
+
+  const explicitOverrideProvider = params.entry?.providerOverride?.trim();
+  const runtimeProvider = params.entry?.modelProvider?.trim();
+  if (explicitOverrideProvider) {
+    return {
+      provider: explicitOverrideProvider,
+      model: normalizedModel,
+    };
+  }
+  if (runtimeProvider) {
+    return {
+      provider: runtimeProvider,
+      model: normalizedModel,
+    };
+  }
+  if (!params.ref.provider || params.ref.provider === DEFAULT_PROVIDER) {
+    return {
+      provider: inferredProvider,
+      model: normalizedModel,
+    };
+  }
+
+  return {
+    provider: params.ref.provider,
+    model: normalizedModel,
+  };
+}
+
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -1060,7 +1112,11 @@ export function resolveSessionModelRef(
     overrideModel: entry?.modelOverride,
   });
   if (persisted) {
-    return persisted;
+    return normalizeResolvedSessionModelRef({
+      cfg,
+      ref: persisted,
+      entry,
+    });
   }
   return resolved;
 }
