@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InternalHookEvent } from "../hooks/internal-hooks.js";
+
+type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
 const mocks = {
   logWarn: vi.fn(),
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
+  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_event) => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -20,6 +24,16 @@ vi.mock("../channels/plugins/index.js", async () => ({
 vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: vi.fn(async () => undefined),
 }));
+
+vi.mock("../hooks/internal-hooks.js", async () => {
+  const actual = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
+    "../hooks/internal-hooks.js",
+  );
+  return {
+    ...actual,
+    triggerInternalHook: mocks.triggerInternalHook,
+  };
+});
 
 vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
@@ -88,6 +102,33 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAgentHarnesses.mockClear();
     mocks.disposeAllSessionMcpRuntimes.mockClear();
     mocks.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    mocks.triggerInternalHook.mockReset();
+    mocks.triggerInternalHook.mockResolvedValue(undefined);
+  });
+
+  it("emits gateway shutdown and pre-restart hooks", async () => {
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 123 });
+
+    const hookCalls = mocks.triggerInternalHook.mock.calls as unknown as Array<
+      [{ type?: string; action?: string; context?: Record<string, unknown> }]
+    >;
+    const shutdownEvent = hookCalls.find(
+      ([event]) => event?.type === "gateway" && event?.action === "shutdown",
+    )?.[0];
+    const preRestartEvent = hookCalls.find(
+      ([event]) => event?.type === "gateway" && event?.action === "pre-restart",
+    )?.[0];
+
+    expect(shutdownEvent?.context).toMatchObject({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+    });
+    expect(preRestartEvent?.context).toMatchObject({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+    });
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {
