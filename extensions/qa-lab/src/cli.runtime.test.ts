@@ -338,6 +338,11 @@ describe("qa cli runtime", () => {
           "source-docs-discovery-report",
           "image-understanding-attachment",
           "compaction-retry-mutating-tool",
+          "subagent-handoff",
+          "subagent-fanout-synthesis",
+          "memory-recall",
+          "thread-memory-isolation",
+          "config-restart-capability-flip",
         ],
       }),
     );
