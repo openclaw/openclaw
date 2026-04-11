@@ -14,7 +14,12 @@ import {
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow,
+  getTaskFlowById,
+  requestFlowCancel,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
   cancelTaskById,
@@ -1798,6 +1803,58 @@ describe("task-registry", () => {
         taskId: created.taskId,
         status: "awaiting_approval",
         progressSummary: "Awaiting approval before command can run.",
+      });
+    });
+  });
+
+  it("keeps managed flows active when tasks move into awaiting_approval", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Await approval safely",
+      });
+
+      const created = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-await-approval-flow",
+        task: "Guarded command inside flow",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      requestFlowCancel({
+        flowId: flow.flowId,
+        updatedAt: 42,
+        cancelRequestedAt: 42,
+      });
+
+      emitAgentEvent({
+        runId: "run-await-approval-flow",
+        stream: "approval",
+        data: {
+          phase: "requested",
+          kind: "exec",
+          status: "pending",
+          title: "Command approval requested",
+        },
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        status: "awaiting_approval",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "queued",
       });
     });
   });

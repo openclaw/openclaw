@@ -106,7 +106,12 @@ export function isParentFlowLinkError(error: unknown): error is ParentFlowLinkEr
 }
 
 function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
+  return (
+    status === "queued" ||
+    status === "awaiting_approval" ||
+    status === "waiting_external" ||
+    status === "running"
+  );
 }
 
 function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
