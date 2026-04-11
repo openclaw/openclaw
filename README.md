@@ -6,16 +6,25 @@
 
 ## Fixes on top of upstream
 
-### [v2026.4.10+] Silent message drop fixes (`426606c`)
+### [v2026.4.11+] ChatGPT-style session management UI (`1d6aaac`)
+
+- **New chat button** in the sidebar (always visible, disabled when disconnected)
+- **Recent sessions list** in the sidebar — click any session to switch to it
+- **Rename session** button in the chat header
+- Session list ordered by last activity, with idle/connected state indicators
+
+---
+
+### [v2026.4.10+] Silent message drop fixes (`1c17abb`)
 
 Four bugs that caused agents (e.g. MonicaHall, Harvey) to silently drop user messages in Telegram:
 
-| # | Bug | Fix |
-|---|-----|-----|
-| 1 | **Timeout compaction gate** treated missing LLM usage stats as 0% context pressure, skipping compaction and stalling sessions | `run.ts`: falls back to preflight-estimated prompt tokens; idle-timeout now treated as 100% pressure |
-| 2 | **Pre-flight compaction** used truncation-only for sessions >200 messages, which doesn't handle structural overflow | `preemptive-compaction.ts`: upgrades truncation-only → `compact_then_truncate` when session exceeds 200 messages |
-| 3 | **Thinking-only LLM responses** (`stopReason=stop`, no visible text, no tool calls) were silently dropped instead of retried | `incomplete-turn.ts`: detects thinking-only stop turns and surfaces a user-visible warning |
-| 4 | **Startup stuck-session replay**: on gateway restart, sessions with unanswered user turns are detected and replayed automatically | `server-startup-stuck-session-replay.ts`: scans transcripts, re-verifies before send (race guard), 30s per-send timeout, cap of 10 candidates |
+| #   | Bug                                                                                                                               | Fix                                                                                                                                           |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Timeout compaction gate** treated missing LLM usage stats as 0% context pressure, skipping compaction and stalling sessions     | `run.ts`: falls back to preflight-estimated prompt tokens; idle-timeout now treated as 100% pressure                                          |
+| 2   | **Pre-flight compaction** used truncation-only for sessions >200 messages, which doesn't handle structural overflow               | `preemptive-compaction.ts`: upgrades truncation-only → `compact_then_truncate` when session exceeds 200 messages                              |
+| 3   | **Thinking-only LLM responses** (`stopReason=stop`, no visible text, no tool calls) were silently dropped instead of retried      | `incomplete-turn.ts`: detects thinking-only stop turns and surfaces a user-visible warning                                                    |
+| 4   | **Startup stuck-session replay**: on gateway restart, sessions with unanswered user turns are detected and replayed automatically | `server-startup-stuck-session-replay.ts`: scans transcripts, re-verifies before send (race guard), 30s per-send timeout, cap of 10 candidates |
 
 Related upstream issues: [#724](https://github.com/openclaw/openclaw/issues/724), [#64570](https://github.com/openclaw/openclaw/issues/64570), [#64571](https://github.com/openclaw/openclaw/issues/64571)
 
