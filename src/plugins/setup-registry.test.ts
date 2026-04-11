@@ -12,6 +12,7 @@ const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
+let resolvePluginSetupService: typeof import("./setup-registry.js").resolvePluginSetupService;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
@@ -26,7 +27,12 @@ describe("setup-registry getJiti", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
-    ({ clearPluginSetupRegistryCache, resolvePluginSetupRegistry, runPluginSetupConfigMigrations } =
+    ({
+      clearPluginSetupRegistryCache,
+      resolvePluginSetupRegistry,
+      resolvePluginSetupService,
+      runPluginSetupConfigMigrations,
+    } =
       await import("./setup-registry.js"));
     clearPluginSetupRegistryCache();
   });
@@ -192,5 +198,56 @@ describe("setup-registry getJiti", () => {
 
     expect(result.changes).toEqual(["voice-call"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps setup services from duplicate-id plugin roots distinct by rootDir", () => {
+    const bundledRoot = makeTempDir();
+    const overrideRoot = makeTempDir();
+    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(overrideRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "acpx", rootDir: bundledRoot },
+        { id: "acpx", rootDir: overrideRoot },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation((_modulePath: string) => {
+      return () => ({
+        default: {
+          register(api: {
+            registerService: (service: { id: string; start: () => void }) => void;
+          }) {
+            api.registerService({ id: "acpx-runtime", start() {} });
+          },
+        },
+      });
+    });
+
+    const registry = resolvePluginSetupRegistry({
+      workspaceDir: bundledRoot,
+      env: {},
+      pluginIds: ["acpx"],
+    });
+
+    expect(registry.services).toHaveLength(2);
+    expect(
+      resolvePluginSetupService({
+        pluginId: "acpx",
+        serviceId: "acpx-runtime",
+        rootDir: bundledRoot,
+        workspaceDir: bundledRoot,
+        env: {},
+      })?.service.id,
+    ).toBe("acpx-runtime");
+    expect(
+      resolvePluginSetupService({
+        pluginId: "acpx",
+        serviceId: "acpx-runtime",
+        rootDir: overrideRoot,
+        workspaceDir: bundledRoot,
+        env: {},
+      })?.service.id,
+    ).toBe("acpx-runtime");
   });
 });

@@ -341,7 +341,7 @@ export function resolvePluginSetupRegistry(params?: {
           if (!id) {
             return;
           }
-          const key = `${record.id}:${id}`;
+          const key = `${record.id}:${record.rootDir ?? ""}:${id}`;
           if (serviceKeys.has(key)) {
             return;
           }
