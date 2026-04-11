@@ -4,6 +4,7 @@ import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   normalizeProviderId,
@@ -426,7 +427,9 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const catalog = cfg.models?.mode === "replace"
+    ? buildConfiguredModelCatalog({ cfg })
+    : await loadModelCatalog({ config: cfg, useCache: false });
   if (catalog.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -602,7 +605,9 @@ export async function promptModelAllowlist(params: {
     ? initialSeeds.filter((key) => allowedKeySet.has(key))
     : initialSeeds;
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const catalog = cfg.models?.mode === "replace"
+    ? buildConfiguredModelCatalog({ cfg })
+    : await loadModelCatalog({ config: cfg, useCache: false });
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const raw = await params.prompter.text({
       message:
