@@ -97,6 +97,50 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+
+  it("extracts [[buttons:...]] tag into interactive and strips it from text", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: 'Send this? [[buttons: [{"label":"Send","value":"send","style":"success"},{"label":"Cancel","value":"cancel","style":"danger"}]]]',
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Send this?",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Send", value: "send", style: "success" },
+                { label: "Cancel", value: "cancel", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("payload.interactive takes precedence over [[buttons:...]] tag", () => {
+    const existingInteractive = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "X", value: "x" }] }],
+    };
+    const result = normalizeReplyPayloadsForDelivery([
+      {
+        text: 'Text [[buttons: [{"label":"Y","value":"y"}]]]',
+        interactive: existingInteractive,
+      },
+    ]);
+    expect(result[0]?.interactive).toEqual(existingInteractive);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
