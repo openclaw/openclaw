@@ -44,7 +44,7 @@ const invalidPairs = allTransitionPairs.filter(
   ([f, t]) => !(MISSION_TRANSITIONS.get(f)?.has(t) ?? false),
 );
 
-function makeMission(state: MissionState | string, updated_at = 1_000): MissionStateLike {
+function makeMission(state: string, updated_at = 1_000): MissionStateLike {
   return { state, updated_at };
 }
 

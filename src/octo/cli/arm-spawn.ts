@@ -192,6 +192,8 @@ function buildRuntimeOptions(
       }
       return ro;
     }
+    default:
+      return {};
   }
 }
 

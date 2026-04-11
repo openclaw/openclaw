@@ -104,6 +104,8 @@ export class RetryService {
         return initialDelayS * attemptCount;
       case "fixed":
         return initialDelayS;
+      default:
+        return initialDelayS;
     }
   }
 

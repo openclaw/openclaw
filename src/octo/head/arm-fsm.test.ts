@@ -36,7 +36,7 @@ const invalidPairs = allTransitionPairs.filter(
   ([f, t]) => !(ARM_TRANSITIONS.get(f)?.has(t) ?? false),
 );
 
-function makeArm(state: ArmState | string, updated_at = 1_000): ArmStateLike {
+function makeArm(state: string, updated_at = 1_000): ArmStateLike {
   return { state, updated_at };
 }
 

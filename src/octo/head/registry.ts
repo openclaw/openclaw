@@ -510,7 +510,7 @@ export class RegistryService {
       params.push(filter.owner);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = filter.limit !== undefined ? Number(filter.limit) : DEFAULT_LIST_LIMIT;
+    const limit = filter.limit !== undefined ? filter.limit : DEFAULT_LIST_LIMIT;
     const sql = `SELECT * FROM missions ${where} ORDER BY created_at DESC LIMIT ${limit}`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as unknown as MissionRow[];
@@ -640,7 +640,7 @@ export class RegistryService {
       params.push(filter.agent_id);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = filter.limit !== undefined ? Number(filter.limit) : DEFAULT_LIST_LIMIT;
+    const limit = filter.limit !== undefined ? filter.limit : DEFAULT_LIST_LIMIT;
     const sql = `SELECT * FROM arms ${where} ORDER BY created_at DESC LIMIT ${limit}`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as unknown as ArmRow[];
@@ -797,7 +797,7 @@ export class RegistryService {
       params.push(filter.assigned_arm_id);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = filter.limit !== undefined ? Number(filter.limit) : DEFAULT_LIST_LIMIT;
+    const limit = filter.limit !== undefined ? filter.limit : DEFAULT_LIST_LIMIT;
     const sql = `SELECT * FROM grips ${where} ORDER BY created_at DESC LIMIT ${limit}`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as unknown as GripRow[];
@@ -930,7 +930,7 @@ export class RegistryService {
       params.push(filter.owner_arm_id);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = filter.limit !== undefined ? Number(filter.limit) : DEFAULT_LIST_LIMIT;
+    const limit = filter.limit !== undefined ? filter.limit : DEFAULT_LIST_LIMIT;
     const sql = `SELECT * FROM claims ${where} ORDER BY created_at DESC LIMIT ${limit}`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as unknown as ClaimRow[];

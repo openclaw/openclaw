@@ -522,7 +522,7 @@ function probeCli(binary: string): CliCapabilities | null {
     const hashCode = Array.from(hash).reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
     return {
       subcommands,
-      helpHash: String(hashCode.toString(16)),
+      helpHash: hashCode.toString(16),
       lastChecked: new Date().toISOString(),
     };
   } catch {
@@ -1007,6 +1007,8 @@ function weightLabel(weight: RuntimeInfo["weight"]): string {
       return "light";
     case "heavy":
       return "heavy";
+    default:
+      return String(weight);
   }
 }
 
