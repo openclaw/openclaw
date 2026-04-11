@@ -7,6 +7,7 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { saveObservableSessionState } from "./observable-state.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
@@ -535,6 +536,10 @@ async function writeSessionStoreAtomic(params: {
     storePath: params.storePath,
     store: params.store,
     serialized: params.serialized,
+  });
+  saveObservableSessionState({
+    storePath: params.storePath,
+    store: params.store,
   });
 }
 
