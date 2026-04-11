@@ -6,12 +6,17 @@
  * like `channel.discord` or `channel.slack`.
  */
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
   UpsertChannelPairingRequestForAccount,
 } from "../../pairing/pairing-store.types.js";
 type ShouldHandleTextCommands =
   import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
+type IsControlCommandMessage =
+  import("../../auto-reply/command-detection.runtime-types.js").IsControlCommandMessage;
+type ShouldComputeCommandAuthorized =
+  import("../../auto-reply/command-detection.runtime-types.js").ShouldComputeCommandAuthorized;
 type BuildMentionRegexes = import("../../auto-reply/reply/mentions.types.js").BuildMentionRegexes;
 type MatchesMentionPatterns =
   import("../../auto-reply/reply/mentions.types.js").MatchesMentionPatterns;
@@ -79,7 +84,7 @@ export type PluginRuntimeChannel = {
   };
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
-    createReplyDispatcherWithTyping: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
+    createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
     dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
@@ -135,8 +140,8 @@ export type PluginRuntimeChannel = {
   };
   commands: {
     resolveCommandAuthorizedFromAuthorizers: typeof import("../../channels/command-gating.js").resolveCommandAuthorizedFromAuthorizers;
-    isControlCommandMessage: typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
-    shouldComputeCommandAuthorized: typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
+    isControlCommandMessage: IsControlCommandMessage;
+    shouldComputeCommandAuthorized: ShouldComputeCommandAuthorized;
     shouldHandleTextCommands: ShouldHandleTextCommands;
   };
   outbound: {
