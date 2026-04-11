@@ -22,6 +22,58 @@ type StreamEvent =
       };
     };
 
+/**
+ * Provider variant tag for `body.model`. The mock previously ignored
+ * `body.model` for dispatch and only echoed it in the prose output, which
+ * made the parity gate tautological when run against the mock alone
+ * (both providers produced identical scenario plans by construction).
+ * Tagging requests with a normalized variant lets individual scenario
+ * branches opt into provider-specific behavior while the rest of the
+ * dispatcher stays shared, and lets `/debug/requests` consumers verify
+ * which provider lane a given request came from without re-parsing the
+ * raw model string.
+ *
+ * Policy:
+ * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
+ * - `anthropic/*`, `claude-*` → `"anthropic"`
+ * - Everything else (including empty strings) → `"unknown"`
+ *
+ * The `/v1/messages` route always feeds `body.model` straight through,
+ * so an Anthropic request with an `openai/gpt-5.4` model string is still
+ * classified as `"openai"`. That matches the parity program's convention
+ * where the provider label is the source of truth, not the HTTP route.
+ */
+export type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
+
+export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
+  if (typeof model !== "string") {
+    return "unknown";
+  }
+  const trimmed = model.trim().toLowerCase();
+  if (trimmed.length === 0) {
+    return "unknown";
+  }
+  // Prefer the explicit `provider/model` or `provider:model` prefix when
+  // the caller supplied one — that's the most reliable signal.
+  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
+  const provider = separatorMatch?.[1] ?? trimmed;
+  if (provider === "openai" || provider === "openai-codex") {
+    return "openai";
+  }
+  if (provider === "anthropic" || provider === "claude-cli") {
+    return "anthropic";
+  }
+  // Fall back to model-name prefix matching for bare model strings like
+  // `gpt-5.4` or `claude-opus-4-6`.
+  if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
+    return "openai";
+  }
+  if (/^(?:claude-|anthropic-)/.test(trimmed)) {
+    return "anthropic";
+  }
+  return "unknown";
+}
+
 type MockOpenAiRequestSnapshot = {
   raw: string;
   body: Record<string, unknown>;
@@ -29,6 +81,7 @@ type MockOpenAiRequestSnapshot = {
   allInputText: string;
   toolOutput: string;
   model: string;
+  providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
 };
@@ -1107,13 +1160,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
       const events = await buildResponsesPayload(body);
+      const resolvedModel = typeof body.model === "string" ? body.model : "";
       lastRequest = {
         raw,
         body,
         prompt: extractLastUserText(input),
         allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
-        model: typeof body.model === "string" ? body.model : "",
+        model: resolvedModel,
+        providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };
@@ -1170,6 +1225,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
         model: normalizedModel,
+        providerVariant: resolveProviderVariant(normalizedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };

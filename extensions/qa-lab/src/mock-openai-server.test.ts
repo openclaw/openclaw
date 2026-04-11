@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { resolveProviderVariant, startQaMockOpenAiServer } from "./mock-openai-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
@@ -1245,5 +1245,121 @@ describe("qa mock openai server", () => {
     expect(debugResponse.status).toBe(200);
     const debug = (await debugResponse.json()) as { model: string };
     expect(debug.model).toBe("claude-opus-4-6");
+  });
+});
+
+describe("resolveProviderVariant", () => {
+  it("tags prefix-qualified openai models", () => {
+    expect(resolveProviderVariant("openai/gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("openai:gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("openai-codex/gpt-5.4")).toBe("openai");
+  });
+
+  it("tags prefix-qualified anthropic models", () => {
+    expect(resolveProviderVariant("anthropic/claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("anthropic:claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-cli/claude-opus-4-6")).toBe("anthropic");
+  });
+
+  it("tags bare model names by prefix", () => {
+    expect(resolveProviderVariant("gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("gpt-5.4-alt")).toBe("openai");
+    expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
+    expect(resolveProviderVariant("o1-preview")).toBe("openai");
+    expect(resolveProviderVariant("claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-sonnet-4-6")).toBe("anthropic");
+  });
+
+  it("handles case drift and whitespace", () => {
+    expect(resolveProviderVariant("  OpenAI/GPT-5.4  ")).toBe("openai");
+    expect(resolveProviderVariant("ANTHROPIC/CLAUDE-OPUS-4-6")).toBe("anthropic");
+  });
+
+  it("falls through to unknown for unrecognized providers", () => {
+    expect(resolveProviderVariant("")).toBe("unknown");
+    expect(resolveProviderVariant(undefined)).toBe("unknown");
+    expect(resolveProviderVariant("mistral/mistral-large")).toBe("unknown");
+    expect(resolveProviderVariant("some-random-model")).toBe("unknown");
+  });
+});
+
+describe("qa mock openai server provider variant tagging", () => {
+  it("records providerVariant on /debug/last-request for openai requests", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "openai/gpt-5.4",
+        stream: false,
+        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      model: string;
+      providerVariant: string;
+    };
+    expect(debug.model).toBe("openai/gpt-5.4");
+    expect(debug.providerVariant).toBe("openai");
+  });
+
+  it("records providerVariant=anthropic on /v1/messages requests", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [{ role: "user", content: "Heartbeat check" }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      model: string;
+      providerVariant: string;
+    };
+    expect(debug.model).toBe("claude-opus-4-6");
+    expect(debug.providerVariant).toBe("anthropic");
+  });
+
+  it("records providerVariant=unknown for unrecognized models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mistral/mistral-large",
+        stream: false,
+        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      providerVariant: string;
+    };
+    expect(debug.providerVariant).toBe("unknown");
   });
 });
