@@ -129,6 +129,7 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   markSubagentRunTerminated: () => 0,
 }));
 
+import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -1579,5 +1580,89 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       mediaUrl: "https://example.test/image.png",
     });
     expect(payload?.text).toBeUndefined();
+  });
+});
+
+describe("runReplyAgent mid-stream steer", () => {
+  const queueEmbeddedPiMessageMock = vi.mocked(queueEmbeddedPiMessage);
+
+  function createSteerRun(overrides: { isStreaming: boolean; steerReturns: boolean }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "steer" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "change direction",
+      summaryLine: "change direction",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "steer-session",
+        sessionKey: "main",
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    queueEmbeddedPiMessageMock.mockReturnValue(overrides.steerReturns);
+
+    return {
+      typing,
+      call: () =>
+        runReplyAgent({
+          commandBody: "change direction",
+          followupRun,
+          queueKey: "main",
+          resolvedQueue,
+          shouldSteer: true,
+          shouldFollowup: false,
+          isActive: true,
+          isStreaming: overrides.isStreaming,
+          typing,
+          sessionCtx,
+          defaultModel: "anthropic/claude",
+          resolvedVerboseLevel: "off",
+          isNewSession: false,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          shouldInjectGroupIntro: false,
+          typingMode: "instant",
+        }),
+    };
+  }
+
+  it("aborts active run when steer injection fails (not streaming)", async () => {
+    const { call } = createSteerRun({ isStreaming: false, steerReturns: false });
+    await call();
+    expect(abortEmbeddedPiRunMock).toHaveBeenCalledWith("steer-session");
+  });
+
+  it("does not abort when steer injection succeeds (streaming)", async () => {
+    const { call } = createSteerRun({ isStreaming: true, steerReturns: true });
+    const result = await call();
+    expect(result).toBeUndefined();
+    expect(abortEmbeddedPiRunMock).not.toHaveBeenCalled();
+  });
+
+  it("attempts steer even when run is active but not streaming", async () => {
+    const { call } = createSteerRun({ isStreaming: false, steerReturns: false });
+    await call();
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith("steer-session", "change direction");
   });
 });

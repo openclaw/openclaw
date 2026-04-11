@@ -2,7 +2,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
@@ -146,7 +146,7 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isRunActive,
-    isStreaming,
+    isStreaming: _isStreaming,
     opts,
     typing,
     sessionEntry,
@@ -207,7 +207,7 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (shouldSteer && isStreaming) {
+  if (shouldSteer && isActive) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
@@ -216,6 +216,12 @@ export async function runReplyAgent(params: {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
+    }
+    // Steer injection failed (run active but not streaming) — abort so
+    // the enqueued followup starts sooner instead of waiting for the
+    // current turn to finish naturally.
+    if (!steered) {
+      abortEmbeddedPiRun(steerSessionId);
     }
   }
 

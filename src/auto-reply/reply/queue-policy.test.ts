@@ -45,4 +45,26 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("enqueue-followup");
   });
+
+  it("runs immediately for interrupt mode while active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("run-now");
+  });
+
+  it("enqueues steer-backlog mode while active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        shouldFollowup: false,
+        queueMode: "steer-backlog",
+      }),
+    ).toBe("run-now");
+  });
 });
