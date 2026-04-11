@@ -386,16 +386,20 @@ async function executeUsage(
     const hasOutputTokens = Number.isFinite(session.outputTokens);
     const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
     const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
-    const fallbackTotal = hasInputTokens || hasOutputTokens ? input + output : null;
-    const total = Number.isFinite(session.totalTokens)
+    const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
+    const contextSnapshotTotal = Number.isFinite(session.totalTokens)
       ? (session.totalTokens ?? null)
-      : fallbackTotal;
+      : cumulativeTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
     const ctx = session.contextTokens ?? 0;
     const pct =
-      total !== null && totalTokensFresh && ctx > 0 ? Math.round((total / ctx) * 100) : null;
+      contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
+        ? Math.round((contextSnapshotTotal / ctx) * 100)
+        : null;
     const totalDisplay =
-      total === null ? "n/a" : `${totalTokensFresh ? "" : "~"}${fmtTokens(total)}`;
+      cumulativeTotal === null
+        ? "n/a"
+        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
 
     const lines = [
       "**Session Usage**",
