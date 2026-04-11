@@ -27,6 +27,7 @@ import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { createZaiWebSearchProvider } from "./src/zai-web-search-provider.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -44,19 +45,13 @@ function resolveGlm5ForwardCompatModel(
     return undefined;
   }
 
-  const existing = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    trimmedModelId,
-  ) as ProviderRuntimeModel | null;
+  const existing = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (existing) {
     return existing;
   }
 
   const def = buildZaiModelDefinition({ id: trimmedModelId });
-  const template = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    GLM5_TEMPLATE_MODEL_ID,
-  ) as ProviderRuntimeModel | null;
+  const template = ctx.modelRegistry.find(PROVIDER_ID, GLM5_TEMPLATE_MODEL_ID);
   return normalizeModelCompat({
     ...template,
     id: def.id,
@@ -315,6 +310,7 @@ export default definePluginEntry({
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
     });
+    api.registerWebSearchProvider(createZaiWebSearchProvider());
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 });

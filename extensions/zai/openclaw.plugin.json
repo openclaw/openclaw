@@ -77,11 +77,30 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["zai"]
+    "mediaUnderstandingProviders": ["zai"],
+    "webSearchProviders": ["zai"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Z.AI Search API Key",
+      "help": "Z.AI API key for web search (fallback: ZAI_API_KEY env var). Reuses the same key as the Z.AI model provider.",
+      "sensitive": true,
+      "placeholder": "zai-..."
+    }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
   }
 }
