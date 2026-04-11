@@ -80,4 +80,72 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
     expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
   });
+
+  it("clears reset CLI import suppression when a new CLI binding is persisted", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-codex-cli";
+    const sessionId = "test-openclaw-session";
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        suppressCliHistoryImport: true,
+        cliSessionBindings: {
+          "codex-cli": {
+            sessionId: "stale-session",
+          },
+        },
+        cliSessionIds: {
+          "codex-cli": "stale-session",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    const result: EmbeddedPiRunResult = {
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session-456",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          cliSessionBinding: {
+            sessionId: "cli-session-456",
+          },
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      result,
+    });
+
+    expect(sessionStore[sessionKey]?.suppressCliHistoryImport).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "cli-session-456",
+    });
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.suppressCliHistoryImport).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "cli-session-456",
+    });
+  });
 });

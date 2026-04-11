@@ -89,7 +89,7 @@ export function setCliSessionBinding(
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = trimmed;
   }
-  delete entry.suppressCliHistoryImport;
+  entry.suppressCliHistoryImport = undefined;
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
@@ -107,11 +107,12 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     delete entry.claudeCliSessionId;
   }
-  delete entry.suppressCliHistoryImport;
+  // Reset-created sessions should keep CLI import suppression until a fresh
+  // CLI binding is written back to the session entry.
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
-  delete entry.suppressCliHistoryImport;
+  entry.suppressCliHistoryImport = undefined;
   delete entry.cliSessionBindings;
   delete entry.cliSessionIds;
   delete entry.claudeCliSessionId;

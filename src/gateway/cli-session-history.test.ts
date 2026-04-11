@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { __testing as codexCliHistoryTesting } from "./cli-session-history.codex.js";
 import {
   augmentChatHistoryWithCliSessionImports,
   mergeImportedChatHistoryMessages,
@@ -195,6 +196,7 @@ async function withCodexSessionsDir<T>(
 
 describe("cli session history", () => {
   afterEach(() => {
+    codexCliHistoryTesting.resetCodexCliSessionPathCacheForTests();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -580,6 +582,27 @@ describe("cli session history", () => {
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the codex session path cache", async () => {
+    const previousCacheCap = codexCliHistoryTesting.maxCodexCliSessionPathCacheEntries;
+    codexCliHistoryTesting.setMaxCodexCliSessionPathCacheEntriesForTests(2);
+
+    try {
+      await withCodexSessionsDir(async ({ homeDir, sessionId }) => {
+        expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBeTruthy();
+      });
+      await withCodexSessionsDir(async ({ homeDir, sessionId }) => {
+        expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBeTruthy();
+      });
+      await withCodexSessionsDir(async ({ homeDir, sessionId }) => {
+        expect(resolveCodexCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBeTruthy();
+      });
+
+      expect(codexCliHistoryTesting.codexCliSessionPathCacheSize).toBeLessThanOrEqual(2);
+    } finally {
+      codexCliHistoryTesting.setMaxCodexCliSessionPathCacheEntriesForTests(previousCacheCap);
     }
   });
 
