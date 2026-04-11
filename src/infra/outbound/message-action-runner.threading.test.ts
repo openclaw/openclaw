@@ -164,4 +164,49 @@ describe("message action threading helpers", () => {
     expect(resolved).toBe("thread-777");
     expect(actionParams.threadId).toBe("thread-777");
   });
+
+  it("maps Slack [[reply_to_current]] to the active thread target", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "[[reply_to_current]] hi",
+      },
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "111.222",
+        replyToMode: "off",
+      },
+    });
+
+    expect(call?.replyToId).toBeUndefined();
+    expect(call?.threadId).toBe("111.222");
+    expect(call?.ctx?.params?.threadId).toBe("111.222");
+    expect(call?.ctx?.params?.message).toBe("hi");
+  });
+
+  it("does not force Slack [[reply_to_current]] outside the active channel", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C999",
+        message: "[[reply_to_current]] hi",
+      },
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "111.222",
+        replyToMode: "all",
+      },
+    });
+
+    expect(call?.threadId).toBeUndefined();
+    expect(call?.ctx?.params?.threadId).toBeUndefined();
+    expect(call?.ctx?.params?.message).toBe("[from C123] hi");
+  });
 });

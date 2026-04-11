@@ -73,6 +73,59 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
+function resolveAndApplyOutboundThreadId(
+  params: Record<string, unknown>,
+  ctx: {
+    cfg: OpenClawConfig;
+    channel: ChannelId;
+    to: string;
+    accountId?: string | null;
+    toolContext?: ChannelThreadingToolContext;
+  },
+): string | undefined {
+  const threadId = readStringParam(params, "threadId");
+  const resolved =
+    threadId ??
+    getChannelPlugin(ctx.channel)?.threading?.resolveAutoThreadId?.({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId,
+      to: ctx.to,
+      toolContext: ctx.toolContext,
+      replyToId: readStringParam(params, "replyTo"),
+    });
+  if (resolved && !params.threadId) {
+    params.threadId = resolved;
+  }
+  return resolved ?? undefined;
+}
+
+function resolveExplicitReplyToCurrentThreadId(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  to: string;
+  accountId?: string | null;
+  toolContext?: ChannelThreadingToolContext;
+  parsedReplyToCurrent: boolean;
+}): string | undefined {
+  if (!params.parsedReplyToCurrent || params.channel !== "slack") {
+    return undefined;
+  }
+  const resolveAutoThreadId = getChannelPlugin(params.channel)?.threading?.resolveAutoThreadId;
+  if (!resolveAutoThreadId) {
+    return undefined;
+  }
+  return resolveAutoThreadId({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    to: params.to,
+    toolContext: params.toolContext
+      ? {
+          ...params.toolContext,
+          replyToMode: "all",
+        }
+      : undefined,
+  });
+}
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
@@ -481,6 +534,19 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   params.message = message;
   if (!params.replyTo && parsed.replyToId) {
     params.replyTo = parsed.replyToId;
+  }
+  if (!params.threadId && !params.replyTo && parsed.replyToCurrent) {
+    const explicitCurrentThreadId = resolveExplicitReplyToCurrentThreadId({
+      cfg,
+      channel,
+      to,
+      accountId,
+      toolContext: input.toolContext,
+      parsedReplyToCurrent: parsed.replyToCurrent,
+    });
+    if (explicitCurrentThreadId) {
+      params.threadId = explicitCurrentThreadId;
+    }
   }
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
