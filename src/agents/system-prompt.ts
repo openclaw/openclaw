@@ -217,6 +217,12 @@ function buildReplyTagsSection(isMinimal: boolean) {
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
     "Tags are removed before sending; support depends on the current channel config.",
     "",
+    "To add inline buttons to your reply (Telegram; approval/snooze/choice flows), place the tag at the end of your reply:",
+    '[[buttons: [{"label":"Send","value":"send","style":"success"},{"label":"Cancel","value":"cancel","style":"danger"}]]]',
+    "- Each button: `label` (display text) and `value` (injected as a user message on tap).",
+    "- Optional `style`: `primary` (blue), `success` (green), `danger` (red).",
+    "- The tag is stripped from visible reply text before delivery.",
+    "",
   ];
 }
 
