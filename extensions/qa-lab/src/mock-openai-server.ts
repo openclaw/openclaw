@@ -925,8 +925,19 @@ function convertAnthropicMessagesToResponsesInput(params: {
     if (!Array.isArray(content)) {
       continue;
     }
+    // Buffer each block type so we can push in OpenAI-Responses order instead
+    // of the order they appear in the Anthropic content array. The parent
+    // role message must precede any function_call_output items from the same
+    // turn, otherwise extractToolOutput() (which scans for
+    // function_call_output AFTER the last user-role index) will not see the
+    // output and the downstream scenario dispatcher will behave as if no
+    // tool output was returned. Similarly, assistant tool_use blocks become
+    // function_call items that must follow the assistant text message they
+    // narrate.
     const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
     const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
+    const toolResultItems: ResponsesInputItem[] = [];
+    const toolUseItems: ResponsesInputItem[] = [];
     for (const block of content) {
       if (!block || typeof block !== "object") {
         continue;
@@ -946,7 +957,7 @@ function convertAnthropicMessagesToResponsesInput(params: {
       if (block.type === "tool_result") {
         const output = stringifyToolResultContent(block.content);
         if (output.trim()) {
-          items.push({ type: "function_call_output", output });
+          toolResultItems.push({ type: "function_call_output", output });
         }
         continue;
       }
@@ -956,7 +967,7 @@ function convertAnthropicMessagesToResponsesInput(params: {
         // call". The scenario dispatcher looks for tool_output on the next
         // user turn, not the assistant's prior tool_use, so a minimal
         // placeholder is enough.
-        items.push({
+        toolUseItems.push({
           type: "function_call",
           name: block.name,
           arguments: JSON.stringify(block.input ?? {}),
@@ -968,6 +979,18 @@ function convertAnthropicMessagesToResponsesInput(params: {
     if (textPieces.length > 0 || imagePieces.length > 0) {
       const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
       items.push({ role: message.role, content: combinedContent });
+    }
+    // Emit tool_use (assistant prior calls) and tool_result (user-side
+    // returns) AFTER the parent role message so extractLastUserText and
+    // extractToolOutput walk the array in the order they expect. For a
+    // tool_result-only user turn with no text/image blocks, the parent
+    // message is intentionally omitted — the function_call_output itself
+    // represents the user's "return the tool output" turn.
+    for (const toolUse of toolUseItems) {
+      items.push(toolUse);
+    }
+    for (const toolResult of toolResultItems) {
+      items.push(toolResult);
     }
   }
   return items;

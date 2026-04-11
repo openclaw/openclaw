@@ -1130,4 +1130,95 @@ describe("qa mock openai server", () => {
     expect(textBlock?.text).toContain("Delegated task");
     expect(textBlock?.text).toContain("Evidence");
   });
+
+  it("places tool_result after the parent user message even in mixed-content turns", async () => {
+    // Regression for the loop-6 Copilot / Greptile finding: a user message
+    // that mixes a tool_result block with fresh text blocks must still land
+    // the function_call_output AFTER the parent user message in the
+    // converted ResponsesInputItem[], otherwise extractToolOutput (which
+    // scans AFTER the last user-role index) fails to see the tool output
+    // and the downstream scenario dispatcher behaves as if no tool output
+    // was returned. We verify the conversion directly via the snapshot
+    // that /debug/last-request exposes: the last-request `toolOutput`
+    // field should be the stringified tool_result content, and `prompt`
+    // should be the trailing fresh-text block.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_mixed",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_mixed",
+                content: "SUBAGENT-OK",
+              },
+              // A trailing fresh text block in the same user turn. Before
+              // the loop-6 fix, the tool_result was pushed BEFORE the
+              // parent user message, so extractToolOutput saw the text
+              // turn as the last user-role item and found no
+              // function_call_output after it → returned "". The
+              // downstream dispatcher then behaved as if no tool output
+              // was present at all.
+              {
+                type: "text",
+                text: "Keep going with the fanout.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = (await debugResponse.json()) as {
+      prompt: string;
+      allInputText: string;
+      toolOutput: string;
+    };
+    // extractToolOutput should surface the tool_result content because
+    // the function_call_output item is placed AFTER the parent user
+    // message in the converted input array.
+    expect(debug.toolOutput).toBe("SUBAGENT-OK");
+    // extractLastUserText should surface the fresh-text block (the parent
+    // user message that was pushed BEFORE the function_call_output).
+    expect(debug.prompt).toBe("Keep going with the fanout.");
+    // The converted history still records both turns, including the
+    // original delegate prompt from the first user turn.
+    expect(debug.allInputText).toContain("Delegate one bounded QA task");
+  });
 });
