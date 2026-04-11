@@ -928,6 +928,11 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
 fi
 cd "\$HOME"
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+# Same-guest npm upgrades can leave the old gateway process holding the old
+# bundled plugin host version. Stop it before post-update config commands.
+/usr/bin/pkill -9 -f openclaw-gateway || true
+/usr/bin/pkill -9 -f 'openclaw gateway run' || true
+/usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
 version="\$(/opt/homebrew/bin/openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
@@ -978,6 +983,11 @@ set -euo pipefail
 export HOME=/root
 cd "\$HOME"
 openclaw update --tag "$update_target" --yes --json
+# The fresh Linux lane starts a manual gateway; stop the old process before
+# post-update config validation sees mixed old-host/new-plugin metadata.
+pkill -9 -f openclaw-gateway || true
+pkill -9 -f 'openclaw gateway run' || true
+pkill -9 -f 'openclaw.mjs gateway' || true
 version="\$(openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
