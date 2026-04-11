@@ -46,9 +46,11 @@ describe("subagents info", () => {
 
   it("returns info for a subagent", () => {
     const now = Date.now();
+    const runId = "commands-subagents-info-run";
+    const childSessionKey = "agent:main:subagent:commands-info";
     const run = {
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
+      runId,
+      childSessionKey,
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "do thing",
@@ -62,8 +64,8 @@ describe("subagents info", () => {
     createTaskRecord({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:abc",
-      runId: "run-1",
+      childSessionKey,
+      runId,
       task: "do thing",
       status: "succeeded",
       terminalSummary: "Completed the requested task",
@@ -80,7 +82,7 @@ describe("subagents info", () => {
     const text = requireReplyText(result.reply);
     expect(result.shouldContinue).toBe(false);
     expect(text).toContain("Subagent info");
-    expect(text).toContain("Run: run-1");
+    expect(text).toContain(`Run: ${runId}`);
     expect(text).toContain("Status: done");
     expect(text).toContain("TaskStatus: succeeded");
     expect(text).toContain("Task summary: Completed the requested task");
@@ -88,9 +90,11 @@ describe("subagents info", () => {
 
   it("sanitizes leaked task details in /subagents info", () => {
     const now = Date.now();
+    const runId = "commands-subagents-info-leak-run";
+    const childSessionKey = "agent:main:subagent:commands-info-leak";
     const run = {
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
+      runId,
+      childSessionKey,
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Inspect the stuck run",
@@ -113,14 +117,14 @@ describe("subagents info", () => {
     createTaskRecord({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:subagent:abc",
-      runId: "run-1",
+      childSessionKey,
+      runId,
       task: "Inspect the stuck run",
       status: "running",
       deliveryStatus: "delivered",
     });
     failTaskRunByRunId({
-      runId: "run-1",
+      runId,
       endedAt: now - 1_000,
       error: [
         "OpenClaw runtime context (internal):",

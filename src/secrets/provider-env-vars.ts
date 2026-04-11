@@ -51,7 +51,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
-  const candidates: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  const candidates: Record<string, string[]> = {};
   for (const plugin of registry.plugins) {
     if (!plugin.providerAuthEnvVars) {
       continue;

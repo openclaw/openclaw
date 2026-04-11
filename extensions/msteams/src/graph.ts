@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";

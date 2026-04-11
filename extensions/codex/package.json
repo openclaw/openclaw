@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "@mariozechner/pi-coding-agent": "0.65.2",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

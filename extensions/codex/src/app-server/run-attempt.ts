@@ -18,36 +18,21 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import {
-  clearSharedCodexAppServerClient,
-  getSharedCodexAppServerClient,
-  isCodexAppServerApprovalRequest,
-  type CodexAppServerClient,
-} from "./client.js";
-import {
-  resolveCodexAppServerRuntimeOptions,
-  type CodexAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   isJsonObject,
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
   type CodexTurnStartResponse,
-  type CodexUserInput,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import {
-  clearCodexAppServerBinding,
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
+import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 type CodexAppServerClientFactory = (
@@ -142,6 +127,7 @@ export async function runCodexAppServerAttempt(
   const completion = new Promise<void>((resolve) => {
     resolveCompletion = resolve;
   });
+  let notificationQueue: Promise<void> = Promise.resolve();
 
   const handleNotification = async (notification: CodexServerNotification) => {
     if (!projector || !turnId) {
@@ -157,8 +143,15 @@ export async function runCodexAppServerAttempt(
       resolveCompletion?.();
     }
   };
+  const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    notificationQueue = notificationQueue.then(
+      () => handleNotification(notification),
+      () => handleNotification(notification),
+    );
+    return notificationQueue;
+  };
 
-  const notificationCleanup = client.addNotificationHandler(handleNotification);
+  const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
     if (!turnId) {
       return undefined;
@@ -185,16 +178,15 @@ export async function runCodexAppServerAttempt(
 
   let turn: CodexTurnStartResponse;
   try {
-    turn = await client.request<CodexTurnStartResponse>("turn/start", {
-      threadId: thread.threadId,
-      input: buildUserInput(params),
-      cwd: effectiveWorkspace,
-      approvalPolicy: appServer.approvalPolicy,
-      approvalsReviewer: appServer.approvalsReviewer,
-      model: params.modelId,
-      ...(appServer.serviceTier ? { serviceTier: appServer.serviceTier } : {}),
-      effort: resolveReasoningEffort(params.thinkLevel),
-    });
+    turn = await client.request<CodexTurnStartResponse>(
+      "turn/start",
+      buildTurnStartParams(params, {
+        threadId: thread.threadId,
+        cwd: effectiveWorkspace,
+        appServer,
+      }),
+      { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
+    );
   } catch (error) {
     notificationCleanup();
     requestCleanup();
@@ -204,7 +196,7 @@ export async function runCodexAppServerAttempt(
   turnId = turn.turn.id;
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
   for (const notification of pendingNotifications.splice(0)) {
-    await handleNotification(notification);
+    await enqueueNotification(notification);
   }
   const activeTurnId = turnId;
   const activeProjector = projector;
@@ -399,163 +391,6 @@ async function withCodexStartupTimeout<T>(params: {
     }
     abortCleanup?.();
   }
-}
-
-async function startOrResumeThread(params: {
-  client: CodexAppServerClient;
-  params: EmbeddedRunAttemptParams;
-  cwd: string;
-  dynamicTools: JsonValue[];
-  appServer: CodexAppServerRuntimeOptions;
-}): Promise<CodexAppServerThreadBinding> {
-  const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const binding = await readCodexAppServerBinding(params.params.sessionFile);
-  if (binding?.threadId) {
-    // `/codex resume <thread>` writes a binding before the next turn can know
-    // the dynamic tool catalog, so only invalidate fingerprints we actually have.
-    if (
-      binding.dynamicToolsFingerprint &&
-      binding.dynamicToolsFingerprint !== dynamicToolsFingerprint
-    ) {
-      embeddedAgentLog.debug(
-        "codex app-server dynamic tool catalog changed; starting a new thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      await clearCodexAppServerBinding(params.params.sessionFile);
-    } else {
-      try {
-        const response = await params.client.request<CodexThreadResumeResponse>("thread/resume", {
-          threadId: binding.threadId,
-          model: params.params.modelId,
-          modelProvider: normalizeModelProvider(params.params.provider),
-          approvalPolicy: params.appServer.approvalPolicy,
-          approvalsReviewer: params.appServer.approvalsReviewer,
-          sandbox: params.appServer.sandbox,
-          ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-          persistExtendedHistory: true,
-        });
-        await writeCodexAppServerBinding(params.params.sessionFile, {
-          threadId: response.thread.id,
-          cwd: params.cwd,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
-          dynamicToolsFingerprint,
-          createdAt: binding.createdAt,
-        });
-        return {
-          ...binding,
-          threadId: response.thread.id,
-          cwd: params.cwd,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
-          dynamicToolsFingerprint,
-        };
-      } catch (error) {
-        embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
-          error,
-        });
-        await clearCodexAppServerBinding(params.params.sessionFile);
-      }
-    }
-  }
-
-  const response = await params.client.request<CodexThreadStartResponse>("thread/start", {
-    model: params.params.modelId,
-    modelProvider: normalizeModelProvider(params.params.provider),
-    cwd: params.cwd,
-    approvalPolicy: params.appServer.approvalPolicy,
-    approvalsReviewer: params.appServer.approvalsReviewer,
-    sandbox: params.appServer.sandbox,
-    ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-    serviceName: "OpenClaw",
-    developerInstructions: buildDeveloperInstructions(params.params),
-    dynamicTools: params.dynamicTools,
-    experimentalRawEvents: true,
-    persistExtendedHistory: true,
-  });
-  const createdAt = new Date().toISOString();
-  await writeCodexAppServerBinding(params.params.sessionFile, {
-    threadId: response.thread.id,
-    cwd: params.cwd,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
-    dynamicToolsFingerprint,
-    createdAt,
-  });
-  return {
-    schemaVersion: 1,
-    threadId: response.thread.id,
-    sessionFile: params.params.sessionFile,
-    cwd: params.cwd,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
-    dynamicToolsFingerprint,
-    createdAt,
-    updatedAt: createdAt,
-  };
-}
-
-function fingerprintDynamicTools(dynamicTools: JsonValue[]): string {
-  return JSON.stringify(dynamicTools.map(stabilizeJsonValue));
-}
-
-function stabilizeJsonValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
-    return value.map(stabilizeJsonValue);
-  }
-  if (!isJsonObject(value)) {
-    return value;
-  }
-  const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    stable[key] = stabilizeJsonValue(child);
-  }
-  return stable;
-}
-
-function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
-  const sections = [
-    "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
-    "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
-    params.extraSystemPrompt,
-    params.skillsSnapshot?.prompt,
-  ];
-  return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
-}
-
-function buildUserInput(params: EmbeddedRunAttemptParams): CodexUserInput[] {
-  return [
-    { type: "text", text: params.prompt },
-    ...(params.images ?? []).map(
-      (image): CodexUserInput => ({
-        type: "image",
-        url: `data:${image.mimeType};base64,${image.data}`,
-      }),
-    ),
-  ];
-}
-
-function normalizeModelProvider(provider: string): string {
-  return provider === "codex" || provider === "openai-codex" ? "openai" : provider;
-}
-
-function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
-): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
-  if (
-    thinkLevel === "minimal" ||
-    thinkLevel === "low" ||
-    thinkLevel === "medium" ||
-    thinkLevel === "high" ||
-    thinkLevel === "xhigh"
-  ) {
-    return thinkLevel;
-  }
-  return null;
 }
 
 function readDynamicToolCallParams(

@@ -15,6 +15,7 @@ import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
 } from "./src/app-server/config.js";
+import { clearSharedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
 const PROVIDER_ID = "codex";
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -99,14 +100,18 @@ export async function buildCodexProviderCatalog(
   const config = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const timeoutMs = normalizeTimeoutMs(config.discovery?.timeoutMs);
-  const discovered =
-    config.discovery?.enabled === false || shouldSkipLiveDiscovery(options.env)
-      ? []
-      : await listModelsBestEffort({
-          listModels: options.listModels ?? listCodexAppServerModels,
-          timeoutMs,
-          startOptions: appServer.start,
-        });
+  let discovered: CodexAppServerModel[] = [];
+  if (config.discovery?.enabled !== false && !shouldSkipLiveDiscovery(options.env)) {
+    try {
+      discovered = await listModelsBestEffort({
+        listModels: options.listModels ?? listCodexAppServerModels,
+        timeoutMs,
+        startOptions: appServer.start,
+      });
+    } finally {
+      clearSharedCodexAppServerClient();
+    }
+  }
   const models = (discovered.length > 0 ? discovered : FALLBACK_CODEX_MODELS).map(
     codexModelToDefinition,
   );
@@ -189,7 +194,11 @@ function normalizeTimeoutMs(value: unknown): number {
 }
 
 function shouldSkipLiveDiscovery(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.VITEST) && env[LIVE_DISCOVERY_ENV] !== "1";
+  const override = env[LIVE_DISCOVERY_ENV]?.trim().toLowerCase();
+  if (override === "0" || override === "false") {
+    return true;
+  }
+  return Boolean(env.VITEST) && override !== "1";
 }
 
 function shouldDefaultToReasoningModel(modelId: string): boolean {

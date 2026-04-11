@@ -201,6 +201,20 @@ entries.
 }
 ```
 
+Seedance 2.0 on fal can be pinned with:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+      },
+    },
+  },
+}
+```
+
 ## Provider notes
 
 | Provider | Notes                                                                                                                                                       |
@@ -208,7 +222,7 @@ entries.
 | Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                      |
 | BytePlus | Single image reference only.                                                                                                                                |
 | ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                           |
-| fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                  |
+| fal      | Uses queue-backed flow for long-running jobs. Single image reference only. Includes Seedance 2.0 text-to-video and image-to-video model refs.               |
 | Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                 |
 | MiniMax  | Single image reference only.                                                                                                                                |
 | OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                    |

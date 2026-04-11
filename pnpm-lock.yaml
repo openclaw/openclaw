@@ -426,6 +426,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -840,6 +843,9 @@ importers:
       '@microsoft/teams.apps':
         specifier: 2.0.7
         version: 2.0.7
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       express:
         specifier: ^5.2.1
         version: 5.2.1
