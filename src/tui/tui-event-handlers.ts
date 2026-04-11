@@ -134,11 +134,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    allowStaleFooterRecovery?: boolean;
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
+    const shouldRecoverExternalCompletion =
+      Boolean(params.allowStaleFooterRecovery) && sessionRuns.size === 0;
+    if (shouldRecoverExternalCompletion) {
+      // External chat finals are safe to use for stale footer recovery once no runs remain.
+      state.activeChatRunId = null;
+    }
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || shouldRecoverExternalCompletion) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -250,6 +257,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+      const isLocalRun = isLocalRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
@@ -262,7 +270,12 @@ export function createEventHandlers(context: EventHandlerContext) {
           allowLocalWithoutDisplayableFinal: true,
         });
         chatLog.dropAssistant(evt.runId);
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status: "idle",
+          allowStaleFooterRecovery: !isLocalRun,
+        });
         tui.requestRender();
         return;
       }
@@ -272,7 +285,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status: "idle",
+          allowStaleFooterRecovery: !isLocalRun,
+        });
         tui.requestRender();
         return;
       }
@@ -301,6 +319,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        allowStaleFooterRecovery: !isLocalRun,
       });
     }
     if (evt.state === "aborted") {

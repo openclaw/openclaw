@@ -530,6 +530,23 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
   });
 
+  it("recovers the footer when the last tracked run finalizes under a stale active run id", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-stale" },
+    });
+
+    handleChatEvent({
+      runId: "run-complete",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-complete");
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
   it("suppresses non-local empty final placeholders during concurrent runs", () => {
     const { state, chatLog, loadHistory, handleChatEvent } =
       createConcurrentRunHarness("local stream");
