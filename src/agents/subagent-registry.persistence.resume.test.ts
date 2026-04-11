@@ -168,33 +168,30 @@ describe("subagent registry persistence resume", () => {
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     hoisted.registryPath = registryPath;
-    hoisted.allowedRunIds = new Set(["run-1"]);
-
-    let releaseInitialWait:
-      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
-      | undefined;
-    vi.mocked(callGatewayModule.callGateway)
-      .mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            releaseInitialWait = resolve as typeof releaseInitialWait;
-          }),
-      )
-      .mockResolvedValueOnce({
-        status: "ok",
-        startedAt: 111,
-        endedAt: 222,
-      });
-
-    mod.registerSubagentRun({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:test",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: " whatsapp ", accountId: " acct-main " },
-      requesterDisplayKey: "main",
-      task: "do the thing",
-      cleanup: "keep",
-    });
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify(
+        {
+          version: 2,
+          runs: {
+            "run-1": {
+              runId: "run-1",
+              childSessionKey: "agent:main:subagent:test",
+              requesterSessionKey: "agent:main:main",
+              requesterOrigin: { channel: "whatsapp", accountId: "acct-main" },
+              requesterDisplayKey: "main",
+              task: "do the thing",
+              cleanup: "keep",
+              createdAt: Date.now(),
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:test",
       sessionId: "sess-test",
@@ -216,15 +213,13 @@ describe("subagent registry persistence resume", () => {
     expect(run?.requesterOrigin?.channel).toBe("whatsapp");
     expect(run?.requesterOrigin?.accountId).toBe("acct-main");
 
-    mod.resetSubagentRegistryForTests({ persist: false });
     mod.initSubagentRegistry();
-    releaseInitialWait?.({
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-    });
 
     await flushQueuedRegistryWork();
+    await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
+      timeout: 1_000,
+      interval: 10,
+    });
 
     const announceCalls = announceSpy.mock.calls as unknown as Array<[unknown]>;
     const announce = (announceCalls.at(-1)?.[0] ?? undefined) as
@@ -238,20 +233,18 @@ describe("subagent registry persistence resume", () => {
           outcome?: { status?: string };
         }
       | undefined;
-    if (announce) {
-      expect(announce).toMatchObject({
-        childRunId: "run-1",
-        childSessionKey: "agent:main:subagent:test",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: {
-          channel: "whatsapp",
-          accountId: "acct-main",
-        },
-        task: "do the thing",
-        cleanup: "keep",
-        outcome: { status: "ok" },
-      });
-    }
+    expect(announce).toMatchObject({
+      childRunId: "run-1",
+      childSessionKey: "agent:main:subagent:test",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "whatsapp",
+        accountId: "acct-main",
+      },
+      task: "do the thing",
+      cleanup: "keep",
+      outcome: { status: "ok" },
+    });
 
     const restored = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(restored?.childSessionKey).toBe("agent:main:subagent:test");
