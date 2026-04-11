@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,
   createChatModelOverride,
+  formatCatalogChatModelDisplay,
   formatChatModelDisplay,
   normalizeChatModelOverrideValue,
-  resolveChatModelOverride,
-  resolvePreferredServerChatModel,
+  resolvePreferredServerChatModelValue,
   resolveServerChatModelValue,
 } from "./chat-model-ref.ts";
 import {
@@ -22,10 +22,10 @@ const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
 });
 
 describe("chat-model-ref helpers", () => {
-  it("builds provider-qualified option values and labels", () => {
-    expect(buildChatModelOption(catalog[0])).toEqual({
+  it("builds provider-qualified option values and prefers catalog names for labels", () => {
+    expect(buildChatModelOption(catalog[0], catalog)).toEqual({
       value: "openai/gpt-5-mini",
-      label: "gpt-5-mini · openai",
+      label: "GPT-5 Mini",
     });
   });
 
@@ -35,35 +35,105 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
-  it("prefixes provider-native model ids that already contain slashes", () => {
-    expect(
-      buildChatModelOption({
-        id: "google/gemma-4-26b-a4b-it",
-        provider: "openrouter",
-      } as never),
-    ).toEqual({
+  it("prefixes provider-native catalog ids that already contain slashes", () => {
+    const providerNativeModel = {
+      id: "google/gemma-4-26b-a4b-it",
+      name: "Gemma 4 26B A4B IT",
+      provider: "openrouter",
+    };
+
+    expect(buildChatModelOption(providerNativeModel, [providerNativeModel])).toEqual({
       value: "openrouter/google/gemma-4-26b-a4b-it",
-      label: "google/gemma-4-26b-a4b-it · openrouter",
+      label: "Gemma 4 26B A4B IT",
     });
     expect(
-      resolvePreferredServerChatModel("Google/Gemma-4-26b-a4b-it", "openrouter", [
-        { id: "google/gemma-4-26b-a4b-it", provider: "openrouter" } as never,
+      resolvePreferredServerChatModelValue("google/gemma-4-26b-a4b-it", "openrouter", [
+        providerNativeModel,
       ]),
-    ).toEqual({
-      value: "openrouter/google/gemma-4-26b-a4b-it",
-      source: "server",
-    });
+    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
-  it("reuses already-qualified catalog ids without double-prefixing them", () => {
-    expect(
-      resolvePreferredServerChatModel("OpenAI/GPT-4O", "openai", [
-        { id: "openai/gpt-4o", provider: "openai" } as never,
-      ]),
-    ).toEqual({
-      value: "openai/gpt-4o",
-      source: "server",
+  it("prefers alias over name for picker labels", () => {
+    const aliasedModel = {
+      id: "moonshotai/kimi-k2.5",
+      alias: "Kimi K2.5 (NVIDIA)",
+      name: "Kimi K2.5",
+      provider: "nvidia",
+    };
+
+    expect(buildChatModelOption(aliasedModel, [aliasedModel])).toEqual({
+      value: "nvidia/moonshotai/kimi-k2.5",
+      label: "Kimi K2.5 (NVIDIA)",
     });
+    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [aliasedModel])).toBe(
+      "Kimi K2.5 (NVIDIA)",
+    );
+  });
+
+  it("uses friendly catalog names for qualified nested model ids", () => {
+    const nestedModel = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5 (NVIDIA)",
+      provider: "nvidia",
+    };
+    expect(buildChatModelOption(nestedModel, [nestedModel])).toEqual({
+      value: "nvidia/moonshotai/kimi-k2.5",
+      label: "Kimi K2.5 (NVIDIA)",
+    });
+    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [nestedModel])).toBe(
+      "Kimi K2.5 (NVIDIA)",
+    );
+  });
+
+  it("disambiguates duplicate friendly names with the provider", () => {
+    const duplicateNameCatalog = createModelCatalog(
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "openrouter",
+      },
+    );
+
+    expect(buildChatModelOption(duplicateNameCatalog[0], duplicateNameCatalog)).toEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · anthropic",
+    });
+    expect(
+      formatCatalogChatModelDisplay("openrouter/claude-3-7-sonnet", duplicateNameCatalog),
+    ).toBe("Claude Sonnet · openrouter");
+  });
+
+  it("falls back to the raw catalog label when name and provider still collide", () => {
+    const duplicateNameAndProviderCatalog = createModelCatalog(
+      {
+        id: "claude-3-7-sonnet",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+      {
+        id: "claude-3-7-sonnet-thinking",
+        name: "Claude Sonnet",
+        provider: "anthropic",
+      },
+    );
+
+    expect(
+      buildChatModelOption(duplicateNameAndProviderCatalog[0], duplicateNameAndProviderCatalog),
+    ).toEqual({
+      value: "anthropic/claude-3-7-sonnet",
+      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+    });
+    expect(
+      formatCatalogChatModelDisplay(
+        "anthropic/claude-3-7-sonnet-thinking",
+        duplicateNameAndProviderCatalog,
+      ),
+    ).toBe("Claude Sonnet · claude-3-7-sonnet-thinking · anthropic");
   });
 
   it("normalizes raw overrides when the catalog match is unique", () => {
@@ -91,48 +161,82 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 
-  it("reports the override resolution source for unique catalog matches", () => {
-    expect(resolveChatModelOverride(createChatModelOverride("gpt-5-mini"), catalog)).toEqual({
-      value: "openai/gpt-5-mini",
-      source: "catalog",
-    });
-  });
-
-  it("reports ambiguous raw overrides without guessing a provider", () => {
+  it("uses the recorded server provider when it is present", () => {
     expect(
-      resolveChatModelOverride(
-        createChatModelOverride("gpt-5-mini"),
-        createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter"),
-      ),
-    ).toEqual({
-      value: "gpt-5-mini",
-      source: "raw",
-      reason: "ambiguous",
-    });
+      resolvePreferredServerChatModelValue("deepseek-chat", "deepseek", [DEEPSEEK_CHAT_MODEL]),
+    ).toBe("deepseek/deepseek-chat");
   });
 
-  it("prefers the catalog provider over a stale server provider when the match is unique", () => {
-    expect(resolvePreferredServerChatModel("deepseek-chat", "zai", [DEEPSEEK_CHAT_MODEL])).toEqual({
-      value: "deepseek/deepseek-chat",
-      source: "catalog",
-    });
+  it("corrects stale server providers for unique plain-id catalog matches", () => {
+    expect(
+      resolvePreferredServerChatModelValue("deepseek-chat", "zai", [DEEPSEEK_CHAT_MODEL]),
+    ).toBe("deepseek/deepseek-chat");
   });
 
   it("falls back to the server provider when the catalog misses or is ambiguous", () => {
-    expect(resolvePreferredServerChatModel("gpt-5-mini", "openai", [])).toEqual({
-      value: "openai/gpt-5-mini",
-      source: "server",
-      reason: "missing",
-    });
+    expect(resolvePreferredServerChatModelValue("gpt-5-mini", "openai", [])).toBe(
+      "openai/gpt-5-mini",
+    );
     expect(
-      resolvePreferredServerChatModel(
+      resolvePreferredServerChatModelValue(
         "gpt-5-mini",
         "openai",
         createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter"),
       ),
-    ).toEqual({
-      value: "openai/gpt-5-mini",
-      source: "server",
-    });
+    ).toBe("openai/gpt-5-mini");
+  });
+
+  it("qualifies slash-containing server model ids with the recorded provider", () => {
+    expect(
+      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [
+        {
+          id: "moonshotai/kimi-k2.5",
+          name: "Kimi K2.5 (NVIDIA)",
+          provider: "nvidia",
+        },
+      ]),
+    ).toBe("nvidia/moonshotai/kimi-k2.5");
+  });
+
+  it("uses the catalog-backed provider for slash-containing nested ids before stale provider fallback", () => {
+    expect(
+      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "zai", [
+        {
+          id: "moonshotai/kimi-k2.5",
+          name: "Kimi K2.5 (NVIDIA)",
+          provider: "nvidia",
+        },
+      ]),
+    ).toBe("nvidia/moonshotai/kimi-k2.5");
+  });
+
+  it("falls back to the server-qualified value for slash-containing ids when the catalog is empty", () => {
+    expect(resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [])).toBe(
+      "moonshotai/kimi-k2.5",
+    );
+  });
+
+  it("preserves already-qualified server model values when the provider matches", () => {
+    expect(
+      resolvePreferredServerChatModelValue("openai/gpt-5-mini", "openai", [OPENAI_GPT5_MINI_MODEL]),
+    ).toBe("openai/gpt-5-mini");
+  });
+
+  it("preserves already-qualified server model values when the provider is stale", () => {
+    expect(
+      resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [OPENAI_GPT5_MINI_MODEL]),
+    ).toBe("openai/gpt-5-mini");
+  });
+
+  it("preserves already-qualified server model values when the provider is stale and the catalog is empty", () => {
+    expect(resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [])).toBe(
+      "openai/gpt-5-mini",
+    );
+  });
+
+  it("uses catalog resolution for provider-less raw server model values", () => {
+    expect(resolvePreferredServerChatModelValue("gpt-5-mini", null, [OPENAI_GPT5_MINI_MODEL])).toBe(
+      "openai/gpt-5-mini",
+    );
   });
 });
