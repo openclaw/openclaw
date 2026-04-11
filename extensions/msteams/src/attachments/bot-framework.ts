@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
@@ -8,7 +7,7 @@ import {
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   resolveAttachmentFetchPolicy,
-  resolveMediaSsrfPolicy,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -58,30 +57,47 @@ async function fetchBotFrameworkAttachmentInfo(params: {
   serviceUrl: string;
   attachmentId: string;
   accessToken: string;
+  policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
-  ssrfPolicy?: SsrFPolicy;
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<BotFrameworkAttachmentInfo | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    fetchImpl: params.fetchFn ?? fetch,
-    init: {
-      headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
-    },
-    policy: params.ssrfPolicy,
-    auditContext: "msteams.botframework.attachmentInfo",
-  });
+  // Use `safeFetchWithPolicy` instead of `fetchWithSsrFGuard`. The strict
+  // pinned undici dispatcher used by `fetchWithSsrFGuard` is incompatible
+  // with Node 24+'s built-in undici v7 and silently breaks Bot Framework
+  // attachment downloads (same root cause as the SharePoint fix in #63396).
+  // `safeFetchWithPolicy` already enforces hostname allowlist validation
+  // across every redirect hop, which is sufficient for these attachment
+  // service URLs.
+  let response: Response;
   try {
-    if (!response.ok) {
-      return undefined;
-    }
-    try {
-      return (await response.json()) as BotFrameworkAttachmentInfo;
-    } catch {
-      return undefined;
-    }
-  } finally {
-    await release();
+    response = await safeFetchWithPolicy({
+      url,
+      policy: params.policy,
+      fetchFn: params.fetchFn,
+      requestInit: {
+        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+      },
+    });
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework attachmentInfo fetch failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+  if (!response.ok) {
+    params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
+      status: response.status,
+    });
+    return undefined;
+  }
+  try {
+    return (await response.json()) as BotFrameworkAttachmentInfo;
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
   }
 }
 
@@ -91,35 +107,51 @@ async function fetchBotFrameworkAttachmentView(params: {
   viewId: string;
   accessToken: string;
   maxBytes: number;
+  policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
-  ssrfPolicy?: SsrFPolicy;
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<Buffer | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}/views/${encodeURIComponent(params.viewId)}`;
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    fetchImpl: params.fetchFn ?? fetch,
-    init: {
-      headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
-    },
-    policy: params.ssrfPolicy,
-    auditContext: "msteams.botframework.attachmentView",
-  });
+  // See `fetchBotFrameworkAttachmentInfo` for why this uses
+  // `safeFetchWithPolicy` instead of `fetchWithSsrFGuard` on Node 24+ (#63396).
+  let response: Response;
   try {
-    if (!response.ok) {
-      return undefined;
-    }
-    const contentLength = response.headers.get("content-length");
-    if (contentLength && Number(contentLength) > params.maxBytes) {
-      return undefined;
-    }
+    response = await safeFetchWithPolicy({
+      url,
+      policy: params.policy,
+      fetchFn: params.fetchFn,
+      requestInit: {
+        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+      },
+    });
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework attachmentView fetch failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+  if (!response.ok) {
+    params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
+      status: response.status,
+    });
+    return undefined;
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number(contentLength) > params.maxBytes) {
+    return undefined;
+  }
+  try {
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     if (buffer.byteLength > params.maxBytes) {
       return undefined;
     }
     return buffer;
-  } finally {
-    await release();
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework attachmentView body read failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
   }
 }
 
@@ -153,7 +185,6 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   if (!isUrlAllowed(baseUrl, policy.allowHosts)) {
     return undefined;
   }
-  const ssrfPolicy = resolveMediaSsrfPolicy(policy.allowHosts);
 
   let accessToken: string;
   try {
@@ -172,8 +203,9 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     serviceUrl: params.serviceUrl,
     attachmentId: params.attachmentId,
     accessToken,
+    policy,
     fetchFn: params.fetchFn,
-    ssrfPolicy,
+    logger: params.logger,
   });
   if (!info) {
     return undefined;
@@ -205,8 +237,9 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     viewId,
     accessToken,
     maxBytes: params.maxBytes,
+    policy,
     fetchFn: params.fetchFn,
-    ssrfPolicy,
+    logger: params.logger,
   });
   if (!buffer) {
     return undefined;
