@@ -408,13 +408,33 @@ function Restart-GatewayWithRecovery {
   )
 
   $restartFailed = $false
-  try {
-    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
-  } catch {
+  $restartJob = Start-Job -ScriptBlock {
+    param([string]$Path)
+    $output = & $Path gateway restart *>&1
+    [pscustomobject]@{
+      ExitCode = $LASTEXITCODE
+      Output = ($output | Out-String).Trim()
+    }
+  } -ArgumentList $OpenClawPath
+
+  $restartCompleted = Wait-Job $restartJob -Timeout 20
+  if ($null -ne $restartCompleted) {
+    $restartResult = Receive-Job $restartJob
+    if ($null -ne $restartResult.Output -and $restartResult.Output.Length -gt 0) {
+      $restartResult.Output | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    if ($restartResult.ExitCode -ne 0) {
+      $restartFailed = $true
+      Write-ProgressLog 'update.restart-gateway.soft-fail'
+      "openclaw gateway restart failed with exit code $($restartResult.ExitCode)" | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+  } else {
     $restartFailed = $true
-    Write-ProgressLog 'update.restart-gateway.soft-fail'
-    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+    Stop-Job $restartJob -ErrorAction SilentlyContinue
+    Write-ProgressLog 'update.restart-gateway.timeout'
+    'openclaw gateway restart timed out after 20s; continuing to RPC readiness checks' | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
+  Remove-Job $restartJob -Force -ErrorAction SilentlyContinue
 
   Write-ProgressLog 'update.gateway-status'
   try {
