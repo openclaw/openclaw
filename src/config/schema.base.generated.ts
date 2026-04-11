@@ -705,6 +705,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
                 },
+                headless: {
+                  type: "boolean",
+                },
+                executablePath: {
+                  type: "string",
+                },
               },
               required: ["color"],
               additionalProperties: false,
