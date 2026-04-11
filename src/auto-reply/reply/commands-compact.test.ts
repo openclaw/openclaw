@@ -226,5 +226,6 @@ describe("handleCompactCommand", () => {
         agentDir: "/tmp/target-agent",
       }),
     );
+    expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "target");
   });
 });
