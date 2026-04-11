@@ -201,6 +201,26 @@ describe("info command handlers", () => {
     );
   });
 
+  it("preserves the shared session store path when routing /status", async () => {
+    const params = buildInfoParams(
+      "/status",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    );
+    params.storePath = "/tmp/target-session-store.json";
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/target-session-store.json",
+      }),
+    );
+  });
+
   it("uses the canonical target session agent when listing /commands", async () => {
     const { handleCommandsListCommand } = await import("./commands-info.js");
     const params = buildInfoParams("/commands", {
