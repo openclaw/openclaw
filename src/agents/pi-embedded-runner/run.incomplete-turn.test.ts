@@ -360,6 +360,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("applies the planning-only retry guard to prefixed GPT-5 ids", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "openai/gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("applies the ack-turn fast path to broadened GPT-5-family ids", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "openai",
+      modelId: "gpt-5o-mini",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toContain("Do not recap or restate the plan");
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(
