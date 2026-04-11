@@ -111,6 +111,40 @@ describe("resolveRunFailoverDecision", () => {
       action: "continue_normal",
     });
   });
+
+  it("surfaces error for timeout when no fallback is configured and rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        fallbackConfigured: false,
+        failoverFailure: false,
+        failoverReason: "timeout",
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces error for timeout when no fallback is configured and not rotated", () => {
+    // When timedOut=true and not during compaction, shouldRotateAssistant returns true.
+    // With profileRotated=true and no fallback, we get surface_error.
+    const decision = resolveRunFailoverDecision({
+      stage: "assistant",
+      aborted: false,
+      fallbackConfigured: false,
+      failoverFailure: false,
+      failoverReason: null,
+      timedOut: true,
+      timedOutDuringCompaction: false,
+      profileRotated: true,
+    });
+    expect(decision.action).toBe("surface_error");
+  });
 });
 
 describe("mergeRetryFailoverReason", () => {

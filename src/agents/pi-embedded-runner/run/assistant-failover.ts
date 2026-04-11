@@ -223,6 +223,44 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
+    // Surface the error as a throw so the caller can propagate it to the UI.
+    // Previously this fell through to "continue_normal", which silently
+    // swallowed the error and left the UI hanging when the WebSocket
+    // connection was torn down before any final event could be sent.
+    const surfaceMessage = params.timedOut
+      ? "LLM request timed out."
+      : params.billingFailure
+        ? formatBillingErrorMessage(
+            params.activeErrorContext.provider,
+            params.activeErrorContext.model,
+          )
+        : params.rateLimitFailure
+          ? "LLM request rate limited."
+          : params.authFailure
+            ? "LLM request unauthorized."
+            : (params.lastAssistant
+                ? formatAssistantErrorText(params.lastAssistant, {
+                    cfg: params.config,
+                    sessionKey: params.sessionKey,
+                    provider: params.activeErrorContext.provider,
+                    model: params.activeErrorContext.model,
+                  })
+                : undefined) ||
+              params.lastAssistant?.errorMessage?.trim() ||
+              "LLM request failed.";
+    const surfaceReason: FailoverReason = decision.reason ?? (params.timedOut ? "timeout" : "unknown");
+    const status = resolveFailoverStatus(surfaceReason) ?? (isTimeoutErrorMessage(surfaceMessage) ? 408 : undefined);
+    return {
+      action: "throw",
+      overloadProfileRotations,
+      error: new FailoverError(surfaceMessage, {
+        reason: surfaceReason,
+        provider: params.activeErrorContext.provider,
+        model: params.activeErrorContext.model,
+        profileId: params.lastProfileId,
+        status,
+      }),
+    };
   }
 
   return {

@@ -2093,6 +2093,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      let terminalEventSent = false;
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -2155,6 +2156,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 runId: clientRunId,
                 sessionKey,
               });
+              terminalEventSent = true;
             } else {
               const combinedReply = buildTranscriptReplyText(
                 deliveredReplies
@@ -2198,9 +2200,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
                 message,
               });
+              terminalEventSent = true;
             }
           } else {
             void emitUserTranscriptUpdate();
+            // Agent run was started — the streaming infrastructure sends its
+            // own terminal events, so mark as sent to avoid the .finally()
+            // safety net from emitting a spurious error broadcast.
+            terminalEventSent = true;
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -2244,8 +2251,26 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionKey,
             errorMessage: String(err),
           });
+          terminalEventSent = true;
         })
         .finally(() => {
+          // Safety net: if neither the .then() nor .catch() branch managed to
+          // send a terminal chat event (e.g. due to a connection abort race),
+          // emit an error event so the UI never hangs indefinitely.
+          if (!terminalEventSent) {
+            try {
+              broadcastChatError({
+                context,
+                runId: clientRunId,
+                sessionKey,
+                errorMessage:
+                  "Agent run ended without sending a final response. " +
+                  "This may indicate a timeout or connection interruption.",
+              });
+            } catch {
+              // Best-effort — if broadcast itself fails the run is already over.
+            }
+          }
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
