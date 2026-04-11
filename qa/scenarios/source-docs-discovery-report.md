@@ -60,9 +60,10 @@ steps:
       # require an actual read tool call before the prose report. Without this,
       # a model could fabricate a plausible Worked/Failed/Blocked/Follow-up
       # report without ever touching the repo files the prompt names. The
-      # debug request log is fetched once, lowercased for case-insensitive
-      # matching (the real prompt says "Worked, Failed, Blocked"), and
-      # reused for both the assertion and its failure-message diagnostic.
+      # debug request log is fetched once and reused for both the assertion
+      # and its failure-message diagnostic. Each request's allInputText is
+      # lowercased inline at match time (the real prompt writes it as
+      # "Worked, Failed, Blocked") so the contains check is case-insensitive.
       - set: discoveryDebugRequests
         value:
           expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
