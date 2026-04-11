@@ -18,11 +18,13 @@ import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
   loadPluginManifest,
   type OpenClawPackageManifest,
+  type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestModelSupport,
+  type PluginManifestSetup,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -84,6 +86,8 @@ export type PluginManifestRecord = {
   providerAuthAliases?: Record<string, string>;
   channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
+  activation?: PluginManifestActivation;
+  setup?: PluginManifestSetup;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -322,6 +326,8 @@ function buildRecord(params: {
     providerAuthAliases: params.manifest.providerAuthAliases,
     channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
+    activation: params.manifest.activation,
+    setup: params.manifest.setup,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],
