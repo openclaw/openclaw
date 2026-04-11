@@ -44,6 +44,7 @@ const ZERO_USAGE: Usage = {
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
+  private readonly assistantItemOrder: string[] = [];
   private readonly reasoningTextByItem = new Map<string, string>();
   private readonly planTextByItem = new Map<string, string>();
   private readonly activeItemIds = new Set<string>();
@@ -210,9 +211,12 @@ export class CodexAppServerEventProjector {
       this.assistantStarted = true;
       await this.params.onAssistantMessageStart?.();
     }
+    this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
-    await this.params.onPartialReply?.({ text });
+    // Codex app-server can emit multiple agentMessage items per turn, including
+    // intermediate coordination/progress prose. Keep those deltas internal until
+    // turn completion chooses the last assistant item as the user-visible reply.
   }
 
   private async handleReasoningDelta(params: JsonObject): Promise<void> {
@@ -291,6 +295,7 @@ export class CodexAppServerEventProjector {
       this.completedItemIds.add(itemId);
     }
     if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
+      this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
     }
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
@@ -348,6 +353,7 @@ export class CodexAppServerEventProjector {
     }
     for (const item of turn.items ?? []) {
       if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+        this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
@@ -425,7 +431,29 @@ export class CodexAppServerEventProjector {
   }
 
   private collectAssistantTexts(): string[] {
-    return [...this.assistantTextByItem.values()].filter((text) => text.trim().length > 0);
+    const finalText = this.resolveFinalAssistantText();
+    return finalText ? [finalText] : [];
+  }
+
+  private resolveFinalAssistantText(): string | undefined {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (!itemId) {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      if (text) {
+        return text;
+      }
+    }
+    return undefined;
+  }
+
+  private rememberAssistantItem(itemId: string): void {
+    if (!itemId || this.assistantItemOrder.includes(itemId)) {
+      return;
+    }
+    this.assistantItemOrder.push(itemId);
   }
 
   private createAssistantMessage(text: string): AssistantMessage {

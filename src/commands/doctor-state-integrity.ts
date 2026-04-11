@@ -5,7 +5,6 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listBundledChannelPluginIds } from "../channels/plugins/bundled-ids.js";
 import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
@@ -17,6 +16,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";

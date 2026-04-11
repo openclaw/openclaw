@@ -206,6 +206,19 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureRuntimePluginsLoaded,
   }));
 
+  vi.doMock("../harness/selection.js", () => ({
+    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+  }));
+
+  vi.doMock("../../plugins/provider-runtime.js", () => ({
+    prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
+    resolveProviderSystemPromptContribution: vi.fn(() => undefined),
+    resolveProviderTextTransforms: vi.fn(() => undefined),
+    transformProviderSystemPrompt: vi.fn(
+      (params: { systemPrompt?: string }) => params.systemPrompt,
+    ),
+  }));
+
   vi.doMock("../provider-stream.js", () => ({
     registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));

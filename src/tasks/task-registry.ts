@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -7,7 +7,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
   formatTaskBlockedFollowupMessage,
@@ -63,16 +63,26 @@ type TaskRegistryDeliveryRuntime = Pick<
   typeof import("./task-registry-delivery-runtime.js"),
   "sendMessage"
 >;
+type TaskRegistryControlRuntime = {
+  getAcpSessionManager: () => Pick<
+    ReturnType<(typeof import("./task-registry-control.runtime.js"))["getAcpSessionManager"]>,
+    "cancelSession"
+  >;
+  killSubagentRunAdmin: (typeof import("./task-registry-control.runtime.js"))["killSubagentRunAdmin"];
+};
 const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.deliveryRuntimeOverride",
 );
-type TaskRegistryGlobalWithDeliveryOverride = typeof globalThis & {
+const TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY = Symbol.for(
+  "openclaw.taskRegistry.controlRuntimeOverride",
+);
+type TaskRegistryGlobalWithRuntimeOverrides = typeof globalThis & {
   [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
+  [TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY]?: TaskRegistryControlRuntime | null;
 };
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
-let controlRuntimePromise: Promise<typeof import("./task-registry-control.runtime.js")> | null =
-  null;
+let controlRuntimePromise: Promise<TaskRegistryControlRuntime> | null = null;
 
 type TaskDeliveryOwner = {
   sessionKey?: string;
@@ -368,7 +378,7 @@ function appendTaskEvent(event: {
 }
 
 function loadTaskRegistryDeliveryRuntime() {
-  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ];
   if (deliveryRuntimeOverride) {
@@ -379,6 +389,12 @@ function loadTaskRegistryDeliveryRuntime() {
 }
 
 function loadTaskRegistryControlRuntime() {
+  const controlRuntimeOverride = (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ];
+  if (controlRuntimeOverride) {
+    return Promise.resolve(controlRuntimeOverride);
+  }
   // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
   // control graph off the default import path until a cancellation flow actually needs it.
   controlRuntimePromise ??= import("./task-registry-control.runtime.js");
@@ -1964,15 +1980,29 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 export function resetTaskRegistryDeliveryRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = null;
   deliveryRuntimePromise = null;
 }
 
 export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = runtime;
   deliveryRuntimePromise = null;
+}
+
+export function resetTaskRegistryControlRuntimeForTests() {
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ] = null;
+  controlRuntimePromise = null;
+}
+
+export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ] = runtime;
+  controlRuntimePromise = null;
 }

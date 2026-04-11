@@ -216,7 +216,13 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
 ];
 
 function resolveSubCliCommandGroups(): CommandGroupEntry[] {
-  return buildCommandGroupEntries(getSubCliEntryDescriptors(), entrySpecs, (register) => register);
+  const descriptors = getSubCliEntryDescriptors();
+  const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
+  return buildCommandGroupEntries(
+    descriptors,
+    entrySpecs.filter((spec) => spec.commandNames.every((name) => descriptorNames.has(name))),
+    (register) => register,
+  );
 }
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {

@@ -169,6 +169,77 @@ describe("qa mock openai server", () => {
     ]);
   });
 
+  it("drives the compaction retry mutating tool parity flow", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+          },
+        ],
+      }),
+    });
+    expect(writePlan.status).toBe(200);
+    const writePlanBody = await writePlan.text();
+    expect(writePlanBody).toContain('"name":"write"');
+    expect(writePlanBody).toContain("compaction-retry-summary.txt");
+
+    const finalReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
+          },
+        ],
+      }),
+    });
+    expect(finalReply.status).toBe(200);
+    const finalPayload = (await finalReply.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(finalPayload.output?.[0]?.content?.[0]?.text).toContain("replay unsafe after write");
+  });
+
   it("supports exact reply memory prompts and embeddings requests", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
