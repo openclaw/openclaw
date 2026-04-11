@@ -25,7 +25,7 @@ export function parseConfigValue(raw: string): {
     return { value: null };
   }
 
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+  if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
     const num = Number(trimmed);
     if (Number.isFinite(num)) {
       return { value: num };
