@@ -148,4 +148,24 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain("plugins.entries.memory-core.enabled=false");
     expect(message).not.toContain("runtime slash command");
   });
+
+  it("allows CLI commands when their parent plugin is in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage("wiki", {
+      plugins: {
+        allow: ["memory-wiki"],
+      },
+    });
+    expect(message).toBeNull();
+  });
+
+  it("blocks CLI commands when parent plugin is NOT in plugins.allow", () => {
+    const message = resolveMissingPluginCommandMessage("wiki", {
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+    expect(message).not.toBeNull();
+    expect(message).toContain('"memory-wiki"');
+    expect(message).toContain("plugins.allow");
+  });
 });

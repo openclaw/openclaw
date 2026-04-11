@@ -118,6 +118,9 @@ export function resolveMissingPluginCommandMessage(
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
+    if (parentPluginId && allow.includes(parentPluginId)) {
+      return null;
+    }
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
