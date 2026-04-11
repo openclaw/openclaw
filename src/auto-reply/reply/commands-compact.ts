@@ -1,4 +1,4 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -96,6 +96,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
     : params.agentId;
+  const sessionAgentDir = resolveAgentDir(params.cfg, sessionAgentId) ?? params.agentDir;
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
@@ -125,7 +126,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       }),
     ),
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
+    agentDir: sessionAgentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
