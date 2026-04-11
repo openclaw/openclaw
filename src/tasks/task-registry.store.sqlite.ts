@@ -10,6 +10,7 @@ type TaskRegistryRow = {
   task_id: string;
   runtime: TaskRecord["runtime"];
   source_id: string | null;
+  requester_session_key: string | null;
   owner_key: string;
   scope_kind: TaskRecord["scopeKind"];
   child_session_key: string | null;
@@ -44,7 +45,6 @@ type TableInfoRow = {
 };
 
 type TaskRegistryStatements = {
-  legacyRequesterSessionColumn: boolean;
   selectAll: StatementSync;
   selectAllDeliveryStates: StatementSync;
   upsertRow: StatementSync;
@@ -93,11 +93,13 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const lastEventAt = normalizeNumber(row.last_event_at);
   const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const requesterSessionKey =
+    row.scope_kind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
     taskId: row.task_id,
     runtime: row.runtime,
     ...(row.source_id ? { sourceId: row.source_id } : {}),
-    requesterSessionKey: row.scope_kind === "system" ? "" : row.owner_key,
+    requesterSessionKey,
     ownerKey: row.owner_key,
     scopeKind: row.scope_kind,
     ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
@@ -137,6 +139,7 @@ function bindTaskRecordBase(record: TaskRecord) {
     task_id: record.taskId,
     runtime: record.runtime,
     source_id: record.sourceId ?? null,
+    requester_session_key: record.scopeKind === "system" ? "" : record.requesterSessionKey,
     owner_key: record.ownerKey,
     scope_kind: record.scopeKind,
     child_session_key: record.childSessionKey ?? null,
@@ -161,16 +164,6 @@ function bindTaskRecordBase(record: TaskRecord) {
   };
 }
 
-function bindTaskRecord(record: TaskRecord, legacyRequesterSessionColumn: boolean) {
-  if (!legacyRequesterSessionColumn) {
-    return bindTaskRecordBase(record);
-  }
-  return {
-    ...bindTaskRecordBase(record),
-    requester_session_key: record.scopeKind === "system" ? "" : record.requesterSessionKey,
-  };
-}
-
 function bindTaskDeliveryState(state: TaskDeliveryState) {
   return {
     task_id: state.taskId,
@@ -180,24 +173,13 @@ function bindTaskDeliveryState(state: TaskDeliveryState) {
 }
 
 function createStatements(db: DatabaseSync): TaskRegistryStatements {
-  const legacyRequesterSessionColumn = hasTaskRunsColumn(db, "requester_session_key");
-  const upsertLegacyRequesterColumns = legacyRequesterSessionColumn
-    ? `
-        requester_session_key,
-`
-    : "";
-  const upsertLegacyRequesterValues = legacyRequesterSessionColumn
-    ? `
-        @requester_session_key,
-`
-    : "";
   return {
-    legacyRequesterSessionColumn,
     selectAll: db.prepare(`
       SELECT
         task_id,
         runtime,
         source_id,
+        requester_session_key,
         owner_key,
         scope_kind,
         child_session_key,
@@ -235,7 +217,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         task_id,
         runtime,
         source_id,
-${upsertLegacyRequesterColumns}        owner_key,
+        requester_session_key,
+        owner_key,
         scope_kind,
         child_session_key,
         parent_flow_id,
@@ -260,7 +243,8 @@ ${upsertLegacyRequesterColumns}        owner_key,
         @task_id,
         @runtime,
         @source_id,
-${upsertLegacyRequesterValues}        @owner_key,
+        @requester_session_key,
+        @owner_key,
         @scope_kind,
         @child_session_key,
         @parent_flow_id,
@@ -285,6 +269,7 @@ ${upsertLegacyRequesterValues}        @owner_key,
       ON CONFLICT(task_id) DO UPDATE SET
         runtime = excluded.runtime,
         source_id = excluded.source_id,
+        requester_session_key = excluded.requester_session_key,
         owner_key = excluded.owner_key,
         scope_kind = excluded.scope_kind,
         child_session_key = excluded.child_session_key,
@@ -334,6 +319,9 @@ function migrateLegacyOwnerColumns(db: DatabaseSync) {
   if (!hasTaskRunsColumn(db, "owner_key")) {
     db.exec(`ALTER TABLE task_runs ADD COLUMN owner_key TEXT;`);
   }
+  if (!hasTaskRunsColumn(db, "requester_session_key")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN requester_session_key TEXT;`);
+  }
   if (!hasTaskRunsColumn(db, "scope_kind")) {
     db.exec(`ALTER TABLE task_runs ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'session';`);
   }
@@ -359,6 +347,14 @@ function migrateLegacyOwnerColumns(db: DatabaseSync) {
       ELSE 'session'
     END
   `);
+  db.exec(`
+    UPDATE task_runs
+    SET requester_session_key = CASE
+      WHEN scope_kind = 'system' THEN ''
+      WHEN trim(COALESCE(requester_session_key, '')) <> '' THEN trim(requester_session_key)
+      ELSE owner_key
+    END
+  `);
 }
 
 function ensureSchema(db: DatabaseSync) {
@@ -367,6 +363,7 @@ function ensureSchema(db: DatabaseSync) {
       task_id TEXT PRIMARY KEY,
       runtime TEXT NOT NULL,
       source_id TEXT,
+      requester_session_key TEXT,
       owner_key TEXT NOT NULL,
       scope_kind TEXT NOT NULL,
       child_session_key TEXT,
@@ -479,7 +476,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     statements.clearDeliveryStates.run();
     statements.clearRows.run();
     for (const task of snapshot.tasks.values()) {
-      statements.upsertRow.run(bindTaskRecord(task, statements.legacyRequesterSessionColumn));
+      statements.upsertRow.run(bindTaskRecordBase(task));
     }
     for (const state of snapshot.deliveryStates.values()) {
       statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
@@ -489,9 +486,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   const store = openTaskRegistryDatabase();
-  store.statements.upsertRow.run(
-    bindTaskRecord(task, store.statements.legacyRequesterSessionColumn),
-  );
+  store.statements.upsertRow.run(bindTaskRecordBase(task));
 }
 
 export function upsertTaskWithDeliveryStateToSqlite(params: {
@@ -499,7 +494,7 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   deliveryState?: TaskDeliveryState;
 }) {
   withWriteTransaction((statements) => {
-    statements.upsertRow.run(bindTaskRecord(params.task, statements.legacyRequesterSessionColumn));
+    statements.upsertRow.run(bindTaskRecordBase(params.task));
     if (params.deliveryState) {
       statements.replaceDeliveryState.run(bindTaskDeliveryState(params.deliveryState));
     } else {
