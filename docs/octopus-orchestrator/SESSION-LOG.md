@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 MD037 MD038 -->
+
 # Octopus Orchestrator — Session Log
 
 Turn-by-turn history of the architecture and build work. Appended each turn. Previous turns before this log was started are reflected in the git history of this branch (`octopus-orchestrator`).
@@ -963,7 +965,7 @@ All 4 agents heeded the iteration-14 lesson and ran `pnpm tsgo` (or equivalent) 
 6. `c0226fdf` — M1-09 done (MissionFSM, 97 tests)
 7. (this commit) — iteration 15 close
 
-### Aggregate verification
+### Aggregate verification (M3)
 
 - **Full octo sweep across 16 test files: 911/911 passing** (514 prior + 19 event-log incremental + 252 ArmFSM + 29 GripFSM + 97 MissionFSM)
 - **pnpm lint: 0/0**
@@ -1044,7 +1046,7 @@ All 3 Wave D agents succeeded. **First gateway handler is live.** This is a mile
 4. `2213155f` — M1-14 done (octo.arm.spawn handler)
 5. (this commit) — iteration 16 close
 
-### Aggregate verification
+### Aggregate verification (M4)
 
 - **Full octo sweep across 19 test files: 950/950 passing** (911 prior + 16 M1-05 + 14 M1-13 + 9 M1-14)
 - **pnpm lint: 0/0**
@@ -1150,7 +1152,7 @@ Total: 6 codes. Growing organically as handler methods land. Documented in the f
 3. `80f192e8` — M1-16 administrative closeout (status flip only; code is in f13a18b9)
 4. (this commit) — iteration 17 close
 
-### Aggregate verification
+### Aggregate verification (M5)
 
 - Full octo sweep: **964/964 tests** across 19 test files (950 prior + 5 M1-15 + 9 M1-16 = 964)
 - pnpm lint: **0/0**
@@ -1313,6 +1315,7 @@ All 24 M2 tasks done across iterations 21-25. MILESTONE_2_COMPLETE marker set.
    Then around line 1461 (in `attachGatewayWsHandlers`), spread `octoInstance?.handlers` into `extraHandlers`.
 
 4. **Squash commits:**
+
    ```bash
    # Create a clean integration branch
    git checkout -b octopus-orchestrator-clean
@@ -1330,6 +1333,7 @@ All 24 M2 tasks done across iterations 21-25. MILESTONE_2_COMPLETE marker set.
    # 10. Policy + safety (M5)
    # 11. Integration entry point
    ```
+
 5. **Smoke test:**
 
    ```bash
@@ -1341,6 +1345,7 @@ All 24 M2 tasks done across iterations 21-25. MILESTONE_2_COMPLETE marker set.
    ```
 
 6. **Push the clean branch + open PR:**
+
    ```bash
    git push fork octopus-orchestrator-clean
    gh pr create --repo openclaw/openclaw --head mmartoccia:octopus-orchestrator-clean \

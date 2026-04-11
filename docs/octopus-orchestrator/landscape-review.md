@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # OpenClaw Octopus Orchestrator Landscape Review
 
 ## Status
