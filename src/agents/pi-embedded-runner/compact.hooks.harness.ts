@@ -230,8 +230,8 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
-    AuthStorage: class AuthStorage {},
-    ModelRegistry: class ModelRegistry {},
+    AuthStorage: function AuthStorage() {},
+    ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
@@ -261,7 +261,7 @@ export async function loadCompactHooksHarness(): Promise<{
       };
       return { session };
     }),
-    DefaultResourceLoader: class DefaultResourceLoader {},
+    DefaultResourceLoader: function DefaultResourceLoader() {},
     SessionManager: {
       open: vi.fn(() => ({})),
     },
@@ -269,6 +269,7 @@ export async function loadCompactHooksHarness(): Promise<{
       create: vi.fn(() => ({})),
     },
     estimateTokens: estimateTokensMock,
+    generateSummary: vi.fn(async () => "summary"),
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -457,6 +458,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));

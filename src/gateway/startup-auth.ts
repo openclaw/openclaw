@@ -5,6 +5,7 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import { replaceConfigFile } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
@@ -118,8 +119,8 @@ function hasGatewayTokenCandidate(params: {
 }
 
 function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
-  return Boolean(
-    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0,
+  return (
+    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0
   );
 }
 
@@ -130,9 +131,9 @@ function hasGatewayPasswordOverrideCandidate(params: {
   if (hasGatewayPasswordEnvCandidate(params.env)) {
     return true;
   }
-  return Boolean(
+  return (
     typeof params.authOverride?.password === "string" &&
-    params.authOverride.password.trim().length > 0,
+    params.authOverride.password.trim().length > 0
   );
 }
 
@@ -244,15 +245,12 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (params.cfg.hooks?.enabled !== true) {
     return;
   }
-  const hooksToken =
-    typeof params.cfg.hooks.token === "string" ? params.cfg.hooks.token.trim() : "";
+  const hooksToken = normalizeOptionalString(params.cfg.hooks.token) ?? "";
   if (!hooksToken) {
     return;
   }
   const gatewayToken =
-    params.auth.mode === "token" && typeof params.auth.token === "string"
-      ? params.auth.token.trim()
-      : "";
+    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
   if (!gatewayToken) {
     return;
   }

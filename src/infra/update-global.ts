@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
@@ -39,7 +40,7 @@ function normalizePackageTarget(value: string): string {
 }
 
 export function isMainPackageTarget(value: string): boolean {
-  return normalizePackageTarget(value).toLowerCase() === "main";
+  return normalizeLowercaseStringOrEmpty(normalizePackageTarget(value)) === "main";
 }
 
 export function isExplicitPackageInstallSpec(value: string): boolean {
@@ -136,7 +137,6 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
   env.NPM_CONFIG_FUND = "false";
   env.NPM_CONFIG_AUDIT = "false";
-  env.NPM_CONFIG_SCRIPT_SHELL = "cmd.exe";
   env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
@@ -205,7 +205,10 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   if (path.basename(parentDir) === "lib") {
     return path.dirname(parentDir);
   }
-  if (process.platform === "win32" && path.basename(parentDir).toLowerCase() === "npm") {
+  if (
+    process.platform === "win32" &&
+    normalizeLowercaseStringOrEmpty(path.basename(parentDir)) === "npm"
+  ) {
     return parentDir;
   }
   return null;

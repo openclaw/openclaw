@@ -341,16 +341,16 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
     return {
       version: 1,
       approvals: parsed.approvals
-        .filter((entry): entry is PluginBindingApprovalEntry =>
-          Boolean(entry && typeof entry === "object"),
+        .filter(
+          (entry): entry is PluginBindingApprovalEntry =>
+            entry !== null && typeof entry === "object",
         )
         .map((entry) => ({
           pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
           pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
           pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
           channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-          accountId:
-            typeof entry.accountId === "string" ? entry.accountId.trim() || "default" : "default",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
           approvedAt:
             typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
               ? Math.floor(entry.approvedAt)
@@ -625,7 +625,7 @@ function resolvePluginBindingDisplayName(binding: {
   pluginId: string;
   pluginName?: string;
 }): string {
-  return binding.pluginName?.trim() || binding.pluginId;
+  return normalizeOptionalString(binding.pluginName) || binding.pluginId;
 }
 
 function buildDetachHintSuffix(detachHint?: string): string {

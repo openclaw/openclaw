@@ -13,6 +13,7 @@ import {
   resolvePluginLoaderJitiConfig,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
 
@@ -66,9 +67,14 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
 const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedModuleExports = new Map<string, unknown>();
+const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
+}
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
-  const ext = path.extname(modulePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
   if (ext === ".js") {
     return [modulePath, modulePath.slice(0, -3) + ".ts"];
   }
@@ -137,6 +143,9 @@ function resolveBundledEntryModuleCandidates(
 
   const distExtensionsRoot = path.join(packageRoot, "dist", "extensions") + path.sep;
   if (!importerPath.startsWith(distExtensionsRoot)) {
+    return candidates;
+  }
+  if (isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -279,7 +288,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   if (
     process.platform === "win32" &&
     modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase())
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
   ) {
     try {
       loaded = nodeRequire(modulePath);

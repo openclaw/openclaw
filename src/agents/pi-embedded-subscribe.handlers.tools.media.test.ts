@@ -35,6 +35,7 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },

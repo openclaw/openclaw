@@ -103,6 +103,21 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  runCommandJob?: (params: {
+    job: CronJob;
+    command: string;
+    args?: string[];
+    timeoutSeconds?: number;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      summary?: string;
+      outputText?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+    } & CronRunOutcome &
+      CronRunTelemetry
+  >;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
@@ -114,8 +129,9 @@ export type CronServiceDeps = {
   onEvent?: (evt: CronEvent) => void;
 };
 
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs" | "runCommandJob"> & {
   nowMs: () => number;
+  runCommandJob: NonNullable<CronServiceDeps["runCommandJob"]>;
 };
 
 export type CronServiceState = {
@@ -131,7 +147,16 @@ export type CronServiceState = {
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: {
+      ...deps,
+      nowMs: deps.nowMs ?? (() => Date.now()),
+      runCommandJob:
+        deps.runCommandJob ??
+        (async () => ({
+          status: "error" as const,
+          error: "cron command execution is not configured",
+        })),
+    },
     store: null,
     timer: null,
     running: false,

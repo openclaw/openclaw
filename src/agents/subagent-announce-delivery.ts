@@ -2,6 +2,7 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -37,7 +38,7 @@ import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
@@ -189,7 +190,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   expectsCompletionMessage: boolean;
 }): Promise<DeliveryContext | undefined> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const channel = requesterOrigin?.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(requesterOrigin?.channel);
   const to = requesterOrigin?.to?.trim();
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =

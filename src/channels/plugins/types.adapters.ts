@@ -1,11 +1,14 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ConfiguredBindingRule } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { AgentBinding } from "../../config/types.agents.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
-import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
-import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
+import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
@@ -15,6 +18,7 @@ import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
+import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
   ChannelAccountSnapshot,
@@ -32,6 +36,9 @@ import type {
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+
+type ConfiguredBindingRule = AgentBinding;
+export type { ChannelApprovalKind } from "../../infra/approval-types.js";
 
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }
@@ -391,6 +398,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * - Built-in channels (slack, discord, etc.) typically don't use this field
    *   because they can directly import internal modules
    * - External plugins should check for undefined before using
+   * - When provided, this must be a full `createPluginRuntime().channel` surface;
+   *   partial stubs are not supported
    *
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
@@ -458,22 +467,6 @@ export type ChannelAuthAdapter = {
     verbose?: boolean;
     channelInput?: string | null;
   }) => Promise<void>;
-  authorizeActorAction?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    senderId?: string | null;
-    action: "approve";
-    approvalKind: "exec" | "plugin";
-  }) => {
-    authorized: boolean;
-    reason?: string;
-  };
-  getActionAvailabilityState?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    action: "approve";
-  }) => ChannelActionAvailabilityState;
-  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
 };
 
 export type ChannelHeartbeatAdapter = {
@@ -677,52 +670,19 @@ export type ChannelApprovalDeliveryAdapter = {
   }) => boolean;
 };
 
-export type ChannelApprovalKind = "exec" | "plugin";
-
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
   | { kind: "reply"; text: string };
 
-export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
-
-export type ChannelApprovalNativeTarget = {
-  to: string;
-  threadId?: string | number | null;
-};
-
-export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
-
-export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
-
-export type ChannelApprovalNativeDeliveryCapabilities = {
-  enabled: boolean;
-  preferredSurface: ChannelApprovalNativeDeliveryPreference;
-  supportsOriginSurface: boolean;
-  supportsApproverDmSurface: boolean;
-  notifyOriginWhenDmOnly?: boolean;
-};
-
-export type ChannelApprovalNativeAdapter = {
-  describeDeliveryCapabilities: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeDeliveryCapabilities;
-  resolveOriginTarget?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget | null | Promise<ChannelApprovalNativeTarget | null>;
-  resolveApproverDmTargets?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
-};
+export type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeDeliveryCapabilities,
+  ChannelApprovalNativeDeliveryPreference,
+  ChannelApprovalNativeRequest,
+  ChannelApprovalNativeSurface,
+  ChannelApprovalNativeTarget,
+} from "./approval-native.types.js";
 
 export type ChannelApprovalRenderAdapter = {
   exec?: {
@@ -755,6 +715,7 @@ export type ChannelApprovalRenderAdapter = {
 
 export type ChannelApprovalAdapter = {
   delivery?: ChannelApprovalDeliveryAdapter;
+  nativeRuntime?: ChannelApprovalNativeRuntimeAdapter;
   render?: ChannelApprovalRenderAdapter;
   native?: ChannelApprovalNativeAdapter;
   describeExecApprovalSetup?: (params: {
@@ -765,8 +726,28 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
-  authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
-  getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
+  authorizeActorAction?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    action: "approve";
+    approvalKind: "exec" | "plugin";
+  }) => {
+    authorized: boolean;
+    reason?: string;
+  };
+  getActionAvailabilityState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+    approvalKind?: ChannelApprovalKind;
+  }) => ChannelActionAvailabilityState;
+  /** Exec-native client availability for the initiating surface; distinct from same-chat auth. */
+  getExecInitiatingSurfaceState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+  }) => ChannelActionAvailabilityState;
   resolveApproveCommandBehavior?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -847,6 +828,8 @@ export type ChannelCommandConversationContext = {
   senderId?: string;
   sessionKey?: string;
   parentSessionKey?: string;
+  from?: string;
+  chatType?: string;
   originatingTo?: string;
   commandTo?: string;
   fallbackTo?: string;

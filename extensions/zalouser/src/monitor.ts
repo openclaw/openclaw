@@ -112,7 +112,7 @@ function resolveUserAllowlistEntries(
     }
     const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
     const match = matches[0];
-    const id = match?.userId ? String(match.userId) : undefined;
+    const id = match?.userId;
     if (id) {
       additions.push(id);
       mapping.push(`${entry}->${id}`);
@@ -156,24 +156,24 @@ function resolveZalouserInboundSessionKey(params: {
     return params.route.sessionKey;
   }
 
-  const directSessionKey = params.core.channel.routing
-    .buildAgentSessionKey({
+  const directSessionKey = normalizeLowercaseStringOrEmpty(
+    params.core.channel.routing.buildAgentSessionKey({
       agentId: params.route.agentId,
       channel: "zalouser",
       accountId: params.route.accountId,
       peer: { kind: "direct", id: params.senderId },
       dmScope: resolveZalouserDmSessionScope(params.config),
       identityLinks: params.config.session?.identityLinks,
-    })
-    .toLowerCase();
-  const legacySessionKey = params.core.channel.routing
-    .buildAgentSessionKey({
+    }),
+  );
+  const legacySessionKey = normalizeLowercaseStringOrEmpty(
+    params.core.channel.routing.buildAgentSessionKey({
       agentId: params.route.agentId,
       channel: "zalouser",
       accountId: params.route.accountId,
       peer: { kind: "group", id: params.senderId },
-    })
-    .toLowerCase();
+    }),
+  );
   const hasDirectSession =
     params.core.channel.session.readSessionUpdatedAt({
       storePath: params.storePath,
@@ -844,9 +844,9 @@ export async function monitorZalouserProvider(
           mapping.push(`${entry}→${cleaned}`);
           continue;
         }
-        const matches = byName.get(cleaned.toLowerCase()) ?? [];
+        const matches = byName.get(normalizeLowercaseStringOrEmpty(cleaned)) ?? [];
         const match = matches[0];
-        const id = match?.groupId ? String(match.groupId) : undefined;
+        const id = match?.groupId;
         if (id) {
           if (!nextGroups[id]) {
             nextGroups[id] = groupsConfig[entry];

@@ -88,8 +88,8 @@ export async function listMattermostDirectoryGroups(
           continue;
         }
         if (q) {
-          const name = (ch.name ?? "").toLowerCase();
-          const display = (ch.display_name ?? "").toLowerCase();
+          const name = normalizeLowercaseStringOrEmpty(ch.name);
+          const display = normalizeLowercaseStringOrEmpty(ch.display_name);
           if (!name.includes(q) && !display.includes(q)) {
             continue;
           }

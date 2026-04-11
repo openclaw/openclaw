@@ -77,7 +77,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (idx === -1) {
       return null;
     }
-    const key = token.slice(0, idx).trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(token.slice(0, idx));
     const value = token.slice(idx + 1).trim();
     if (!key) {
       return null;
@@ -85,7 +85,10 @@ function parseExecDirectiveArgs(raw: string): Omit<
     return { key, value };
   };
 
-  while (i < len) {
+  for (;;) {
+    if (i >= len) {
+      break;
+    }
     const token = takeToken();
     if (!token) {
       break;

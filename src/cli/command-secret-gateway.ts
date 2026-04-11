@@ -393,7 +393,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = formatErrorMessage(err).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
   if (!message.includes("secrets.resolve")) {
     return false;
   }
@@ -687,7 +687,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   let payload: GatewaySecretsResolveResult;
   try {
-    payload = await callGateway<GatewaySecretsResolveResult>({
+    payload = await callGateway({
       config: params.config,
       method: "secrets.resolve",
       requiredMethods: ["secrets.resolve"],

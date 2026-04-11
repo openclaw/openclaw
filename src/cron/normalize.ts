@@ -2,6 +2,7 @@ import { sanitizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
@@ -44,14 +45,21 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
   );
 }
 
+function hasCommandPayloadHint(payload: UnknownRecord) {
+  return (
+    hasTrimmedStringValue(payload.command) ||
+    normalizeTrimmedStringArray(payload.args) !== undefined
+  );
+}
+
 function normalizeTrimmedStringArray(
   value: unknown,
   options?: { allowNull?: boolean },
 ): string[] | null | undefined {
   if (Array.isArray(value)) {
     const normalized = value
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .map((entry) => entry.trim());
+      .map((entry) => normalizeOptionalString(entry))
+      .filter((entry): entry is string => Boolean(entry));
     if (normalized.length === 0 && value.length > 0) {
       return undefined;
     }
@@ -67,12 +75,12 @@ function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
-  const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
-  const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
+  const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const legacyCronRaw = normalizeOptionalString(schedule.cron) ?? "";
   const normalizedExpr = exprRaw || legacyCronRaw;
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
-  const atString = typeof atRaw === "string" ? atRaw.trim() : "";
+  const atString = normalizeOptionalString(atRaw) ?? "";
   const parsedAtMs =
     typeof atMsRaw === "number"
       ? atMsRaw
@@ -150,29 +158,33 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "command") {
+    next.kind = "command";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
   if (!next.kind) {
-    const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
-    const hasText = typeof next.text === "string" && next.text.trim().length > 0;
+    const hasMessage = Boolean(normalizeOptionalString(next.message));
+    const hasText = Boolean(normalizeOptionalString(next.text));
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasCommandPayloadHint(next)) {
+      next.kind = "command";
     } else if (hasAgentTurnPayloadHint(next)) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
     }
   }
   if (typeof next.message === "string") {
-    const trimmed = next.message.trim();
+    const trimmed = normalizeOptionalString(next.message) ?? "";
     if (trimmed) {
       next.message = trimmed;
     }
   }
   if (typeof next.text === "string") {
-    const trimmed = next.text.trim();
+    const trimmed = normalizeOptionalString(next.text) ?? "";
     if (trimmed) {
       next.text = trimmed;
     }
@@ -209,6 +221,22 @@ function coercePayload(payload: UnknownRecord) {
       delete next.fallbacks;
     }
   }
+  if ("args" in next) {
+    const args = normalizeTrimmedStringArray(next.args, { allowNull: true });
+    if (args !== undefined) {
+      next.args = args;
+    } else {
+      delete next.args;
+    }
+  }
+  if ("command" in next) {
+    const command = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.command);
+    if (command !== undefined) {
+      next.command = command;
+    } else {
+      delete next.command;
+    }
+  }
   if ("toolsAllow" in next) {
     const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
     if (toolsAllow !== undefined) {
@@ -232,8 +260,21 @@ function coercePayload(payload: UnknownRecord) {
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
+    delete next.command;
+    delete next.args;
   } else if (next.kind === "agentTurn") {
     delete next.text;
+    delete next.command;
+    delete next.args;
+  } else if (next.kind === "command") {
+    delete next.text;
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
   }
   if ("deliver" in next) {
     delete next.deliver;
@@ -288,14 +329,19 @@ function coerceDelivery(delivery: UnknownRecord) {
 }
 
 function inferTopLevelPayload(next: UnknownRecord) {
-  const message = typeof next.message === "string" ? next.message.trim() : "";
+  const message = normalizeOptionalString(next.message) ?? "";
   if (message) {
     return { kind: "agentTurn", message } satisfies UnknownRecord;
   }
 
-  const text = typeof next.text === "string" ? next.text.trim() : "";
+  const text = normalizeOptionalString(next.text) ?? "";
   if (text) {
     return { kind: "systemEvent", text } satisfies UnknownRecord;
+  }
+
+  const command = typeof next.command === "string" ? next.command.trim() : "";
+  if (command || hasCommandPayloadHint(next)) {
+    return { kind: "command", ...(command ? { command } : {}) } satisfies UnknownRecord;
   }
 
   if (hasAgentTurnPayloadHint(next)) {
@@ -344,12 +390,13 @@ function normalizeWakeMode(raw: unknown) {
 
 function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord) {
   const copyString = (field: "model" | "thinking") => {
-    if (typeof payload[field] === "string" && payload[field].trim()) {
+    if (normalizeOptionalString(payload[field])) {
       return;
     }
     const value = next[field];
-    if (typeof value === "string" && value.trim()) {
-      payload[field] = value.trim();
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      payload[field] = normalized;
     }
   };
   copyString("model");

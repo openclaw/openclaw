@@ -15,7 +15,19 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
+    expect(resolved.timeoutSeconds).toBe(120);
     expect(resolved.agents).toEqual({});
+  });
+
+  it("keeps explicit timeoutSeconds config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        timeoutSeconds: 300,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.timeoutSeconds).toBe(300);
   });
 
   it("accepts agent command overrides", () => {
@@ -62,6 +74,9 @@ describe("embedded acpx plugin config", () => {
       properties: expect.objectContaining({
         cwd: expect.any(Object),
         stateDir: expect.any(Object),
+        timeoutSeconds: expect.objectContaining({
+          default: 120,
+        }),
         agents: expect.any(Object),
         mcpServers: expect.any(Object),
       }),

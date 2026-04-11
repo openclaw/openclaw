@@ -1,10 +1,23 @@
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
 } from "./model.forward-compat.test-support.js";
 import { resolveModelWithRegistry } from "./model.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => undefined,
+  resolveProviderBuiltInModelSuppression: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
 
 const ANTHROPIC_OPUS_TEMPLATE = buildForwardCompatTemplate({
   id: "claude-opus-4-5",

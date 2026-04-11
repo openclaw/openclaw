@@ -25,6 +25,8 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   resolveConfigDir,
   resolveUserPath,
@@ -251,7 +253,7 @@ function resolveLazyProviderConfig(
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
   const canonical =
-    normalizeConfiguredSpeechProviderId(providerId) ?? providerId.trim().toLowerCase();
+    normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = config.providerConfigs[canonical];
   const effectiveCfg = cfg ?? config.sourceConfig;
   if (existing && !effectiveCfg) {
@@ -314,7 +316,7 @@ export function getResolvedSpeechProviderConfig(
   const canonical =
     canonicalizeSpeechProviderId(providerId, cfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
-    providerId.trim().toLowerCase();
+    normalizeLowercaseStringOrEmpty(providerId);
   return resolveLazyProviderConfig(config, canonical, cfg);
 }
 
@@ -328,9 +330,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     mode: raw.mode ?? "final",
     provider:
       normalizeConfiguredSpeechProviderId(raw.provider) ??
-      (providerSource === "config"
-        ? (normalizeOptionalString(raw.provider)?.toLowerCase() ?? "")
-        : ""),
+      (providerSource === "config" ? (normalizeOptionalLowercaseString(raw.provider) ?? "") : ""),
     providerSource,
     summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
@@ -593,10 +593,15 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
+}
+
+function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
+  const channelId = resolveChannelId(channel);
+  return channelId !== null && OPUS_CHANNELS.has(channelId);
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
@@ -807,8 +812,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, providers } = setup;
-  const channelId = resolveChannelId(params.channel);
-  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -1161,9 +1165,8 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    const channelId = resolveChannelId(params.channel);
     const shouldVoice =
-      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
+      supportsNativeVoiceNoteTts(params.channel) && result.voiceCompatible === true;
     return {
       ...nextPayload,
       mediaUrl: result.audioPath,
@@ -1189,6 +1192,7 @@ export async function maybeApplyTtsToPayload(params: {
 export const _test = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
+  supportsNativeVoiceNoteTts,
   summarizeText,
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,

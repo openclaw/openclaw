@@ -6,6 +6,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
@@ -189,6 +190,7 @@ export const ModelCompatSchema = z
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    requiresStringContent: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -278,17 +280,25 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
-  })
+  .object(ConfiguredProviderRequestFields)
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const ModelDefinitionSchema = z
   .object({
@@ -519,6 +529,7 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+    jsonlDialect: z.literal("claude-stream-json").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -533,6 +544,8 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileConfigArg: z.string().optional(),
+    systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
     systemPromptWhen: z
       .union([z.literal("first"), z.literal("always"), z.literal("never")])
@@ -557,7 +570,7 @@ export const CliBackendSchema = z
   .strict();
 
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  (values ?? []).map((v) => String(v).trim()).filter(Boolean);
+  normalizeStringEntries(values);
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;

@@ -93,6 +93,9 @@ Those belong in your plugin code and `package.json`.
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
+  "providerAuthAliases": {
+    "openrouter-coding": "openrouter"
+  },
   "channelEnvVars": {
     "openrouter-chatops": ["OPENROUTER_CHATOPS_TOKEN"]
   },
@@ -144,7 +147,9 @@ Those belong in your plugin code and `package.json`.
 | `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
+| `commandAliases`                    | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
+| `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
 | `channelEnvVars`                    | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                     |
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
@@ -178,6 +183,30 @@ OpenClaw reads this before provider runtime loads.
 | `cliOption`           | No       | `string`                                        | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
 | `cliDescription`      | No       | `string`                                        | Description used in CLI help.                                                                            |
 | `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
+
+## commandAliases reference
+
+Use `commandAliases` when a plugin owns a runtime command name that users may
+mistakenly put in `plugins.allow` or try to run as a root CLI command. OpenClaw
+uses this metadata for diagnostics without importing plugin runtime code.
+
+```json
+{
+  "commandAliases": [
+    {
+      "name": "dreaming",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ]
+}
+```
+
+| Field        | Required | Type              | What it means                                                           |
+| ------------ | -------- | ----------------- | ----------------------------------------------------------------------- |
+| `name`       | Yes      | `string`          | Command name that belongs to this plugin.                               |
+| `kind`       | No       | `"runtime-slash"` | Marks the alias as a chat slash command rather than a root CLI command. |
+| `cliCommand` | No       | `string`          | Related root CLI command to suggest for CLI operations, if one exists.  |
 
 ## uiHints reference
 
@@ -440,6 +469,9 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `providerAuthEnvVars` is the cheap metadata path for auth probes, env-marker
   validation, and similar provider-auth surfaces that should not boot plugin
   runtime just to inspect env names.
+- `providerAuthAliases` lets provider variants reuse another provider's auth
+  env vars, auth profiles, config-backed auth, and API-key onboarding choice
+  without hardcoding that relationship in core.
 - `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
   prompts, and similar channel surfaces that should not boot plugin runtime
   just to inspect env names.

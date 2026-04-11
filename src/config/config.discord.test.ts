@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfig, validateConfigObject } from "./config.js";
+import { loadConfig } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("config discord", () => {
   let previousHome: string | undefined;

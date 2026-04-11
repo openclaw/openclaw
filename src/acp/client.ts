@@ -21,7 +21,10 @@ import {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
 
@@ -103,7 +106,7 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
         : toolTitle
       : (toolName ?? "unknown tool");
     rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
-      const approved = answer.trim().toLowerCase() === "y";
+      const approved = normalizeLowercaseStringOrEmpty(answer) === "y";
       console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
       finish(approved);
     });

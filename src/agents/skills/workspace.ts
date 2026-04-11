@@ -4,7 +4,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
@@ -36,7 +37,7 @@ const skillsLogger = createSubsystemLogger("skills");
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
 function compactSkillPaths(skills: Skill[]): Skill[] {
-  const home = os.homedir();
+  const home = resolveHomeDir() ?? os.homedir();
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
   return skills.map((s) => ({
@@ -410,9 +411,7 @@ function loadSkillEntries(
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw
-    .map((d) => (typeof d === "string" ? d.trim() : ""))
-    .filter(Boolean);
+  const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,
@@ -436,7 +435,11 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const personalAgentsSkillsDir = path.resolve(
+    resolveHomeDir() ?? os.homedir(),
+    ".agents",
+    "skills",
+  );
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",

@@ -1,21 +1,11 @@
 import {
-  resolveProviderWebSearchPluginConfig,
-  setProviderWebSearchPluginConfigValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
-
-function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
-  return searchConfig?.apiKey;
-}
-
-function setTopLevelCredentialValue(
-  searchConfigTarget: Record<string, unknown>,
-  value: unknown,
-): void {
-  searchConfigTarget.apiKey = value;
-}
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
+  const credentialPath = "plugins.entries.brave.config.webSearch.apiKey";
+
   return {
     id: "brave",
     label: "Brave Search",
@@ -27,15 +17,12 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://brave.com/search/api/",
     docsUrl: "https://docs.openclaw.ai/brave-search",
     autoDetectOrder: 10,
-    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.brave.config.webSearch.apiKey"],
-    getCredentialValue: getTopLevelCredentialValue,
-    setCredentialValue: setTopLevelCredentialValue,
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "brave", "apiKey", value);
-    },
+    credentialPath,
+    ...createWebSearchProviderContractFields({
+      credentialPath,
+      searchCredential: { type: "top-level" },
+      configuredCredential: { pluginId: "brave" },
+    }),
     createTool: () => null,
   };
 }

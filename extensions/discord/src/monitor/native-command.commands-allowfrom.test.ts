@@ -274,10 +274,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
 
-    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock
-      .calls[0]?.[0] as
-      | Parameters<typeof dispatcherModule.dispatchReplyWithDispatcher>[0]
-      | undefined;
+    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
     await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
 
     expect(interaction.followUp).toHaveBeenCalledWith(

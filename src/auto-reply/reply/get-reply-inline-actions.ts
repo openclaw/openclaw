@@ -27,8 +27,8 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -239,6 +239,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
         allowGatewaySubagentBinding: true,
+        senderIsOwner: command.senderIsOwner,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -346,13 +347,15 @@ export async function handleInlineActions(params: {
   let didSendInlineStatus = false;
   if (handleInlineStatus) {
     const { buildStatusReply } = await import("./commands.runtime.js");
+    const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
+      storePath,
       provider,
       model,
       contextTokens,

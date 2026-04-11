@@ -43,7 +43,7 @@ export type CronFailureDestination = {
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = "ok" | "error" | "skipped" | "aborted";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
 export type CronUsageSummary = {
@@ -81,9 +81,21 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+type CronCommandPayloadFields = {
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+};
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -106,11 +118,19 @@ type CronAgentTurnPayload = {
   kind: "agentTurn";
 } & CronAgentTurnPayloadFields;
 
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
 } & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
     toolsAllow?: string[] | null;
   };
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -118,7 +138,7 @@ export type CronJobState = {
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
   /** Back-compat alias for lastRunStatus. */
-  lastStatus?: "ok" | "error" | "skipped";
+  lastStatus?: "ok" | "error" | "skipped" | "aborted";
   lastError?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;

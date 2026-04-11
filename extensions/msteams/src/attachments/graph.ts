@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -9,7 +10,9 @@ import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
+  encodeGraphShareId,
   GRAPH_ROOT,
+  estimateBase64DecodedBytes,
   inferPlaceholder,
   readNestedString,
   isUrlAllowed,
@@ -53,7 +56,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   const conversationType = normalizeLowercaseStringOrEmpty(params.conversationType ?? "");
   const messageIdCandidates = new Set<string>();
   const pushCandidate = (value: string | null | undefined) => {
-    const trimmed = typeof value === "string" ? value.trim() : "";
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (trimmed) {
       messageIdCandidates.add(trimmed);
     }
@@ -64,7 +67,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   pushCandidate(readNestedString(params.channelData, ["messageId"]));
   pushCandidate(readNestedString(params.channelData, ["teamsMessageId"]));
 
-  const replyToId = typeof params.replyToId === "string" ? params.replyToId.trim() : "";
+  const replyToId = normalizeOptionalString(params.replyToId) ?? "";
 
   if (conversationType === "channel") {
     const teamId =
@@ -190,6 +193,9 @@ async function downloadGraphHostedContent(params: {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
     let buffer: Buffer;
     if (contentBytes) {
+      if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
+        continue;
+      }
       try {
         buffer = Buffer.from(contentBytes, "base64");
       } catch {
@@ -317,13 +323,15 @@ export async function downloadMSTeamsGraphMedia(params: {
           const name = att.name ?? "file";
 
           try {
-            // SharePoint URLs need to be accessed via Graph shares API
+            // SharePoint URLs need to be accessed via Graph shares API. Validate the
+            // rewritten Graph URL, not the original SharePoint host, so the existing
+            // Graph allowlist path can fetch shared files without separately allowing
+            // arbitrary SharePoint hosts.
             const shareUrl = att.contentUrl!;
-            if (!isUrlAllowed(shareUrl, policy.allowHosts)) {
+            const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
+            if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
               continue;
             }
-            const encodedUrl = Buffer.from(shareUrl).toString("base64url");
-            const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
             const media = await downloadAndStoreMSTeamsRemoteMedia({
               url: sharesUrl,

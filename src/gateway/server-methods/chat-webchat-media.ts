@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 /** Cap embedded audio size to avoid multi‑MB payloads on the chat WebSocket. */
 const MAX_WEBCHAT_AUDIO_BYTES = 15 * 1024 * 1024;
@@ -69,7 +70,7 @@ function resolveLocalAudioFileForEmbedding(raw: string): string | null {
 }
 
 function mimeTypeForPath(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return MIME_BY_EXT[ext] ?? "audio/mpeg";
 }
 

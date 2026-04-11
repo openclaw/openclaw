@@ -101,6 +101,7 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.managedBy ?? null,
       ]);
   }
+  throw new Error("Unsupported auth profile credential type");
 }
 
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {

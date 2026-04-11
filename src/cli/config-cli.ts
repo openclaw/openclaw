@@ -36,6 +36,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -370,7 +371,7 @@ function pruneInactiveGatewayAuthCredentials(params: {
     return [];
   }
   const auth = authRaw as Record<string, unknown>;
-  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+  const mode = normalizeOptionalString(auth.mode) ?? "";
 
   const removedPaths: string[] = [];
   const remove = (key: "token" | "password") => {
@@ -1132,7 +1133,7 @@ export async function runConfigSet(opts: {
     if (removedGatewayAuthPaths.length > 0) {
       runtime.log(
         info(
-          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
         ),
       );
     }

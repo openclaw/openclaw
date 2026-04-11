@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
+import { closeQaHttpServer } from "./bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -33,6 +35,7 @@ type MockOpenAiRequestSnapshot = {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
+let subagentFanoutPhase = 0;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,6 +65,40 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function countApproxTokens(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+}
+
+function extractEmbeddingInputTexts(input: unknown): string[] {
+  if (typeof input === "string") {
+    return [input];
+  }
+  if (Array.isArray(input)) {
+    return input.flatMap((entry) => extractEmbeddingInputTexts(entry));
+  }
+  if (
+    input &&
+    typeof input === "object" &&
+    typeof (input as { text?: unknown }).text === "string"
+  ) {
+    return [(input as { text: string }).text];
+  }
+  return [];
+}
+
+function buildDeterministicEmbedding(text: string, dimensions = 16) {
+  const values = Array.from({ length: dimensions }, () => 0);
+  for (let index = 0; index < text.length; index += 1) {
+    values[index % dimensions] += text.charCodeAt(index) / 255;
+  }
+  const magnitude = Math.hypot(...values) || 1;
+  return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
@@ -280,12 +317,37 @@ function extractRememberedFact(userTexts: string[]) {
 }
 
 function extractOrbitCode(text: string) {
-  return /\b(?:ORBIT-9|orbit-9)\b/.exec(text)?.[0]?.toUpperCase() ?? null;
+  return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
+}
+
+function extractLastCapture(text: string, pattern: RegExp) {
+  let lastMatch: RegExpExecArray | null = null;
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
+    lastMatch = match;
+  }
+  return lastMatch?.[1]?.trim() || null;
 }
 
 function extractExactReplyDirective(text: string) {
-  const match = /reply with exactly:\s*([^\n]+)/i.exec(text);
-  return match?.[1]?.trim() || null;
+  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  if (colonMatch) {
+    return colonMatch;
+  }
+  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+}
+
+function extractExactMarkerDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+}
+
+function isHeartbeatPrompt(text: string) {
+  return /Read HEARTBEAT\.md if it exists/i.test(text);
 }
 
 function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
@@ -305,10 +367,14 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective = extractExactReplyDirective(allInputText);
+  const exactMarkerDirective = extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
+  }
+  if (/remember this fact/i.test(prompt) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (/remember this fact/i.test(prompt) && rememberedFact) {
     return `Protocol note: acknowledged. I will remember ${rememberedFact}.`;
@@ -316,8 +382,14 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
   }
+  if (isHeartbeatPrompt(prompt)) {
+    return "HEARTBEAT_OK";
+  }
   if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
+  }
+  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+    return exactMarkerDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";
@@ -328,20 +400,48 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
+  if (/tool continuity check/i.test(prompt) && toolOutput) {
+    return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
+  }
+  if (/session memory ranking check/i.test(prompt) && orbitCode) {
+    return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
+  }
+  if (/thread memory check/i.test(prompt) && orbitCode) {
+    return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
+  }
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
-  if (/tool continuity check/i.test(prompt) && toolOutput) {
-    return `Protocol note: model switch acknowledged. Tool continuity held on ${model || "the requested model"}.`;
-  }
-  if (/image generation check/i.test(prompt) && mediaPath) {
+  if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+  }
+  if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
+    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
   if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
-  if (toolOutput && /delegate|subagent/i.test(prompt)) {
-    return `Protocol note: delegated result acknowledged. The bounded subagent task returned and is folded back into the main thread.`;
+  if (
+    /interrupted by a gateway reload/i.test(prompt) &&
+    /subagent recovery worker/i.test(allInputText)
+  ) {
+    return "RECOVERED-SUBAGENT-OK";
+  }
+  if (/subagent recovery worker/i.test(prompt)) {
+    return "RECOVERED-SUBAGENT-OK";
+  }
+  if (/fanout worker alpha/i.test(prompt)) {
+    return "ALPHA-OK";
+  }
+  if (/fanout worker beta/i.test(prompt)) {
+    return "BETA-OK";
+  }
+  if (/subagent fanout synthesis check/i.test(prompt) && toolOutput && subagentFanoutPhase >= 2) {
+    return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
+  }
+  if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
+    const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
+    return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
   }
   if (toolOutput && /worked, failed, blocked|worked\/failed\/blocked|follow-up/i.test(prompt)) {
     return `Worked:\n- Read seeded QA material.\n- Expanded the report structure.\nFailed:\n- None observed in mock mode.\nBlocked:\n- No live provider evidence in this lane.\nFollow-up:\n- Re-run with a real model for qualitative coverage.`;
@@ -415,7 +515,7 @@ function buildAssistantEvents(text: string): StreamEvent[] {
   ];
 }
 
-function buildResponsesPayload(body: Record<string, unknown>) {
+async function buildResponsesPayload(body: Record<string, unknown>) {
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -423,6 +523,9 @@ function buildResponsesPayload(body: Record<string, unknown>) {
   const allInputText = extractAllInputTexts(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
+  if (isHeartbeatPrompt(prompt)) {
+    return buildAssistantEvents("HEARTBEAT_OK");
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -466,17 +569,97 @@ function buildResponsesPayload(body: Record<string, unknown>) {
       });
     }
   }
-  if (/image generation check/i.test(prompt) && !toolOutput) {
+  if (/session memory ranking check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("memory_search", {
+        query: "current Project Nebula codename ORBIT-10",
+        maxResults: 3,
+      });
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    const firstPath = typeof first?.path === "string" ? first.path : undefined;
+    if (first?.source === "sessions" || firstPath?.startsWith("sessions/")) {
+      return buildAssistantEvents(
+        "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
+      );
+    }
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
+    }
+  }
+  if (/thread memory check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("memory_search", {
+        query: "hidden thread codename ORBIT-22",
+        maxResults: 3,
+      });
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
+    }
+  }
+  if (/(image generation check|capability flip image check)/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
       size: "1024x1024",
     });
   }
+  if (/subagent fanout synthesis check/i.test(prompt)) {
+    if (!toolOutput && subagentFanoutPhase === 0) {
+      subagentFanoutPhase = 1;
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+        label: "qa-fanout-alpha",
+        thread: false,
+      });
+    }
+    if (toolOutput && subagentFanoutPhase === 1) {
+      subagentFanoutPhase = 2;
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
+        label: "qa-fanout-beta",
+        thread: false,
+      });
+    }
+  }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
-  if (/delegate|subagent/i.test(prompt) && !toolOutput) {
+  if ((/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Inspect the QA workspace and return one concise protocol note.",
       label: "qa-sidecar",
@@ -501,11 +684,18 @@ function buildResponsesPayload(body: Record<string, unknown>) {
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
+  if (
+    /subagent recovery worker/i.test(prompt) &&
+    !/interrupted by a gateway reload/i.test(prompt)
+  ) {
+    await sleep(60_000);
+  }
   return buildAssistantEvents(buildAssistantText(input, body));
 }
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
+  subagentFanoutPhase = 0;
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -521,6 +711,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.4", object: "model" },
           { id: "gpt-5.4-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
+          { id: "text-embedding-3-small", object: "model" },
         ],
       });
       return;
@@ -554,11 +745,33 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+      const raw = await readBody(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      const inputs = extractEmbeddingInputTexts(body.input);
+      writeJson(res, 200, {
+        object: "list",
+        data: inputs.map((text, index) => ({
+          object: "embedding",
+          index,
+          embedding: buildDeterministicEmbedding(text),
+        })),
+        model:
+          typeof body.model === "string" && body.model.trim()
+            ? body.model
+            : "text-embedding-3-small",
+        usage: {
+          prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+          total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+        },
+      });
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/responses") {
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-      const events = buildResponsesPayload(body);
+      const events = await buildResponsesPayload(body);
       lastRequest = {
         raw,
         body,
@@ -601,9 +814,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }

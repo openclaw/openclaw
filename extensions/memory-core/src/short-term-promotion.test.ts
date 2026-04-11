@@ -11,9 +11,11 @@ import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   isShortTermMemoryPath,
+  recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
+  removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   resolveShortTermRecallLockPath,
   resolveShortTermPhaseSignalStorePath,
@@ -174,6 +176,128 @@ describe("short-term promotion", () => {
 
       const ranked = await rankShortTermPromotionCandidates({ workspaceDir });
       expect(ranked).toHaveLength(0);
+    });
+  });
+
+  it("lets grounded durable evidence satisfy default deep thresholds", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        'Always use "Happy Together" calendar for flights and reservations.',
+      ]);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.82,
+            query: "__dreaming_grounded_backfill__:candidate",
+            signalCount: 1,
+            dayBucket: "2026-04-03",
+          },
+        ],
+        dedupeByQueryPerDay: true,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.groundedCount).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(2);
+      expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memory).toContain('Always use "Happy Together" calendar');
+    });
+  });
+
+  it("removes grounded-only staged entries without deleting mixed live entries", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Grounded only rule.",
+        "Live recall-backed rule.",
+      ]);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: "Grounded only rule.",
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 2,
+            endLine: 2,
+            snippet: "Live recall-backed rule.",
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+        ],
+        dedupeByQueryPerDay: true,
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "live recall",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.87,
+            snippet: "Live recall-backed rule.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const result = await removeGroundedShortTermCandidates({ workspaceDir });
+      expect(result.removed).toBe(1);
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.snippet).toContain("Live recall-backed rule");
+      expect(ranked[0]?.groundedCount).toBe(2);
+      expect(ranked[0]?.recallCount).toBe(1);
     });
   });
 
@@ -1100,6 +1224,7 @@ describe("short-term promotion", () => {
               snippet,
               recallCount: 2,
               dailyCount: 0,
+              groundedCount: 0,
               totalScore: 1.8,
               maxScore: 0.95,
               firstRecalledAt: "2026-04-01T00:00:00.000Z",

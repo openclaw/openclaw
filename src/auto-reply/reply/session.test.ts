@@ -79,6 +79,7 @@ async function makeStorePath(prefix: string): Promise<string> {
 }
 
 const createStorePath = makeStorePath;
+const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
 
 async function writeSessionStoreFast(
   storePath: string,
@@ -290,9 +291,12 @@ describe("initSessionState thread forking", () => {
     if (!newSessionFile) {
       throw new Error("Missing session file for forked thread");
     }
-    const [headerLine] = (await fs.readFile(newSessionFile, "utf-8"))
+    const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0);
+      .find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as {
       parentSession?: string;
     };
@@ -521,7 +525,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionFile).toBeTruthy();
     const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const [headerLine] = forkedContent.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const headerLine = forkedContent.split(/\r?\n/).find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
     const expectedParentSession = await fs.realpath(parentSessionFile);
     const actualParentSession = parsedHeader.parentSession
@@ -961,6 +968,53 @@ describe("initSessionState RawBody", () => {
     expect(result.resetTriggered).toBe(true);
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("prefers native command target sessions over bound slash sessions", async () => {
+    const storePath = await createStorePath("native-command-target-session-");
+    const boundSlashSessionKey = "slack:slash:123";
+    const targetSessionKey = "agent:main:main";
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: "slack",
+      accountId: "default",
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSlashSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "channel:ops",
+      },
+      placement: "current",
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        CommandBody: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        Provider: "slack",
+        Surface: "slack",
+        AccountId: "default",
+        SenderId: "U123",
+        From: "slack:U123",
+        To: "channel:ops",
+        OriginatingTo: "channel:ops",
+        SessionKey: boundSlashSessionKey,
+        CommandSource: "native",
+        CommandTargetSessionKey: targetSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(targetSessionKey);
+    expect(result.sessionCtx.SessionKey).toBe(targetSessionKey);
   });
 
   it("uses the default per-agent sessions store when config store is unset", async () => {

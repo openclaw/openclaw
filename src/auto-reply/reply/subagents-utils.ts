@@ -1,5 +1,8 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -92,8 +95,10 @@ export function resolveSubagentTargetFromRuns(params: {
       ? { entry: bySessionKey }
       : { error: params.errors.unknownSession(trimmed) };
   }
-  const lowered = trimmed.toLowerCase();
-  const byExactLabel = deduped.filter((entry) => params.label(entry).toLowerCase() === lowered);
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const byExactLabel = deduped.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(params.label(entry)) === lowered,
+  );
   if (byExactLabel.length === 1) {
     return { entry: byExactLabel[0] };
   }
@@ -101,7 +106,7 @@ export function resolveSubagentTargetFromRuns(params: {
     return { error: params.errors.ambiguousLabel(trimmed) };
   }
   const byLabelPrefix = deduped.filter((entry) =>
-    params.label(entry).toLowerCase().startsWith(lowered),
+    normalizeLowercaseStringOrEmpty(params.label(entry)).startsWith(lowered),
   );
   if (byLabelPrefix.length === 1) {
     return { entry: byLabelPrefix[0] };

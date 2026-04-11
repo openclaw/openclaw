@@ -139,6 +139,9 @@ type _VideoGenerationSdkCompat = [
 ];
 
 export {
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
   DEFAULT_VIDEO_GENERATION_DURATION_SECONDS,
   DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
   DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
@@ -148,6 +151,7 @@ export {
   extractDashscopeVideoUrls,
   pollDashscopeVideoTaskUntilComplete,
   resolveVideoGenerationReferenceUrls,
+  runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
 
 export type { DashscopeVideoGenerationResponse } from "../video-generation/dashscope-compatible.js";

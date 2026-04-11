@@ -214,11 +214,14 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return false;
   }
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
+  if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
     return true;
   }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
+  if (
+    tailnetIPv6 &&
+    normalizeLowercaseStringOrEmpty(ip) === normalizeLowercaseStringOrEmpty(tailnetIPv6)
+  ) {
     return true;
   }
   return false;
@@ -484,7 +487,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };

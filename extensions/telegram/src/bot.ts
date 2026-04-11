@@ -3,7 +3,6 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -20,10 +19,13 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
-import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
-import { registerTelegramHandlers } from "./bot-handlers.js";
+import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -34,39 +36,16 @@ import {
 } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
-import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
+import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-export type TelegramBotOptions = {
-  token: string;
-  accountId?: string;
-  runtime?: RuntimeEnv;
-  requireMention?: boolean;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  mediaMaxMb?: number;
-  replyToMode?: ReplyToMode;
-  proxyFetch?: typeof fetch;
-  config?: OpenClawConfig;
-  /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
-  fetchAbortSignal?: AbortSignal;
-  updateOffset?: {
-    lastUpdateId?: number | null;
-    onUpdateId?: (updateId: number) => void | Promise<void>;
-  };
-  testTimings?: {
-    mediaGroupFlushMs?: number;
-    textFragmentGapMs?: number;
-  };
-  /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
-  telegramTransport?: TelegramTransport;
-  telegramDeps?: TelegramBotDeps;
-};
+export type { TelegramBotOptions } from "./bot.types.js";
 
 export { getTelegramSequentialKey };
 
@@ -129,7 +108,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
     const pathname = new URL(url).pathname;
     const segments = pathname.split("/").filter(Boolean);
     const method = segments.length > 0 ? (segments.at(-1) ?? null) : null;
-    return method?.toLowerCase() ?? null;
+    return normalizeOptionalLowercaseString(method) ?? null;
   } catch {
     return null;
   }

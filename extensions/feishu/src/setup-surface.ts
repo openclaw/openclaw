@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   inspectFeishuCredentials,
   resolveDefaultFeishuAccountId,
@@ -102,7 +103,7 @@ function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boo
       return false;
     }
     const rec = value as Record<string, unknown>;
-    const source = normalizeString(rec.source)?.toLowerCase();
+    const source = normalizeOptionalLowercaseString(normalizeString(rec.source));
     const id = normalizeString(rec.id);
     if (source === "env" && id) {
       return Boolean(normalizeString(process.env[id]));
@@ -110,9 +111,8 @@ function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boo
     return hasConfiguredSecretInput(value);
   };
 
-  const topLevelConfigured = Boolean(
-    isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
-  );
+  const topLevelConfigured =
+    isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret);
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return topLevelConfigured;
@@ -132,7 +132,7 @@ function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boo
     ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
     : hasConfiguredSecretInput(feishuCfg?.appSecret);
 
-  return Boolean(accountAppIdConfigured && accountSecretConfigured);
+  return accountAppIdConfigured && accountSecretConfigured;
 }
 
 async function promptFeishuAllowFrom(params: {
@@ -161,10 +161,7 @@ async function promptFeishuAllowFrom(params: {
     initialValue:
       existingAllowFrom.length > 0 ? existingAllowFrom.map(String).join(", ") : undefined,
   });
-  const mergedAllowFrom = mergeAllowFromEntries(
-    existingAllowFrom,
-    splitSetupEntries(String(entry)),
-  );
+  const mergedAllowFrom = mergeAllowFromEntries(existingAllowFrom, splitSetupEntries(entry));
   return setFeishuAllowFrom(params.cfg, params.accountId, mergedAllowFrom);
 }
 
@@ -189,12 +186,12 @@ async function promptFeishuAppId(params: {
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
   initialValue?: string;
 }): Promise<string> {
-  return String(
+  return (
     await params.prompter.text({
       message: "Enter Feishu App ID",
       initialValue: params.initialValue,
       validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    })
   ).trim();
 }
 
@@ -438,12 +435,12 @@ export const feishuSetupWizard: ChannelSetupWizard = {
       }
 
       const currentWebhookPath = getScopedFeishuConfig(next, resolvedAccountId).webhookPath;
-      const webhookPath = String(
+      const webhookPath = (
         await prompter.text({
           message: "Feishu webhook path",
           initialValue: currentWebhookPath ?? "/feishu/events",
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
+          validate: (value) => ((value ?? "").trim() ? undefined : "Required"),
+        })
       ).trim();
       next = patchFeishuConfig(next, resolvedAccountId, { webhookPath });
     }
@@ -484,7 +481,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
         initialValue: existing.length > 0 ? existing.map(String).join(", ") : undefined,
       });
       if (entry) {
-        const parts = splitSetupEntries(String(entry));
+        const parts = splitSetupEntries(entry);
         if (parts.length > 0) {
           next = setFeishuGroupAllowFrom(next, resolvedAccountId, parts);
         }

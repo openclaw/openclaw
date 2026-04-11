@@ -832,7 +832,6 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");
-
   assertCommandRegistry(commands);
   return commands;
 }

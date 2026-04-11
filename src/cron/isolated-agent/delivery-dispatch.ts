@@ -12,11 +12,16 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -31,8 +36,8 @@ export function matchesMessagingToolDeliveryTarget(
   if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
-  const channel = delivery.channel.trim().toLowerCase();
-  const provider = target.provider?.trim().toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(delivery.channel);
+  const provider = normalizeOptionalLowercaseString(target.provider);
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
@@ -186,9 +191,7 @@ function pruneCompletedDirectCronDeliveries(now: number) {
 
 function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
-    ? scheduledAt
-    : params.runStartedAt;
+  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
 }
 
 function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {

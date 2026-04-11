@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "../../api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
 import { asRecord, formatChangesDate, formatErrorMessage } from "./utils.js";
 

@@ -4,13 +4,24 @@ import { z } from "zod";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
-import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
+
+type SetupCommandDeps = {
+  ensureAgentWorkspace?: typeof ensureAgentWorkspace;
+  mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
+  resolveSessionTranscriptsDir?: () => string | Promise<string>;
+  writeConfigFile?: typeof writeConfigFile;
+};
+
+async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
+  const { resolveSessionTranscriptsDir } = await import("../config/sessions.js");
+  return resolveSessionTranscriptsDir();
+}
 
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
@@ -28,6 +39,7 @@ async function readConfigFileRaw(configPath: string): Promise<{
 export async function setupCommand(
   opts?: { workspace?: string },
   runtime: RuntimeEnv = defaultRuntime,
+  deps: SetupCommandDeps = {},
 ) {
   const desiredWorkspace =
     typeof opts?.workspace === "string" && opts.workspace.trim()
@@ -62,7 +74,7 @@ export async function setupCommand(
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
-    await writeConfigFile(next);
+    await (deps.writeConfigFile ?? writeConfigFile)(next);
     if (!existingRaw.exists) {
       runtime.log(`Wrote ${formatConfigPath(configPath)}`);
     } else {
@@ -80,13 +92,15 @@ export async function setupCommand(
     runtime.log(`Config OK: ${formatConfigPath(configPath)}`);
   }
 
-  const ws = await ensureAgentWorkspace({
+  const ws = await (deps.ensureAgentWorkspace ?? ensureAgentWorkspace)({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const sessionsDir = resolveSessionTranscriptsDir();
-  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionsDir = await (
+    deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
+  )();
+  await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }

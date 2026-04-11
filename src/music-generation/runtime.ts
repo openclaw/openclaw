@@ -1,10 +1,11 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
@@ -124,13 +125,9 @@ export async function generateMusic(
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,
-          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
-          sanitized.normalization.durationSeconds.applied !== undefined
-            ? {
-                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
-                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
-              }
-            : {}),
+          ...buildMediaGenerationNormalizationMetadata({
+            normalization: sanitized.normalization,
+          }),
         },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
@@ -149,7 +146,7 @@ export async function generateMusic(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "music generation",
     attempts,
     lastError,

@@ -2254,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`

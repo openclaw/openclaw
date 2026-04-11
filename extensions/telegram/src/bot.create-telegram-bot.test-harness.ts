@@ -5,9 +5,9 @@ import {
   resetInboundDedupe,
   type GetReplyOptions,
   type MsgContext,
-  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
@@ -26,6 +26,12 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
+type ReplyPayloadLike = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  replyToId?: string;
+};
 
 const _EMPTY_REPLY_COUNTS: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
   block: 0,
@@ -118,7 +124,7 @@ const replySpyHoisted = vi.hoisted(() => ({
       ctx: MsgContext,
       opts?: GetReplyOptions,
       configOverride?: OpenClawConfig,
-    ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+    ) => Promise<ReplyPayloadLike | ReplyPayloadLike[] | undefined>
   >,
 }));
 
@@ -126,11 +132,11 @@ async function dispatchHarnessReplies(
   params: DispatchReplyHarnessParams,
   runReply: (
     params: DispatchReplyHarnessParams,
-  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>,
+  ) => Promise<ReplyPayloadLike | ReplyPayloadLike[] | undefined>,
 ): Promise<DispatchReplyWithBufferedBlockDispatcherResult> {
   await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
   const reply = await runReply(params);
-  const payloads: ReplyPayload[] =
+  const payloads: ReplyPayloadLike[] =
     reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
   const dispatcher = createReplyDispatcher({
     deliver: async (payload, info) => {
@@ -208,7 +214,7 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
 } {
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
-    const provider = providerRaw?.trim().toLowerCase();
+    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
     const model = modelRaw?.trim();
     if (!provider || !model) {
       return;

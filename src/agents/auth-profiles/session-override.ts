@@ -85,6 +85,13 @@ export async function resolveSessionAuthProfileOverride(params: {
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   let current = sessionEntry.authProfileOverride?.trim();
+  const source =
+    sessionEntry.authProfileOverrideSource ??
+    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined);
 
   if (current && !store.profiles[current]) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
@@ -96,7 +103,8 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  if (current && order.length > 0 && !order.includes(current)) {
+  // Explicit user picks should survive provider rotation order changes.
+  if (current && order.length > 0 && !order.includes(current) && source !== "user") {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -126,14 +134,6 @@ export async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
-
-  const source =
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? "auto"
-      : current
-        ? "user"
-        : undefined);
   if (source === "user" && current && !isNewSession) {
     return current;
   }

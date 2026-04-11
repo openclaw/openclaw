@@ -77,6 +77,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/cli/capability",
+      "destination": "/cli/infer"
+    },
+    {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/architecture"
     },
@@ -1070,6 +1074,7 @@
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
+                      "concepts/active-memory",
                       "concepts/dreaming"
                     ]
                   },
@@ -1108,6 +1113,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/codex-harness",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   {
@@ -1125,6 +1131,7 @@
                       "plugins/sdk-overview",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",

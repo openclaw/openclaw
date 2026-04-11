@@ -3,7 +3,7 @@ import {
   collectUnitFastTestFileAnalysis,
   collectUnitFastTestCandidates,
   unitFastTestFiles,
-} from "../vitest.unit-fast-paths.mjs";
+} from "../test/vitest/vitest.unit-fast-paths.mjs";
 
 const args = new Set(process.argv.slice(2));
 const json = args.has("--json");

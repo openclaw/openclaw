@@ -112,6 +112,7 @@ export function getSock(): MockSock {
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 
 function expectInboxPairingReplyText(
@@ -156,7 +157,7 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
 
 export async function startInboxMonitor(
   onMessage: InboxOnMessage,
-  options: { selfChatMode?: boolean } = {},
+  extraOptions: Partial<InboxMonitorOptions> = {},
 ) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
@@ -166,7 +167,7 @@ export async function startInboxMonitor(
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
-    selfChatMode: options.selfChatMode,
+    ...extraOptions,
   });
   return { listener, sock: getSock() };
 }
@@ -201,14 +202,11 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls[0];
   expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText(
-    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
-    {
-      channel: "whatsapp",
-      idLine: `Your WhatsApp phone number: ${senderE164}`,
-      code: "PAIRCODE",
-    },
-  );
+  expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
+    channel: "whatsapp",
+    idLine: `Your WhatsApp phone number: ${senderE164}`,
+    code: "PAIRCODE",
+  });
 }
 
 let authDir: string | undefined;

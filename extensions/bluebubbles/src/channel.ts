@@ -8,13 +8,15 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { buildProbeChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { type ResolvedBlueBubblesAccount } from "./accounts.js";
+import {
+  type ResolvedBlueBubblesAccount,
+  resolveBlueBubblesEffectiveAllowPrivateNetwork,
+} from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import {
   bluebubblesCapabilities,
@@ -226,7 +228,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+            allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
+              baseUrl: account.baseUrl,
+              config: account.config,
+            }),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;

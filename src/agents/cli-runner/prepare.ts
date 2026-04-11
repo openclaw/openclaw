@@ -22,6 +22,8 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -131,19 +133,22 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    authEpoch,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
@@ -160,7 +165,13 @@ export async function prepareCliRunContext(
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt =
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir,
+    config: params.config,
+    agentId: sessionAgentId,
+  });
+  const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
       agentId: sessionAgentId,
@@ -173,11 +184,26 @@ export async function prepareCliRunContext(
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
       docsPath: docsPath ?? undefined,
+      skillsPrompt,
       tools: [],
       contextFiles,
       modelDisplay,
       agentId: sessionAgentId,
     });
+  const transformedSystemPrompt =
+    backendResolved.transformSystemPrompt?.({
+      config: params.config,
+      workspaceDir,
+      provider: params.provider,
+      modelId,
+      modelDisplay,
+      agentId: sessionAgentId,
+      systemPrompt: builtSystemPrompt,
+    }) ?? builtSystemPrompt;
+  const systemPrompt = applyPluginTextReplacements(
+    transformedSystemPrompt,
+    backendResolved.textTransforms?.input,
+  );
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -197,7 +223,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

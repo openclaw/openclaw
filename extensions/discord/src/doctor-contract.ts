@@ -4,45 +4,16 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  asObjectRecord,
+  hasLegacyAccountStreamingAliases,
+  hasLegacyStreamingAliases,
   normalizeLegacyDmAliases,
   normalizeLegacyStreamingAliases,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  if (
-    typeof entry.streamMode === "string" ||
-    typeof entry.chunkMode === "string" ||
-    typeof entry.blockStreaming === "boolean" ||
-    typeof entry.blockStreamingCoalesce === "boolean" ||
-    typeof entry.draftChunk === "boolean" ||
-    (entry.draftChunk && typeof entry.draftChunk === "object")
-  ) {
-    return true;
-  }
-  const streaming = entry.streaming;
-  return typeof streaming === "string" || typeof streaming === "boolean";
-}
-
-function hasLegacyAccountStreamingAliases(
-  value: unknown,
-  match: (entry: unknown) => boolean,
-): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => match(account));
+  return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
 }
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;

@@ -279,7 +279,7 @@ describe("spawnSubagentDirect seam flow", () => {
       status: "error",
       childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
     });
-    expect(String(result.error ?? "")).toContain("invalid model");
+    expect(result.error ?? "").toContain("invalid model");
     expect(
       hoisted.callGatewayMock.mock.calls.some(
         (call) => (call[0] as { method?: string }).method === "agent",

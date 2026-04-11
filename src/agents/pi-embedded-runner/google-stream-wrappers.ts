@@ -1,15 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 function isGemini31Model(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
 }
 
 function isGemma4Model(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("gemma-4");
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
 }
 
 function mapThinkLevelToGoogleThinkingLevel(
@@ -106,9 +107,7 @@ export function sanitizeGoogleThinkingPayload(params: {
     }
 
     const mappedLevel =
-      explicitMappedLevel ??
-      normalizedThinkingLevel ??
-      (hadThinkingBudget ? "MINIMAL" : undefined);
+      explicitMappedLevel ?? normalizedThinkingLevel ?? (hadThinkingBudget ? "MINIMAL" : undefined);
 
     if (mappedLevel) {
       thinkingConfigObj.thinkingLevel = mappedLevel;

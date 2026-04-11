@@ -732,4 +732,49 @@ describe("exec backgrounded onUpdate suppression", () => {
     },
     isWin ? 15_000 : 5_000,
   );
+
+  it(
+    "does not invoke onUpdate after the foreground exec process exits",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      // Run a foreground command that produces output then exits.
+      const command = joinCommands([shellEcho("line1"), shellEcho("line2")]);
+      await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
+      const callsAtExit = onUpdateSpy.mock.calls.length;
+      // Allow a tick for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
+    },
+    isWin ? 10_000 : 5_000,
+  );
+
+  it(
+    "suppresses onUpdate after abort signal fires",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      const abortController = new AbortController();
+      // Run a command that produces output over time.
+      const command = joinCommands([
+        shellEcho("before-abort"),
+        shortDelayCmd,
+        shellEcho("after-abort"),
+      ]);
+      // Abort almost immediately so the signal fires while the command
+      // is still producing output.
+      setTimeout(() => abortController.abort(), 10);
+      const result = await execTool.execute(
+        nextCallId(),
+        { command },
+        abortController.signal,
+        onUpdateSpy,
+      );
+      const callsAtAbort = onUpdateSpy.mock.calls.length;
+      // Allow extra time for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 100));
+      // After abort, no new onUpdate calls should have been made.
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
+      expect(result).toBeDefined();
+    },
+    isWin ? 10_000 : 5_000,
+  );
 });

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -15,6 +16,7 @@ import {
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
@@ -22,6 +24,7 @@ import {
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
+import { resolveCronJobTimeoutMs } from "../cron/service/timeout-policy.js";
 import { assertSafeCronSessionTargetId } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
@@ -83,6 +86,8 @@ function resolveCronWebhookTarget(params: {
   return null;
 }
 
+const CRON_COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
+
 function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -141,6 +146,149 @@ async function postCronWebhook(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function runCronCommandJob(params: {
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+  abortSignal?: AbortSignal;
+}): Promise<{
+  status: "ok" | "error" | "aborted";
+  summary?: string;
+  outputText?: string;
+  error?: string;
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
+}> {
+  const command = params.command.trim();
+  const args = Array.isArray(params.args) ? params.args.filter((entry) => entry.length > 0) : [];
+  if (!command) {
+    return { status: "error" as const, error: "cron command payload requires a non-empty command" };
+  }
+
+  return await new Promise<{
+    status: "ok" | "error" | "aborted";
+    summary?: string;
+    outputText?: string;
+    error?: string;
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+  }>((resolve) => {
+    const child = spawn(command, args, {
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+
+    const appendLimited = (current: string, chunk: Buffer, used: number) => {
+      if (used >= CRON_COMMAND_OUTPUT_LIMIT_BYTES) {
+        return { text: current, bytes: used };
+      }
+      const remaining = CRON_COMMAND_OUTPUT_LIMIT_BYTES - used;
+      const slice = chunk.subarray(0, remaining);
+      return { text: current + slice.toString("utf8"), bytes: used + slice.byteLength };
+    };
+
+    const finish = (result: {
+      status: "ok" | "error" | "aborted";
+      summary?: string;
+      outputText?: string;
+      error?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+    }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      child.kill("SIGTERM");
+    };
+
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const next = appendLimited(stdout, chunk, stdoutBytes);
+      stdout = next.text;
+      stdoutBytes = next.bytes;
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const next = appendLimited(stderr, chunk, stderrBytes);
+      stderr = next.text;
+      stderrBytes = next.bytes;
+    });
+
+    child.once("error", (err) => {
+      finish({ status: "error", error: formatErrorMessage(err) });
+    });
+
+    child.once("close", (code, signal) => {
+      const outputText = stdout.trim() || undefined;
+      const errorText = stderr.trim() || undefined;
+      if (timedOut) {
+        finish({
+          status: "error",
+          error: `command timed out after ${params.timeoutSeconds ?? 0}s`,
+          summary: errorText ?? outputText,
+          outputText,
+        });
+        return;
+      }
+      if (aborted) {
+        finish({
+          status: "aborted",
+          error: "aborted",
+          summary: errorText ?? outputText,
+          outputText,
+        });
+        return;
+      }
+      if (code === 0) {
+        finish({
+          status: "ok",
+          summary: outputText ?? errorText ?? `Command completed: ${command}`,
+          outputText,
+        });
+        return;
+      }
+      finish({
+        status: "error",
+        error:
+          errorText ??
+          `command exited with code ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
+        summary: errorText ?? outputText,
+        outputText,
+      });
+    });
+
+    const timeoutMs =
+      typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+        ? Math.max(0, params.timeoutSeconds) * 1000
+        : 0;
+    const timeout: ReturnType<typeof setTimeout> | undefined =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+          }, timeoutMs)
+        : undefined;
+    timeout?.unref?.();
+  });
 }
 
 export function buildGatewayCronService(params: {
@@ -307,6 +455,83 @@ export function buildGatewayCronService(params: {
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
+    },
+    runCommandJob: async ({ job, command, args, timeoutSeconds, abortSignal }) => {
+      const result = await runCronCommandJob({ command, args, timeoutSeconds, abortSignal });
+      const primaryPlan = resolveCronDeliveryPlan(job);
+      const deliveryBestEffort = job.delivery?.bestEffort === true;
+      const summaryText =
+        typeof result.summary === "string" && result.summary.trim().length > 0
+          ? result.summary.trim()
+          : typeof result.outputText === "string" && result.outputText.trim().length > 0
+            ? result.outputText.trim()
+            : undefined;
+      if (!primaryPlan.requested || !summaryText) {
+        return result;
+      }
+
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      const resolvedDelivery = await resolveDeliveryTarget(runtimeConfig, agentId, {
+        channel: primaryPlan.channel,
+        to: primaryPlan.to,
+        threadId: primaryPlan.threadId,
+        accountId: primaryPlan.accountId,
+        sessionKey: job.sessionKey,
+      });
+      if (!resolvedDelivery.ok) {
+        if (!deliveryBestEffort) {
+          return {
+            ...result,
+            status: "error",
+            error: resolvedDelivery.error.message,
+            deliveryAttempted: false,
+            delivered: false,
+          };
+        }
+        return {
+          ...result,
+          deliveryAttempted: false,
+          delivered: false,
+        };
+      }
+
+      const runSessionId = `cron-command:${job.id}`;
+      const agentSessionKey = `cron-command:${job.id}`;
+      const deliveryResult = await dispatchCronDelivery({
+        cfg: runtimeConfig,
+        cfgWithAgentDefaults: runtimeConfig,
+        deps: params.deps,
+        job,
+        timeoutMs: resolveCronJobTimeoutMs(job) ?? 0,
+        agentId,
+        agentSessionKey,
+        runSessionId,
+        resolvedDelivery,
+        deliveryRequested: true,
+        skipHeartbeatDelivery: false,
+        deliveryBestEffort,
+        deliveryPayloadHasStructuredContent: false,
+        deliveryPayloads: [{ text: summaryText }],
+        synthesizedText: summaryText,
+        runStartedAt: Date.now(),
+        runEndedAt: Date.now(),
+        summary: summaryText,
+        outputText: result.outputText,
+        telemetry: {},
+        abortSignal,
+        isAborted: () => abortSignal?.aborted === true,
+        abortReason: () => "aborted",
+        withRunSession: (wrapped) => ({
+          ...wrapped,
+          sessionId: runSessionId,
+          sessionKey: agentSessionKey,
+        }),
+      });
+      return {
+        ...result,
+        delivered: deliveryResult.delivered,
+        deliveryAttempted: deliveryResult.deliveryAttempted,
+      };
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

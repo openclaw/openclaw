@@ -23,10 +23,11 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
-- Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime. The remaining core env-var
-  map is now just for non-plugin/core providers and a few generic-precedence
-  cases such as Anthropic API-key-first onboarding.
+- Provider manifests can declare `providerAuthEnvVars` and
+  `providerAuthAliases` so generic env-based auth probes and provider variants
+  do not need to load plugin runtime. The remaining core env-var map is now
+  just for non-plugin/core providers and a few generic-precedence cases such
+  as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
@@ -49,6 +50,13 @@ For model selection rules, see [/concepts/models](/concepts/models).
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
+- The bundled `codex` provider is paired with the bundled Codex agent harness.
+  Use `codex/gpt-*` when you want Codex-owned login, model discovery, native
+  thread resume, and app-server execution. Plain `openai/gpt-*` refs continue
+  to use the OpenAI provider and the normal OpenClaw provider transport.
+  Codex-only deployments can disable automatic PI fallback with
+  `agents.defaults.embeddedHarness.fallback: "none"`; see
+  [Codex Harness](/plugins/codex-harness).
 
 ## Plugin-owned provider behavior
 
@@ -371,7 +379,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5`
+- Example model: `zai/glm-5.1`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface

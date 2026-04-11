@@ -318,6 +318,28 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
+  it("respects an explicit private-network opt-out for loopback serverUrl", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-opt-out" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+  });
+
   it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {
     mockSuccessfulAttachmentDownload();
 
@@ -325,6 +347,28 @@ describe("downloadBlueBubblesAttachment", () => {
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "https://bluebubbles.example.com:1234",
       password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["bluebubbles.example.com"] });
+  });
+
+  it("keeps public serverUrl hostname pinning when private-network access is explicitly disabled", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-public-host-opt-out" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "https://bluebubbles.example.com:1234",
+      password: "test",
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          },
+        },
+      },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;

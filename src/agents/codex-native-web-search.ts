@@ -113,6 +113,14 @@ export function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;
 }): boolean {
+  if (
+    Object.values(params.config?.auth?.profiles ?? {}).some(
+      (profile) => isRecord(profile) && profile.provider === "openai-codex",
+    )
+  ) {
+    return true;
+  }
+
   if (params.agentDir) {
     try {
       if (
@@ -124,10 +132,7 @@ export function hasAvailableCodexAuth(params: {
       // Fall back to config-based detection below.
     }
   }
-
-  return Object.values(params.config?.auth?.profiles ?? {}).some(
-    (profile) => isRecord(profile) && profile.provider === "openai-codex",
-  );
+  return false;
 }
 
 export function resolveCodexNativeSearchActivation(params: {
