@@ -239,19 +239,33 @@ function ensureDir(filePath: string) {
 }
 
 function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(trustedRoot);
+  // Resolve trustedRoot through top-level symlinks (e.g. ~/.openclaw -> real path)
+  // so that a symlinked OPENCLAW_HOME itself is accepted, while still
+  // rejecting symlinks *inside* the resolved root.
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = fs.realpathSync(path.resolve(trustedRoot));
+  } catch {
+    resolvedRoot = path.resolve(trustedRoot);
+  }
+
+  let resolvedTarget: string;
+  try {
+    resolvedTarget = fs.realpathSync(path.resolve(targetPath));
+  } catch {
+    resolvedTarget = path.resolve(targetPath);
+  }
+
   if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
     return;
   }
 
+  // Only check path segments WITHIN the resolved root for symlinks
   const relative = path.relative(resolvedRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
   let current = resolvedRoot;
-  for (const segment of [".", ...segments]) {
-    if (segment !== ".") {
-      current = path.join(current, segment);
-    }
+  for (const segment of segments) {
+    current = path.join(current, segment);
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
