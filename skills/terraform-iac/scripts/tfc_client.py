@@ -2112,6 +2112,18 @@ resource "aws_efs_mount_target" "mt_{i}" {{
 """
         subnet_display = ", ".join(subnets)
 
+    # NFS source CIDR
+    if vpc_source == "yes":
+        nfs_cidr_ref = "data.terraform_remote_state.vpc.outputs.vpc_cidr_block"
+        nfs_cidr_display = f"VPC CIDR from {vpc_ws}"
+    else:
+        print("\n  NFS ingress CIDR:")
+        print("    Must match the CIDR of the VPC where clients will mount EFS.")
+        print("    Common ranges: 10.0.0.0/16, 172.16.0.0/12, 192.168.0.0/16")
+        nfs_cidr = prompt("Source CIDR for NFS (port 2049)", default="10.0.0.0/8")
+        nfs_cidr_ref = f'"{nfs_cidr}"'
+        nfs_cidr_display = nfs_cidr
+
     # Lifecycle block
     lifecycle_block = ""
     if ia_enabled:
@@ -2170,7 +2182,7 @@ resource "aws_security_group" "efs" {{
     from_port   = 2049
     to_port     = 2049
     protocol    = "tcp"
-    cidr_blocks = ["10.0.0.0/8"]
+    cidr_blocks = [{nfs_cidr_ref}]
     description = "NFS from private network"
   }}
 
