@@ -78,7 +78,7 @@ describe("qa agentic parity report", () => {
     );
   });
 
-  it("fails the parity gate when required first-wave scenarios are missing on both sides", () => {
+  it("fails the parity gate when required parity scenarios are missing on both sides", () => {
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
@@ -93,7 +93,38 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Missing required first-wave parity scenario coverage for Image understanding from attachment: openai/gpt-5.4=missing, anthropic/claude-opus-4-6=missing.",
+      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.4=missing, anthropic/claude-opus-4-6=missing.",
+    );
+  });
+
+  it("fails the parity gate when required parity scenarios are skipped", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: {
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Compaction retry after mutating tool", status: "skip" },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
+      },
+      baselineSummary: {
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Compaction retry after mutating tool", status: "skip" },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "Missing required parity scenario coverage for Compaction retry after mutating tool: openai/gpt-5.4=skip, anthropic/claude-opus-4-6=skip.",
     );
   });
 

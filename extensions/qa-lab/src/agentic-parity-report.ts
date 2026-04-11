@@ -138,6 +138,12 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function requiredCoverageStatus(
+  scenario: QaParityReportScenario | undefined,
+): "pass" | "fail" | "skip" | "missing" {
+  return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
+}
+
 export function buildQaAgenticParityComparison(params: {
   candidateLabel: string;
   baselineLabel: string;
@@ -175,12 +181,24 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
-  const requiredScenarioCoverage = QA_AGENTIC_PARITY_SCENARIO_TITLES.filter(
-    (name) => !candidateByName.has(name) || !baselineByName.has(name),
+  const requiredScenarioCoverage = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
+    const candidate = candidateByName.get(name);
+    const baseline = baselineByName.get(name);
+    return {
+      name,
+      candidateStatus: requiredCoverageStatus(candidate),
+      baselineStatus: requiredCoverageStatus(baseline),
+    };
+  }).filter(
+    (scenario) =>
+      scenario.candidateStatus === "missing" ||
+      scenario.baselineStatus === "missing" ||
+      scenario.candidateStatus === "skip" ||
+      scenario.baselineStatus === "skip",
   );
-  for (const name of requiredScenarioCoverage) {
+  for (const scenario of requiredScenarioCoverage) {
     failures.push(
-      `Missing required first-wave parity scenario coverage for ${name}: ${params.candidateLabel}=${candidateByName.has(name) ? "present" : "missing"}, ${params.baselineLabel}=${baselineByName.has(name) ? "present" : "missing"}.`,
+      `Missing required parity scenario coverage for ${scenario.name}: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
     );
   }
   const coverageMismatch = scenarioComparisons.filter(
