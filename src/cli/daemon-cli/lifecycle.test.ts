@@ -20,6 +20,7 @@ type RestartParams = {
 };
 
 const service = {
+  label: "LaunchAgent",
   readCommand: vi.fn(),
   restart: vi.fn(),
 };
@@ -47,6 +48,9 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const launchAgentPlistExists = vi.fn<(env: NodeJS.ProcessEnv) => Promise<boolean>>(
+  async () => false,
+);
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -78,6 +82,10 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
 
+vi.mock("../../daemon/launchd.js", () => ({
+  launchAgentPlistExists: (env: NodeJS.ProcessEnv) => launchAgentPlistExists(env),
+}));
+
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -105,8 +113,12 @@ describe("runDaemonRestart health checks", () => {
     runPostRestartCheck?: boolean;
   } = {}) {
     runServiceRestart.mockImplementation(
-      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+      async (
+        params: RestartParams & {
+          onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+        },
+      ) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
         if (runPostRestartCheck) {
           await params.postRestartCheck?.({
             json: Boolean(params.opts?.json),
@@ -143,6 +155,7 @@ describe("runDaemonRestart health checks", () => {
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    launchAgentPlistExists.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -176,6 +189,7 @@ describe("runDaemonRestart health checks", () => {
     isRestartEnabled.mockReturnValue(true);
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
+    launchAgentPlistExists.mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -244,9 +258,13 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals an unmanaged gateway process on stop", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await runDaemonStop({ json: true });
 
@@ -268,6 +286,41 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("restarts a booted-out launch agent when the plist still exists", async () => {
+    launchAgentPlistExists.mockResolvedValue(true);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    runServiceRestart.mockImplementation(
+      async (
+        params: RestartParams & {
+          onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+        },
+      ) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
+
+    await runDaemonRestart({ json: true });
+
+    expect(launchAgentPlistExists).toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
@@ -295,9 +348,13 @@ describe("runDaemonRestart health checks", () => {
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await runDaemonStop({ json: true });
 

@@ -156,6 +156,30 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toContain("unmanaged process");
   });
 
+  it("rechecks service state when a not-loaded restart path re-registers the service", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message: "Gateway service restarted.",
+        serviceLoaded: true,
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.isLoaded).toHaveBeenCalledTimes(2);
+    const payload = readJsonLog<{ service?: { loaded?: boolean }; message?: string }>();
+    expect(payload.message).toBe("Gateway service restarted.");
+    expect(payload.service?.loaded).toBe(true);
+  });
+
   it("skips restart health checks when restart is only scheduled", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.restart.mockResolvedValue({ outcome: "scheduled" });

@@ -1,5 +1,6 @@
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { launchAgentPlistExists } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -163,12 +164,28 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => {
+    onNotLoaded: async ({ stdout }) => {
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
+        return handled;
       }
-      return handled;
+      if (service.label === "LaunchAgent" && (await launchAgentPlistExists(process.env))) {
+        const restartResult = await service.restart({ env: process.env, stdout });
+        if (restartResult.outcome === "scheduled") {
+          return {
+            result: "restarted" as const,
+            message: "restart scheduled, gateway will restart momentarily",
+            serviceLoaded: true,
+          };
+        }
+        return {
+          result: "restarted" as const,
+          message: "Gateway service restarted.",
+          serviceLoaded: true,
+        };
+      }
+      return null;
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
