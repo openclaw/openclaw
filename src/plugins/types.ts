@@ -60,7 +60,7 @@ import type {
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
 } from "../secrets/runtime-web-tools.types.js";
-import type { SecurityAuditFinding } from "../security/audit.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,

@@ -51,6 +51,7 @@ import {
   persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
@@ -648,6 +649,10 @@ const subagentRunManager = createSubagentRunManager({
   notifyContextEngineSubagentEnded,
   completeCleanupBookkeeping,
   completeSubagentRun,
+});
+
+configureSubagentRegistrySteerRuntime({
+  replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
 });
 
 export function markSubagentRunForSteerRestart(runId: string) {

@@ -10,10 +10,8 @@ import {
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  ensureContextEnginesInitialized,
-  resolveContextEngine,
-} from "../../context-engine/index.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   captureCompactionCheckpointSnapshot,
   cleanupCompactionCheckpointSnapshot,

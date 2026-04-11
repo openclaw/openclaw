@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
