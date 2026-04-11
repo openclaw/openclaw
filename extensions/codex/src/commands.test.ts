@@ -61,7 +61,7 @@ describe("codex command", () => {
     const deps = createDeps({
       codexControlRequest: vi.fn(
         async (_pluginConfig: unknown, method: string, requestParams: unknown) => {
-          requests.push({ method: String(method), params: requestParams });
+          requests.push({ method, params: requestParams });
           return {
             thread: { id: "thread-123", cwd: "/repo" },
             model: "gpt-5.4",

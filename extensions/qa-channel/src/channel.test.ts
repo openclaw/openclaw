@@ -58,7 +58,7 @@ function createMockQaRuntime(): PluginRuntime {
           dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
         }) {
           await dispatcherOptions.deliver({
-            text: `qa-echo: ${String(ctx.BodyForAgent ?? ctx.Body ?? "")}`,
+            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
           });
         },
       },

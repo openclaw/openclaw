@@ -326,7 +326,7 @@ describe("msteams graph attachments", () => {
     );
 
     expectAttachmentMediaLength(media.media, 0);
-    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
     expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
     expect(calledUrls).not.toContain(escapedUrl);
   });
