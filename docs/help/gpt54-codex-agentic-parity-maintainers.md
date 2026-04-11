@@ -1,14 +1,14 @@
-# GPT-5.4 / Codex Parity Maintainer Notes
+# GPT-5.4 / Codex parity maintainer notes
 
-This note explains how to review the GPT-5.4 / Codex parity program without losing the original six-contract architecture. The program ships as ten runtime/test merge units (PRs A, B, C, D, E, F, H, J, K, L) plus a separate documentation catch-up (PR M #64837 — this page). Wave 1 — the four initial PRs A, B, C, D — established the runtime contract, parity harness, and first-wave scenario pack and is now merged. Wave 2 — the six follow-up PRs E, F, H, J, K, L — doubles the parity pack, auto-activates strict-agentic on GPT-5, tightens tool-call enforcement, covers the baseline provider for offline runs, and self-describes each run in its summary artifact. PR F was closed as superseded after its three fixes were resolved upstream independently, so wave 2 lands as five code PRs plus PR M.
+This is the review-oriented companion to [`gpt54-codex-agentic-parity.md`](/help/gpt54-codex-agentic-parity). The goal here is to make the program legible as merge units without losing the underlying six-contract architecture, so someone picking up a PR knows what it's supposed to own and what it deliberately doesn't.
 
-## Program status
+The program ends up as ten runtime/test merge units plus a separate documentation pass (PR M, this note). Wave 1 — PRs A, B, C, D — is merged and landed the runtime contract, the parity harness, and the first-wave scenario pack. Wave 2 — PRs E, F, H, J, K, L — is the refinement round: it doubles the parity pack, makes strict-agentic the real default for GPT-5, adds tool-call enforcement, brings the mock server up to dual-provider coverage, and teaches each summary artifact to describe itself. PR F was closed after each of its three fixes landed on `main` through unrelated commits during the review window, so wave 2 effectively merges as five code PRs plus this docs pass.
 
-Sections below describe each PR's scope, including wave-2 PRs that have not yet merged. This doc is merged as PR M after the wave-2 code PRs. Until then, "Owns" blocks for wave-2 PRs describe the intended end state of each slice.
+Sections below describe each PR's scope including the wave-2 ones that haven't merged yet. "Owns" blocks for wave-2 PRs describe their intended end state, not what's on `main` today.
 
 ## Merge units
 
-### PR A: strict-agentic execution
+### PR A — strict-agentic execution
 
 Owns:
 
@@ -17,14 +17,9 @@ Owns:
 - `update_plan` as non-terminal progress tracking
 - explicit blocked states instead of plan-only silent stops
 
-Does not own:
+Does not own: auth/runtime failure classification, permission truthfulness, replay/continuation redesign, parity benchmarking.
 
-- auth/runtime failure classification
-- permission truthfulness
-- replay/continuation redesign
-- parity benchmarking
-
-### PR B: runtime truthfulness
+### PR B — runtime truthfulness
 
 Owns:
 
@@ -32,13 +27,9 @@ Owns:
 - typed provider/runtime failure classification
 - truthful `/elevated full` availability and blocked reasons
 
-Does not own:
+Does not own: tool schema normalization, replay/liveness state, benchmark gating.
 
-- tool schema normalization
-- replay/liveness state
-- benchmark gating
-
-### PR C: execution correctness
+### PR C — execution correctness
 
 Owns:
 
@@ -47,13 +38,9 @@ Owns:
 - replay-invalid surfacing
 - paused, blocked, and abandoned long-task state visibility
 
-Does not own:
+Does not own: self-elected continuation, generic Codex dialect behavior outside provider hooks, benchmark gating.
 
-- self-elected continuation
-- generic Codex dialect behavior outside provider hooks
-- benchmark gating
-
-### PR D: first-wave parity harness
+### PR D — first-wave parity harness
 
 Owns:
 
@@ -61,31 +48,23 @@ Owns:
 - parity documentation baseline
 - parity report and release-gate mechanics
 
-Does not own:
+Does not own: second-wave scenarios, dual-provider mock routing, runtime behavior changes outside QA-lab.
 
-- second-wave scenarios
-- dual-provider mock routing
-- runtime behavior changes outside QA-lab
-
-### PR E: second-wave parity pack
+### PR E — second-wave parity pack
 
 Owns:
 
 - five additional parity scenarios (`subagent-handoff`, `subagent-fanout-synthesis`, `memory-recall`, `thread-memory-isolation`, `config-restart-capability-flip`)
 - parity report header parametrization so non-default model pairs render accurate labels
-- parity gate failure when any required scenario fails on either candidate or baseline, so “both models fail” no longer leaks through the relative metric comparison
+- parity gate failure when a required scenario fails on either candidate or baseline, so "both models fail" no longer slips through the relative metric comparison
 
-Does not own:
+Does not own: dual-provider mock routing (PR K), self-describing run metadata (PR L), tool-call assertions (PR J).
 
-- dual-provider mock routing (PR K)
-- self-describing run metadata (PR L)
-- tool-call assertions (PR J)
+### PR F — post-parity main stabilization (closed as superseded)
 
-### PR F: post-parity main stabilization (closed as superseded)
+Had three inherited red-CI fixes against `target-resolver.test.ts`, `memory-wiki/index.test.ts`, and `config.pruning-defaults.test.ts`. All three got resolved upstream through unrelated commits during the review window, so the PR was closed after verification and no review action is needed.
 
-Owned three inherited red-CI fixes against `target-resolver.test.ts`, `memory-wiki/index.test.ts`, and `config.pruning-defaults.test.ts`. All three failures were resolved upstream through independent commits while the parity loop was in progress, and the PR was closed as superseded after verification. No review action needed.
-
-### PR H: strict-agentic auto-activation for GPT-5 + blocked-exit liveness
+### PR H — strict-agentic auto-activation + blocked-exit liveness
 
 Owns:
 
@@ -93,50 +72,38 @@ Owns:
 - explicit `"blocked"` liveness state at the strict-agentic blocked exit
 - regression coverage pinning both behaviors
 
-Does not own:
+Does not own: the `executionContract` mechanism itself (PR A), non-GPT-5 provider defaults.
 
-- the `executionContract` mechanism itself (that's PR A)
-- non-GPT-5 provider defaults
-
-### PR J: parity scenario tool-call enforcement
+### PR J — parity scenario tool-call enforcement
 
 Owns:
 
-- tool-call assertions on the `source-docs-discovery-report` and `subagent-handoff` parity scenarios
+- tool-call assertions on `source-docs-discovery-report` and `subagent-handoff`
 - `/debug/requests` seam consumption from scenario YAML flows
-- matching on scenario-unique prompt substrings to keep assertions scoped to their own scenario
+- matching on scenario-unique prompt substrings so neighboring scenarios can't accidentally satisfy each other's assertions
 
-Does not own:
+Does not own: the `/debug/requests` store itself (part of the mock server), tool schemas or tool execution.
 
-- the `/debug/requests` store itself (part of the mock server)
-- tool schemas or tool execution
-
-### PR K: Anthropic `/v1/messages` mock route
+### PR K — Anthropic `/v1/messages` mock route
 
 Owns:
 
 - the `/v1/messages` route on the qa-lab mock server
 - Anthropic messages → shared `ResponsesInputItem[]` conversion
-- empty-model and streaming-request edge cases (empty string defaults to `claude-opus-4-6`; `stream: true` returns a 400 so the failure mode is visible)
+- the empty-model and streaming-request edge cases (empty-string defaults to `claude-opus-4-6`; `stream: true` returns a 400 so the failure mode is visible)
 
-Does not own:
+Does not own: real Anthropic API compatibility beyond what the scenario dispatcher reads, live Anthropic credential wiring.
 
-- real Anthropic API compatibility beyond what the scenario dispatcher reads
-- live Anthropic credential wiring
-
-### PR L: qa-suite-summary.json run metadata
+### PR L — `qa-suite-summary.json` run metadata
 
 Owns:
 
 - the `run` block in `qa-suite-summary.json` (`primaryProvider`, `primaryModel`, `providerMode`, `scenarioIds`)
 - reuse of the canonical `QaProviderMode` union in `writeQaSuiteArtifacts` instead of a re-declared string-literal union
 
-Does not own:
+Does not own: parity report consumption of the run block (PR D's report helper), scenario catalog filtering.
 
-- parity report consumption of the run block (that's PR D's report helper)
-- scenario catalog filtering
-
-### PR M: documentation catch-up
+### PR M — parity documentation catch-up
 
 Owns:
 
@@ -146,12 +113,7 @@ Owns:
 - the goal-to-evidence matrix update covering all 10 PRs
 - the program-status disclaimer that marks wave-2 sections as forward-looking until each wave-2 PR merges
 
-Does not own:
-
-- any runtime, test, or scenario registry change (documentation-only PR)
-- the `QA_AGENTIC_PARITY_SCENARIOS` registry expansion (PR E owns that)
-- the CLI flag reference (PR M describes `--model` / `--alt-model` as they exist on `main`; PR M does not change the CLI surface)
-- any architecture change to the mock server, parity report, or strict-agentic contract
+Does not own: any runtime, test, or scenario registry change (docs-only), the `QA_AGENTIC_PARITY_SCENARIOS` registry expansion (PR E owns that), the CLI flag reference itself (PR M describes `--model` / `--alt-model` as they exist on `main` but doesn't change the CLI surface), the mock server, the parity report, or the strict-agentic contract.
 
 ## Mapping back to the original six contracts
 
@@ -166,18 +128,16 @@ Does not own:
 
 ## Review order
 
-1. PR A
-2. PR B
-3. PR C
-4. PR D
-5. PR H (runtime follow-up, parallelizable with D)
-6. PR E (parity pack expansion, depends on D)
-7. PR K (Anthropic mock route, parallelizable with E/J)
-8. PR J (tool-call enforcement, depends on E)
-9. PR L (run metadata, parallelizable with J)
-10. PR M (documentation catch-up, depends on E/H/J/K/L)
+Wave 1 landed in A → B → C → D order. For wave 2, the dependencies are:
 
-PR D is the proof layer. It should not be the reason runtime-correctness PRs are delayed. PRs E/H/J/K/L are independent refinements that can land in any order as long as their individual dependency callouts are respected. PR M is documentation-only and can land in parallel with the last code PR.
+1. PR H is a runtime follow-up, independent of the parity harness work — review it any time.
+2. PR E depends on PR D being merged (it extends the parity pack registry).
+3. PR K is independent of E/H/J/L.
+4. PR J depends on PR E because it asserts against scenarios the second-wave pack registers.
+5. PR L is independent of J.
+6. PR M is docs-only and should land last so its references point to merged content.
+
+PRs H, K, and L can be reviewed in parallel. PR E should land before PR J. PR M should be the tail.
 
 ## What to look for
 
@@ -189,15 +149,15 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 
 ### PR B
 
-- auth/proxy/runtime failures stop collapsing into generic “model failed” handling
-- `/elevated full` is only described as available when it is actually available
+- auth/proxy/runtime failures don't collapse into a generic "model failed" handler
+- `/elevated full` is only described as available when it actually is
 - blocked reasons are visible to both the model and the user-facing runtime
 
 ### PR C
 
 - strict OpenAI/Codex tool registration behaves predictably
-- parameter-free tools do not fail strict schema checks
-- replay and compaction outcomes preserve truthful liveness state
+- parameter-free tools don't fail strict schema checks
+- replay and compaction outcomes keep truthful liveness state
 
 ### PR D
 
@@ -206,17 +166,13 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 - reports are readable by humans and automation
 - parity claims are evidence-backed, not anecdotal
 
-Expected artifacts from PR D:
-
-- `qa-suite-report.md` / `qa-suite-summary.json` for each model run
-- `qa-agentic-parity-report.md` with aggregate and scenario-level comparison
-- `qa-agentic-parity-summary.json` with a machine-readable verdict
+Expected artifacts: `qa-suite-report.md` / `qa-suite-summary.json` for each model run, `qa-agentic-parity-report.md` with aggregate and scenario-level comparison, `qa-agentic-parity-summary.json` with a machine-readable verdict.
 
 ### PR E
 
-- the parity pack is now ten scenarios, not five
-- the parity report Markdown header reflects the candidate and baseline labels instead of a hardcoded legacy string
-- a required scenario that fails on either side fails the gate, even if both sides fail the same scenario (this closes the relative-metric loophole)
+- the parity pack is ten scenarios, not five
+- the parity report Markdown header reflects the candidate and baseline labels, not a hardcoded legacy string
+- a required scenario that fails on either side fails the gate, even when both sides fail the same scenario — this closes the relative-metric loophole
 - the five new scenarios exercise delegation, fanout synthesis, memory recall, thread-memory isolation, and a capability flip across config restart
 
 ### PR H
@@ -228,16 +184,16 @@ Expected artifacts from PR D:
 
 ### PR J
 
-- the `source-docs-discovery-report` scenario gates on a real `read` tool call via `/debug/requests`, not just the prose shape of the reply
-- the `subagent-handoff` scenario gates on a real `sessions_spawn` call before accepting the three labeled sections
-- both assertions use a scenario-unique prompt substring so neighboring scenarios (for example `subagent-fanout-synthesis`) cannot accidentally satisfy them
+- `source-docs-discovery-report` gates on a real `read` tool call via `/debug/requests`, not just the prose shape of the reply
+- `subagent-handoff` gates on a real `sessions_spawn` call before accepting the three labeled sections
+- both assertions match on a scenario-unique prompt substring so neighboring scenarios (for example `subagent-fanout-synthesis`, which also contains "delegate" and produces its own `sessions_spawn` request) can't accidentally satisfy them
 
 ### PR K
 
-- the `/v1/messages` mock route routes through the same scenario dispatcher as `/v1/responses` so one scenario plan drives both providers
+- `/v1/messages` routes through the same scenario dispatcher as `/v1/responses` so one scenario plan drives both providers
 - streaming requests return a 400 with an Anthropic-shaped error body, not a silent non-streaming fallback
 - empty-string `model` is treated the same as absent and defaults to `claude-opus-4-6`
-- `/debug/requests` snapshots record the same `plannedToolName` / `allInputText` / `toolOutput` fields that the OpenAI route exposes, so a single parity run can diff assertions across both lanes
+- `/debug/requests` snapshots record the same `plannedToolName` / `allInputText` / `toolOutput` fields on the Anthropic route that the OpenAI route already exposes, so a single parity run can diff assertions across both lanes
 
 ### PR L
 
@@ -249,24 +205,24 @@ Expected artifacts from PR D:
 
 - the parity docs cover all ten PRs, not just the first four
 - the three new mermaid diagrams are present (dual-provider mock, parity run orchestration, tool-call assertion seam)
-- the end-to-end parity runbook is reproducible offline
+- the end-to-end parity runbook uses the real CLI flags and calls out which steps depend on unmerged wave-2 PRs
 - the goal-to-evidence matrix matches the ten-PR program
 
 ## Release gate
 
-Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:
+Don't claim GPT-5.4 parity or superiority over Opus 4.6 until:
 
-- PR A, PR B, PR C, and PR H are merged (runtime contract enforced by default for GPT-5)
-- PR D and PR E run the ten-scenario parity pack cleanly on both providers
-- PR J tool-call assertions pass on the tool-mediated scenarios
-- PR K offline dual-provider mock is exercised in CI
-- PR L run metadata is present in both summary artifacts
-- runtime-truthfulness regression suites remain green
+- PRs A, B, C, and H are merged (runtime contract enforced by default for GPT-5)
+- PRs D and E run the ten-scenario parity pack cleanly on both providers
+- PR J's tool-call assertions pass on the tool-mediated scenarios
+- PR K's offline dual-provider mock is exercised in CI
+- PR L's run metadata is present in both summary artifacts
+- runtime-truthfulness regression suites stay green
 - the parity report shows no fake-success cases and no regression in stop behavior
 
 ```mermaid
 flowchart LR
-    A["PR A-C merged"] --> B["Run GPT-5.4 parity pack"]
+    A["Runtime PRs merged"] --> B["Run GPT-5.4 parity pack"]
     A --> C["Run Opus 4.6 parity pack"]
     B --> D["qa-suite-summary.json"]
     C --> E["qa-suite-summary.json"]
@@ -275,25 +231,22 @@ flowchart LR
     F --> G["Markdown report + JSON verdict"]
     G --> H{"Pass?"}
     H -- "yes" --> I["Parity claim allowed"]
-    H -- "no" --> J["Keep runtime fixes / review loop open"]
+    H -- "no" --> J["Keep runtime fixes in play"]
 ```
 
-The parity harness is not the only evidence source. Keep this split explicit in review:
-
-- PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
-- PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
+The parity harness isn't the only evidence source. Keep the split explicit in review: PRs D and E own the scenario-based GPT-5.4 vs Opus 4.6 comparison, and PR B's deterministic suites still own auth, proxy, DNS, and `/elevated full` truthfulness.
 
 ## Goal-to-evidence map
 
-| Completion gate item                     | Primary owners            | Review artifact                                                                                                       |
-| ---------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| No plan-only stalls                      | PR A + PR H               | strict-agentic runtime tests, `approval-turn-tool-followthrough`, PR H auto-activation regression                     |
-| No fake progress or fake tool completion | PR A + PR D + PR J        | parity fake-success count, scenario-level report details, `/debug/requests` tool-call assertions                      |
-| No false `/elevated full` guidance       | PR B                      | deterministic runtime-truthfulness suites                                                                             |
-| Replay/liveness failures remain explicit | PR C + PR H               | lifecycle/replay suites plus PR H strict-agentic blocked-exit liveness regression                                     |
-| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E + PR K + PR L | `qa-agentic-parity-report.md`, `qa-agentic-parity-summary.json`, full ten-scenario coverage on both providers offline |
+| Completion gate criterion                | Primary owners            | Review artifact                                                                                                   |
+| ---------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| No plan-only stalls                      | PR A + PR H               | strict-agentic runtime tests, `approval-turn-tool-followthrough`, PR H auto-activation regression                 |
+| No fake progress or fake tool completion | PR A + PR D + PR J        | parity fake-success count, scenario-level report details, `/debug/requests` tool-call assertions                  |
+| No false `/elevated full` guidance       | PR B                      | deterministic runtime-truthfulness suites                                                                         |
+| Replay/liveness failures remain explicit | PR C + PR H               | lifecycle/replay suites plus PR H strict-agentic blocked-exit liveness regression                                 |
+| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E + PR K + PR L | `qa-agentic-parity-report.md`, `qa-agentic-parity-summary.json`, ten-scenario coverage on both providers, offline |
 
-## Reviewer shorthand: before vs after
+## Reviewer shorthand
 
 | User-visible problem before                                 | Review signal after                                                                               |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
