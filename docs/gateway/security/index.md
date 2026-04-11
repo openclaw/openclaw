@@ -698,8 +698,9 @@ tool calls. Reduce the blast radius by:
 - For OpenResponses URL inputs (`input_file` / `input_image`), set tight
   `gateway.http.endpoints.responses.files.urlAllowlist` and
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
-  Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
-  if you want to disable URL fetching entirely.
+  An explicit empty allowlist (`[]`) denies all URL fetches; omitting the list means no
+  hostname restriction. Use `files.allowUrl: false` / `images.allowUrl: false` to disable
+  URL fetching entirely.
 - For OpenResponses file inputs, decoded `input_file` text is still injected as
   **untrusted external content**. Do not rely on file text being trusted just because
   the Gateway decoded it locally. The injected block still carries explicit
