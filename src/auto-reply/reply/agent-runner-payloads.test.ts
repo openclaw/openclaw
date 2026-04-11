@@ -381,6 +381,20 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("preserves voice-reply payloads through silent turns (audioAsVoice=true)", async () => {
+    // When an agent uses NO_REPLY as its text reply but also produced a
+    // voice message (audioAsVoice=true from TTS), the voice should still be
+    // delivered — silent suppresses the text portion, not the voice itself.
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/voice.opus", audioAsVoice: true }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({ audioAsVoice: true });
+  });
+
   it("suppresses warning text when silent media payloads fail normalization", async () => {
     const normalizeMediaPaths = async () => {
       throw new Error("file not found");
