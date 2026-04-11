@@ -34,7 +34,12 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
-    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
+    resolveThinkingDefault: (params: {
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+      provider: string;
+      model: string;
+      catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
+    }) => import("../../auto-reply/thinking.js").ThinkLevel;
     runEmbeddedAgent: typeof import("../../agents/embedded-agent.js").runEmbeddedAgent;
     runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
@@ -80,20 +85,36 @@ export type PluginRuntimeCore = {
     transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../image-generation/runtime.js").generateImage;
-    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+    generate: (
+      params: import("../../image-generation/runtime-types.js").GenerateImageParams,
+    ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
+    listProviders: (
+      params?: import("../../image-generation/runtime-types.js").ListRuntimeImageGenerationProvidersParams,
+    ) => import("../../image-generation/runtime-types.js").RuntimeImageGenerationProvider[];
   };
   videoGeneration: {
-    generate: typeof import("../../video-generation/runtime.js").generateVideo;
-    listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
+    generate: (
+      params: import("../../video-generation/runtime-types.js").GenerateVideoParams,
+    ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
+    listProviders: (
+      params?: import("../../video-generation/runtime-types.js").ListRuntimeVideoGenerationProvidersParams,
+    ) => import("../../video-generation/runtime-types.js").RuntimeVideoGenerationProvider[];
   };
   musicGeneration: {
-    generate: typeof import("../../music-generation/runtime.js").generateMusic;
-    listProviders: typeof import("../../music-generation/runtime.js").listRuntimeMusicGenerationProviders;
+    generate: (
+      params: import("../../music-generation/runtime-types.js").GenerateMusicParams,
+    ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
+    listProviders: (
+      params?: import("../../music-generation/runtime-types.js").ListRuntimeMusicGenerationProvidersParams,
+    ) => import("../../music-generation/runtime-types.js").RuntimeMusicGenerationProvider[];
   };
   webSearch: {
-    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
-    search: typeof import("../../web-search/runtime.js").runWebSearch;
+    listProviders: (
+      params?: import("../../web-search/runtime-types.js").ListWebSearchProvidersParams,
+    ) => import("../../web-search/runtime-types.js").RuntimeWebSearchProviderEntry[];
+    search: (
+      params: import("../../web-search/runtime-types.js").RunWebSearchParams,
+    ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
@@ -125,7 +146,7 @@ export type PluginRuntimeCore = {
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/config.js").OpenClawConfig;
-    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
@@ -136,6 +157,6 @@ export type PluginRuntimeCore = {
     resolveApiKeyForProvider: (params: {
       provider: string;
       cfg?: import("../../config/config.js").OpenClawConfig;
-    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };
