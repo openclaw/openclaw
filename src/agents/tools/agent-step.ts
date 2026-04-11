@@ -28,7 +28,7 @@ export async function runAgentStep(params: {
   sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
-  const response = await agentStepDeps.callGateway<{ runId?: string }>({
+  const response = await agentStepDeps.callGateway({
     method: "agent",
     params: {
       message: params.message,

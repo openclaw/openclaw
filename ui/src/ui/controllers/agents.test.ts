@@ -173,6 +173,30 @@ describe("loadToolsCatalog", () => {
     expect(state.toolsCatalogError).toContain("gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
   });
+
+  it("ignores catalog responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsCatalog(state, "main");
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profiles: [{ id: "full", label: "Full" }],
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsCatalogResult).toBeNull();
+    expect(state.toolsCatalogError).toBeNull();
+    expect(state.toolsCatalogLoading).toBe(false);
+  });
 });
 
 describe("loadToolsEffective", () => {
@@ -221,6 +245,31 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveResultKey).toBeNull();
     expect(state.toolsEffectiveError).toContain("gateway unavailable");
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("ignores effective-tool responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
+    expect(state.toolsEffectiveError).toBeNull();
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 
