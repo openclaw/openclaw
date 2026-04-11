@@ -121,12 +121,100 @@ describe("fal video generation provider", () => {
 
     expect(provider.models).toEqual(
       expect.arrayContaining([
+        "fal-ai/heygen/v2/video-agent",
         "bytedance/seedance-2.0/fast/text-to-video",
         "bytedance/seedance-2.0/fast/image-to-video",
         "bytedance/seedance-2.0/text-to-video",
         "bytedance/seedance-2.0/image-to-video",
       ]),
     );
+  });
+
+  it("submits HeyGen video-agent requests without unsupported fal controls", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-key",
+      source: "env",
+      mode: "api-key",
+    });
+    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
+      baseUrl: "https://fal.run",
+      allowPrivateNetwork: false,
+      headers: new Headers({
+        Authorization: "Key fal-key",
+        "Content-Type": "application/json",
+      }),
+      dispatcherPolicy: undefined,
+      requestConfig: createMockRequestConfig(),
+    });
+    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
+    _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
+    fetchGuardMock
+      .mockResolvedValueOnce({
+        response: {
+          json: async () => ({
+            request_id: "heygen-req-123",
+            status_url:
+              "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123/status",
+            response_url:
+              "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123",
+          }),
+        },
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: {
+          json: async () => ({
+            status: "COMPLETED",
+          }),
+        },
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: {
+          json: async () => ({
+            status: "COMPLETED",
+            response: {
+              video: { url: "https://fal.run/files/heygen.mp4" },
+            },
+          }),
+        },
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: {
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("heygen-mp4-bytes"),
+        },
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "fal",
+      model: "fal-ai/heygen/v2/video-agent",
+      prompt: "A founder explains OpenClaw in a concise studio video",
+      durationSeconds: 8,
+      aspectRatio: "16:9",
+      resolution: "720P",
+      audio: true,
+      cfg: {},
+    });
+
+    expect(fetchGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "https://queue.fal.run/fal-ai/heygen/v2/video-agent",
+      }),
+    );
+    const submitBody = JSON.parse(
+      String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}"),
+    ) as Record<string, unknown>;
+    expect(submitBody).toEqual({
+      prompt: "A founder explains OpenClaw in a concise studio video",
+    });
+    expect(result.metadata).toEqual({
+      requestId: "heygen-req-123",
+    });
   });
 
   it("submits Seedance 2 requests with fal schema fields", async () => {
