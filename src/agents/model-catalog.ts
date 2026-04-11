@@ -23,7 +23,7 @@ type DiscoveredModel = {
   input?: ModelInputType[];
 };
 
-type PiSdkModule = typeof import("./pi-model-discovery.js");
+type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
 type PiRegistryInstance =
   | Array<DiscoveredModel>
   | {

@@ -64,7 +64,7 @@ import {
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
-import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
+import type { CreatePluginRuntimeOptions } from "./runtime/types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import {

@@ -50,12 +50,7 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import {
-  getReplyPayloadMetadata,
-  type BlockReplyContext,
-  type GetReplyOptions,
-  type ReplyPayload,
-} from "../types.js";
+import { getReplyPayloadMetadata, type BlockReplyContext, type ReplyPayload } from "../types.js";
 import {
   createInternalHookEvent,
   loadSessionStore,
@@ -63,8 +58,11 @@ import {
   resolveStorePath,
   triggerInternalHook,
 } from "./dispatch-from-config.runtime.js";
+import type {
+  DispatchFromConfigParams,
+  DispatchFromConfigResult,
+} from "./dispatch-from-config.types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -194,23 +192,14 @@ const createShouldEmitVerboseProgress = (params: {
     return params.fallbackLevel !== "off";
   };
 };
+export type {
+  DispatchFromConfigParams,
+  DispatchFromConfigResult,
+} from "./dispatch-from-config.types.js";
 
-export type DispatchFromConfigResult = {
-  queuedFinal: boolean;
-  counts: Record<ReplyDispatchKind, number>;
-};
-
-export async function dispatchReplyFromConfig(params: {
-  ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
-  fastAbortResolver?: typeof import("./abort.runtime.js").tryFastAbortFromMessage;
-  formatAbortReplyTextResolver?: typeof import("./abort.runtime.js").formatAbortReplyText;
-  /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
-  configOverride?: OpenClawConfig;
-}): Promise<DispatchFromConfigResult> {
+export async function dispatchReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");

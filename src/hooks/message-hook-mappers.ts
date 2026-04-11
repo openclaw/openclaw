@@ -7,7 +7,7 @@ import type {
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
-} from "../plugins/types.js";
+} from "../plugins/hook-message.types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

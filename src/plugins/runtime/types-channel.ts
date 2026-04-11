@@ -71,7 +71,7 @@ export type PluginRuntimeChannel = {
     resolveChunkMode: typeof import("../../auto-reply/chunk.js").resolveChunkMode;
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
-    resolveMarkdownTableMode: typeof import("../../config/markdown-tables.js").resolveMarkdownTableMode;
+    resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
     convertMarkdownTables: typeof import("../../markdown/tables.js").convertMarkdownTables;
   };
   reply: {
@@ -79,7 +79,7 @@ export type PluginRuntimeChannel = {
     createReplyDispatcherWithTyping: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
-    dispatchReplyFromConfig: typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
+    dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
     withReplyDispatcher: typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -137,7 +137,7 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: typeof import("../../channels/plugins/outbound/load.js").loadChannelOutboundAdapter;
+    loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

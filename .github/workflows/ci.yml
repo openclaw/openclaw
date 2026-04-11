@@ -694,7 +694,7 @@ jobs:
           EOF
 
   checks-node-core-test:
-    name: checks-node-core-test
+    name: checks-node-core
     needs: [preflight, checks-node-core-test-shard]
     if: always() && needs.preflight.outputs.run_checks == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
