@@ -70,7 +70,10 @@ import type {
 } from "./monitor-shared.js";
 import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
-import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import {
+  normalizeBlueBubblesReactionInputStrict,
+  sendBlueBubblesReaction,
+} from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -393,7 +396,7 @@ function resolveBlueBubblesAckReaction(params: {
     return null;
   }
   try {
-    normalizeBlueBubblesReactionInput(raw);
+    normalizeBlueBubblesReactionInputStrict(raw);
     return raw;
   } catch {
     const key = normalizeLowercaseStringOrEmpty(raw);
