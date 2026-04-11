@@ -16,6 +16,7 @@ async function resolveBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   completed?: boolean;
+  signatureMode?: "lenient" | "strict";
   resolver?: () => Promise<{
     bootstrapFiles: unknown[];
     contextFiles: unknown[];
@@ -37,6 +38,7 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     sessionFile: "/tmp/session.jsonl",
+    signatureMode: params.signatureMode ?? "strict",
     resolveBootstrapSignatureForRun,
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
@@ -65,7 +67,12 @@ describe("embedded attempt context injection", () => {
     expect(result.isContinuationTurn).toBe(true);
     expect(result.bootstrapFiles).toEqual([]);
     expect(result.contextFiles).toEqual([]);
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    // In the default strict mode the continuation probe passes the resolved
+    // signatureMode so callers can distinguish lenient upgrades from strict
+    // drift-detection workspaces.
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl", undefined, {
+      signatureMode: "strict",
+    });
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -153,20 +160,25 @@ describe("embedded attempt context injection", () => {
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun,
       resolveBootstrapSignatureForRun,
-    } =
-      await resolveBootstrapContext({
-        contextInjectionMode: "continuation-skip",
-        completed: true,
-        signatureResolver: vi.fn(async () => "agents:/tmp/AGENTS.hook.md"),
-      });
+    } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      completed: true,
+      signatureResolver: vi.fn(async () => "agents:/tmp/AGENTS.hook.md"),
+    });
 
     expect(resolveBootstrapSignatureForRun).toHaveBeenCalledTimes(1);
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
-    expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(1, "/tmp/session.jsonl");
+    // The signature-only probe forwards the resolved signatureMode so strict
+    // and lenient callers share the same shim shape. `"strict"` is the test
+    // harness default (see resolveBootstrapContext in this file).
+    expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(1, "/tmp/session.jsonl", undefined, {
+      signatureMode: "strict",
+    });
     expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(
       2,
       "/tmp/session.jsonl",
       "agents:/tmp/AGENTS.hook.md",
+      { signatureMode: "strict" },
     );
   });
 
@@ -193,6 +205,38 @@ describe("embedded attempt context injection", () => {
     });
 
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("skips signature resolution entirely in lenient mode and accepts a completion marker", async () => {
+    const signatureResolver = vi.fn(async () => "agents:AGENTS.md");
+    const { result, resolveBootstrapContextForRun, hasCompletedBootstrapTurn } =
+      await resolveBootstrapContext({
+        contextInjectionMode: "continuation-skip",
+        signatureMode: "lenient",
+        completed: true,
+        signatureResolver,
+      });
+
+    // Lenient mode short-circuits: signature resolver is never called, the
+    // bootstrap context builder stays dormant, and the continuation probe
+    // only sees one call (the initial no-signature probe).
+    expect(result.isContinuationTurn).toBe(true);
+    expect(signatureResolver).not.toHaveBeenCalled();
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledTimes(1);
+    expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(1, "/tmp/session.jsonl", undefined, {
+      signatureMode: "lenient",
+    });
+  });
+
+  it("still records a completed bootstrap turn in lenient mode so future runs can short-circuit", async () => {
+    const { result } = await resolveBootstrapContext({
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      signatureMode: "lenient",
+    });
+
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
   });
 
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
