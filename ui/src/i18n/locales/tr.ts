@@ -355,6 +355,15 @@ export const tr: TranslationMap = {
       on: "Dreaming Açık",
       off: "Dreaming Kapalı",
     },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
+    },
     status: {
       active: "Dreaming Etkin",
       idle: "Dreaming Boşta",

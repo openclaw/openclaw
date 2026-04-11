@@ -6,7 +6,7 @@ type DreamingRestartConfirmationProps = {
   loading: boolean;
   onConfirm: () => void;
   onCancel: () => void;
-  error: string | null;
+  hasError: boolean;
 };
 
 export function renderDreamingRestartConfirmation(props: DreamingRestartConfirmationProps) {
@@ -26,15 +26,17 @@ export function renderDreamingRestartConfirmation(props: DreamingRestartConfirma
         <div class="callout danger" style="margin-top: 12px;">
           ${t("dreaming.restartConfirmation.warning")}
         </div>
-        ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
+        ${props.hasError
+          ? html`<div class="exec-approval-error">${t("dreaming.restartConfirmation.failed")}</div>`
+          : nothing}
         <div class="exec-approval-actions">
-          <button class="btn" ?disabled=${props.loading} @click=${props.onCancel}>
-            ${t("common.cancel")}
-          </button>
           <button class="btn danger" ?disabled=${props.loading} @click=${props.onConfirm}>
             ${props.loading
               ? t("dreaming.restartConfirmation.restarting")
               : t("dreaming.restartConfirmation.confirm")}
+          </button>
+          <button class="btn" ?disabled=${props.loading} @click=${props.onCancel}>
+            ${t("common.cancel")}
           </button>
         </div>
       </div>
