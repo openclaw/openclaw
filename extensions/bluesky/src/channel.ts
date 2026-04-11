@@ -1,5 +1,4 @@
 import type { BskyAgent } from "@atproto/api";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -134,7 +133,10 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
     deliveryMode: "direct",
 
     sendText: async ({ to, text, accountId }) => {
-      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const rt = (await import("./runtime.js")).getBlueskyRuntime();
+      const cfg = rt.config.loadConfig();
+      const resolvedAccountId =
+        accountId ?? resolveDefaultBlueskyAccountId(cfg as Record<string, unknown>);
       const agent = activeAgents.get(resolvedAccountId);
       if (!agent) {
         throw new Error(
