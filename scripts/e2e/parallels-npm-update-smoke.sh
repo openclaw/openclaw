@@ -927,17 +927,22 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
+  /usr/bin/pkill -9 -f openclaw-gateway || true
+  /usr/bin/pkill -9 -f 'openclaw gateway run' || true
+  /usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
+  for pid in \$(/usr/sbin/lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+    /bin/kill -9 "\$pid" 2>/dev/null || true
+  done
+}
 # Stop the pre-update gateway before replacing the package. Otherwise the old
 # host can observe new plugin metadata mid-update and abort config validation.
-/usr/bin/pkill -9 -f openclaw-gateway || true
-/usr/bin/pkill -9 -f 'openclaw gateway run' || true
-/usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
+stop_openclaw_gateway_processes
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
-/usr/bin/pkill -9 -f openclaw-gateway || true
-/usr/bin/pkill -9 -f 'openclaw gateway run' || true
-/usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
+stop_openclaw_gateway_processes
 version="\$(/opt/homebrew/bin/openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
@@ -987,17 +992,27 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  openclaw gateway stop >/dev/null 2>&1 || true
+  pkill -9 -f openclaw-gateway || true
+  pkill -9 -f 'openclaw gateway run' || true
+  pkill -9 -f 'openclaw.mjs gateway' || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 18789/tcp >/dev/null 2>&1 || true
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    for pid in \$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+      kill -9 "\$pid" 2>/dev/null || true
+    done
+  fi
+}
 # Stop the pre-update manual gateway before replacing the package. Otherwise
 # the old host can observe new plugin metadata mid-update and abort validation.
-pkill -9 -f openclaw-gateway || true
-pkill -9 -f 'openclaw gateway run' || true
-pkill -9 -f 'openclaw.mjs gateway' || true
+stop_openclaw_gateway_processes
 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
-pkill -9 -f openclaw-gateway || true
-pkill -9 -f 'openclaw gateway run' || true
-pkill -9 -f 'openclaw.mjs gateway' || true
+stop_openclaw_gateway_processes
 version="\$(openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
