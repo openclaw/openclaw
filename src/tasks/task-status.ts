@@ -6,7 +6,12 @@ import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js"
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
+const ACTIVE_TASK_STATUSES = new Set([
+  "queued",
+  "awaiting_approval",
+  "waiting_external",
+  "running",
+]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 export const TASK_STATUS_TITLE_MAX_CHARS = 80;
@@ -125,7 +130,12 @@ export function formatTaskStatusTitle(task: TaskRecord): string {
 }
 
 export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
-  if (task.status === "running" || task.status === "queued") {
+  if (
+    task.status === "running" ||
+    task.status === "queued" ||
+    task.status === "awaiting_approval" ||
+    task.status === "waiting_external"
+  ) {
     return (
       sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_STATUS_DETAIL_MAX_CHARS }) ||
       undefined

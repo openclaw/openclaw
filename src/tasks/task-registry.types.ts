@@ -4,6 +4,8 @@ export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
 export type TaskStatus =
   | "queued"
+  | "awaiting_approval"
+  | "waiting_external"
   | "running"
   | "succeeded"
   | "failed"

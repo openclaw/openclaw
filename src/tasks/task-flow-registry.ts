@@ -193,7 +193,11 @@ export function deriveTaskFlowStatusFromTask(
   if (task.status === "queued") {
     return "queued";
   }
-  if (task.status === "running") {
+  if (
+    task.status === "awaiting_approval" ||
+    task.status === "waiting_external" ||
+    task.status === "running"
+  ) {
     return "running";
   }
   if (task.status === "succeeded") {
