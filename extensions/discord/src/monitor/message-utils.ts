@@ -555,6 +555,17 @@ function inferPlaceholder(attachment: APIAttachment): string {
   if (mime.startsWith("audio/")) {
     return "<media:audio>";
   }
+  // Fallback: infer media type from filename extension when content_type is
+  // missing or generic.  Discord voice messages (OGG/Opus) sometimes arrive
+  // without a correct content_type, so this ensures they are still recognised
+  // as audio and can trigger transcription.
+  const name = normalizeLowercaseStringOrEmpty(attachment.filename);
+  if (name && /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|wma)$/.test(name)) {
+    return "<media:audio>";
+  }
+  if (name && /\.(mp4|mov|avi|mkv|webm)$/.test(name)) {
+    return "<media:video>";
+  }
   return "<media:document>";
 }
 
