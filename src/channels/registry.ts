@@ -1,7 +1,4 @@
-import {
-  getActivePluginChannelRegistryFromState,
-  getPluginRegistryState,
-} from "../plugins/runtime-state.js";
+import { getActivePluginChannelRegistryFromState } from "../plugins/runtime-channel-state.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -32,7 +29,7 @@ function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
   if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
     return channelRegistry.channels;
   }
-  return getPluginRegistryState()?.activeRegistry?.channels ?? [];
+  return [];
 }
 
 function findRegisteredChannelPluginEntry(
