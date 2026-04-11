@@ -163,13 +163,14 @@ describe("exchangeMSTeamsCodeForTokens", () => {
       code: "auth-code",
       verifier: "pkce-verifier",
     });
+    const afterExchange = Date.now();
 
     expect(tokens.accessToken).toBe("at-123");
     expect(tokens.refreshToken).toBe("rt-456");
     expect(tokens.scopes).toEqual(["ChatMessage.Send", "offline_access"]);
     // expiresAt should be roughly now + 3600s - 300s
     expect(tokens.expiresAt).toBeGreaterThanOrEqual(now + 3300 * 1000 - 1000);
-    expect(tokens.expiresAt).toBeLessThanOrEqual(now + 3300 * 1000 + 2000);
+    expect(tokens.expiresAt).toBeLessThanOrEqual(afterExchange + 3300 * 1000 + 2000);
 
     // Verify the request was well-formed
     expect(fetchSpy).toHaveBeenCalledOnce();
