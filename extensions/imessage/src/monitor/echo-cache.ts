@@ -23,18 +23,19 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
+// U+FFFD replacement characters and C0/C1 control characters that imsg injects when
+// extracting text from NSAttributedString (attributedBody column). Uses RegExp constructor
+// to keep Unicode escapes out of a regex literal (avoids no-control-regex). See: #61312, #61821
+const IMSG_GARBAGE_CHARS_RE = new RegExp(
+  "[\\ufffd\\ufffe\\uffff\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f]+",
+  "g",
+);
+
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  // Strip U+FFFD replacement characters and C0/C1 control characters that imsg
-  // injects when extracting text from NSAttributedString (attributedBody column).
-  // Without this, the echo cache stores clean text but the reflected copy has
-  // garbage prefixes, defeating text-based deduplication. See: #61312, #61821
-  const normalized = text
-    .replace(/[\ufffd\ufffe\uffff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g, "")
-    .replace(/\r\n?/g, "\n")
-    .trim();
+  const normalized = text.replace(IMSG_GARBAGE_CHARS_RE, "").replace(/\r\n?/g, "\n").trim();
   return normalized ? normalized : null;
 }
 
