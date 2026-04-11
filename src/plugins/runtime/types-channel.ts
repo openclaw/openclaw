@@ -33,7 +33,7 @@ type UpsertChannelPairingRequestForAccount = (
 ) => ReturnType<UpsertChannelPairingRequest>;
 
 export type RuntimeThreadBindingLifecycleRecord =
-  | import("../../infra/outbound/session-binding-service.js").SessionBindingRecord
+  | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
   | {
       boundAt: number;
       lastActivityAt: number;
