@@ -26,5 +26,13 @@ type GlobalChannelRegistryState = typeof globalThis & {
 
 export function getActivePluginChannelRegistryFromState(): RuntimeTrackedChannelRegistry | null {
   const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
-  return state?.channel?.registry ?? state?.activeRegistry ?? null;
+  const pinnedRegistry = state?.channel?.registry ?? null;
+  if ((pinnedRegistry?.channels?.length ?? 0) > 0) {
+    return pinnedRegistry;
+  }
+  const activeRegistry = state?.activeRegistry ?? null;
+  if ((activeRegistry?.channels?.length ?? 0) > 0) {
+    return activeRegistry;
+  }
+  return pinnedRegistry ?? activeRegistry;
 }

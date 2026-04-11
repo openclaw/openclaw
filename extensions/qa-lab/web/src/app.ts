@@ -689,7 +689,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function buildCaptureSavedView(name: string): CaptureSavedView {
     return {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: crypto.randomUUID(),
       name,
       sessionIds: [...state.selectedCaptureSessionIds],
       kindFilter: [...state.captureKindFilter],
