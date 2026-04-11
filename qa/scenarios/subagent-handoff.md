@@ -50,16 +50,15 @@ steps:
       # require an actual sessions_spawn tool call. Without this, a model
       # could produce the three labeled sections ("Delegated task", "Result",
       # "Evidence") as free-form prose without ever delegating to a real
-      # subagent. The assertion must be pinned to THIS scenario's request
-      # window, so it matches the scenario-unique prompt text
-      # "Delegate one bounded QA task" (not a broad /delegate|subagent/
-      # regex) — otherwise the earlier subagent-fanout-synthesis scenario
-      # in catalog order also produces a pre-tool sessions_spawn request
-      # and would satisfy the assertion even when the current handoff run
-      # never delegates. The match is also pinned to pre-tool requests
-      # (no toolOutput) because the mock only plans sessions_spawn on
-      # requests with no toolOutput; the follow-up request after the tool
-      # runs has plannedToolName unset.
+      # subagent. The assertion is pinned to THIS scenario by matching the
+      # scenario-unique prompt substring "Delegate one bounded QA task"
+      # (not a broad /delegate|subagent/ regex) so the earlier
+      # subagent-fanout-synthesis scenario — which also contains "delegate"
+      # and produces its own pre-tool sessions_spawn request — cannot
+      # satisfy the assertion here. The match is also constrained to
+      # pre-tool requests (no toolOutput) because the mock only plans
+      # sessions_spawn on requests with no toolOutput; the follow-up
+      # request after the tool runs has plannedToolName unset.
       - set: subagentDebugRequests
         value:
           expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
