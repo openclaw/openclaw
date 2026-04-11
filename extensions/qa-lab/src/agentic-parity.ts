@@ -21,6 +21,26 @@ export const QA_AGENTIC_PARITY_SCENARIOS = [
     id: "compaction-retry-mutating-tool",
     title: "Compaction retry after mutating tool",
   },
+  {
+    id: "subagent-handoff",
+    title: "Subagent handoff",
+  },
+  {
+    id: "subagent-fanout-synthesis",
+    title: "Subagent fanout synthesis",
+  },
+  {
+    id: "memory-recall",
+    title: "Memory recall after context switch",
+  },
+  {
+    id: "thread-memory-isolation",
+    title: "Thread memory isolation",
+  },
+  {
+    id: "config-restart-capability-flip",
+    title: "Config restart capability flip",
+  },
 ] as const;
 
 export const QA_AGENTIC_PARITY_SCENARIO_IDS = QA_AGENTIC_PARITY_SCENARIOS.map(({ id }) => id);
