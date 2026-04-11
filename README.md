@@ -1,17 +1,30 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
-> **This is [`dzianisv/openclaw`](https://github.com/dzianisv/openclaw)** — a fork of [`openclaw/openclaw`](https://github.com/openclaw/openclaw) with production fixes applied on top of upstream `main`.
+> **This is [`dzianisv/openclaw`](https://github.com/dzianisv/openclaw)** — a fork of [`openclaw/openclaw`](https://github.com/openclaw/openclaw) with targeted production patches on top of upstream `main`.
 >
 > Install the fork: `npm install -g @vibetechnologies/openclaw@latest`
 
-## Fixes on top of upstream
+## Why this fork exists
+
+We hit production issues that were not yet available in upstream `main` at the time we needed them.  
+This fork carries only those deltas, kept as explicit patches over upstream.
+
+## Fork patches on top of upstream `main`
 
 ### [v2026.4.11+] ChatGPT-style session management UI (`1d6aaac`)
 
-- **New chat button** in the sidebar (always visible, disabled when disconnected)
-- **Recent sessions list** in the sidebar — click any session to switch to it
-- **Rename session** button in the chat header
-- Session list ordered by last activity, with idle/connected state indicators
+| Problem in upstream/main | What we added in fork | Result |
+| --- | --- | --- |
+| Starting a fresh chat was not a first-class sidebar action | Added sidebar **New chat** action wired to `createControlUiSession` + deterministic `agent:<id>:ui:<timestamp>-<slug>-<suffix>` session keys (`ui/src/ui/controllers/sessions.ts`, `ui/src/ui/app-render.ts`) | One-click chat creation without slash-command flow |
+| Session switching was not ChatGPT-style in the left nav | Added **recent sessions** sidebar rail, ordered by recent activity with connection/idle indicators (`ui/src/ui/app-render.ts`, `ui/src/styles/layout.css`) | Fast left-rail session hopping |
+| Session rename was not exposed as a direct chat-header action | Added **Rename chat** header action + `sessions.patch` label update path (`ui/src/ui/app-render.helpers.ts`, `ui/src/ui/app-render.ts`) | Inline rename flow for active session |
+| New actions lacked locale coverage | Added `newChat` / `renameChat` strings in EN/DE/ES/PT-BR/ZH-CN/ZH-TW | UI labels remain translated across supported locales |
+
+### [v2026.4.11+] ChatGPT-style recent sessions sidebar (`c3188d6`)
+
+| Problem in upstream/main | What we added in fork | Result |
+| --- | --- | --- |
+| Sidebar did not prioritize session navigation like ChatGPT | Added a recent-sessions-focused sidebar flow and settings refresh coverage (`ui/src/ui/app-render.ts`, `ui/src/ui/app-settings.ts`, `ui/src/ui/views/dreaming.ts`) | Session-centric navigation stays visible and consistent during normal dashboard use |
 
 ---
 
@@ -19,7 +32,7 @@
 
 Four bugs that caused agents (e.g. MonicaHall, Harvey) to silently drop user messages in Telegram:
 
-| #   | Bug                                                                                                                               | Fix                                                                                                                                           |
+| #   | Bug                                                                                                                               | What we added in fork                                                                                                                        |
 | --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **Timeout compaction gate** treated missing LLM usage stats as 0% context pressure, skipping compaction and stalling sessions     | `run.ts`: falls back to preflight-estimated prompt tokens; idle-timeout now treated as 100% pressure                                          |
 | 2   | **Pre-flight compaction** used truncation-only for sessions >200 messages, which doesn't handle structural overflow               | `preemptive-compaction.ts`: upgrades truncation-only → `compact_then_truncate` when session exceeds 200 messages                              |
