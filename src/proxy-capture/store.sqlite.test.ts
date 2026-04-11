@@ -77,4 +77,46 @@ describe("DebugProxyCaptureStore", () => {
     ]);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
+
+  it("keeps shared blobs when deleting one of multiple referencing sessions", () => {
+    const store = makeStore();
+    const sharedPayload = persistEventPayload(store, {
+      data: '{"shared":true}',
+      contentType: "application/json",
+    });
+
+    for (const sessionId of ["session-a", "session-b"]) {
+      store.upsertSession({
+        id: sessionId,
+        startedAt: Date.now(),
+        mode: "proxy-run",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: store.dbPath,
+        blobDir: store.blobDir,
+      });
+      store.recordEvent({
+        sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: `flow-${sessionId}`,
+        method: "POST",
+        host: "api.example.com",
+        path: "/v1/shared",
+        ...sharedPayload,
+      });
+    }
+
+    const result = store.deleteSessions(["session-a"]);
+
+    expect(result.sessions).toBe(1);
+    expect(result.events).toBe(1);
+    expect(result.blobs).toBe(0);
+    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
+    expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
+  });
 });

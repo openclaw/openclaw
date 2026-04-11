@@ -1,8 +1,13 @@
-export { resolveDebugProxySettings } from "../proxy-capture/env.js";
+export {
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+  resolveEffectiveDebugProxyUrl,
+} from "../proxy-capture/env.js";
 export {
   DebugProxyCaptureStore,
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
+export { captureHttpExchange, captureWsEvent } from "../proxy-capture/runtime.js";
 export type {
   CaptureEventRecord,
   CaptureQueryPreset,

@@ -5,11 +5,14 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../../src/proxy-capture/env.js";
-import { captureWsEvent } from "../../src/proxy-capture/runtime.js";
 import {
   asFiniteNumber,
   readRealtimeErrorDetail,

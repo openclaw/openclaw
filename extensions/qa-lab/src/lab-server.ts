@@ -13,10 +13,12 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  getDebugProxyCaptureStore,
+  resolveDebugProxySettings,
+  type CaptureQueryPreset,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { getDebugProxyCaptureStore } from "../../../src/proxy-capture/store.sqlite.js";
-import { resolveDebugProxySettings } from "../../../src/proxy-capture/env.js";
-import type { CaptureQueryPreset } from "../../../src/proxy-capture/types.js";
 import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";

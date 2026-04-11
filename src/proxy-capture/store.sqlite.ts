@@ -410,10 +410,30 @@ export class DebugProxyCaptureStore {
     this.db
       .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
       .run(...uniqueSessionIds);
+    const candidateBlobIds = blobRows
+      .map((row) => row.blobId?.trim())
+      .filter((blobId): blobId is string => Boolean(blobId));
+    const remainingBlobRefs =
+      candidateBlobIds.length > 0
+        ? new Set(
+            (
+              this.db
+                .prepare(
+                  `SELECT DISTINCT data_blob_id AS blobId
+                   FROM capture_events
+                   WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
+                     AND data_blob_id IS NOT NULL`,
+                )
+                .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
+            )
+              .map((row) => row.blobId?.trim())
+              .filter((blobId): blobId is string => Boolean(blobId)),
+          )
+        : new Set<string>();
     let blobs = 0;
     for (const row of blobRows) {
       const blobId = row.blobId?.trim();
-      if (!blobId) {
+      if (!blobId || remainingBlobRefs.has(blobId)) {
         continue;
       }
       const blobPath = path.join(this.blobDir, `${blobId}.bin.gz`);

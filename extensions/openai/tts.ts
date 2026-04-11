@@ -4,7 +4,7 @@ import {
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
-import { captureHttpExchange } from "../../src/proxy-capture/runtime.js";
+import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 

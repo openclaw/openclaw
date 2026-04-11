@@ -1,12 +1,12 @@
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { z } from "openclaw/plugin-sdk/zod";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import {
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "../../../../src/proxy-capture/env.js";
-import { captureWsEvent } from "../../../../src/proxy-capture/runtime.js";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";

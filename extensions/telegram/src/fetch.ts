@@ -8,11 +8,10 @@ import {
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureHttpExchange, resolveEffectiveDebugProxyUrl } from "openclaw/plugin-sdk/proxy-capture";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
-import { resolveEffectiveDebugProxyUrl } from "../../../src/proxy-capture/env.js";
-import { captureHttpExchange } from "../../../src/proxy-capture/runtime.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,

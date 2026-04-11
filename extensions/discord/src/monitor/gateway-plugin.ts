@@ -4,11 +4,15 @@ import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  captureHttpExchange,
+  captureWsEvent,
+  resolveEffectiveDebugProxyUrl,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { resolveEffectiveDebugProxyUrl } from "../../../../src/proxy-capture/env.js";
-import { captureHttpExchange, captureWsEvent } from "../../../../src/proxy-capture/runtime.js";
 import * as undici from "undici";
 import * as ws from "ws";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
@@ -243,7 +247,6 @@ function createGatewayPlugin(params: {
     webSocketCtor?: DiscordGatewayWebSocketCtor;
   };
 }): carbonGateway.GatewayPlugin {
-  const wsFlowId = randomUUID();
   class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
     private gatewayInfoUsedFallback = false;
 
@@ -279,6 +282,7 @@ function createGatewayPlugin(params: {
       if (!url) {
         throw new Error("Gateway URL is required");
       }
+      const wsFlowId = randomUUID();
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
@@ -352,6 +356,7 @@ export function createDiscordGatewayPlugin(params: {
 }): carbonGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
+  const debugProxySettings = resolveDebugProxySettings();
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -363,15 +368,17 @@ export function createDiscordGatewayPlugin(params: {
       options,
       fetchImpl: async (input, init) => {
         const response = await fetch(input, init as RequestInit);
-        captureHttpExchange({
-          url: input,
-          method: (init?.method as string | undefined) ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta: { subsystem: "discord-gateway-metadata" },
-        });
+        if (!debugProxySettings.enabled) {
+          captureHttpExchange({
+            url: input,
+            method: (init?.method as string | undefined) ?? "GET",
+            requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+            requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+            response,
+            flowId: randomUUID(),
+            meta: { subsystem: "discord-gateway-metadata" },
+          });
+        }
         return response;
       },
       runtime: params.runtime,

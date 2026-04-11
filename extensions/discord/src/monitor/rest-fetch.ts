@@ -1,9 +1,8 @@
 import { wrapFetchWithAbortSignal } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureHttpExchange, resolveEffectiveDebugProxyUrl } from "openclaw/plugin-sdk/proxy-capture";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
-import { resolveEffectiveDebugProxyUrl } from "../../../../src/proxy-capture/env.js";
-import { captureHttpExchange } from "../../../../src/proxy-capture/runtime.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
 export function resolveDiscordRestFetch(

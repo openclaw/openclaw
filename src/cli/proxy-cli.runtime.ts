@@ -17,6 +17,17 @@ import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
   const settings = resolveDebugProxySettings();
+  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  store.upsertSession({
+    id: settings.sessionId,
+    startedAt: Date.now(),
+    mode: "proxy-start",
+    sourceScope: "openclaw",
+    sourceProcess: "openclaw",
+    proxyUrl: settings.proxyUrl,
+    dbPath: settings.dbPath,
+    blobDir: settings.blobDir,
+  });
   initializeDebugProxyCapture("proxy-start", settings);
   const ca = await ensureDebugProxyCa(settings.certDir);
   const server = await startDebugProxyServer({
@@ -32,7 +43,12 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await server.stop();
-    finalizeDebugProxyCapture(settings);
+    if (settings.enabled) {
+      finalizeDebugProxyCapture(settings);
+    } else {
+      store.endSession(settings.sessionId);
+      closeDebugProxyCaptureStore();
+    }
     process.exit(0);
   };
   const onSignal = () => {
