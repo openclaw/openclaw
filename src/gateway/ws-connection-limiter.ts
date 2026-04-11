@@ -17,13 +17,20 @@ interface WsLimitConfig {
   trustedProxies?: string[];
 }
 
+type HeaderValue = string | string[] | undefined;
+
+interface RequestLike {
+  socket?: { remoteAddress?: string };
+  headers?: Record<string, HeaderValue>;
+}
+
 const DEFAULT_CONFIG: WsLimitConfig = {
   maxPendingPerIp: 10,
   challengeTimeoutMs: 30_000,
   enabled: true,
 };
 
-function getIp(req: any, trustedProxies: string[]): string {
+function getIp(req: RequestLike, trustedProxies: string[]): string {
   const remoteAddr = req.socket?.remoteAddress;
   const forwardedHeader = req.headers?.["x-forwarded-for"];
   const forwardedFor =
@@ -45,7 +52,7 @@ export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
   const trustedProxies = config.trustedProxies ?? [];
 
   const pending = new Map<string, number>();
-  const timers = new Map<object, ReturnType<typeof setTimeout>>();
+  const timers = new Map<RequestLike, ReturnType<typeof setTimeout>>();
 
   return {
     /**
@@ -54,8 +61,10 @@ export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
      * Starts a challenge timeout — calls onTimeout if auth is not
      * completed in time.
      */
-    onConnect(req: any, onTimeout: () => void): boolean {
-      if (!config.enabled) return true;
+    onConnect(req: RequestLike, onTimeout: () => void): boolean {
+      if (!config.enabled) {
+        return true;
+      }
 
       const ip = getIp(req, trustedProxies);
       const current = pending.get(ip) || 0;
@@ -81,7 +90,9 @@ export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
         }
       }, config.challengeTimeoutMs);
 
-      if (timer.unref) timer.unref();
+      if (timer.unref) {
+        timer.unref();
+      }
       timers.set(req, timer);
 
       return true;
@@ -91,7 +102,7 @@ export function createWsConnectionLimiter(userConfig?: Partial<WsLimitConfig>) {
      * Call when a connection completes auth or disconnects cleanly.
      * Only decrements if the timeout has not already fired.
      */
-    onResolved(req: any): void {
+    onResolved(req: RequestLike): void {
       const timer = timers.get(req);
       if (timer) {
         clearTimeout(timer);

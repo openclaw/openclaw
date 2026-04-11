@@ -39,9 +39,7 @@ const DEFAULT_CONFIG: BreakerConfig = {
   enabled: true,
 };
 
-export function createCostCircuitBreaker(
-  userConfig?: Partial<BreakerConfig>,
-) {
+export function createCostCircuitBreaker(userConfig?: Partial<BreakerConfig>) {
   const config = { ...DEFAULT_CONFIG, ...userConfig };
   const windowMs = config.windowSecs * 1000;
   const cooldownMs = config.cooldownSecs * 1000;
@@ -83,7 +81,9 @@ export function createCostCircuitBreaker(
         trip();
       }
     }, probeTimeoutMs);
-    if (probeTimer.unref) probeTimer.unref();
+    if (probeTimer.unref) {
+      probeTimer.unref();
+    }
   }
 
   return {
@@ -96,9 +96,13 @@ export function createCostCircuitBreaker(
     },
 
     allowCall(): boolean {
-      if (!config.enabled) return true;
+      if (!config.enabled) {
+        return true;
+      }
 
-      if (state === "closed") return true;
+      if (state === "closed") {
+        return true;
+      }
 
       if (state === "open") {
         if (Date.now() - openedAt >= cooldownMs) {
@@ -113,7 +117,9 @@ export function createCostCircuitBreaker(
     },
 
     recordCost(cost: number): void {
-      if (!config.enabled) return;
+      if (!config.enabled) {
+        return;
+      }
 
       clearProbeTimer();
       entries.push({ timestamp: Date.now(), cost });
@@ -122,21 +128,26 @@ export function createCostCircuitBreaker(
 
       if (state === "half-open") {
         state = total < config.costThreshold ? "closed" : "open";
-        if (state === "open") openedAt = Date.now();
+        if (state === "open") {
+          openedAt = Date.now();
+        }
         return;
       }
 
       if (state === "closed" && total >= config.costThreshold) {
-
         trip();
       }
     },
 
     recordFailure(): void {
-      if (!config.enabled) return;
+      if (!config.enabled) {
+        return;
+      }
 
       clearProbeTimer();
-      if (state === "half-open") trip();
+      if (state === "half-open") {
+        trip();
+      }
     },
 
     /** Reset to closed and clear all cost history. */

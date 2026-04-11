@@ -22,15 +22,24 @@ interface ClientWindow {
   timestamps: number[];
 }
 
+type HeaderValue = string | string[] | undefined;
+
+interface RequestLike {
+  socket?: { remoteAddress?: string };
+  headers?: Record<string, HeaderValue>;
+}
+
+interface ResponseLike {
+  setHeader(name: string, value: string): void;
+}
+
 const DEFAULT_CONFIG: RateLimitHeadersConfig = {
   limit: 120,
   windowSecs: 60,
   enabled: true,
 };
 
-export function createRateLimitHeaders(
-  userConfig?: Partial<RateLimitHeadersConfig>,
-) {
+export function createRateLimitHeaders(userConfig?: Partial<RateLimitHeadersConfig>) {
   const config = { ...DEFAULT_CONFIG, ...userConfig };
   const windowMs = config.windowSecs * 1000;
   const trustedProxies = config.trustedProxies ?? [];
@@ -46,9 +55,11 @@ export function createRateLimitHeaders(
     }
   }, 300_000);
 
-  if (cleanupTimer.unref) cleanupTimer.unref();
+  if (cleanupTimer.unref) {
+    cleanupTimer.unref();
+  }
 
-  function getClientKey(req: any): string {
+  function getClientKey(req: RequestLike): string {
     const remoteAddr = req.socket?.remoteAddress;
     const forwardedHeader = req.headers?.["x-forwarded-for"];
     const forwardedFor =
@@ -66,8 +77,10 @@ export function createRateLimitHeaders(
   }
 
   return {
-    applyHeaders(req: any, res: any): boolean {
-      if (!config.enabled) return true;
+    applyHeaders(req: RequestLike, res: ResponseLike): boolean {
+      if (!config.enabled) {
+        return true;
+      }
 
       const key = getClientKey(req);
       const now = Date.now();
