@@ -532,8 +532,13 @@ async function sweepSubagentRuns() {
           },
           timeoutMs: resolveGatewayRpcTimeoutMs(loadConfig()),
         });
-      } catch {
-        // ignore
+      } catch (err) {
+        log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
+          runId,
+          childSessionKey: entry.childSessionKey,
+          err,
+        });
+        continue;
       }
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,

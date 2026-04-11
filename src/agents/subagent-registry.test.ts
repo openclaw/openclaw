@@ -291,6 +291,37 @@ describe("subagent registry seam flow", () => {
     ).toBeUndefined();
   });
 
+  it("normalizes thrown agent.wait transport failures into terminal timeout outcomes", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway timeout while waiting"));
+
+    mod.registerSubagentRun({
+      runId: "run-agent-wait-transport-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish despite wait transport failure",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-agent-wait-transport-timeout",
+        outcome: { status: "timeout" },
+      }),
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-agent-wait-transport-timeout");
+    expect(run?.endedAt).toBeTypeOf("number");
+    expect(run?.outcome).toEqual({ status: "timeout" });
+  });
+
   it("finalizes retry-budgeted completion delete runs during resume", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
