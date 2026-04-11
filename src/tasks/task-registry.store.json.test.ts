@@ -179,12 +179,13 @@ describe("task-registry.store.json", () => {
   });
 
   describe("closeTaskRegistryJsonStore", () => {
-    it("should clear in-memory state", () => {
+    it("should persist data before clearing in-memory state", () => {
       upsertTaskRegistryRecordToJson(testTask);
       closeTaskRegistryJsonStore();
-      // After close, loading should return empty
+      // After close, data should be persisted and reloadable
       const state = loadTaskRegistryStateFromJson();
-      expect(state.tasks.size).toBe(0);
+      expect(state.tasks.size).toBe(1);
+      expect(state.tasks.get(testTask.taskId)).toEqual(testTask);
     });
   });
 });

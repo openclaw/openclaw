@@ -3,7 +3,6 @@
  * This handles Homebrew Node.js builds that exclude experimental built-in modules.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTaskRegistryDir, resolveTaskRegistryJsonPath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.js";

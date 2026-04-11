@@ -105,12 +105,13 @@ describe("task-flow-registry.store.json", () => {
   });
 
   describe("closeTaskFlowRegistryJsonStore", () => {
-    it("should clear in-memory state", () => {
+    it("should persist data before clearing in-memory state", () => {
       upsertTaskFlowRecordToJson(testFlow);
       closeTaskFlowRegistryJsonStore();
-      // After close, loading should return empty
-      const state = loadTaskFlowRegistryStateFromJson();
-      expect(state.flows.size).toBe(0);
+      // After close, data should be persisted and reloadable
+      const state = loadTaskRegistryStateFromJson();
+      expect(state.flows.size).toBe(1);
+      expect(state.flows.get(testFlow.flowId)).toEqual(testFlow);
     });
   });
 });

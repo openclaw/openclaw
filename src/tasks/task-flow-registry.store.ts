@@ -1,10 +1,10 @@
 import { isNodeSqliteAvailable } from "../infra/node-sqlite.js";
 import {
   closeTaskFlowRegistryJsonStore,
-  deleteTaskFlowRegistryRecordFromJson,
+  deleteTaskFlowRecordFromJson,
   loadTaskFlowRegistryStateFromJson,
   saveTaskFlowRegistryStateToJson,
-  upsertTaskFlowRegistryRecordToJson,
+  upsertTaskFlowRecordToJson,
 } from "./task-flow-registry.store.json.js";
 import {
   closeTaskFlowRegistrySqliteStore,
@@ -54,8 +54,8 @@ const defaultFlowRegistryStore: TaskFlowRegistryStore = useJsonStore
   ? {
       loadSnapshot: loadTaskFlowRegistryStateFromJson,
       saveSnapshot: saveTaskFlowRegistryStateToJson,
-      upsertFlow: upsertTaskFlowRegistryRecordToJson,
-      deleteFlow: deleteTaskFlowRegistryRecordFromJson,
+      upsertFlow: upsertTaskFlowRecordToJson,
+      deleteFlow: deleteTaskFlowRecordFromJson,
       close: closeTaskFlowRegistryJsonStore,
     }
   : {
