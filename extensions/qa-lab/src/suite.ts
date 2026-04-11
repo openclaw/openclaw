@@ -1454,7 +1454,11 @@ async function writeQaSuiteArtifacts(params: {
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
   transport: QaTransportAdapter;
-  providerMode: "mock-openai" | "live-frontier";
+  // Reuse the canonical QaProviderMode union instead of re-declaring it
+  // inline. Loop 6 already unified `QaSuiteSummaryJsonParams.providerMode`
+  // on this type; keeping the writer in sync prevents drift when model-
+  // selection.ts adds a new provider mode.
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
