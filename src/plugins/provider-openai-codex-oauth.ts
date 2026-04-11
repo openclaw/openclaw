@@ -20,8 +20,6 @@ export async function loginOpenAICodexOAuth(params: {
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
 
-  // Ensure env-based proxy dispatcher is active before any outbound fetch calls,
-  // including the TLS preflight check.
   ensureGlobalUndiciEnvProxyDispatcher();
 
   const preflight = await runOpenAIOAuthTlsPreflight();

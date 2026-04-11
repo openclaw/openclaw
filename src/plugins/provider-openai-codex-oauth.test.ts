@@ -18,12 +18,12 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("../plugins/provider-openai-codex-oauth-tls.js", () => ({
+vi.mock("./provider-openai-codex-oauth-tls.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
 }));
 
-import { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
+import { loginOpenAICodexOAuth } from "./provider-openai-codex-oauth.js";
 
 function createPrompter() {
   const spin = { update: vi.fn(), stop: vi.fn() };
