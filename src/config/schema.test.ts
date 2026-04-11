@@ -234,7 +234,7 @@ describe("config schema", () => {
 
     // $defs should be hoisted to root level with namespaced key
     expect(schema.$defs).toBeDefined();
-    expect(schema.$defs?.["qqbot_account"]).toBeDefined();
+    expect(schema.$defs?.["qqbot__account"]).toBeDefined();
 
     // Plugin config should have rewritten $ref
     const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
@@ -248,7 +248,7 @@ describe("config schema", () => {
     const accountProp = pluginConfigProps?.account as Record<string, unknown> | undefined;
 
     // $ref should point to namespaced definition at root
-    expect(accountProp?.$ref).toBe("#/$defs/qqbot_account");
+    expect(accountProp?.$ref).toBe("#/$defs/qqbot__account");
 
     // Plugin config should NOT have its own $defs
     expect(pluginConfigSchema?.$defs).toBeUndefined();
@@ -285,7 +285,7 @@ describe("config schema", () => {
 
     // $defs should be hoisted to root level with namespaced key
     expect(schema.$defs).toBeDefined();
-    expect(schema.$defs?.["custom-channel_settings"]).toBeDefined();
+    expect(schema.$defs?.["custom-channel__settings"]).toBeDefined();
 
     // Channel schema should have rewritten $ref
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
@@ -295,7 +295,7 @@ describe("config schema", () => {
     const settingsProp = channelSchemaProps?.settings as Record<string, unknown> | undefined;
 
     // $ref should point to namespaced definition at root
-    expect(settingsProp?.$ref).toBe("#/$defs/custom-channel_settings");
+    expect(settingsProp?.$ref).toBe("#/$defs/custom-channel__settings");
 
     // Channel schema should NOT have its own $defs
     expect(channelSchema?.$defs).toBeUndefined();
@@ -334,14 +334,14 @@ describe("config schema", () => {
     const schema = res.schema as { $defs?: Record<string, unknown> };
 
     // Both defs should be hoisted
-    expect(schema.$defs?.["nested-plugin_parent"]).toBeDefined();
-    expect(schema.$defs?.["nested-plugin_child"]).toBeDefined();
+    expect(schema.$defs?.["nested-plugin__parent"]).toBeDefined();
+    expect(schema.$defs?.["nested-plugin__child"]).toBeDefined();
 
     // The nested $ref inside parent should also be rewritten
-    const parentDef = schema.$defs?.["nested-plugin_parent"] as Record<string, unknown> | undefined;
+    const parentDef = schema.$defs?.["nested-plugin__parent"] as Record<string, unknown> | undefined;
     const parentProps = parentDef?.properties as Record<string, unknown> | undefined;
     const childRef = parentProps?.child as Record<string, unknown> | undefined;
-    expect(childRef?.$ref).toBe("#/$defs/nested-plugin_child");
+    expect(childRef?.$ref).toBe("#/$defs/nested-plugin__child");
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {

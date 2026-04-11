@@ -321,7 +321,7 @@ function applyHeartbeatTargetHints(
 
 /**
  * Recursively rewrites `$ref` pointers in a schema object.
- * If the ref matches `#/$defs/<name>`, it is rewritten to `#/$defs/<prefix>_<name>`.
+ * If the ref matches `#/$defs/<name>`, it is rewritten to `#/$defs/<prefix>__<name>`.
  */
 function rewriteDefsRefs(obj: unknown, prefix: string, originalDefNames: Set<string>): unknown {
   if (obj === null || typeof obj !== "object") {
@@ -336,7 +336,7 @@ function rewriteDefsRefs(obj: unknown, prefix: string, originalDefNames: Set<str
     if (key === "$ref" && typeof value === "string") {
       const match = value.match(/^#\/\$defs\/(.+)$/);
       if (match && originalDefNames.has(match[1])) {
-        result[key] = `#/$defs/${prefix}_${match[1]}`;
+        result[key] = `#/$defs/${prefix}__${match[1]}`;
       } else {
         result[key] = value;
       }
@@ -366,7 +366,7 @@ function extractAndNamespaceDefs(
 
   // Namespace each definition by prefixing with plugin id
   for (const [name, def] of Object.entries(defs)) {
-    const namespacedName = `${pluginId}_${name}`;
+    const namespacedName = `${pluginId}__${name}`;
     // Also rewrite any $refs inside the definition itself
     namespacedDefs[namespacedName] = rewriteDefsRefs(def, pluginId, defNames);
   }
