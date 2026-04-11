@@ -109,6 +109,98 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+type FailoverStateSnapshot = SessionEntry["failoverState"] | undefined;
+
+function snapshotFailoverState(entry: SessionEntry): FailoverStateSnapshot {
+  return entry.failoverState ? { ...entry.failoverState } : undefined;
+}
+
+function applyFailoverState(
+  entry: SessionEntry,
+  run: { provider: string; model: string },
+  provider: string,
+  model: string,
+  authProfile: string | undefined,
+  reason: string,
+  now = Date.now(),
+): boolean {
+  const next: SessionEntry["failoverState"] = {
+    active: true,
+    from: { provider: run.provider, model: run.model },
+    to: { provider, model, ...(authProfile ? { authProfile } : {}) },
+    reason,
+    startedAt: new Date(now).toISOString(),
+  };
+  const prev = entry.failoverState;
+  if (
+    prev?.active &&
+    prev.to.provider === next.to.provider &&
+    prev.to.model === next.to.model
+  ) {
+    return false;
+  }
+  entry.failoverState = next;
+  entry.updatedAt = now;
+  return true;
+}
+
+function rollbackFailoverStateIfUnchanged(
+  entry: SessionEntry,
+  expected: FailoverStateSnapshot,
+  previous: FailoverStateSnapshot,
+): boolean {
+  const current = entry.failoverState;
+  // Only roll back if the current state matches what we set
+  if (expected?.active && current?.active &&
+      current.to.provider === expected.to.provider &&
+      current.to.model === expected.to.model) {
+    entry.failoverState = previous;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Sanitize a session entry that may have been polluted by the old behavior
+ * where auto-failover was persisted into user override fields.
+ *
+ * If override fields exist with `modelOverrideSource === "auto"` or
+ * `authProfileOverrideSource === "auto"`, migrate them into `failoverState`
+ * and clear the override fields so they don't masquerade as user intent.
+ */
+export function sanitizeFailoverPollutedEntry(entry: SessionEntry): boolean {
+  const isAutoModel = entry.modelOverrideSource === "auto";
+  const isAutoAuth = entry.authProfileOverrideSource === "auto" && !entry.authProfileOverride;
+  if (!isAutoModel) {
+    return false;
+  }
+  // Migrate auto-persisted override into failoverState if not already present
+  if (!entry.failoverState && entry.providerOverride && entry.modelOverride) {
+    entry.failoverState = {
+      active: true,
+      from: { provider: "", model: "" }, // unknown original, best-effort
+      to: {
+        provider: entry.providerOverride,
+        model: entry.modelOverride,
+        ...(entry.authProfileOverride ? { authProfile: entry.authProfileOverride } : {}),
+      },
+      reason: "migrated from polluted auto-override",
+      startedAt: new Date(entry.updatedAt ?? Date.now()).toISOString(),
+    };
+  }
+  // Clear the polluted override fields
+  delete entry.providerOverride;
+  delete entry.modelOverride;
+  delete entry.modelOverrideSource;
+  if (isAutoAuth || entry.authProfileOverrideSource === "auto") {
+    delete entry.authProfileOverride;
+    delete entry.authProfileOverrideSource;
+    delete entry.authProfileOverrideCompactionCount;
+  }
+  return true;
+}
+
+// Legacy types kept for backward compatibility with existing test imports
 type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
@@ -119,159 +211,31 @@ type FallbackSelectionState = Pick<
   | "authProfileOverrideCompactionCount"
 >;
 
-const FALLBACK_SELECTION_STATE_KEYS = [
-  "providerOverride",
-  "modelOverride",
-  "modelOverrideSource",
-  "authProfileOverride",
-  "authProfileOverrideSource",
-  "authProfileOverrideCompactionCount",
-] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
-
-function setFallbackSelectionStateField(
-  entry: SessionEntry,
-  key: keyof FallbackSelectionState,
-  value: FallbackSelectionState[keyof FallbackSelectionState],
-): boolean {
-  switch (key) {
-    case "providerOverride":
-      if (entry.providerOverride !== value) {
-        entry.providerOverride = value as SessionEntry["providerOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverride":
-      if (entry.modelOverride !== value) {
-        entry.modelOverride = value as SessionEntry["modelOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverrideSource":
-      if (entry.modelOverrideSource !== value) {
-        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
-        return true;
-      }
-      return false;
-    case "authProfileOverride":
-      if (entry.authProfileOverride !== value) {
-        entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideSource":
-      if (entry.authProfileOverrideSource !== value) {
-        entry.authProfileOverrideSource = value as SessionEntry["authProfileOverrideSource"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideCompactionCount":
-      if (entry.authProfileOverrideCompactionCount !== value) {
-        entry.authProfileOverrideCompactionCount =
-          value as SessionEntry["authProfileOverrideCompactionCount"];
-        return true;
-      }
-      return false;
-  }
-  throw new Error("Unsupported fallback selection state key");
-}
-
-function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
-  return {
-    providerOverride: entry.providerOverride,
-    modelOverride: entry.modelOverride,
-    modelOverrideSource: entry.modelOverrideSource,
-    authProfileOverride: entry.authProfileOverride,
-    authProfileOverrideSource: entry.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
-  };
-}
-
-function buildFallbackSelectionState(params: {
-  provider: string;
-  model: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-}): FallbackSelectionState {
-  return {
-    providerOverride: params.provider,
-    modelOverride: params.model,
-    modelOverrideSource: "auto",
-    authProfileOverride: params.authProfileId,
-    authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
-    authProfileOverrideCompactionCount: undefined,
-  };
-}
-
 export function applyFallbackCandidateSelectionToEntry(params: {
   entry: SessionEntry;
   run: FollowupRun["run"];
   provider: string;
   model: string;
   now?: number;
-}): { updated: boolean; nextState?: FallbackSelectionState } {
+}): { updated: boolean; nextState?: FailoverStateSnapshot } {
   if (params.provider === params.run.provider && params.model === params.run.model) {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const nextState = buildFallbackSelectionState({
-    provider: params.provider,
-    model: params.model,
-    authProfileId: scopedAuthProfile.authProfileId,
-    authProfileIdSource: scopedAuthProfile.authProfileIdSource,
-  });
+  const updated = applyFailoverState(
+    params.entry,
+    { provider: params.run.provider, model: params.run.model },
+    params.provider,
+    params.model,
+    scopedAuthProfile.authProfileId,
+    "auto-failover",
+    params.now,
+  );
   return {
-    updated: applyFallbackSelectionState(params.entry, nextState, params.now),
-    nextState,
+    updated,
+    nextState: updated ? params.entry.failoverState : undefined,
   };
 }
-
-function applyFallbackSelectionState(
-  entry: SessionEntry,
-  nextState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    const nextValue = nextState[key];
-    if (nextValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== nextValue) {
-      updated = setFallbackSelectionStateField(entry, key, nextValue) || updated;
-    }
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
-}
-
-function rollbackFallbackSelectionStateIfUnchanged(
-  entry: SessionEntry,
-  expectedState: FallbackSelectionState,
-  previousState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    if (entry[key] !== expectedState[key]) {
-      continue;
-    }
-    const previousValue = previousState[key];
-    if (previousValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== previousValue) {
-      updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
-    }
   }
   if (updated) {
     entry.updatedAt = now;
@@ -647,27 +611,10 @@ export async function runAgentTurnWithFallback(params: {
       return undefined;
     }
 
-    // Don't overwrite a user-initiated model override (e.g. from /models or
-    // /model) with the fallback model.  The user's explicit selection should
-    // survive transient primary-model failures so subsequent messages still
-    // target the model the user chose.  Fallback persistence is only
-    // appropriate when the override was itself set by a previous fallback
-    // ("auto") or when there is no override yet.
-    //
-    // `modelOverrideSource` was added later, so older persisted sessions can
-    // carry a user-selected override without the source field.  Treat any
-    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
-    // user state, matching the backward-compat treatment in
-    // session-reset-service.
-    const isUserModelOverride =
-      activeSessionEntry.modelOverrideSource === "user" ||
-      (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
-    if (isUserModelOverride) {
-      return undefined;
-    }
+    // Sanitize any polluted auto-override state from pre-patch sessions
+    sanitizeFailoverPollutedEntry(activeSessionEntry);
 
-    const previousState = snapshotFallbackSelectionState(activeSessionEntry);
+    const previousState = snapshotFailoverState(activeSessionEntry);
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
       run: params.followupRun.run,
@@ -687,18 +634,20 @@ export async function runAgentTurnWithFallback(params: {
           if (!persistedEntry) {
             return;
           }
-          applyFallbackSelectionState(persistedEntry, nextState);
+          sanitizeFailoverPollutedEntry(persistedEntry);
+          persistedEntry.failoverState = nextState;
+          persistedEntry.updatedAt = Date.now();
           store[params.sessionKey!] = persistedEntry;
         });
       }
     } catch (error) {
-      rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
+      rollbackFailoverStateIfUnchanged(activeSessionEntry, nextState, previousState);
       params.activeSessionStore[params.sessionKey] = activeSessionEntry;
       throw error;
     }
 
     return async () => {
-      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
+      const rolledBackInMemory = rollbackFailoverStateIfUnchanged(
         activeSessionEntry,
         nextState,
         previousState,
@@ -714,7 +663,7 @@ export async function runAgentTurnWithFallback(params: {
         if (!persistedEntry) {
           return;
         }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+        if (rollbackFailoverStateIfUnchanged(persistedEntry, nextState, previousState)) {
           store[params.sessionKey!] = persistedEntry;
         }
       });

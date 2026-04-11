@@ -597,6 +597,8 @@ export async function performGatewaySessionReset(params: {
       // Resets should keep the user's explicit selection, but clear any
       // temporary fallback model that was pinned during the previous run.
       ...resetPreservedSelection,
+      // Always clear transient failover state on /new and /reset
+      failoverState: undefined,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

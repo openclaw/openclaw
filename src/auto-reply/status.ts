@@ -791,7 +791,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     return "channel override";
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const userOverrideNote =
+    entry?.modelOverrideSource === "user" && entry?.modelOverride
+      ? " (user override)"
+      : "";
+  const modelLine = `🧠 Model: ${selectedModelLabel}${userOverrideNote}${selectedAuthLabel}${modelNote}`;
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
@@ -806,7 +810,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     : null;
 
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
-  const fallbackLine = fallbackState.active
+  // Prefer failoverState (new structured field) over legacy fallback notice
+  const failoverLine = entry?.failoverState?.active
+    ? `↪️ Active: ${formatProviderModelRef(entry.failoverState.to.provider, entry.failoverState.to.model)} (temporary failover: ${entry.failoverState.reason})`
+    : null;
+  const fallbackLine = !failoverLine && fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
@@ -826,6 +834,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.timeLine,
     modelLine,
     configuredFallbacksLine,
+    failoverLine,
     fallbackLine,
     usageCostLine,
     cacheLine,

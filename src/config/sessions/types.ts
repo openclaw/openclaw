@@ -255,6 +255,21 @@ export type SessionEntry = {
    */
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
+  /**
+   * Runtime-owned transient failover state. Tracks auto-failover separately
+   * from user-chosen model overrides so that transient provider failures do
+   * not persist as sticky user selections.
+   *
+   * Null/absent means the session is not in failover.
+   * Cleared on `/new` and `/reset`.
+   */
+  failoverState?: {
+    active: boolean;
+    from: { provider: string; model: string };
+    to: { provider: string; model: string; authProfile?: string };
+    reason: string;
+    startedAt: string;
+  };
 };
 
 export function resolveSessionPluginDebugLines(
