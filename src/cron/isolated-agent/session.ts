@@ -77,12 +77,17 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
+    // sessionFile must also be cleared so that resolveSessionFilePath recomputes
+    // the transcript path from the new sessionId. Leaving the stale sessionFile
+    // in place makes every forced-new run append to the previous transcript,
+    // which defeats heartbeat.isolatedSession and cron sessionTarget: "isolated".
     ...(isNewSession && {
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

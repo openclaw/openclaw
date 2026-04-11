@@ -255,6 +255,57 @@ describe("resolveCronSession", () => {
       });
     });
 
+    it("clears sessionFile when forceNew is true so fresh isolated runs do not reuse the prior transcript", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-802",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "stable-heartbeat-transcript.jsonl",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // sessionFile must be cleared so resolveSessionFilePath recomputes the
+      // transcript path from the new sessionId. Without this, heartbeat
+      // isolatedSession: true and cron sessionTarget: "isolated" silently
+      // append every run to the same physical transcript file.
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
+    it("clears sessionFile when session is stale", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000, // 1 day ago
+          sessionFile: "stale-transcript.jsonl",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
+    it("preserves sessionFile when reusing a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-803",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "persistent-transcript.jsonl",
+        },
+        fresh: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      // On reuse we must NOT clear sessionFile — the whole point of reuse is
+      // that the transcript keeps accumulating in the same file.
+      expect(result.sessionEntry.sessionFile).toBe("persistent-transcript.jsonl");
+    });
+
     it("creates new sessionId when entry exists but has no sessionId", () => {
       const result = resolveWithStoredEntry({
         entry: {
