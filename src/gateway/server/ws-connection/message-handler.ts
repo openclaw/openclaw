@@ -2,7 +2,6 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -49,6 +48,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { isLocalDirectRequest } from "../../auth.js";
 import {

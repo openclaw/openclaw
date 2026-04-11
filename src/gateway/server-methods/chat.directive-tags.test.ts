@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../protocol/client-info.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -1754,10 +1754,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           }
         | undefined;
       expect(message?.MediaPath).toBe("/tmp/chat-send-inline.png");
-      expect(message?.MediaPaths).toEqual([
-        "/tmp/chat-send-inline.png",
-        "/tmp/offloaded-big.png",
-      ]);
+      expect(message?.MediaPaths).toEqual(["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"]);
       expect(message?.MediaType).toBe("image/png");
       expect(message?.MediaTypes).toEqual(["image/png", "image/png"]);
     });
@@ -2127,9 +2124,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("does not parse or offload attachments for stop commands", async () => {
     createTranscriptFixture("openclaw-chat-send-stop-command-attachments-");
-    mockState.savedMediaResults = [
-      { path: "/tmp/should-not-exist.png", contentType: "image/png" },
-    ];
+    mockState.savedMediaResults = [{ path: "/tmp/should-not-exist.png", contentType: "image/png" }];
     const respond = vi.fn();
     const context = createChatContext();
     context.chatAbortControllers.set("run-same-session", {

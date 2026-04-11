@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import {
@@ -11,7 +12,6 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -182,15 +182,15 @@ describe("handleControlUiHttpRequest", () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-",
       fn: async (tmpRoot) => {
-      const filePath = path.join(tmpRoot, "photo.png");
-      await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-      const { res, handled } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
       },
     });
   });
@@ -215,16 +215,16 @@ describe("handleControlUiHttpRequest", () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-meta-",
       fn: async (tmpRoot) => {
-      const filePath = path.join(tmpRoot, "photo.png");
-      await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-      const { res, handled, end } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
       },
     });
   });
@@ -248,16 +248,16 @@ describe("handleControlUiHttpRequest", () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-auth-",
       fn: async (tmpRoot) => {
-      const filePath = path.join(tmpRoot, "photo.png");
-      await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-      const { res, handled, end } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -266,30 +266,30 @@ describe("handleControlUiHttpRequest", () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-proxy-",
       fn: async (tmpRoot) => {
-      const filePath = path.join(tmpRoot, "photo.png");
-      await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-      const { res, handled, end } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
-        method: "GET",
-        auth: {
-          mode: "trusted-proxy",
-          allowTailscale: false,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
           },
-        },
-        trustedProxies: ["10.0.0.1"],
-        remoteAddress: "10.0.0.1",
-        headers: {
-          host: "gateway.example.com",
-          origin: "https://evil.example",
-          "x-forwarded-user": "nick@example.com",
-          "x-forwarded-proto": "https",
-        },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });

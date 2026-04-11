@@ -26,6 +26,7 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -38,6 +39,17 @@ async function runQaSuite(opts: {
   await runtime.runQaSuiteCommand(opts);
 }
 
+async function runQaParityReport(opts: {
+  repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
+  outputDir?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaParityReportCommand(opts);
+}
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -159,6 +171,7 @@ export function registerQaLabCli(program: Command) {
       "--cli-auth-mode <mode>",
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
+    .option("--parity-pack <name>", "Preset scenario pack; currently only \"agentic\" is supported")
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
@@ -177,6 +190,7 @@ export function registerQaLabCli(program: Command) {
         model?: string;
         altModel?: string;
         cliAuthMode?: string;
+        parityPack?: string;
         scenario?: string[];
         concurrency?: number;
         fast?: boolean;
@@ -194,6 +208,7 @@ export function registerQaLabCli(program: Command) {
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           cliAuthMode: opts.cliAuthMode,
+          parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
           image: opts.image,
@@ -201,6 +216,27 @@ export function registerQaLabCli(program: Command) {
           memory: opts.memory,
           disk: opts.disk,
         });
+      },
+    );
+
+  qa.command("parity-report")
+    .description("Compare two QA suite summaries and write an agentic parity gate report")
+    .requiredOption("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
+    .requiredOption("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--candidate-label <label>", "Candidate display label", "openai/gpt-5.4")
+    .option("--baseline-label <label>", "Baseline display label", "anthropic/claude-opus-4-6")
+    .option("--output-dir <path>", "Artifact directory for the parity report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        candidateSummary: string;
+        baselineSummary: string;
+        candidateLabel?: string;
+        baselineLabel?: string;
+        outputDir?: string;
+      }) => {
+        await runQaParityReport(opts);
       },
     );
 

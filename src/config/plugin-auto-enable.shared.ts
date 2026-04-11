@@ -3,7 +3,7 @@ import {
   hasPotentialConfiguredChannels,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,
@@ -608,7 +608,28 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   return next;
 }
 
-function formatAutoEnableChange(entry: PluginAutoEnableCandidate): string {
+function resolveChannelAutoEnableDisplayLabel(
+  entry: Extract<PluginAutoEnableCandidate, { kind: "channel-configured" }>,
+  manifestRegistry: PluginManifestRegistry,
+): string | undefined {
+  const builtInChannelId = normalizeChatChannelId(entry.channelId);
+  if (builtInChannelId) {
+    return getChatChannelMeta(builtInChannelId).label;
+  }
+  const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
+  return plugin?.channelConfigs?.[entry.channelId]?.label ?? plugin?.channelCatalogMeta?.label;
+}
+
+function formatAutoEnableChange(
+  entry: PluginAutoEnableCandidate,
+  manifestRegistry: PluginManifestRegistry,
+): string {
+  if (entry.kind === "channel-configured") {
+    const label = resolveChannelAutoEnableDisplayLabel(entry, manifestRegistry);
+    if (label) {
+      return `${label} configured, enabled automatically.`;
+    }
+  }
   return `${resolvePluginAutoEnableCandidateReason(entry).trim()}, enabled automatically.`;
 }
 
@@ -675,7 +696,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       ...(autoEnabledReasons.get(entry.pluginId) ?? []),
       reason,
     ]);
-    changes.push(formatAutoEnableChange(entry));
+    changes.push(formatAutoEnableChange(entry, params.manifestRegistry));
   }
 
   next = materializeConfiguredPluginEntryAllowlist({

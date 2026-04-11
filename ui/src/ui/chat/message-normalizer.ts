@@ -231,9 +231,9 @@ function expandTextContent(text: string): {
           ? (parsed.mediaUrls ?? [])
               .filter((url) => shouldPreserveRelativeAssistantAttachment(url))
               .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
-        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-          ? [{ type: "text", text: parsed.text }]
-          : [],
+          : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+            ? [{ type: "text", text: parsed.text }]
+            : [],
     audioAsVoice,
     replyTarget,
   };
@@ -312,9 +312,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               url: attachment.url,
               kind: attachment.kind,
               label: attachment.label,
-              ...(typeof attachment.mimeType === "string"
-                ? { mimeType: attachment.mimeType }
-                : {}),
+              ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
             },
           },

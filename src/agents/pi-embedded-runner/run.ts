@@ -726,7 +726,8 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
-            lastAssistant,
+            lastAssistant: sessionLastAssistant,
+            currentAttemptAssistant,
           } = attempt;
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -738,7 +739,7 @@ export async function runEmbeddedPiAgent(
                   ]),
                 )
               : bootstrapPromptWarningSignaturesSeen);
-          const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
@@ -748,7 +749,6 @@ export async function runEmbeddedPiAgent(
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           const activeErrorContext = resolveActiveErrorContext({
-            lastAssistant,
             provider,
             model: modelId,
           });
@@ -765,8 +765,8 @@ export async function runEmbeddedPiAgent(
             accumulatedReplayState,
             attempt.replayMetadata,
           );
-          const formattedAssistantErrorText = lastAssistant
-            ? formatAssistantErrorText(lastAssistant, {
+          const formattedAssistantErrorText = sessionLastAssistant
+            ? formatAssistantErrorText(sessionLastAssistant, {
                 cfg: params.config,
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
@@ -774,8 +774,8 @@ export async function runEmbeddedPiAgent(
               })
             : undefined;
           const assistantErrorText =
-            lastAssistant?.stopReason === "error"
-              ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
+            sessionLastAssistant?.stopReason === "error"
+              ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
             !attempt.didSendViaMessagingTool &&
@@ -1140,7 +1140,7 @@ export async function runEmbeddedPiAgent(
                   model: model.id,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant,
+                  lastAssistant: sessionLastAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
@@ -1194,7 +1194,7 @@ export async function runEmbeddedPiAgent(
                     model: model.id,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant,
+                    lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -1232,7 +1232,7 @@ export async function runEmbeddedPiAgent(
                     model: model.id,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant,
+                    lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -1340,8 +1340,9 @@ export async function runEmbeddedPiAgent(
             throw promptError;
           }
 
+          const assistantForFailover = currentAttemptAssistant ?? sessionLastAssistant;
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: lastAssistant?.errorMessage,
+            message: assistantForFailover?.errorMessage,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -1352,26 +1353,28 @@ export async function runEmbeddedPiAgent(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(lastAssistant);
-          const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          const billingFailure = isBillingAssistantError(lastAssistant);
-          const failoverFailure = isFailoverAssistantError(lastAssistant);
+          const authFailure = isAuthAssistantError(assistantForFailover);
+          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
+          const billingFailure = isBillingAssistantError(assistantForFailover);
+          const failoverFailure = isFailoverAssistantError(assistantForFailover);
           const assistantFailoverReason = classifyFailoverReason(
-            lastAssistant?.errorMessage ?? "",
+            assistantForFailover?.errorMessage ?? "",
             {
-              provider: lastAssistant?.provider,
+              provider: assistantForFailover?.provider,
             },
           );
           const assistantProfileFailureReason =
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
-          const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          const imageDimensionError = parseImageDimensionError(
+            assistantForFailover?.errorMessage ?? "",
+          );
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: lastAssistant?.errorMessage?.trim(),
+            rawError: assistantForFailover?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
@@ -1385,7 +1388,7 @@ export async function runEmbeddedPiAgent(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              lastAssistant?.errorMessage ?? "",
+              assistantForFailover?.errorMessage ?? "",
               runtimeAuthRetry,
             ))
           ) {
@@ -1442,7 +1445,7 @@ export async function runEmbeddedPiAgent(
             modelId,
             provider,
             activeErrorContext,
-            lastAssistant,
+            lastAssistant: assistantForFailover,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             authFailure,
@@ -1473,20 +1476,20 @@ export async function runEmbeddedPiAgent(
           }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
             lastRunPromptUsage,
             lastTurnTotal,
           });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            provider: lastAssistant?.provider ?? provider,
-            model: lastAssistant?.model ?? model.id,
+            provider: sessionLastAssistant?.provider ?? provider,
+            model: sessionLastAssistant?.model ?? model.id,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
-          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(lastAssistant);
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
@@ -1737,7 +1740,7 @@ export async function runEmbeddedPiAgent(
                 ? "tool_calls"
                 : attempt.yieldDetected
                   ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
+                  : (sessionLastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

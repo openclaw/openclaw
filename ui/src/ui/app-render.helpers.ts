@@ -44,11 +44,11 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
-export function resolveAssistantAttachmentAuthToken(state: Pick<AppViewState, "settings" | "password">) {
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "settings" | "password">,
+) {
   return (
-    normalizeOptionalString(state.settings.token) ??
-    normalizeOptionalString(state.password) ??
-    null
+    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
   );
 }
 
