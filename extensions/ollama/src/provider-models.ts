@@ -76,9 +76,7 @@ function buildOllamaModelShowCacheKey(
 }
 
 function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
-  if (ollamaModelShowInfoCache.has(key)) {
-    ollamaModelShowInfoCache.delete(key);
-  } else if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
+  if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
     const oldestKey = ollamaModelShowInfoCache.keys().next().value;
     if (typeof oldestKey === "string") {
       ollamaModelShowInfoCache.delete(oldestKey);
@@ -87,20 +85,25 @@ function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelSho
   ollamaModelShowInfoCache.set(key, value);
 }
 
+function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
+  return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
+}
+
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
 ): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/show`,
+      url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
     try {
@@ -146,9 +149,10 @@ async function queryOllamaModelShowInfoCached(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
 ): Promise<OllamaModelShowInfo> {
-  const cacheKey = buildOllamaModelShowCacheKey(apiBase, model);
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
+  const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model);
   if (!cacheKey) {
-    return await queryOllamaModelShowInfo(apiBase, model.name);
+    return await queryOllamaModelShowInfo(normalizedApiBase, model.name);
   }
 
   const cached = ollamaModelShowInfoCache.get(cacheKey);
@@ -156,7 +160,12 @@ async function queryOllamaModelShowInfoCached(
     return await cached;
   }
 
-  const pending = queryOllamaModelShowInfo(apiBase, model.name);
+  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name).then((result) => {
+    if (!hasCachedOllamaModelShowInfo(result)) {
+      ollamaModelShowInfoCache.delete(cacheKey);
+    }
+    return result;
+  });
   setOllamaModelShowCacheEntry(cacheKey, pending);
   return await pending;
 }
