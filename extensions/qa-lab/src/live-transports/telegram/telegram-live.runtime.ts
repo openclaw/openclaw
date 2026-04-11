@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -30,8 +31,16 @@ type TelegramBotIdentity = {
   username?: string;
 };
 
-type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<"telegram-help-command"> & {
-  buildInput: (sutUsername: string) => string;
+type TelegramQaScenarioId = "telegram-help-command" | "telegram-mention-gating";
+
+type TelegramQaScenarioRun = {
+  expectReply: boolean;
+  input: string;
+  matchText?: string;
+};
+
+type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
+  buildRun: (sutUsername: string) => TelegramQaScenarioRun;
 };
 
 type TelegramObservedMessage = {
@@ -162,7 +171,24 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     standardId: "help-command",
     title: "Telegram help command reply",
     timeoutMs: 45_000,
-    buildInput: (sutUsername) => `/help@${sutUsername}`,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/help@${sutUsername}`,
+    }),
+  },
+  {
+    id: "telegram-mention-gating",
+    standardId: "mention-gating",
+    title: "Telegram group message without mention does not trigger",
+    timeoutMs: 8_000,
+    buildRun: () => {
+      const token = `TELEGRAM_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: false,
+        input: `reply with only this exact marker: ${token}`,
+        matchText: token,
+      };
+    },
   },
 ];
 
@@ -502,6 +528,25 @@ function findScenario(ids?: string[]) {
   });
 }
 
+function matchesTelegramScenarioReply(params: {
+  groupId: string;
+  matchText?: string;
+  message: TelegramObservedMessage;
+  sentMessageId: number;
+  sutBotId: number;
+}) {
+  if (
+    params.message.chatId !== Number(params.groupId) ||
+    params.message.senderId !== params.sutBotId
+  ) {
+    return false;
+  }
+  if (params.message.replyToMessageId === params.sentMessageId) {
+    return true;
+  }
+  return Boolean(params.matchText && params.message.text.includes(params.matchText));
+}
+
 function classifyCanaryReply(params: {
   message: TelegramObservedMessage;
   groupId: string;
@@ -761,11 +806,12 @@ export async function runTelegramQaLive(params: {
     if (!canaryFailure) {
       let driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
       for (const scenario of scenarios) {
+        const scenarioRun = scenario.buildRun(sutUsername);
         try {
           const sent = await sendGroupMessage(
             runtimeEnv.driverToken,
             runtimeEnv.groupId,
-            scenario.buildInput(sutUsername),
+            scenarioRun.input,
           );
           const matched = await waitForObservedMessage({
             token: runtimeEnv.driverToken,
@@ -773,12 +819,21 @@ export async function runTelegramQaLive(params: {
             timeoutMs: scenario.timeoutMs,
             observedMessages,
             predicate: (message) =>
-              message.chatId === Number(runtimeEnv.groupId) &&
-              message.senderId === sutIdentity.id &&
-              message.replyToMessageId === sent.message_id &&
-              message.text.trim().length > 0,
+              matchesTelegramScenarioReply({
+                groupId: runtimeEnv.groupId,
+                matchText: scenarioRun.matchText,
+                message,
+                sentMessageId: sent.message_id,
+                sutBotId: sutIdentity.id,
+              }),
           });
           driverOffset = matched.nextOffset;
+          if (!scenarioRun.expectReply) {
+            throw new Error(`unexpected reply message ${matched.message.messageId} matched`);
+          }
+          if (!matched.message.text.trim()) {
+            throw new Error(`reply message ${matched.message.messageId} was empty`);
+          }
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -786,6 +841,20 @@ export async function runTelegramQaLive(params: {
             details: `reply message ${matched.message.messageId} matched`,
           });
         } catch (error) {
+          if (!scenarioRun.expectReply) {
+            const details = formatErrorMessage(error);
+            if (
+              details === `timed out after ${scenario.timeoutMs}ms waiting for Telegram message`
+            ) {
+              scenarioResults.push({
+                id: scenario.id,
+                title: scenario.title,
+                status: "pass",
+                details: "no reply",
+              });
+              continue;
+            }
+          }
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -887,6 +956,7 @@ export const __testing = {
   callTelegramApi,
   classifyCanaryReply,
   findScenario,
+  matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,
   resolveTelegramQaRuntimeEnv,
 };
