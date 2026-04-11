@@ -145,6 +145,9 @@ export function decodeFeishuCardAction(params: {
     if (actionValue.c.t !== undefined && actionValue.c.t !== "p2p" && actionValue.c.t !== "group") {
       return { kind: "invalid", reason: "malformed" };
     }
+    if (actionValue.c.uc !== undefined && !isRecord(actionValue.c.uc)) {
+      return { kind: "invalid", reason: "malformed" };
+    }
 
     if (typeof actionValue.c.e === "number" && actionValue.c.e < now) {
       return { kind: "invalid", reason: "stale" };
