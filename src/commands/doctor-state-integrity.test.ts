@@ -6,6 +6,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
+vi.mock("../channels/plugins/bundled-ids.js", () => ({
+  listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
+}));
+
+vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  hasBundledChannelPersistedAuthState: () => false,
+}));
+
 const noteMock = vi.fn();
 
 type EnvSnapshot = {
