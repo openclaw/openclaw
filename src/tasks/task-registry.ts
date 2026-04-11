@@ -1336,6 +1336,20 @@ function ensureListener() {
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
       }
+
+      const assistantText =
+        evt.stream === "assistant" && typeof evt.data?.text === "string"
+          ? evt.data.text
+          : evt.stream === "assistant" && typeof evt.data?.delta === "string"
+            ? evt.data.delta
+            : undefined;
+      if (
+        assistantText &&
+        /no output for .*it may be waiting for (input|interactive input)/i.test(assistantText)
+      ) {
+        patch.status = "waiting_external";
+        patch.progressSummary = "Waiting for external input before work can continue.";
+      }
       const stateChangeEvent =
         patch.status && patch.status !== current.status
           ? appendTaskEvent({

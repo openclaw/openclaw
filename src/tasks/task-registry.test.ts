@@ -1802,6 +1802,38 @@ describe("task-registry", () => {
     });
   });
 
+  it("projects no-output assistant events as waiting_external task state", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const created = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-waiting-external",
+        task: "Wait for external input",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      emitAgentEvent({
+        runId: "run-waiting-external",
+        stream: "assistant",
+        data: {
+          text: "No output for 60s. It may be waiting for input.",
+        },
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "waiting_external",
+        progressSummary: "Waiting for external input before work can continue.",
+      });
+    });
+  });
+
   it("cancels ACP-backed tasks through the ACP session manager", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
