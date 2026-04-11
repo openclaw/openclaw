@@ -1054,7 +1054,8 @@ function validateConfigObjectWithPluginsBase(
           path: "plugins.allow",
           message:
             `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
-            `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
+            `Use "${commandAlias.pluginId}" in plugins.allow instead. ` +
+            `Note: plugins.allow is an exclusive allowlist — any plugin not listed will be disabled.`,
         });
       } else {
         pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });

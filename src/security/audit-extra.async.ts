@@ -664,7 +664,10 @@ export async function collectPluginsTrustFindings(params: {
           (skillCommandsLikelyExposed
             ? "\nNative skill commands are enabled on at least one configured chat surface; treat unpinned/unallowlisted extensions as high risk."
             : ""),
-        remediation: "Set plugins.allow to an explicit list of plugin ids you trust.",
+        remediation:
+          "Set plugins.allow to an explicit list of all plugin ids you trust — " +
+          "this is an exclusive allowlist, so any plugin not listed (including bundled plugins) will be disabled. " +
+          "Include every active plugin when setting this field.",
       });
     }
 

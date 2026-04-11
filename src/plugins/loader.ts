@@ -1016,7 +1016,9 @@ function warnWhenAllowlistIsOpen(params: {
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
   openAllowlistWarningCache.add(params.warningCacheKey);
   params.logger.warn(
-    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. ` +
+      `plugins.allow is an exclusive allowlist — only listed plugins will load, all others (including bundled plugins) are disabled. ` +
+      `Include every plugin you rely on when setting this field.`,
   );
 }
 

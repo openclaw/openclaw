@@ -95,7 +95,8 @@ export function resolveMissingPluginCommandMessage(
       return (
         `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
         `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
-        `instead of "${normalizedPluginId}".`
+        `instead of "${normalizedPluginId}". ` +
+        `Note: plugins.allow is an exclusive allowlist — any active plugin not listed will be disabled.`
       );
     }
     if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
@@ -121,7 +122,8 @@ export function resolveMissingPluginCommandMessage(
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+      `\`plugins.allow\` if you want that bundled plugin CLI surface. ` +
+      `Note: plugins.allow is an exclusive allowlist — ensure all active plugins are listed.`
     );
   }
   if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
