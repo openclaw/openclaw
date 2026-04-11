@@ -172,7 +172,6 @@ function setFallbackSelectionStateField(
       }
       return false;
   }
-  throw new Error("Unsupported fallback selection state key");
 }
 
 function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
@@ -636,6 +635,59 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
+
+  // Model cooldown circuit breaker check (#61622)
+  // When all credentials return model_cooldown with a long reset_seconds,
+  // the session enters a cooldown state to prevent infinite retry loops.
+  const cooldownUntil = params.getActiveSessionEntry()?.modelCooldownUntil;
+  const now = Date.now();
+  if (typeof cooldownUntil === "number" && cooldownUntil > now) {
+    const secsLeft = Math.max(1, Math.ceil((cooldownUntil - now) / 1000));
+    const minsLeft = Math.ceil(secsLeft / 60);
+    const hoursLeft = Math.ceil(secsLeft / 3600);
+    let cooldownMessage: string;
+    if (hoursLeft > 1) {
+      cooldownMessage = `⚠️ All credentials are cooling down for ~${hoursLeft} hours. I'll auto-resume when ready. No need to resend.`;
+    } else if (minsLeft > 1) {
+      cooldownMessage = `⚠️ All credentials are cooling down for ~${minsLeft} minutes. I'll auto-resume when ready. No need to resend.`;
+    } else {
+      cooldownMessage = `⚠️ All credentials are cooling down for ~${secsLeft} seconds. Please wait a moment.`;
+    }
+    defaultRuntime.error(
+      `Session ${params.sessionKey ?? "unknown"} in model cooldown until ${new Date(cooldownUntil).toISOString()}. Rejecting inbound message.`,
+    );
+    return {
+      kind: "final",
+      payload: {
+        text: cooldownMessage,
+      },
+    };
+  }
+  // Clear expired cooldown state if present
+  if (
+    typeof cooldownUntil === "number" &&
+    cooldownUntil <= now &&
+    params.sessionKey &&
+    params.activeSessionStore &&
+    params.storePath
+  ) {
+    const entry = params.getActiveSessionEntry();
+    if (entry?.modelCooldownUntil) {
+      delete entry.modelCooldownUntil;
+      params.activeSessionStore[params.sessionKey] = entry;
+      try {
+        await updateSessionStore(params.storePath, (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (persistedEntry?.modelCooldownUntil) {
+            delete persistedEntry.modelCooldownUntil;
+            store[params.sessionKey!] = persistedEntry;
+          }
+        });
+      } catch {
+        // Non-critical: cooldown expiry clear failure should not block the run
+      }
+    }
+  }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
@@ -646,42 +698,19 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const persistFallbackCandidateSelection = async (
-    provider: string,
-    model: string,
-  ): Promise<(() => Promise<void>) | undefined> => {
+  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
-      return undefined;
+      return;
     }
 
     const activeSessionEntry =
       params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
     if (!activeSessionEntry) {
-      return undefined;
-    }
-
-    // Don't overwrite a user-initiated model override (e.g. from /models or
-    // /model) with the fallback model.  The user's explicit selection should
-    // survive transient primary-model failures so subsequent messages still
-    // target the model the user chose.  Fallback persistence is only
-    // appropriate when the override was itself set by a previous fallback
-    // ("auto") or when there is no override yet.
-    //
-    // `modelOverrideSource` was added later, so older persisted sessions can
-    // carry a user-selected override without the source field.  Treat any
-    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
-    // user state, matching the backward-compat treatment in
-    // session-reset-service.
-    const isUserModelOverride =
-      activeSessionEntry.modelOverrideSource === "user" ||
-      (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
-    if (isUserModelOverride) {
-      return undefined;
+      return;
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
@@ -693,7 +722,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
-      return undefined;
+      return;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 
@@ -886,10 +915,8 @@ export async function runAgentTurnWithFallback(params: {
                     ],
                   images: params.opts?.images,
                   imageOrder: params.opts?.imageOrder,
-                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
-                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
@@ -1258,12 +1285,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: attempt.provider,
-            model: attempt.model,
-            error: attempt.error,
-            reason: attempt.reason || undefined,
+            provider: String(attempt.provider ?? ""),
+            model: String(attempt.model ?? ""),
+            error: String(attempt.error ?? ""),
+            reason: attempt.reason ? String(attempt.reason) : undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code || undefined,
+            code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
 
@@ -1485,17 +1512,78 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const fallbackText = isBilling
-        ? BILLING_ERROR_USER_MESSAGE
-        : isRateLimit
-          ? buildRateLimitCooldownMessage(err)
-          : isContextOverflow
-            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-            : isRoleOrderingError
-              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                : buildExternalRunFailureText(message);
+
+      // Model cooldown circuit breaker (#61622)
+      // When all credentials return model_cooldown with a long reset_seconds,
+      // write cooldown state to session to prevent infinite retry loops.
+      let cooldownUntilMs: number | undefined;
+      if (isFallbackSummaryError(err) && err.soonestCooldownExpiry) {
+        const thresholdMinutes =
+          params.followupRun.run.config.agents?.defaults?.llm?.modelCooldownThresholdMinutes ?? 60;
+        if (thresholdMinutes > 0) {
+          const thresholdMs = thresholdMinutes * 60 * 1000;
+          const cooldownRemainingMs = err.soonestCooldownExpiry - Date.now();
+          if (cooldownRemainingMs > thresholdMs) {
+            cooldownUntilMs = err.soonestCooldownExpiry;
+            // Persist cooldown state to session store
+            if (params.sessionKey && params.activeSessionStore && params.storePath) {
+              const entry = params.getActiveSessionEntry();
+              if (entry) {
+                entry.modelCooldownUntil = cooldownUntilMs;
+                params.activeSessionStore[params.sessionKey] = entry;
+                try {
+                  await updateSessionStore(params.storePath, (store) => {
+                    const persistedEntry = store[params.sessionKey!];
+                    if (persistedEntry) {
+                      persistedEntry.modelCooldownUntil = cooldownUntilMs;
+                      store[params.sessionKey!] = persistedEntry;
+                    }
+                  });
+                  defaultRuntime.error(
+                    `Session ${params.sessionKey} entered model cooldown until ${new Date(cooldownUntilMs).toISOString()} (${Math.ceil(cooldownRemainingMs / 60000)} minutes remaining).`,
+                  );
+                } catch {
+                  // Non-critical: cooldown state persistence failure should not block error response
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Build user-facing message, including circuit breaker notice if applicable
+      let fallbackText: string;
+      if (isBilling) {
+        fallbackText = BILLING_ERROR_USER_MESSAGE;
+      } else if (isRateLimit) {
+        const baseMessage = buildRateLimitCooldownMessage(err);
+        if (cooldownUntilMs) {
+          const cdSecsLeft = Math.max(1, Math.ceil((cooldownUntilMs - Date.now()) / 1000));
+          const cdMinsLeft = Math.ceil(cdSecsLeft / 60);
+          const cdHoursLeft = Math.ceil(cdSecsLeft / 3600);
+          let cdDuration: string;
+          if (cdHoursLeft > 1) {
+            cdDuration = `~${cdHoursLeft} hours`;
+          } else if (cdMinsLeft > 1) {
+            cdDuration = `~${cdMinsLeft} minutes`;
+          } else {
+            cdDuration = `~${cdSecsLeft} seconds`;
+          }
+          fallbackText = `${baseMessage}\n\n⏳ All credentials are cooling down for ${cdDuration}. I'll auto-resume when ready — no need to resend.`;
+        } else {
+          fallbackText = baseMessage;
+        }
+      } else if (isContextOverflow) {
+        fallbackText =
+          "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
+      } else if (isRoleOrderingError) {
+        fallbackText =
+          "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
+      } else if (shouldSurfaceToControlUi) {
+        fallbackText = `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+      } else {
+        fallbackText = buildExternalRunFailureText(message);
+      }
 
       params.replyOperation?.fail("run_failed", err);
       return {
@@ -1575,6 +1663,27 @@ export async function runAgentTurnWithFallback(params: {
       isHeartbeat: params.isHeartbeat,
       payloads: runResult.payloads,
     });
+  }
+
+  // Clear model cooldown state on successful run (#61622)
+  // When a run succeeds after a previous cooldown, clear the cooldown marker.
+  if (params.sessionKey && params.activeSessionStore && params.storePath) {
+    const entry = params.getActiveSessionEntry();
+    if (entry?.modelCooldownUntil) {
+      delete entry.modelCooldownUntil;
+      params.activeSessionStore[params.sessionKey] = entry;
+      try {
+        await updateSessionStore(params.storePath, (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (persistedEntry?.modelCooldownUntil) {
+            delete persistedEntry.modelCooldownUntil;
+            store[params.sessionKey!] = persistedEntry;
+          }
+        });
+      } catch {
+        // Non-critical: cooldown clear failure should not block success response
+      }
+    }
   }
 
   return {

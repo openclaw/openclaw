@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -21,7 +20,6 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
@@ -128,7 +126,15 @@ export const AgentDefaultsSchema = z
           .nonnegative()
           .optional()
           .describe(
-            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
+        modelCooldownThresholdMinutes: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Model cooldown circuit breaker threshold in minutes. When all credentials return model_cooldown with reset_seconds exceeding this threshold, the session enters a cooldown state and rejects new messages until the cooldown expires. Default: 60 minutes. Set to 0 to disable.",
           ),
       })
       .strict()
@@ -184,7 +190,6 @@ export const AgentDefaultsSchema = z
         projectSettingsPolicy: z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
       })
       .strict()
       .optional(),
