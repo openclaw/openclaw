@@ -259,6 +259,56 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
+  it("prefers the target session entry when routing inline status through the shared status builder", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/status",
+      CommandBody: "/status",
+      ParentSessionKey: "ctx-parent",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: stripInlineStatus("/status").cleaned,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/status",
+          commandBodyNormalized: "/status",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            parentSessionKey: "wrapper-parent",
+          } as SessionEntry,
+          sessionStore: {
+            "s:main": {
+              sessionId: "target-session",
+              updatedAt: Date.now(),
+              parentSessionKey: "target-parent",
+            } as SessionEntry,
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: undefined });
+    expect(buildStatusReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+          parentSessionKey: "target-parent",
+        }),
+        parentSessionKey: "target-parent",
+      }),
+    );
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
   it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({

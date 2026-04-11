@@ -347,12 +347,13 @@ export async function handleInlineActions(params: {
   let didSendInlineStatus = false;
   if (handleInlineStatus) {
     const { buildStatusReply } = await import("./commands.runtime.js");
+    const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
       storePath,
       provider,
