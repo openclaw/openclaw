@@ -7,8 +7,8 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizePluginId } from "../plugins/config-state.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
@@ -203,6 +203,8 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   const pluginConfig = youPlugin?.config as { webSearch?: { apiKey?: unknown } } | undefined;
   const configValue = pluginConfig?.webSearch?.apiKey;
   if (configValue !== undefined && configValue !== null) {
+    // Plugin config has webSearch set — this triggers auto-enable via
+    // plugin-web-search-configured, so the plugin will be activated at runtime.
     if (typeof configValue === "string") {
       return configValue.trim().length > 0;
     }
@@ -210,6 +212,12 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
     if (isSecretRef(configValue)) {
       return true;
     }
+  }
+  // YDC_API_KEY env var alone is not enough — the You plugin is bundled without
+  // enabledByDefault and without autoEnableWhenConfiguredProviders, so it stays
+  // bundled-disabled-by-default unless explicitly enabled or config-activated.
+  if (youPlugin?.enabled !== true) {
+    return false;
   }
   const envValue = env.YDC_API_KEY;
   return typeof envValue === "string" && envValue.trim().length > 0;
