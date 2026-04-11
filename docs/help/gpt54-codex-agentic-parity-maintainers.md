@@ -205,7 +205,7 @@ Expected artifacts: `qa-suite-report.md` / `qa-suite-summary.json` for each mode
 
 - the parity docs cover all ten PRs, not just the first four
 - the three new mermaid diagrams are present (dual-provider mock, parity run orchestration, tool-call assertion seam)
-- the end-to-end parity runbook uses the real CLI flags and calls out which steps depend on unmerged wave-2 PRs
+- the end-to-end parity runbook clearly separates the mock structural gate from the live-frontier proof run
 - the goal-to-evidence matrix matches the ten-PR program
 
 ## Release gate
@@ -235,6 +235,12 @@ flowchart LR
 ```
 
 The parity harness isn't the only evidence source. Keep the split explicit in review: PRs D and E own the scenario-based GPT-5.4 vs Opus 4.6 comparison, and PR B's deterministic suites still own auth, proxy, DNS, and `/elevated full` truthfulness.
+
+## Mock gate vs live proof
+
+- The workflow in `.github/workflows/parity-gate.yml` is the **mock structural gate**. It should run `openclaw qa suite --provider-mode mock-openai ...` for both lanes and verify harness structure, scenario registration, artifact generation, and fail-fast semantics without touching real credentials.
+- The final product claim still requires a **live-frontier proof run**. That run should use `--provider-mode live-frontier` for both GPT-5.4 and Opus 4.6, then feed the resulting summaries into `openclaw qa parity-report`.
+- Reviewers should reject any wording that treats the mock structural gate as the final parity proof by itself.
 
 ## Goal-to-evidence map
 
