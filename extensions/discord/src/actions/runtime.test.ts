@@ -680,6 +680,30 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
   });
 
+  it("accepts snake_case applied_tags input", async () => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        applied_tags: ["tag-a", "tag-b"],
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith({
+      channelId: "C1",
+      name: undefined,
+      topic: undefined,
+      position: undefined,
+      parentId: undefined,
+      nsfw: undefined,
+      rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
+      appliedTags: ["tag-a", "tag-b"],
+    });
+  });
+
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],

@@ -131,4 +131,26 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("accepts snake_case applied_tags input", async () => {
+    await handleDiscordMessageAction({
+      action: "channel-edit",
+      params: {
+        channelId: "thread-789",
+        applied_tags: ["tag-a", "tag-b"],
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { channels: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channelEdit",
+        channelId: "thread-789",
+        appliedTags: ["tag-a", "tag-b"],
+      }),
+      expect.any(Object),
+    );
+  });
 });

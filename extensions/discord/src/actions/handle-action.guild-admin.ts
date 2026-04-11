@@ -13,6 +13,15 @@ import {
   readDiscordModerationCommand,
 } from "./runtime.moderation-shared.js";
 
+/** Read appliedTags preserving empty arrays (for clearing forum tags), with camelCase/snake_case support. */
+function readAppliedTags(params: Record<string, unknown>): string[] | undefined {
+  const raw = params.appliedTags ?? params.applied_tags;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw.filter((entry): entry is string => typeof entry === "string");
+}
+
 type Ctx = Pick<
   ChannelMessageActionContext,
   "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "mediaLocalRoots"
@@ -197,9 +206,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
       integer: true,
     });
-    const appliedTags = Array.isArray(actionParams.appliedTags)
-      ? (actionParams.appliedTags as string[])
-      : undefined;
+    const appliedTags = readAppliedTags(actionParams);
     const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {

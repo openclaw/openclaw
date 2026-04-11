@@ -34,6 +34,15 @@ import {
 } from "../send.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
+/** Read appliedTags preserving empty arrays (for clearing forum tags), with camelCase/snake_case support. */
+function readAppliedTags(params: Record<string, unknown>): string[] | undefined {
+  const raw = params.appliedTags ?? params.applied_tags;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw.filter((entry): entry is string => typeof entry === "string");
+}
+
 export const discordGuildActionRuntime = {
   addRoleDiscord,
   createChannelDiscord,
@@ -383,9 +392,7 @@ export async function handleDiscordGuildAction(
       const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
         integer: true,
       });
-      const appliedTags = Array.isArray(params.appliedTags)
-        ? (params.appliedTags as string[])
-        : undefined;
+      const appliedTags = readAppliedTags(params);
       const availableTags = parseAvailableTags(params.availableTags);
       const editPayload = {
         channelId,
