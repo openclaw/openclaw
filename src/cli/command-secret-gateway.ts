@@ -687,7 +687,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   let payload: GatewaySecretsResolveResult;
   try {
-    payload = await callGateway<GatewaySecretsResolveResult>({
+    payload = await callGateway({
       config: params.config,
       method: "secrets.resolve",
       requiredMethods: ["secrets.resolve"],

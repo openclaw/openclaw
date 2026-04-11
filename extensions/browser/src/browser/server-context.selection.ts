@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
@@ -13,6 +14,7 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
+  getSsrFPolicy: () => SsrFPolicy | undefined;
   ensureBrowserAvailable: () => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
@@ -27,6 +29,7 @@ type SelectionOps = {
 export function createProfileSelectionOps({
   profile,
   getProfileState,
+  getSsrFPolicy,
   ensureBrowserAvailable,
   listTabs,
   openTab,
@@ -109,6 +112,7 @@ export function createProfileSelectionOps({
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
+          ssrfPolicy: getSsrFPolicy(),
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
@@ -116,7 +120,12 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`));
+    await fetchOk(
+      appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
+      undefined,
+      undefined,
+      getSsrFPolicy(),
+    );
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
@@ -138,12 +147,18 @@ export function createProfileSelectionOps({
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
+          ssrfPolicy: getSsrFPolicy(),
         });
         return;
       }
     }
 
-    await fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`));
+    await fetchOk(
+      appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
+      undefined,
+      undefined,
+      getSsrFPolicy(),
+    );
   };
 
   return {

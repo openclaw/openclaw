@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { __testing as providerAuthChoiceTesting } from "../plugins/provider-auth-choice.js";
+import type { ProviderAuthContext, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.js";
 import {
@@ -27,6 +29,75 @@ describe("applyAuthChoice (moonshot)", () => {
     const env = await setupAuthTestEnv("openclaw-auth-");
     lifecycle.setStateDir(env.stateDir);
     delete process.env.MOONSHOT_API_KEY;
+    providerAuthChoiceTesting.setDepsForTest({
+      loadPluginProviderRuntime: async () =>
+        ({
+          resolvePluginProviders: () =>
+            [
+              {
+                id: "moonshot",
+                label: "Moonshot",
+                auth: [
+                  {
+                    id: "api-key-cn",
+                    label: "Moonshot API key (.cn)",
+                    kind: "api_key",
+                    run: async ({ prompter }: ProviderAuthContext) => {
+                      const key = await prompter.text({
+                        message: "Enter Moonshot API key (.cn)",
+                      });
+                      return {
+                        profiles: [
+                          {
+                            profileId: "moonshot:default",
+                            credential: {
+                              type: "api_key",
+                              provider: "moonshot",
+                              key,
+                            },
+                          },
+                        ],
+                        configPatch: {
+                          models: {
+                            providers: {
+                              moonshot: {
+                                api: "openai-completions",
+                                baseUrl: "https://api.moonshot.cn/v1",
+                                models: [
+                                  {
+                                    id: "kimi-k2.5",
+                                    name: "kimi-k2.5",
+                                    input: ["text", "image"],
+                                    reasoning: true,
+                                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                                    contextWindow: 128_000,
+                                    maxTokens: 8192,
+                                  },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                        defaultModel: "moonshot/kimi-k2.5",
+                      };
+                    },
+                  },
+                ],
+              },
+            ] as ProviderPlugin[],
+          resolveProviderPluginChoice: ({
+            choice,
+            providers,
+          }: {
+            choice: string;
+            providers: ProviderPlugin[];
+          }) =>
+            choice === "moonshot-api-key-cn"
+              ? { provider: providers[0], method: providers[0]?.auth[0] }
+              : null,
+          runProviderModelSelectedHook: async () => {},
+        }) as never,
+    });
   }
 
   async function readAuthProfiles() {
@@ -53,6 +124,7 @@ describe("applyAuthChoice (moonshot)", () => {
   }
 
   afterEach(async () => {
+    providerAuthChoiceTesting.resetDepsForTest();
     await lifecycle.cleanup();
   });
 

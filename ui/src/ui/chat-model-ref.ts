@@ -1,14 +1,6 @@
+import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import type { ModelCatalogEntry } from "./types.ts";
-
-export type ChatModelOverride =
-  | {
-      kind: "qualified";
-      value: string;
-    }
-  | {
-      kind: "raw";
-      value: string;
-    };
+export type { ChatModelOverride } from "./chat-model-ref.types.ts";
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
   const trimmedModel = model.trim();

@@ -113,6 +113,21 @@ export function resolveConversationDeliveryTarget(params: {
       : typeof params.parentConversationId === "string"
         ? normalizeOptionalString(params.parentConversationId)
         : undefined;
+  const isThreadChild =
+    conversationId && parentConversationId && parentConversationId !== conversationId;
+  if (channel && isThreadChild) {
+    if (
+      channel === "matrix" ||
+      channel === "slack" ||
+      channel === "mattermost" ||
+      channel === "telegram"
+    ) {
+      return {
+        to: `channel:${parentConversationId}`,
+        threadId: conversationId,
+      };
+    }
+  }
   const pluginTarget =
     channel && conversationId
       ? getChannelPlugin(
@@ -127,24 +142,6 @@ export function resolveConversationDeliveryTarget(params: {
       ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
       ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
     };
-  }
-  const isThreadChild =
-    conversationId && parentConversationId && parentConversationId !== conversationId;
-  if (channel && isThreadChild) {
-    if (
-      channel === "matrix" ||
-      channel === "slack" ||
-      channel === "mattermost" ||
-      channel === "telegram"
-    ) {
-      return {
-        to: formatConversationTarget({
-          channel,
-          conversationId: parentConversationId,
-        }),
-        threadId: conversationId,
-      };
-    }
   }
   const to = formatConversationTarget(params);
   return { to };

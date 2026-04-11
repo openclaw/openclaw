@@ -205,7 +205,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
         if (health.healthy) {
-          return;
+          return undefined;
         }
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
@@ -224,6 +224,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           formatCliCommand("openclaw gateway status --deep"),
           formatCliCommand("openclaw doctor"),
         ]);
+        throw new Error("unreachable after gateway restart health failure");
       }
 
       let health = await waitForGatewayHealthyRestart({
@@ -257,7 +258,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        return;
+        return undefined;
       }
 
       const diagnostics = renderRestartDiagnostics(health);
@@ -290,6 +291,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         formatCliCommand("openclaw gateway status --deep"),
         formatCliCommand("openclaw doctor"),
       ]);
+      throw new Error("unreachable after gateway restart failure");
     },
   });
 }

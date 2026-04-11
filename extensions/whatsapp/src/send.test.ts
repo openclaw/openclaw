@@ -17,8 +17,10 @@ let setActiveWebListener: typeof import("./active-listener.js").setActiveWebList
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("./outbound-media.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./outbound-media.runtime.js")>(
+    "./outbound-media.runtime.js",
+  );
   return {
     ...actual,
     loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,

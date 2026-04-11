@@ -1,6 +1,6 @@
 import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import type { GatewayRpcOpts } from "./gateway-rpc.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { withProgress } from "./progress.js";
 
 export async function callGatewayFromCliRuntime(
