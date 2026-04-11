@@ -42,6 +42,12 @@ describe("createBlockReplyContentKey", () => {
     expect(a).toBe(b);
     expect(a).toBe(c);
   });
+
+  it("produces different keys for sticker-only payloads with different sticker IDs", () => {
+    const a = createBlockReplyContentKey({ sticker: { raw: "446:1988" } });
+    const b = createBlockReplyContentKey({ sticker: { raw: "11537:52002734" } });
+    expect(a).not.toBe(b);
+  });
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {

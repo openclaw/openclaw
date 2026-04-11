@@ -224,6 +224,13 @@ describe("routeReply", () => {
     await expectSlackNoDelivery({ text: SILENT_REPLY_TOKEN });
   });
 
+  it("does not restore sticker fallback for intentional silent skips", async () => {
+    await expectSlackNoDelivery({
+      text: SILENT_REPLY_TOKEN,
+      sticker: { raw: "11537:52002734" },
+    });
+  });
+
   it("does not drop payloads that merely start with the silent token", async () => {
     const res = await routeReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },

@@ -20,7 +20,7 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
@@ -115,8 +115,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : cfg.messages?.responsePrefix === "auto"
       ? undefined
       : cfg.messages?.responsePrefix;
+  let skipReason: NormalizeReplySkipReason | null = null;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    onSkip: (reason) => {
+      skipReason = reason;
+    },
     transformReplyPayload: messaging?.transformReplyPayload
       ? (nextPayload) =>
           messaging.transformReplyPayload?.({
@@ -128,7 +132,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   });
   const normalizedPayload =
     normalized ??
-    (payload.sticker
+    (!skipReason && payload.sticker
       ? {
           ...payload,
           text: payload.text ?? "",

@@ -112,6 +112,29 @@ describe("createBlockReplyDeliveryHandler", () => {
     );
   });
 
+  it("tracks different sticker-only block replies with distinct dedupe keys", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ sticker: { raw: "446:1988" } });
+    await handler({ sticker: { raw: "11537:52002734" } });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(directlySentBlockKeys.size).toBe(2);
+  });
+
   it("trims leading whitespace in block-streamed replies", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
