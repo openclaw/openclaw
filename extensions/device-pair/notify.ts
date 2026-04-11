@@ -154,7 +154,32 @@ function notifySubscriberKey(subscriber: {
   accountId?: string;
   messageThreadId?: string | number;
 }): string {
-  return [subscriber.to, subscriber.accountId ?? "", subscriber.messageThreadId ?? ""].join("|");
+  return [
+    subscriber.to,
+    subscriber.accountId ?? "",
+    normalizeNotifyThreadKey(subscriber.messageThreadId),
+  ].join("|");
+}
+
+function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
+  if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
+    return String(Math.trunc(messageThreadId));
+  }
+  if (typeof messageThreadId !== "string") {
+    return "";
+  }
+  const normalized = normalizeOptionalString(messageThreadId);
+  if (!normalized) {
+    return "";
+  }
+  if (!/^-?\d+$/u.test(normalized)) {
+    return normalized;
+  }
+  try {
+    return BigInt(normalized).toString();
+  } catch {
+    return normalized;
+  }
 }
 
 type NotifyTarget = {
