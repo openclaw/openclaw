@@ -6,6 +6,7 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/targets-compare.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
@@ -155,11 +156,21 @@ export async function resolveDeliveryTarget(
 
   // Carry threadId when it was explicitly set (from :topic: parsing or config)
   // or when delivering to the same recipient as the session's last conversation.
+  // Normalize target shapes before comparing so plugin grammars like Telegram's
+  // bare-chat vs chat-scoped topic routes still count as the same destination.
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
+  const explicitToSharesLastRoute = !!(
+    channel &&
+    resolved.to &&
+    resolved.lastTo &&
+    (normalizeTargetForProvider(channel, resolved.to) ?? resolved.to) ===
+      (normalizeTargetForProvider(channel, resolved.lastTo.replace(/:topic:\d+$/, "")) ??
+        resolved.lastTo.replace(/:topic:\d+$/, ""))
+  );
   const threadId =
     resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
+    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo) || explicitToSharesLastRoute)
       ? resolved.threadId
       : undefined;
 

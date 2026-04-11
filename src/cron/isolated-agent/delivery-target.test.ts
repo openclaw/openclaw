@@ -389,6 +389,25 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
+  it("keeps session threadId when explicit bare telegram target matches the previous topic route", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-3b",
+      lastChannel: "telegram",
+      lastTo: "telegram:-1001234567890:topic:2996",
+      lastThreadId: "2996",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "-1001234567890",
+      sessionKey: "agent:test:main",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-1001234567890");
+    expect(result.threadId).toBe("2996");
+  });
+
   it("uses single configured channel when neither explicit nor session channel exists", async () => {
     setMainSessionEntry(undefined);
 
