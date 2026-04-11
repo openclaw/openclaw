@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 - Google/Veo: stop sending the unsupported `numberOfVideos` request field so Gemini Developer API Veo runs do not fail before OpenClaw can complete the intended Google video generation path. (#64723) thanks @velvet-shark
+- Audio transcription: disable pinned DNS only for OpenAI-compatible multipart requests so OpenAI, Groq, and Mistral transcription works again without weakening the generic pinned-DNS path for non-multipart callers. (#64766) Thanks @GodsBoy.
 
 ## 2026.4.10
 
