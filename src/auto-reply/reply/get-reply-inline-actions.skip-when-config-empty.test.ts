@@ -419,6 +419,43 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
+  it("prefers the target session entry for inline /stop cutoff checks", async () => {
+    const typing = createTypingController();
+    const wrapperSessionEntry: SessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      abortCutoffMessageSid: "40",
+      abortedLastRun: true,
+    };
+    const targetSessionEntry: SessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      abortCutoffMessageSid: "42",
+      abortedLastRun: true,
+    };
+    const ctx = buildTestCtx({
+      Body: "old queued message",
+      CommandBody: "old queued message",
+      MessageSid: "41",
+    });
+
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "old queued message",
+      command: {
+        rawBodyNormalized: "old queued message",
+        commandBodyNormalized: "old queued message",
+      },
+      overrides: {
+        sessionEntry: wrapperSessionEntry,
+        sessionStore: {
+          "s:main": targetSessionEntry,
+        },
+      },
+    });
+  });
+
   it("rewrites Claude bundle markdown commands into a native agent prompt", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
