@@ -35,15 +35,17 @@ describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
     mockedFormatAssistantErrorText.mockReturnValue(
       "LLM error server_error: An error occurred while processing your request.",
     );
+    const currentAttemptAssistant = {
+      stopReason: "error",
+      errorMessage: rawCodexError,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+    } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"];
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          stopReason: "error",
-          errorMessage: rawCodexError,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-        } as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: currentAttemptAssistant,
+        currentAttemptAssistant,
       }),
     );
 
