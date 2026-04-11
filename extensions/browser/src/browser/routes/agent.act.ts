@@ -307,6 +307,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
     case "close":
       return null;
   }
+  throw new Error("Unsupported browser act kind");
 }
 
 export function registerBrowserAgentActRoutes(

@@ -465,6 +465,7 @@ export function formatExecFailureReason(params: {
     case "aborted":
       return "Command aborted before exit code was captured";
   }
+  throw new Error("Unsupported exec failure kind");
 }
 
 export function buildExecExitOutcome(params: {
@@ -628,7 +629,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const raw = data.toString();
+    const raw = data;
     // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
@@ -644,7 +645,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const str = sanitizeBinaryOutput(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();

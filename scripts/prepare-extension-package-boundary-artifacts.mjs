@@ -20,6 +20,7 @@ const ROOT_DTS_INPUTS = [
 ];
 const ROOT_DTS_OUTPUTS = [
   "dist/plugin-sdk/.tsbuildinfo",
+  "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
@@ -35,6 +36,7 @@ const PACKAGE_DTS_INPUTS = [
 ];
 const PACKAGE_DTS_OUTPUTS = [
   "packages/plugin-sdk/dist/.tsbuildinfo",
+  "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/video-generation.d.ts",

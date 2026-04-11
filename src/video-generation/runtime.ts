@@ -156,7 +156,7 @@ export async function generateVideo(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "video generation",
     attempts,
     lastError,

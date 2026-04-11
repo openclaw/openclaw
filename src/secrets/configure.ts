@@ -185,11 +185,11 @@ async function promptEnvNameCsv(params: {
     await text({
       message: params.message,
       initialValue: params.initialValue,
-      validate: (value) => validateEnvNameCsv(String(value ?? "")),
+      validate: (value) => validateEnvNameCsv(value ?? ""),
     }),
     "Secrets configure cancelled.",
   );
-  return parseCsv(String(raw ?? ""));
+  return parseCsv(raw ?? "");
 }
 
 async function promptOptionalPositiveInt(params: {
@@ -551,7 +551,7 @@ async function promptExecProvider(
       message: "Trusted dirs (comma-separated absolute paths, blank for none)",
       initialValue: base?.trustedDirs?.join(",") ?? "",
       validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
+        const entries = parseCsv(value ?? "");
         for (const entry of entries) {
           if (!isAbsolutePathValue(entry)) {
             return `Trusted dir must be absolute: ${entry}`;
@@ -579,7 +579,7 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
-  const trustedDirs = parseCsv(String(trustedDirsRaw ?? ""));
+  const trustedDirs = parseCsv(trustedDirsRaw ?? "");
 
   return {
     source: "exec",

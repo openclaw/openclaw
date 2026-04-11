@@ -388,6 +388,65 @@ describe("msteams messenger", () => {
       expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
     });
 
+    it("retries full activity preparation when media upload fails transiently", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
+      const localFile = path.join(tmpDir, "retry.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const attempts: string[] = [];
+        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
+        let uploadAttempts = 0;
+        graphUploadMockState.uploadAndShareOneDrive.mockImplementation(async () => {
+          uploadAttempts += 1;
+          if (uploadAttempts === 1) {
+            throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
+          }
+          return {
+            itemId: "item123",
+            webUrl: "https://onedrive.example.com/item123",
+            shareUrl: "https://onedrive.example.com/share/item123",
+            name: "retry.txt",
+          };
+        });
+
+        const ctx = {
+          sendActivity: createRecordedSendActivity(attempts),
+          updateActivity: noopUpdateActivity,
+          deleteActivity: noopDeleteActivity,
+        };
+        const adapter = createNoopAdapter();
+
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          adapter,
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "one", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+        });
+
+        expect(uploadAttempts).toBe(2);
+        expect(attempts).toHaveLength(1);
+        expect(attempts[0]).toContain("📎 [retry.txt]");
+        expect(ids).toEqual([`id:${attempts[0]}`]);
+        expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
         sendActivity: async () => {

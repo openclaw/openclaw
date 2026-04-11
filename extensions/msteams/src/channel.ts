@@ -319,10 +319,10 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           const graph = teamsProbe?.graph;
           if (graph) {
             const roles = Array.isArray(graph.roles)
-              ? graph.roles.map((role) => String(role).trim()).filter(Boolean)
+              ? graph.roles.map((role) => role.trim()).filter(Boolean)
               : [];
             const scopes = Array.isArray(graph.scopes)
-              ? graph.scopes.map((scope) => String(scope).trim()).filter(Boolean)
+              ? graph.scopes.map((scope) => scope.trim()).filter(Boolean)
               : [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];

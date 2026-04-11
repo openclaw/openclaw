@@ -32,16 +32,20 @@ function resolveBindingForRequester(
   bindings: SessionBindingRecord[],
 ): SessionBindingRecord | null {
   const matchingChannelAccount = bindings.filter(
-    (entry) =>
-      entry.conversation.channel === requester.channel &&
-      entry.conversation.accountId === requester.accountId,
+    (entry) => {
+      const conversation = normalizeConversationRef(entry.conversation);
+      return (
+        conversation.channel === requester.channel && conversation.accountId === requester.accountId
+      );
+    },
   );
   if (matchingChannelAccount.length === 0) {
     return null;
   }
 
   const exactConversation = matchingChannelAccount.find(
-    (entry) => entry.conversation.conversationId === requester.conversationId,
+    (entry) =>
+      normalizeConversationRef(entry.conversation).conversationId === requester.conversationId,
   );
   if (exactConversation) {
     return exactConversation;

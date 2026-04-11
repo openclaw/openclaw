@@ -56,6 +56,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -160,6 +161,9 @@ export type CompactEmbeddedPiSessionParams = {
   currentMessageId?: string | number;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
@@ -561,6 +565,10 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
@@ -638,9 +646,7 @@ export async function compactEmbeddedPiSessionDirect(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities
-          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
-          .filter(Boolean),
+        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
       );
       for (const capability of promptCapabilities) {
         const normalizedCapability = normalizeOptionalLowercaseString(capability);
@@ -1231,6 +1237,10 @@ export async function compactEmbeddedPiSessionDirect(
 export async function compactEmbeddedPiSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
+  const harnessResult = await maybeCompactAgentHarnessSession(params);
+  if (harnessResult) {
+    return harnessResult;
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
