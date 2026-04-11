@@ -379,7 +379,7 @@ const CREDENTIAL_ENV_VARS = [
 // process. This avoids repeated network requests in environments where
 // IMDS returns errors (e.g. 403 in sandboxed environments like NVIDIA
 // NemoClaw) while preserving correct behavior for EC2 instance roles.
-let _cachedProbeResult: Promise<boolean> | undefined;
+let _cachedProbeResult: true | undefined;
 
 export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
@@ -391,8 +391,17 @@ export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): P
 
   // Only cache when using the real process.env (production path).
   // Test callers passing a custom env object bypass the cache.
+  // Only successful probes are cached; failures are retried so that
+  // credentials that become available after startup (e.g. delayed IMDS,
+  // SSO token refresh) are picked up on a subsequent call.
   if (env === process.env) {
-    _cachedProbeResult ??= probeAwsCredentials();
+    if (_cachedProbeResult === undefined) {
+      const result = await probeAwsCredentials();
+      if (result) {
+        _cachedProbeResult = true;
+      }
+      return result;
+    }
     return _cachedProbeResult;
   }
   return probeAwsCredentials();
