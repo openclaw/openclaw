@@ -6,9 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createBedrockNoCacheWrapper,
-  createBedrockServiceTierWrapper,
   isAnthropicBedrockModel,
-  resolveBedrockServiceTier,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -23,8 +21,6 @@ type GuardrailConfig = {
   streamProcessingMode?: "sync" | "async";
   trace?: "enabled" | "disabled" | "enabled_full";
 };
-
-
 
 type AmazonBedrockPluginConfig = {
   discovery?: {
@@ -160,16 +156,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
-    wrapStreamFn: ({ modelId, config, model, streamFn, extraParams }) => {
+    wrapStreamFn: ({ modelId, config, model, streamFn }) => {
       // Apply cache + guardrail wrapping.
-      let wrapped = cacheWrapStreamFn({ modelId, streamFn });
-
-      // Apply service tier wrapping (params.serviceTier from model config).
-      const serviceTier = resolveBedrockServiceTier(extraParams);
-      if (serviceTier) {
-        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
-      }
-
+      const wrapped = cacheWrapStreamFn({ modelId, streamFn: streamFn ?? undefined });
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
 
       if (!region) {
