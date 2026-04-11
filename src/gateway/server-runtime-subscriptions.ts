@@ -32,6 +32,9 @@ export function startGatewayEventSubscriptions(params: {
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, unknown>;
+  isConnIdConnected?: (connId: string) => boolean;
+  hasConnectedClientForDevice?: (deviceId: string, opts?: { excludeConnId?: string }) => boolean;
+  logWarn?: (message: string) => void;
 }) {
   const agentUnsub = params.minimalTestGateway
     ? null
@@ -47,6 +50,9 @@ export function startGatewayEventSubscriptions(params: {
           toolEventRecipients: params.toolEventRecipients,
           sessionEventSubscribers: params.sessionEventSubscribers,
           isChatSendRunActive: (runId) => params.chatAbortControllers.has(runId),
+          isConnIdConnected: params.isConnIdConnected,
+          hasConnectedClientForDevice: params.hasConnectedClientForDevice,
+          logWarn: params.logWarn,
         }),
       );
 

@@ -10,6 +10,7 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { maybeSendChatReplyApnsAlert } from "./chat-apns-notify.js";
 import {
   isSuppressedControlReplyLeadFragment,
   isSuppressedControlReplyText,
@@ -469,6 +470,9 @@ export type AgentEventHandlerOptions = {
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
+  isConnIdConnected?: (connId: string) => boolean;
+  hasConnectedClientForDevice?: (deviceId: string, opts?: { excludeConnId?: string }) => boolean;
+  logWarn?: (message: string) => void;
 };
 
 export function createAgentEventHandler({
@@ -483,6 +487,9 @@ export function createAgentEventHandler({
   sessionEventSubscribers,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
+  isConnIdConnected = () => false,
+  hasConnectedClientForDevice = () => false,
+  logWarn,
 }: AgentEventHandlerOptions) {
   const pendingTerminalLifecycleErrors = new Map<string, NodeJS.Timeout>();
 
@@ -823,6 +830,7 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      const runContext = getAgentRunContext(sourceRunId) ?? getAgentRunContext(clientRunId);
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -840,6 +848,17 @@ export function createAgentEventHandler({
       };
       broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
+      if (text && !shouldSuppressSilent) {
+        void maybeSendChatReplyApnsAlert({
+          sessionKey,
+          requestDeviceId: runContext?.requestDeviceId,
+          requestConnId: runContext?.requestConnId,
+          replyText: text,
+          isConnIdConnected,
+          hasConnectedClientForDevice,
+          logWarn,
+        });
+      }
       return;
     }
     const payload = {

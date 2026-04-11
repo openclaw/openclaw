@@ -14,6 +14,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -90,7 +91,6 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
-
 type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -1779,6 +1779,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            registerAgentRunContext(runId, {
+              sessionKey,
+              requestConnId: normalizeOptionalString(client?.connId) ?? undefined,
+              requestDeviceId: normalizeOptionalString(client?.connect?.device?.id) ?? undefined,
+            });
             void emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(

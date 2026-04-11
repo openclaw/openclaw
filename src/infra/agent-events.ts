@@ -115,6 +115,8 @@ export type AgentRunContext = {
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
+  requestConnId?: string;
+  requestDeviceId?: string;
 };
 
 type AgentEventState = {
