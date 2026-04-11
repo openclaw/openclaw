@@ -10,8 +10,8 @@ Sync multi-account emails, filter high-priority items, and manage a pending-atte
 
 ## Prerequisites
 
-1. The `email-ingest-integration` project must be set up at the path in `EMAIL_TRIAGE_WORKSPACE` (defaults to `~/.openclaw/workspace/email-ingest-integration`).
-2. A Python virtualenv with dependencies must exist at `<workspace>/venv`.
+1. The `email-ingest-integration` project must be set up at the path in `EMAIL_TRIAGE_WORKSPACE` (defaults to `~/.openclaw/workspace/email-ingest-integration`). Requires upstream revision with [Anthrop-OS/email-ingest#18](https://github.com/Anthrop-OS/email-ingest/pull/18) (`main.py status` subcommand) — the skill shells out to that to detect first-run state and no longer opens the upstream SQLite file directly.
+2. A Python virtualenv with dependencies must exist at `<workspace>/venv`, or set `EMAIL_TRIAGE_VENV_PYTHON` to point at an alternative interpreter.
 3. Credentials configured in `<workspace>/.env`.
 
 ## Commands
@@ -46,6 +46,7 @@ Removes the specified email from the pending-attention queue by ID.
 |----------|---------|---------|
 | `EMAIL_TRIAGE_WORKSPACE` | `~/.openclaw/workspace/email-ingest-integration` | Path to the email-ingest-integration project |
 | `EMAIL_TRIAGE_STATE` | `~/.openclaw/workspace/memory/email_triage_state.json` | Path to the state file |
+| `EMAIL_TRIAGE_VENV_PYTHON` | `$EMAIL_TRIAGE_WORKSPACE/venv/bin/python3` | Python interpreter used to invoke the ingest CLI. Override this on Windows (`venv/Scripts/python.exe`) or in CI/test environments that do not have a real venv. |
 
 ## State
 
