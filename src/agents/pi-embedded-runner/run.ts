@@ -1626,15 +1626,18 @@ export async function runEmbeddedPiAgent(
             );
             // Criterion 4 of the GPT-5.4 parity gate requires every terminal
             // exit path to emit an explicit livenessState + replayInvalid so
-            // downstream observers never see "silent disappearance". The
-            // strict-agentic stall-exhausted path is abandonment by design:
-            // the run stopped without any concrete tool action advancing the
-            // task, so "abandoned" is the accurate terminal state. Replay
-            // validity is delegated to the shared resolver because the plan-
-            // only transcript itself is replay-safe even though the run is
+            // downstream observers never see "silent disappearance". Every
+            // other hard-error terminal branch in this file uses "blocked"
+            // for its livenessState (role ordering, image size, schema
+            // error, compaction timeout, aborted-with-no-payloads). Match
+            // that convention here so lifecycle consumers treat an
+            // isError:true strict-agentic-blocked payload the same way they
+            // treat any other error-terminal payload. Replay validity is
+            // delegated to the shared resolver because the plan-only
+            // transcript itself is replay-safe even though the run is
             // terminal.
             const replayInvalid = resolveReplayInvalidForAttempt(null);
-            const livenessState: EmbeddedRunLivenessState = "abandoned";
+            const livenessState: EmbeddedRunLivenessState = "blocked";
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid,
               livenessState,

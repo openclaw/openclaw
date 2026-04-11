@@ -139,7 +139,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
-    expect(result.meta.livenessState).toBe("abandoned");
+    expect(result.meta.livenessState).toBe("blocked");
     expect(result.meta.replayInvalid).toBe(false);
   });
 
@@ -175,7 +175,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
-    expect(result.meta.livenessState).toBe("abandoned");
+    expect(result.meta.livenessState).toBe("blocked");
   });
 
   it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {

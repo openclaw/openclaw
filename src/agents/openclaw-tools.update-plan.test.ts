@@ -95,7 +95,7 @@ describe("openclaw-tools update_plan gating", () => {
         config: cfg,
         agentSessionKey: "agent:main:main",
         modelProvider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
       }),
     ).toBe(false);
     expect(
@@ -147,7 +147,7 @@ describe("openclaw-tools update_plan gating", () => {
         config: cfg,
         agentSessionKey: "agent:main:main",
         modelProvider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
       }),
     ).toBe(false);
     expect(
