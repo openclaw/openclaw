@@ -65,8 +65,10 @@ function normalizeClaimTextKey(text: string): string {
 }
 
 function normalizeTextKey(text: string): string {
+  // Use Unicode-aware regex so CJK and other non-Latin contradiction
+  // notes produce distinct keys instead of collapsing to empty (#64620).
   return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ");
 }
 

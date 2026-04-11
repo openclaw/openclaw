@@ -67,8 +67,11 @@ const RELATED_BLOCK_PATTERN = new RegExp(
 );
 
 export function slugifyWikiSegment(raw: string): string {
+  // Use Unicode-aware \p{L} (letters) and \p{N} (numbers) so CJK,
+  // Cyrillic, Arabic, and other non-Latin scripts produce meaningful
+  // slugs instead of collapsing to the "page" fallback (#64620).
   const slug = normalizeLowercaseStringOrEmpty(raw)
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "page";
