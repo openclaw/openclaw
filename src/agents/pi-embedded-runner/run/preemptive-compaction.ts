@@ -13,6 +13,11 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+/**
+ * When a session exceeds this many messages, truncation-only is upgraded to
+ * compact_then_truncate so the model doesn't choke on structural overhead.
+ */
+export const TRUNCATION_ONLY_MAX_MESSAGES = 200;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -89,6 +94,12 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     } else {
       route = "compact_then_truncate";
     }
+  }
+  if (
+    route === "truncate_tool_results_only" &&
+    params.messages.length > TRUNCATION_ONLY_MAX_MESSAGES
+  ) {
+    route = "compact_then_truncate";
   }
   return {
     route,

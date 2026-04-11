@@ -76,6 +76,7 @@ import {
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
+import { runStartupStuckSessionReplay } from "./server-startup-stuck-session-replay.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
@@ -812,6 +813,14 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       clients,
     });
+
+    if (!minimalTestGateway) {
+      await runStartupStuckSessionReplay({
+        cfg: cfgAtStart,
+        context: gatewayRequestContext,
+        log: log.child("startup-stuck-replay"),
+      });
+    }
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
