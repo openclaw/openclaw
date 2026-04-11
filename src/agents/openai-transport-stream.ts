@@ -1002,6 +1002,214 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   };
 }
 
+/**
+ * Regex for quickly checking whether a text block might contain an inline tool
+ * call that a local LLM (e.g. llama.cpp with Gemma4/Qwen) emitted as plain
+ * text instead of a structured `tool_calls` field.
+ *
+ * Supported patterns:
+ *   ▶ ▸ @  {"name":"…","arguments":{…}}  ◂ ◹
+ *   <tool_call…>…</tool_call /  ▸ @ >
+ *   <function_calls>…</function_calls>
+ *   Bare JSON: {"name":"…","arguments":{…}}
+ */
+const INLINE_TOOL_CALL_QUICK_RE =
+  /(?:\u25B6|\u25B8)\s*@?\s*\{|<\s*\/?\s*(?:tool_call|function_calls?)\b/i;
+
+/** Result of extracting an inline tool call from a text block. */
+interface ExtractedToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+  /** The full matched substring — used to strip it from the remaining text. */
+  rawMatch: string;
+}
+
+/**
+ * Attempt to extract structured tool-call data from a text block that a local
+ * LLM (llama.cpp / Ollama / LM Studio) emitted as plain text.
+ *
+ * Returns an array of `ExtractedToolCall` objects on success, or `null` if
+ * the text does not look like it contains an inline tool call.
+ */
+function tryExtractInlineToolCalls(text: string): ExtractedToolCall[] | null {
+  const results: ExtractedToolCall[] = [];
+
+  // Pattern 1: ▶ @ {"name":"read_file","arguments":{"path":"…"}} ◂
+  // Also matches ▸ @ {"name":...} or ▶ {"name":...}
+  const gemmaPattern = /(?:\u25B6|\u25B8)\s*@?\s*(\{[\s\S]*?\})\s*(?:\u25C0|\u25B9|$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = gemmaPattern.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed.name && typeof parsed.name === "string") {
+        results.push({
+          name: parsed.name,
+          arguments: parsed.arguments ?? parsed.args ?? {},
+          rawMatch: match[0],
+        });
+      }
+    } catch {
+      // Not valid JSON, skip
+    }
+  }
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  // Pattern 2: <tool_call name="…">{"arguments":{…}}</tool_call / ▸ @ >
+  const xmlToolCallPattern = /<\s*tool_call[^>]*>([\s\S]*?)<\s*\/\s*tool_call\s*>/gi;
+  while ((match = xmlToolCallPattern.exec(text)) !== null) {
+    const body = match[1].trim();
+    // Try name from attribute first
+    const nameAttr = /<\s*tool_call[^>]*name\s*=\s*"([^"]+)"/i.exec(match[0]);
+    try {
+      const parsed = JSON.parse(body);
+      const name = nameAttr?.[1] ?? parsed.name ?? "";
+      if (name) {
+        results.push({
+          name,
+          arguments: parsed.arguments ?? parsed.args ?? parsed.parameters ?? {},
+          rawMatch: match[0],
+        });
+      }
+    } catch {
+      // Body might be XML with <function=name> sub-tags (Qwen style)
+      const funcMatch = /<\s*function\s*=\s*([^>]+)>/i.exec(body);
+      if (funcMatch) {
+        const name = funcMatch[1].trim();
+        // Try to extract parameters from <parameter> tags
+        const params: Record<string, unknown> = {};
+        const paramPattern = /<\s*parameter\s+name\s*=\s*"([^"]+)">\s*([\s\S]*?)\s*<\/\s*parameter>/gi;
+        let paramMatch: RegExpExecArray | null;
+        while ((paramMatch = paramPattern.exec(body)) !== null) {
+          params[paramMatch[1]] = paramMatch[2];
+        }
+        if (name) {
+          results.push({ name, arguments: params, rawMatch: match[0] });
+        }
+      }
+    }
+  }
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  // Pattern 3: <function_calls>{"name":"…",…}</function_calls>
+  const funcCallsPattern = /<\s*function_calls\s*>([\s\S]*?)<\s*\/\s*function_calls\s*>/gi;
+  while ((match = funcCallsPattern.exec(text)) !== null) {
+    const body = match[1].trim();
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.name && typeof parsed.name === "string") {
+        results.push({
+          name: parsed.name,
+          arguments: parsed.arguments ?? parsed.args ?? {},
+          rawMatch: match[0],
+        });
+      }
+    } catch {
+      // Not valid JSON, skip
+    }
+  }
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  // Pattern 4: Bare JSON tool call without wrapping tags
+  // {"name": "read_file", "arguments": {"path": "…"}}
+  // Only match if it's the dominant content (not embedded in prose)
+  const bareJsonPattern = /^\s*(\{\s*"name"\s*:\s*"[^"]+"[\s\S]*\})\s*$/;
+  match = bareJsonPattern.exec(text.trim());
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed.name && typeof parsed.name === "string") {
+        results.push({
+          name: parsed.name,
+          arguments: parsed.arguments ?? parsed.args ?? {},
+          rawMatch: text.trim(),
+        });
+      }
+    } catch {
+      // Not valid JSON
+    }
+  }
+
+  return results.length > 0 ? results : null;
+}
+
+/**
+ * Scan text content blocks for inline tool calls that a local LLM emitted as
+ * plain text (instead of structured `tool_calls`), convert them to proper
+ * `toolCall` blocks, and strip the raw tool-call text from the text blocks.
+ */
+function convertTextToolCallsToStructured(
+  output: MutableAssistantOutput,
+  stream: { push(event: unknown): void },
+): void {
+  const newContent: Array<Record<string, unknown>> = [];
+
+  for (const block of output.content) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      newContent.push(block);
+      continue;
+    }
+
+    const text = block.text as string;
+
+    // Quick check: skip text blocks that clearly don't contain tool calls
+    if (!INLINE_TOOL_CALL_QUICK_RE.test(text)) {
+      // Also check for bare JSON pattern: {"name": ...}
+      if (!/^\s*\{\s*"name"\s*:/.test(text.trim())) {
+        newContent.push(block);
+        continue;
+      }
+    }
+
+    // Attempt to extract tool calls from this text block
+    const extracted = tryExtractInlineToolCalls(text);
+    if (!extracted || extracted.length === 0) {
+      newContent.push(block);
+      continue;
+    }
+
+    // We found inline tool calls — convert them to structured toolCall blocks.
+    // Strip the raw matched substrings from the text to get remaining visible
+    // text.
+    let remainingText = text;
+    for (const tc of extracted) {
+      remainingText = remainingText.replace(tc.rawMatch, "");
+    }
+    remainingText = remainingText.trim();
+
+    // Keep remaining visible text if non-empty
+    if (remainingText) {
+      newContent.push({ type: "text", text: remainingText });
+    }
+
+    // Add structured toolCall blocks
+    for (const tc of extracted) {
+      const toolCallBlock = {
+        type: "toolCall" as const,
+        id: `inline_${randomUUID()}`,
+        name: tc.name,
+        arguments: tc.arguments,
+        partialArgs: "",
+      };
+      newContent.push(toolCallBlock);
+      const contentIndex = newContent.length - 1;
+      stream.push({ type: "toolcall_start", contentIndex, partial: output });
+      stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(tc.arguments), partial: output });
+      stream.push({ type: "toolcall_end", contentIndex, toolCall: toolCallBlock, partial: output });
+    }
+  }
+
+  output.content = newContent;
+}
+
 async function processOpenAICompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
   output: MutableAssistantOutput,
@@ -1134,8 +1342,20 @@ async function processOpenAICompletionsStream(
     }
   }
   finishCurrentBlock();
+
+  // Detect tool call XML/JSON patterns in text blocks and convert them to
+  // structured toolCall blocks.  Some providers (e.g. llama.cpp with Gemma4)
+  // return tool calls as plain text inside `delta.content` with
+  // `finish_reason: "stop"` instead of structured `delta.tool_calls`.
+  convertTextToolCallsToStructured(output, stream);
+
+  // Upgrade stopReason to "toolUse" when toolCall blocks exist (reverse of
+  // the downgrade below).  The Google transport already does this; the OpenAI
+  // Completions transport was missing it, causing agent hangs with local LLMs.
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
-  if (output.stopReason === "toolUse" && !hasToolCalls) {
+  if (hasToolCalls && output.stopReason !== "toolUse") {
+    output.stopReason = "toolUse";
+  } else if (!hasToolCalls && output.stopReason === "toolUse") {
     output.stopReason = "stop";
   }
 }
