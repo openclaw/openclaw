@@ -556,7 +556,7 @@ describe("spawnAcpDirect", () => {
         conversation: expect.objectContaining({
           channel: "discord",
           accountId: "default",
-          conversationId: "parent-channel",
+          conversationId: "requester-thread",
         }),
       }),
     );
@@ -1213,7 +1213,7 @@ describe("spawnAcpDirect", () => {
     setActivePluginRegistry(
       createTestRegistry([
         createChannelTestPluginBase({
-          pluginId: "discord",
+          id: "discord",
           messaging: {
             resolveInboundConversation: () => ({ conversationId: "channel:parent-channel" }),
           },
