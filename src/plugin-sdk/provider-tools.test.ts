@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyXaiModelCompat,
   buildProviderToolCompatFamilyHooks,
+  findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
   inspectOpenAIToolSchemas,
   normalizeGeminiToolSchemas,
@@ -166,7 +167,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
-  it("does not tighten permissive object schemas just to satisfy strict mode", () => {
+  it("does not tighten or warn for permissive object schemas that use strict:false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const permissiveParameters = {
       type: "object",
@@ -197,6 +198,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(permissiveParameters);
+    expect(findOpenAIStrictSchemaViolations(permissiveParameters, "cron.parameters")).toEqual(
+      expect.arrayContaining([
+        "cron.parameters.required.schedule",
+        "cron.parameters.additionalProperties",
+      ]),
+    );
     expect(
       hooks.inspectToolSchemas({
         provider: "openai",
@@ -210,16 +217,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools: [permissiveTool],
       }),
-    ).toEqual([
-      {
-        toolName: "cron",
-        toolIndex: 0,
-        violations: expect.arrayContaining([
-          "cron.parameters.required.schedule",
-          "cron.parameters.additionalProperties",
-        ]),
-      },
-    ]);
+    ).toEqual([]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
@@ -256,7 +254,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toEqual([]);
   });
 
-  it("reports remaining strict-schema violations for the openai family", () => {
+  it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
 
     const diagnostics = hooks.inspectToolSchemas({
@@ -288,17 +286,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       ],
     });
 
-    expect(diagnostics).toEqual([
-      {
-        toolName: "exec",
-        toolIndex: 0,
-        violations: expect.arrayContaining([
-          "exec.parameters.additionalProperties",
-          "exec.parameters.required.cwd",
-          "exec.parameters.properties.mode.anyOf",
-        ]),
-      },
-    ]);
+    expect(diagnostics).toEqual([]);
   });
 
   it("covers the shared xAI tool compat patch", () => {
