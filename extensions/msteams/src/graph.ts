@@ -91,6 +91,39 @@ export async function fetchGraphJson<T>(params: {
   return await readOptionalGraphJson<T>(res);
 }
 
+/**
+ * Fetch JSON from an absolute Graph API URL (for example @odata.nextLink
+ * pagination URLs) without prepending GRAPH_ROOT.
+ */
+export async function fetchGraphAbsoluteUrl<T>(params: {
+  token: string;
+  url: string;
+  headers?: Record<string, string>;
+}): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    init: {
+      headers: {
+        "User-Agent": buildUserAgent(),
+        Authorization: `Bearer ${params.token}`,
+        ...params.headers,
+      },
+    },
+    auditContext: "msteams.graph.absolute",
+  });
+  try {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Graph ${params.url} failed (${response.status}): ${text || "unknown error"}`,
+      );
+    }
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
+}
+
 /** Graph collection response with optional pagination link. */
 export type GraphPagedResponse<T> = {
   value?: T[];
