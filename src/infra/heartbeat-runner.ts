@@ -848,9 +848,14 @@ export async function runHeartbeatOnce(opts: {
     // only when the disk-budget sweeper eventually runs. Archive it immediately via
     // the "reset" archival path: rename to <file>.reset.<ts>, then get final cleanup
     // from cleanupArchivedSessionTranscripts after its retention window.
+    //
+    // Note: sessionFile may be undefined on legacy/partially-migrated store rows.
+    // archiveRemovedSessionTranscripts accepts `string | undefined` for sessionFile
+    // and falls back to resolving transcript candidates from `sessionId` + storePath,
+    // so we enqueue on sessionId alone — matching the suffix-collapse branch above.
     if (cronSession.isNewSession) {
       const priorEntryAtKey = cronSession.store[isolatedSessionKey];
-      if (priorEntryAtKey?.sessionId && priorEntryAtKey.sessionFile) {
+      if (priorEntryAtKey?.sessionId) {
         resetSessionFiles.set(priorEntryAtKey.sessionId, priorEntryAtKey.sessionFile);
       }
     }
@@ -883,9 +888,14 @@ export async function runHeartbeatOnce(opts: {
           });
         }
       } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+        // Shared catch for both archival paths (delete + reset). Include both
+        // keys so the log is self-describing regardless of which path failed:
+        // staleIsolatedSessionKey is set only for the suffix-collapse case;
+        // isolatedSessionKey is always set.
+        log.warn("heartbeat: failed to archive isolated session transcript", {
           err: String(err),
-          sessionKey: staleIsolatedSessionKey,
+          staleIsolatedSessionKey,
+          isolatedSessionKey,
         });
       }
     }
