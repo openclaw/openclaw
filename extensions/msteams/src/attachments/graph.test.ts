@@ -96,9 +96,6 @@ function mockGraphMediaFetch(options: {
         return guardedFetchResult(params, response);
       }
     }
-    if (url.endsWith("/attachments")) {
-      return guardedFetchResult(params, mockFetchResponse({ value: [] }));
-    }
     return guardedFetchResult(params, mockFetchResponse({}, 404));
   });
 }
