@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
+import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -11,6 +12,28 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
+
+export async function runGatewayClosePrelude(params: {
+  stopDiagnostics?: () => void;
+  clearSkillsRefreshTimer?: () => void;
+  skillsChangeUnsub?: () => void;
+  disposeAuthRateLimiter?: () => void;
+  disposeBrowserAuthRateLimiter: () => void;
+  stopModelPricingRefresh?: () => void;
+  stopChannelHealthMonitor?: () => void;
+  clearSecretsRuntimeSnapshot?: () => void;
+  closeMcpServer?: () => Promise<void>;
+}): Promise<void> {
+  params.stopDiagnostics?.();
+  params.clearSkillsRefreshTimer?.();
+  params.skillsChangeUnsub?.();
+  params.disposeAuthRateLimiter?.();
+  params.disposeBrowserAuthRateLimiter();
+  params.stopModelPricingRefresh?.();
+  params.stopChannelHealthMonitor?.();
+  params.clearSecretsRuntimeSnapshot?.();
+  await params.closeMcpServer?.().catch(() => {});
+}
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -76,6 +99,7 @@ export function createGatewayCloseHandler(params: {
       for (const plugin of listChannelPlugins()) {
         await params.stopChannel(plugin.id);
       }
+      await disposeRegisteredAgentHarnesses();
       if (params.pluginServices) {
         await params.pluginServices.stop().catch(() => {});
       }

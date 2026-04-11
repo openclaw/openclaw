@@ -710,6 +710,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   api.on("before_agent_reply", async (event, ctx) => {
     try {
+      if (ctx.trigger !== "heartbeat") {
+        return undefined;
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });

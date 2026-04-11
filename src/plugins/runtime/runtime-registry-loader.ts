@@ -22,6 +22,7 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
     case "all":
       return 3;
   }
+  throw new Error("Unsupported plugin registry scope");
 }
 
 function activeRegistrySatisfiesScope(
@@ -50,6 +51,7 @@ function activeRegistrySatisfiesScope(
     case "all":
       return false;
   }
+  throw new Error("Unsupported plugin registry scope");
 }
 
 export function ensurePluginRegistryLoaded(options?: {

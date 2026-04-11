@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
   defaultRuntime,
@@ -158,7 +159,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   skippedPaths: string[];
 }> {
   const sourceFiles = await listHistoricalDailyFiles(params.inputPath);
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-harness-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-harness-"),
+  );
   const memoryDir = path.join(workspaceDir, "memory");
   await fs.mkdir(memoryDir, { recursive: true });
   for (const filePath of sourceFiles) {
@@ -1398,7 +1401,7 @@ export async function runMemoryPromoteExplain(
         `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
           rich,
           theme.muted,
-          "(" + String(agentId) + ")",
+          "(" + agentId + ")",
         )}`,
         colorize(rich, theme.accent, candidate.key),
         colorize(
@@ -1720,7 +1723,9 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-backfill-"));
+      const scratchDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
+      );
       try {
         const sourceFiles = await listHistoricalDailyFiles(opts.path);
         if (sourceFiles.length === 0) {

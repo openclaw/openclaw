@@ -48,10 +48,14 @@ vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeMainKey: vi.fn().mockReturnValue("main"),
-  normalizeAgentId: vi.fn((id?: string) => id ?? "default"),
-}));
+vi.mock(import("../../routing/session-key.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeMainKey: () => "main",
+    normalizeAgentId: (id: string | undefined | null) => id ?? "default",
+  };
+});
 
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: vi.fn().mockReturnValue(false),
@@ -223,6 +227,31 @@ describe("runPreparedReply media-only handling", () => {
     await loadFreshGetReplyRunModuleForTest();
 
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
+  });
+
+  it("passes approved elevated defaults to the runner", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedElevatedLevel: "on",
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+      }),
+    );
+
+    expect(runReplyAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        followupRun: expect.objectContaining({
+          run: expect.objectContaining({
+            bashElevated: {
+              enabled: true,
+              allowed: true,
+              defaultLevel: "on",
+              fullAccessAvailable: true,
+            },
+          }),
+        }),
+      }),
+    );
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {

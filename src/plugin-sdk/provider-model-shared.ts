@@ -151,4 +151,5 @@ export function buildProviderReplayFamilyHooks(
           }),
       };
   }
+  throw new Error("Unsupported provider replay family");
 }

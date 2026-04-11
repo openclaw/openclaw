@@ -28,6 +28,7 @@ import type { OpenClawPluginApi } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type {
+  AgentHarness,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
