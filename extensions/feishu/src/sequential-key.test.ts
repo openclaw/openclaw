@@ -69,6 +69,14 @@ describe("getFeishuSequentialKey", () => {
       "group_topic_sender",
     ],
     [
+      // Whitespace-only root_id trims to "", and the `??` precedence in
+      // resolveFeishuTopicLaneId (mirroring resolveFeishuGroupSession)
+      // keeps that empty string rather than falling through to thread_id.
+      // The resulting topicId is falsy, so the lane collapses to chat-wide
+      // — matching the session store which puts this event on a
+      // chat-scoped peer id. See the separate `keeps queue lane aligned
+      // with resolveFeishuGroupSession ?? precedence` test below for the
+      // explicit lane/session divergence guard.
       createTextEvent({
         text: "hello",
         chatId: "oc_topic_chat",
@@ -76,7 +84,7 @@ describe("getFeishuSequentialKey", () => {
         rootId: "   ",
         threadId: "omt_thread_b",
       }),
-      "feishu:default:oc_topic_chat:topic:omt_thread_b",
+      "feishu:default:oc_topic_chat",
       "group_topic",
     ],
     [
@@ -280,5 +288,63 @@ describe("getFeishuSequentialKey", () => {
         groupSessionScope: "group_topic_sender",
       }),
     ).toBe("feishu:default:oc_private_dm");
+  });
+
+  it("keeps queue lane aligned with resolveFeishuGroupSession ?? precedence", () => {
+    // Regression guard for the lane/session divergence flagged by Codex on
+    // PR #64920: `resolveFeishuGroupSession` uses
+    // `normalizedRootId ?? normalizedThreadId`, where a whitespace-only
+    // root_id trims to "" and ?? keeps that empty string (it does NOT fall
+    // back to thread_id). Once topicScope is falsy, the session store
+    // collapses to a chat-scoped peer id. The queue lane in
+    // `getFeishuSequentialKey` must do the same: if it used `||` instead,
+    // a whitespace-only root_id with a present thread_id would split onto
+    // `:topic:${thread_id}` lane while the session store stayed chat-wide
+    // — two such events could then run concurrently on distinct lanes and
+    // interleave history within the same shared session.
+    //
+    // Case 1: whitespace root_id + valid thread_id in group_topic mode
+    //         must NOT split onto a thread_id lane.
+    const whitespaceRootEvent = createTextEvent({
+      text: "hello",
+      chatId: "oc_topic_chat",
+      chatType: "group",
+      rootId: "   ",
+      threadId: "omt_thread_b",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: whitespaceRootEvent,
+        groupSessionScope: "group_topic",
+      }),
+    ).toBe("feishu:default:oc_topic_chat");
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: whitespaceRootEvent,
+        groupSessionScope: "group_topic_sender",
+      }),
+    ).toBe("feishu:default:oc_topic_chat");
+
+    // Case 2: thread_id still works when root_id is fully absent — the
+    // fallback kicks in only when root_id is undefined, matching the
+    // `normalizedRootId ?? normalizedThreadId` semantics exactly.
+    const threadOnlyEvent = createTextEvent({
+      text: "hello",
+      chatId: "oc_topic_chat",
+      chatType: "group",
+      threadId: "omt_thread_c",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: threadOnlyEvent,
+        groupSessionScope: "group_topic",
+      }),
+    ).toBe("feishu:default:oc_topic_chat:topic:omt_thread_c");
   });
 });
