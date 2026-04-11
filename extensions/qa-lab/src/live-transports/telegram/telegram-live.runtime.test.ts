@@ -234,6 +234,7 @@ describe("telegram live qa runtime", () => {
           "telegram-tools-compact-command",
           "telegram-whoami-command",
           "telegram-context-command",
+          "telegram-mentioned-message-reply",
           "telegram-mention-gating",
         ])
         .map((scenario) => scenario.id),
@@ -243,6 +244,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-context-command",
+      "telegram-mentioned-message-reply",
       "telegram-mention-gating",
     ]);
   });
