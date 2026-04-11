@@ -25,6 +25,7 @@ export type QaParityReportScenario = {
 export type QaParityRunBlock = {
   primaryProvider?: string;
   primaryModel?: string;
+  primaryModelName?: string;
   providerMode?: string;
   scenarioIds?: readonly string[] | null;
 };
@@ -111,7 +112,7 @@ const SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS = [
 // to include "successfully" in their details.
 const SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS = [
   /successfully (?:completed|executed|finished|handled|delegated|ran)/i,
-  /\bdone\.?\s*$/im,
+  /^\s*(?:[-*]\s*)?done\.?\s*$/im,
   /task (?:done|executed|completed|handled|finished) successfully/i,
   /everything (?:worked|ran) (?:as expected|successfully)/i,
   /finished the operation/i,
@@ -168,7 +169,9 @@ export function computeQaAgenticParityMetrics(
     ...scenario,
     status: normalizeScenarioStatus(scenario.status),
   }));
-  const toolBackedTitleSet: ReadonlySet<string> = new Set(QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES);
+  const toolBackedTitleSet: ReadonlySet<string> = new Set(
+    QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
+  );
   const totalScenarios = summary.counts?.total ?? scenarios.length;
   const passedScenarios =
     summary.counts?.passed ?? scenarios.filter((scenario) => scenario.status === "pass").length;
@@ -301,6 +304,7 @@ function verifySummaryLabelMatch(params: {
 }): void {
   const runProvider = params.summary.run?.primaryProvider?.trim();
   const runModel = params.summary.run?.primaryModel?.trim();
+  const runModelName = params.summary.run?.primaryModelName?.trim();
   if (!runProvider || !runModel) {
     return;
   }
@@ -308,9 +312,14 @@ function verifySummaryLabelMatch(params: {
   if (!labelRef) {
     return;
   }
+  const normalizedRunModel = runModel.toLowerCase();
+  const normalizedRunModelName = runModelName?.toLowerCase();
+  const normalizedLabelModel = labelRef.model;
   if (
     runProvider.toLowerCase() === labelRef.provider &&
-    runModel.toLowerCase() === labelRef.model
+    (normalizedRunModel === normalizedLabelModel ||
+      normalizedRunModelName === normalizedLabelModel ||
+      normalizedRunModel === `${labelRef.provider}/${normalizedLabelModel}`)
   ) {
     return;
   }
