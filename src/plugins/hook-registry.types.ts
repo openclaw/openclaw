@@ -1,5 +1,5 @@
 import type { HookEntry } from "../hooks/types.js";
-import type { PluginHookRegistration as TypedPluginHookRegistration } from "./types.js";
+import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
 
 export type PluginLegacyHookRegistration = {
   pluginId: string;
