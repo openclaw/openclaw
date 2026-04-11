@@ -3,6 +3,7 @@ import { readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type { ReplyPayload } from "../auto-reply/types.js";
 
 export type OutboundReplyPayload = {
   text?: string;
