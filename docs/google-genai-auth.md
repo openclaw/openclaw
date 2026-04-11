@@ -38,7 +38,7 @@ If you are working on your local machine and have the Google Cloud SDK (`gcloud`
 2.  **Set Project and Location**:
     ```bash
     export GOOGLE_CLOUD_PROJECT="your-project-id"
-    export GOOGLE_CLOUD_LOCATION="us-central1" # Optional, defaults to us-central1
+    export GOOGLE_CLOUD_LOCATION="global" # Default to global, use "us-central1" if needed
     ```
     _Ensure you do NOT have `GEMINI_API_KEY` set if you want to force the use of Vertex AI._
 
@@ -52,7 +52,7 @@ If `gcloud` login is not working (e.g., on a managed Cloudtop with certificate i
     ```bash
     export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-key.json"
     export GOOGLE_CLOUD_PROJECT="your-project-id"
-    export GOOGLE_CLOUD_LOCATION="us-central1"
+    export GOOGLE_CLOUD_LOCATION="global" # Or "us-central1"
     ```
 
 ---
@@ -74,7 +74,7 @@ pnpm exec vitest run src/agents/google-genai.live.test.ts
 ```bash
 GEMINI_LIVE_TEST=1 \
 GOOGLE_CLOUD_PROJECT="your-project-id" \
-GOOGLE_CLOUD_LOCATION="us-central1" \
+GOOGLE_CLOUD_LOCATION="global" \
 GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/key.json" \
 pnpm exec vitest run src/agents/google-genai.live.test.ts
 ```

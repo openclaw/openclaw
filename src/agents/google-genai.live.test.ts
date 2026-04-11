@@ -7,7 +7,8 @@ import { isLiveTestEnabled } from "./live-test-helpers.js";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
 const PROJECT = process.env.GOOGLE_CLOUD_PROJECT ?? "";
-const LOCATION = process.env.GOOGLE_CLOUD_LOCATION ?? "";
+const LOCATION = process.env.GOOGLE_CLOUD_LOCATION ?? "global";
+const TEST_MODEL = "gemini-flash-latest";
 
 const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 
@@ -18,7 +19,7 @@ describeLive("google-genai live tests", () => {
   describeApiKey("API Key Access", () => {
     it("can stream responses using API Key", async () => {
       const streamFn = createGoogleGenAiStreamFnForModel({
-        id: "gemini-2.5-flash",
+        id: TEST_MODEL,
         provider: "google-genai",
       });
 
@@ -51,7 +52,7 @@ describeLive("google-genai live tests", () => {
   describeVertex("Vertex AI (ADC) Access", () => {
     it("can stream responses using Vertex AI / ADC", async () => {
       const streamFn = createGoogleGenAiStreamFnForModel({
-        id: "gemini-2.5-flash",
+        id: TEST_MODEL,
         provider: "google-genai",
       });
 

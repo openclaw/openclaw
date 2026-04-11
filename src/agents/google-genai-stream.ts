@@ -30,7 +30,7 @@ export function createGoogleGenAiStreamFnForModel(
       try {
         const apiKey = options?.apiKey ?? env.GEMINI_API_KEY;
         const project = env.GOOGLE_CLOUD_PROJECT;
-        const location = env.GOOGLE_CLOUD_LOCATION;
+        const location = env.GOOGLE_CLOUD_LOCATION || "global"; // Default to global, use "us-central1" if needed
 
         let ai: GoogleGenAI;
 
@@ -41,11 +41,6 @@ export function createGoogleGenAiStreamFnForModel(
           if (!project) {
             throw new Error(
               "Google Vertex ADC Error: Project ID is missing.\nRecovery: Vertex AI requires a project ID. Either define 'GOOGLE_CLOUD_PROJECT' in your environment or set 'models.providers.google-genai.vertexai.project' in openclaw.json.",
-            );
-          }
-          if (!location) {
-            throw new Error(
-              "Google Vertex ADC Error: Location is missing.\nRecovery: Vertex AI requires a location (e.g., 'us-central1'). Either define 'GOOGLE_CLOUD_LOCATION' in your environment or set 'models.providers.google-genai.vertexai.location' in openclaw.json.",
             );
           }
 
@@ -139,6 +134,15 @@ export function createGoogleGenAiStreamFnForModel(
             const project = env.GOOGLE_CLOUD_PROJECT || "[PROJECT_ID]";
             processedError = new Error(
               `${errorMessage}\nRecovery: Received 401 from Vertex AI. Ensure the authenticated Service Account or User has the 'Vertex AI User' (roles/aiplatform.user) IAM role assigned for project ${project}. Run 'gcloud auth application-default login' to refresh credentials.`,
+            );
+          }
+        }
+        // Intercept 404 Not Found from Vertex AI
+        if (errorMessage.includes("404") || errorMessage.includes("NOT_FOUND") || errorMessage.includes("not found")) {
+          const currentLoc = env.GOOGLE_CLOUD_LOCATION || "global";
+          if (currentLoc !== "global") {
+            processedError = new Error(
+              `${errorMessage}\nRecovery: Resource not found. Your current location is '${currentLoc}'. Some models/aliases (like 'gemini-flash-latest') are only available on the 'global' endpoint in Vertex AI. Try setting GOOGLE_CLOUD_LOCATION="global" in your environment or openclaw.json.`,
             );
           }
         }
