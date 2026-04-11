@@ -217,16 +217,11 @@ export async function runBlueSkyPollLoop(params: {
 
           if (newMessages.length > 0) {
             hadActivity = true;
-            // Update rev to the latest we fetched
-            const latestRev = newMessages.reduce(
-              (best, m) => (m.messageId > best ? m.messageId : best),
-              prev ?? "",
-            );
             // Use the lastMessage rev from listConvos as the new watermark
             lastRev.set(convo.id, msg.rev);
 
             logVerbose(
-              `Bluesky: ${newMessages.length} new message(s) in convo ${convo.id} (latestRev=${latestRev})`,
+              `Bluesky: ${newMessages.length} new message(s) in convo ${convo.id} (watermark=${msg.rev})`,
             );
 
             for (const inbound of newMessages) {

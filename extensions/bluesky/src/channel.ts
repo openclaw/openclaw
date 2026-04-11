@@ -9,7 +9,7 @@ import {
 import { evictChatServiceTokens, loginBluesky } from "./auth.js";
 import { dispatchBlueskyInboundTurn } from "./inbound-turn.js";
 import { runBlueSkyPollLoop } from "./poll.js";
-import { setBlueskyRuntime } from "./runtime.js";
+import { getBlueskyRuntime, setBlueskyRuntime } from "./runtime.js";
 import { sendBlueskyMessage } from "./send.js";
 import { blueskySetupAdapter, blueskySetupWizard } from "./setup-surface.js";
 import type { ResolvedBlueskyAccount } from "./types.js";
@@ -102,8 +102,7 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
         callbacks: {
           onMessage: async (msg) => {
             // Re-read config each turn so live config changes take effect
-            const rt = (await import("./runtime.js")).getBlueskyRuntime();
-            const currentCfg = rt.config.loadConfig();
+            const currentCfg = getBlueskyRuntime().config.loadConfig();
             await dispatchBlueskyInboundTurn({
               account,
               agent,
@@ -133,8 +132,7 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
     deliveryMode: "direct",
 
     sendText: async ({ to, text, accountId }) => {
-      const rt = (await import("./runtime.js")).getBlueskyRuntime();
-      const cfg = rt.config.loadConfig();
+      const cfg = getBlueskyRuntime().config.loadConfig();
       const resolvedAccountId =
         accountId ?? resolveDefaultBlueskyAccountId(cfg as Record<string, unknown>);
       const agent = activeAgents.get(resolvedAccountId);
