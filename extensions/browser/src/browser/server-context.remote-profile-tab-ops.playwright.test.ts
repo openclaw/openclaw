@@ -174,12 +174,15 @@ describe("browser remote profile tab ops via Playwright", () => {
 
     await expect(remote.listTabs()).rejects.toMatchObject({
       name: "BrowserCdpEndpointBlockedError",
+      status: 400,
     });
     await expect(remote.focusTab("T1")).rejects.toMatchObject({
       name: "BrowserCdpEndpointBlockedError",
+      status: 400,
     });
     await expect(remote.closeTab("T1")).rejects.toMatchObject({
       name: "BrowserCdpEndpointBlockedError",
+      status: 400,
     });
     expect(listPagesViaPlaywright).not.toHaveBeenCalled();
     expect(focusPageByTargetIdViaPlaywright).not.toHaveBeenCalled();

@@ -6,6 +6,10 @@
 
 - Version alignment with core OpenClaw release numbers.
 
+### Fixes
+
+- Capture `tenantId` from `channelData.tenant.id` and `aadObjectId` from `activity.from` on inbound Teams activities and forward them on proactive sends, fixing HTTP 403 errors on bot-initiated messages (e.g. cron announces) from the Bot Framework connector (#58774).
+
 ## 2026.4.8
 
 ### Changes

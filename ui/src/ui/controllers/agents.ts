@@ -196,11 +196,11 @@ export function refreshVisibleToolsEffectiveForCurrentSession(
 ): Promise<void> | undefined {
   const resolvedSessionKey = state.sessionKey?.trim();
   if (!resolvedSessionKey || state.agentsPanel !== "tools" || !state.agentsSelectedId) {
-    return;
+    return undefined;
   }
   const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
   if (!sessionAgentId || state.agentsSelectedId !== sessionAgentId) {
-    return;
+    return undefined;
   }
   return loadToolsEffective(state, {
     agentId: sessionAgentId,

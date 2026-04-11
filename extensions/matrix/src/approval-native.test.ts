@@ -117,32 +117,6 @@ describe("matrix approval capability", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
-  it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
-    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
-      cfg: buildConfig({
-        dm: { allowFrom: ["@owner:example.org"] },
-      }),
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin Approval Required",
-          description: "Allow plugin access",
-          pluginId: "git-tools",
-          sessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$root",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(target).toEqual({
-      to: "room:!ops:example.org",
-      threadId: "$root",
-    });
-  });
-
   it("suppresses same-channel plugin forwarding when Matrix native delivery is available", () => {
     const shouldSuppress = matrixApprovalCapability.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {

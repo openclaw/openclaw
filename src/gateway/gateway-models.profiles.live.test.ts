@@ -1153,7 +1153,7 @@ async function requestGatewayAgentText(params: {
     params.modelKey,
   ).length;
   const accepted = await withGatewayLiveProbeTimeout(
-    params.client.request<{ runId?: unknown; status?: unknown }>("agent", {
+    params.client.request("agent", {
       sessionKey: params.sessionKey,
       idempotencyKey: params.idempotencyKey,
       message: params.message,

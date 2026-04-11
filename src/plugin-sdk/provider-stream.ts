@@ -139,6 +139,7 @@ export function buildProviderStreamFamilyHooks(
           createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
       };
   }
+  throw new Error("Unsupported provider stream family");
 }
 
 // Public stream-wrapper helpers for provider plugins.

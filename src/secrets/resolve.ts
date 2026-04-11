@@ -276,8 +276,9 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  if (cache?.filePayloadByProvider?.has(cacheKey)) {
-    return await (cache.filePayloadByProvider.get(cacheKey) as Promise<unknown>);
+  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
+  if (cachedFilePayload) {
+    return await cachedFilePayload;
   }
 
   const filePath = resolveUserPath(params.providerConfig.path);
@@ -817,7 +818,7 @@ async function resolveProviderRefs(params: {
       message: `Unsupported secret provider source "${String((params.providerConfig as { source?: unknown }).source)}".`,
     });
   } catch (err) {
-    throwUnknownProviderResolutionError({
+    return throwUnknownProviderResolutionError({
       source: params.source,
       provider: params.providerName,
       err,
@@ -915,8 +916,9 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  if (cache?.resolvedByRefKey?.has(key)) {
-    return await (cache.resolvedByRefKey.get(key) as Promise<unknown>);
+  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
+  if (cachedResolvedValue) {
+    return await cachedResolvedValue;
   }
 
   const promise = (async () => {

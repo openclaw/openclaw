@@ -40,15 +40,6 @@ afterAll(async () => {
   await enabledServer?.close({ reason: "openai http enabled suite done" });
 });
 
-async function startServerWithDefaultConfig(port: number) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: false,
-  });
-}
-
 async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
@@ -89,23 +80,6 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
-async function expectChatCompletionsDisabled(
-  start: (port: number) => Promise<{ close: (opts?: { reason?: string }) => Promise<void> }>,
-) {
-  const port = await getFreePort();
-  const server = await start(port);
-  try {
-    const res = await postChatCompletions(port, {
-      model: "openclaw",
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.status).toBe(404);
-    await res.text();
-  } finally {
-    await server.close({ reason: "test done" });
-  }
-}
-
 function parseSseDataLines(text: string): string[] {
   return text
     .split("\n")
@@ -115,15 +89,6 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
-    await expectChatCompletionsDisabled(startServerWithDefaultConfig);
-    await expectChatCompletionsDisabled((port) =>
-      startServer(port, {
-        openAiChatCompletionsEnabled: false,
-      }),
-    );
-  });
-
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {

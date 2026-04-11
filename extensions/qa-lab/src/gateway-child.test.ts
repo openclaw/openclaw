@@ -1,12 +1,20 @@
+import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, buildQaRuntimeEnv, resolveQaControlUiRoot } from "./gateway-child.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  fetchWithSsrFGuardMock.mockReset();
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
@@ -270,6 +278,73 @@ describe("buildQaRuntimeEnv", () => {
         },
       },
     });
+  });
+
+  it("allows loopback gateway health probes through the SSRF guard", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+
+    await expect(
+      __testing.fetchLocalGatewayHealth({
+        baseUrl: "http://127.0.0.1:18789",
+        healthPath: "/readyz",
+      }),
+    ).resolves.toBe(true);
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:18789/readyz",
+        policy: { allowPrivateNetwork: true },
+        auditContext: "qa-lab-gateway-child-health",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-stops gateway children that ignore the graceful signal", async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.on('SIGTERM', () => {});",
+          "process.stdout.write('ready\\n');",
+          "setInterval(() => {}, 1000);",
+        ].join(""),
+      ],
+      {
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    cleanups.push(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          if (process.platform === "win32") {
+            child.kill("SIGKILL");
+          } else if (child.pid) {
+            process.kill(-child.pid, "SIGKILL");
+          }
+        } catch {
+          // The child already exited.
+        }
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.stdout?.once("data", () => resolve());
+    });
+
+    await __testing.stopQaGatewayChildProcessTree(child, {
+      gracefulTimeoutMs: 50,
+      forceTimeoutMs: 1_000,
+    });
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
   });
 });
 

@@ -11,9 +11,9 @@ import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
+import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import {
   loadPluginManifestRegistry,
-  resolveManifestCommandAliasOwner,
   resolveManifestContractPluginIds,
 } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -477,6 +477,10 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
 }
+
+export const __testing = {
+  mapZodIssueToConfigIssue,
+};
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
