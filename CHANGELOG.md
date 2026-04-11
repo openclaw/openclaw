@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Tools/video_generate: allow providers and plugins to return URL-only generated video assets so agent delivery and `openclaw capability video generate --output ...` can forward or stream large videos without requiring the full file in memory first. (#61988) Thanks @xieyongliang.
 - Models/providers: surface how configured OpenAI-compatible endpoints are classified in embedded-agent debug logs, so local and proxy routing issues are easier to diagnose. (#64754) Thanks @ImLukeF.
+- Ollama: cache `/api/show` context-window and capability metadata during model discovery so repeated picker refreshes stop refetching unchanged models, while still retrying after empty responses and invalidating on digest changes. (#64753) Thanks @ImLukeF.
 
 ### Fixes
 
