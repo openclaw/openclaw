@@ -1,3 +1,4 @@
+import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
 import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistryVersionFromState,
@@ -5,14 +6,9 @@ import {
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
-export type LoadedChannelPlugin = {
+export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
-  meta: {
-    order?: number;
-  };
-  capabilities?: {
-    nativeCommands?: boolean;
-  };
+  meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
 type CachedChannelPlugins = {
@@ -56,8 +52,14 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const channelPlugins: LoadedChannelPlugin[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
-      if (entry?.plugin) {
-        channelPlugins.push(entry.plugin);
+      const plugin = entry?.plugin;
+      const id = normalizeOptionalString(plugin?.id) ?? "";
+      if (plugin && id) {
+        channelPlugins.push({
+          ...plugin,
+          id,
+          meta: plugin.meta ?? {},
+        });
       }
     }
   }

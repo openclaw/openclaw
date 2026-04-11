@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
