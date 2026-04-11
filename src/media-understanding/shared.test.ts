@@ -361,4 +361,50 @@ describe("fetchWithTimeoutGuarded", () => {
       }),
     );
   });
+
+  it("forwards an explicit mode override through postJsonRequest even when proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/strict",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+      mode: "strict",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "strict",
+      }),
+    );
+  });
+
+  it("forwards an explicit mode override through postTranscriptionRequest even when proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com",
+      release: async () => {},
+    });
+
+    await postTranscriptionRequest({
+      url: "https://api.example.com/v1/transcriptions",
+      headers: new Headers(),
+      body: "audio-bytes",
+      fetchFn: fetch,
+      mode: "strict",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "strict",
+      }),
+    );
+  });
 });

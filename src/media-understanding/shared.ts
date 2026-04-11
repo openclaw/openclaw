@@ -142,12 +142,14 @@ function resolveGuardedPostRequestOptions(params: {
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
+  mode?: GuardedFetchMode;
 }): GuardedPostRequestOptions | undefined {
   if (
     !params.allowPrivateNetwork &&
     !params.dispatcherPolicy &&
     params.pinDns === undefined &&
-    !params.auditContext
+    !params.auditContext &&
+    params.mode === undefined
   ) {
     return undefined;
   }
@@ -156,6 +158,7 @@ function resolveGuardedPostRequestOptions(params: {
     ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
     ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
     ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+    ...(params.mode !== undefined ? { mode: params.mode } : {}),
   };
 }
 
@@ -169,6 +172,12 @@ export async function postTranscriptionRequest(params: {
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -193,6 +202,12 @@ export async function postJsonRequest(params: {
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
