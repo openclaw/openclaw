@@ -32,6 +32,7 @@ export function buildMediaLocalRoots(
       preferredTmpDir,
       path.join(resolvedStateDir, "media"),
       path.join(resolvedStateDir, "workspace"),
+      path.join(resolvedStateDir, "workspaces"),
       path.join(resolvedStateDir, "sandboxes"),
       // Upgraded installs can still resolve the active state dir to the legacy
       // ~/.clawdbot tree while new media writes already go under ~/.openclaw/media.

@@ -89,7 +89,7 @@ describe("local media roots", () => {
       name: "keeps temp, media cache, and workspace roots by default",
       stateDir: path.join("/tmp", "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
-      expectedContained: ["media", "workspace", "sandboxes"],
+      expectedContained: ["media", "workspace", "workspaces", "sandboxes"],
       expectedExcluded: ["agents"],
       minLength: 3,
     },
