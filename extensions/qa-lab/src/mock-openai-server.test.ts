@@ -168,6 +168,42 @@ describe("qa mock openai server", () => {
     ]);
   });
 
+  it("keeps remember prompts prose-only even when they mention repo cleanup", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain('"name":"read"');
+  });
+
   it("drives the compaction retry mutating tool parity flow", async () => {
     const server = await startMockServer();
 
@@ -1222,13 +1258,7 @@ describe("qa mock openai server", () => {
     expect(debug.allInputText).toContain("Delegate one bounded QA task");
   });
 
-  it("rejects Anthropic /v1/messages streaming requests with a 400", async () => {
-    // Regression for the loop-7 Copilot finding: the /v1/messages handler
-    // used to ignore `body.stream: true` and silently return a
-    // non-streaming JSON response. That masks a real caller bug because
-    // the runner expects either an SSE stream or an explicit error.
-    // The mock should now return an Anthropic-shaped 400 so the failure
-    // mode is visible.
+  it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -1247,19 +1277,85 @@ describe("qa mock openai server", () => {
         messages: [
           {
             role: "user",
-            content: "Read the plan",
+            content: [
+              {
+                type: "text",
+                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+              },
+            ],
           },
         ],
       }),
     });
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as {
-      type: string;
-      error: { type: string; message: string };
-    };
-    expect(body.type).toBe("error");
-    expect(body.error.type).toBe("invalid_request_error");
-    expect(body.error.message).toContain("streaming is not supported");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain("event: message_start");
+    expect(body).toContain("event: content_block_start");
+    expect(body).toContain('"type":"tool_use"');
+    expect(body).toContain('"name":"read"');
+    expect(body).toContain("QA_SCENARIO_PLAN.md");
+    expect(body).toContain("event: message_delta");
+    expect(body).toContain("event: message_stop");
+  });
+
+  it("streams Anthropic /v1/messages tool_result follow-ups as text deltas", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_1",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_1",
+                content: "SUBAGENT-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain("event: content_block_delta");
+    expect(body).toContain('"type":"text_delta"');
+    expect(body).toContain("Delegated task");
+    expect(body).toContain("Evidence");
   });
 
   it("rejects malformed Anthropic /v1/messages JSON with an invalid_request_error", async () => {
@@ -1439,5 +1535,96 @@ describe("qa mock openai server provider variant tagging", () => {
       providerVariant: string;
     };
     expect(debug.providerVariant).toBe("unknown");
+  });
+});
+
+describe("Anthropic exact-reply precedence", () => {
+  it("keeps Anthropic remember prompts on the prose branch even when system text mentions HEARTBEAT", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        system: [
+          {
+            type: "text",
+            text: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain("HEARTBEAT_OK");
+    expect(body).not.toContain('"name":"read"');
+  });
+
+  it("prefers the prompt-local exact reply directive over heartbeat context", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        system: [
+          {
+            type: "text",
+            text: [
+              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
+              "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+              "HEARTBEAT_OK",
+            ].join("\n"),
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain("HEARTBEAT_OK");
   });
 });
