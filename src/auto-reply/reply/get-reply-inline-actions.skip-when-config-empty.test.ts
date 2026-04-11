@@ -3,40 +3,38 @@ import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
-const handleCommandsMock = vi.fn();
-const getChannelPluginMock = vi.fn();
-const createOpenClawToolsMock = vi.fn();
-const buildStatusReplyMock = vi.fn();
+const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, handleCommandsMock } =
+  vi.hoisted(() => ({
+    buildStatusReplyMock: vi.fn(),
+    createOpenClawToolsMock: vi.fn(),
+    getChannelPluginMock: vi.fn(),
+    handleCommandsMock: vi.fn(),
+  }));
 
-let handleInlineActions: typeof import("./get-reply-inline-actions.js").handleInlineActions;
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
 
-async function loadFreshInlineActionsModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./commands.runtime.js", () => ({
-    handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
-    buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
-  }));
-  vi.doMock("../../agents/openclaw-tools.runtime.js", () => ({
-    createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
-  }));
-  vi.doMock("../../channels/plugins/index.js", async () => {
-    const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
-      "../../channels/plugins/index.js",
-    );
-    return {
-      ...actual,
-      getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-    };
-  });
-  ({ handleInlineActions } = await import("./get-reply-inline-actions.js"));
-}
+vi.mock("./commands.runtime.js", () => ({
+  handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
+  buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
+}));
+
+vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
+  createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  getLoadedChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  listChannelPlugins: () => [],
+  normalizeChannelId: (value?: string) => value?.trim().toLowerCase() || null,
+}));
 
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
@@ -119,7 +117,7 @@ async function expectInlineActionSkipped(params: {
 }
 
 describe("handleInlineActions", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
@@ -134,7 +132,6 @@ describe("handleInlineActions", () => {
           ? { mentions: { stripPatterns: () => ["<@!?\\d+>"] } }
           : undefined,
     );
-    await loadFreshInlineActionsModuleForTest();
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {

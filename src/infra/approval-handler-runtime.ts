@@ -23,18 +23,18 @@ import {
   createChannelNativeApprovalRuntime,
   type PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime.js";
+import {
+  buildExpiredApprovalView,
+  buildPendingApprovalView,
+  buildResolvedApprovalView,
+} from "./approval-view-model.js";
 import type {
   ApprovalActionView,
   ApprovalMetadataView,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
-} from "./approval-view-model.js";
-import {
-  buildExpiredApprovalView,
-  buildPendingApprovalView,
-  buildResolvedApprovalView,
-} from "./approval-view-model.js";
+} from "./approval-view-model.types.js";
 import type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeEventKind,
@@ -53,7 +53,7 @@ export type {
   PluginApprovalPendingView,
   PluginApprovalResolvedView,
   ResolvedApprovalView,
-} from "./approval-view-model.js";
+} from "./approval-view-model.types.js";
 export { resolveApprovalOverGateway };
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
