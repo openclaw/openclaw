@@ -40,6 +40,26 @@ export function resolvePowerShellPath(): string {
 
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
+    // Check for custom shell via OPENCLAW_SHELL or SHELL env var on Windows
+    const customShell = process.env.OPENCLAW_SHELL?.trim() || process.env.SHELL?.trim();
+    if (customShell) {
+      // Determine args based on shell type
+      const shellName = path.basename(customShell).toLowerCase();
+      if (shellName.includes("bash") || shellName === "sh.exe" || shellName === "sh") {
+        return { shell: customShell, args: ["-c"] };
+      }
+      if (shellName.includes("zsh")) {
+        return { shell: customShell, args: ["-c"] };
+      }
+      if (shellName.includes("nu")) {
+        return { shell: customShell, args: ["-c"] };
+      }
+      // For other custom shells, use -c flag (common for Unix-like shells)
+      if (shellName.endsWith(".exe") || !shellName.includes(".")) {
+        return { shell: customShell, args: ["-c"] };
+      }
+    }
+
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
@@ -107,6 +127,14 @@ export function detectRuntimeShell(): string | undefined {
   }
 
   if (process.platform === "win32") {
+    // Check for custom shell via SHELL env var on Windows
+    const envShell = process.env.SHELL?.trim();
+    if (envShell) {
+      const name = normalizeShellName(envShell);
+      if (name) {
+        return name;
+      }
+    }
     if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
       return "pwsh";
     }
