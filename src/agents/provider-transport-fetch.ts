@@ -69,12 +69,13 @@ function resolveModelRequestPolicy(model: Model<Api>) {
       }
     })();
   const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
-    proxy: allowExplicitDebugProxy
-      ? {
-          mode: "explicit-proxy",
-          url: debugProxy.proxyUrl,
-        }
-      : undefined,
+    proxy:
+      allowExplicitDebugProxy && debugProxy.proxyUrl
+        ? {
+            mode: "explicit-proxy",
+            url: debugProxy.proxyUrl,
+          }
+        : undefined,
   });
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,

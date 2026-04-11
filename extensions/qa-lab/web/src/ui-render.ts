@@ -292,7 +292,12 @@ export type UiState = {
   captureGroupMode: "none" | "flow" | "host-path" | "burst";
   captureTimelineLaneMode: "domain" | "provider" | "flow";
   captureTimelineLaneSort: "most-events" | "most-errors" | "severity" | "alphabetical";
-  captureTimelinePreviousLaneSort: "most-events" | "most-errors" | "severity" | "alphabetical" | null;
+  captureTimelinePreviousLaneSort:
+    | "most-events"
+    | "most-errors"
+    | "severity"
+    | "alphabetical"
+    | null;
   captureTimelineLaneSearch: string;
   captureTimelineZoom: 75 | 100 | 150 | 200 | 300;
   captureTimelineSparklineMode: "session-relative" | "lane-relative";
@@ -454,7 +459,8 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
     {
       key: "routing",
       label: "Routing & Network",
-      match: (header) => /host|origin|referer|x-forwarded|forwarded|cf-|traceparent|tracestate|via/i.test(header),
+      match: (header) =>
+        /host|origin|referer|x-forwarded|forwarded|cf-|traceparent|tracestate|via/i.test(header),
     },
   ];
   const remaining = new Map(sourceEntries);
@@ -467,7 +473,7 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
           return { label, value: formatCaptureFieldValue(value, label) };
         })
         .filter((row) => row.value.length > 0)
-        .sort((left, right) => left.label.localeCompare(right.label));
+        .toSorted((left, right) => left.label.localeCompare(right.label));
       if (rows.length === 0) {
         return "";
       }
@@ -483,14 +489,16 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
       value: formatCaptureFieldValue(value, label),
     }))
     .filter((row) => row.value.length > 0)
-    .sort((left, right) => left.label.localeCompare(right.label));
+    .toSorted((left, right) => left.label.localeCompare(right.label));
   if (otherRows.length > 0) {
     renderedGroups.push(`<section class="capture-inline-section">
       <div class="capture-summary-label">Other</div>
       ${renderCaptureKeyValueGrid(otherRows)}
     </section>`);
   }
-  return renderedGroups.join("") || '<div class="empty-state">No captured headers for this event.</div>';
+  return (
+    renderedGroups.join("") || '<div class="empty-state">No captured headers for this event.</div>'
+  );
 }
 
 function isSensitiveCaptureField(label: string): boolean {
@@ -580,7 +588,8 @@ function renderCaptureSsePayload(
         .filter(Boolean)
         .map((line) => {
           const separatorIndex = line.indexOf(":");
-          const label = separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() || "field" : "line";
+          const label =
+            separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() || "field" : "line";
           const value = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
           return { label, value: redactCaptureScalar(value, label) };
         });
@@ -608,7 +617,7 @@ function renderCaptureSsePayload(
       ? frames
       : frames.filter((frame) => frame.searchable.includes(normalizedFilter));
   const sortMode = options?.sort ?? "stream";
-  const sortedFrames = [...filteredFrames].sort((left, right) => {
+  const sortedFrames = [...filteredFrames].toSorted((left, right) => {
     if (sortMode === "name") {
       return left.eventName.localeCompare(right.eventName) || left.index - right.index;
     }
@@ -697,9 +706,7 @@ function renderCapturePayload(
     };
   }
   const isJsonLike =
-    contentType?.includes("json") ||
-    trimmed.startsWith("{") ||
-    trimmed.startsWith("[");
+    contentType?.includes("json") || trimmed.startsWith("{") || trimmed.startsWith("[");
   if (isJsonLike) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
@@ -758,7 +765,8 @@ OPENCLAW_DEBUG_PROXY_URL=http://127.0.0.1:7799 \\
 pnpm openclaw gateway --port 18789 --bind loopback`;
   const qaStart = "pnpm qa:lab:ui --port 43124 --control-ui-url http://127.0.0.1:18789/";
   const caInstall = "pnpm proxy:install-ca";
-  const caTrust = "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/thoffman/.openclaw/debug-proxy/certs/root-ca.pem";
+  const caTrust =
+    "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/thoffman/.openclaw/debug-proxy/certs/root-ca.pem";
   return `<div class="capture-startup-state">
     <div class="capture-startup-title">Proxy capture is not running yet.</div>
     <div class="text-dimmed text-sm capture-startup-copy">
@@ -792,7 +800,10 @@ function captureEventKey(event: Pick<CaptureEventView, "id" | "flowId" | "ts" | 
   return `${event.id ?? "no-id"}:${event.flowId}:${event.ts}:${event.kind}`;
 }
 
-function captureEventGlyph(event: Pick<CaptureEventView, "kind" | "direction">): { label: string; cls: string } {
+function captureEventGlyph(event: Pick<CaptureEventView, "kind" | "direction">): {
+  label: string;
+  cls: string;
+} {
   switch (event.kind) {
     case "request":
       return { label: "REQ", cls: "req" };
@@ -831,14 +842,21 @@ function findPairedCaptureEvent(
         (candidate.kind === "request" || candidate.kind === "response") &&
         captureEventKey(candidate) !== captureEventKey(event),
     )
-    .sort((left, right) => left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)));
+    .toSorted(
+      (left, right) =>
+        left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
+    );
   if (event.kind === "request") {
     return {
-      counterpart: flowEvents.find((candidate) => candidate.kind === "response" && candidate.ts >= event.ts) ?? null,
+      counterpart:
+        flowEvents.find((candidate) => candidate.kind === "response" && candidate.ts >= event.ts) ??
+        null,
       role: "response",
     };
   }
-  const requests = flowEvents.filter((candidate) => candidate.kind === "request" && candidate.ts <= event.ts);
+  const requests = flowEvents.filter(
+    (candidate) => candidate.kind === "request" && candidate.ts <= event.ts,
+  );
   return {
     counterpart: requests.at(-1) ?? null,
     role: "request",
@@ -1557,14 +1575,20 @@ function renderCaptureView(state: UiState): string {
   const rows = state.captureQueryRows;
   const events = state.captureEvents;
   const availableKinds = [
-    ...new Set(events.map((event) => event.kind).filter((value): value is string => Boolean(value))),
-  ].sort();
+    ...new Set(
+      events.map((event) => event.kind).filter((value): value is string => Boolean(value)),
+    ),
+  ].toSorted();
   const availableProviders = [
-    ...new Set(events.map((event) => event.provider).filter((value): value is string => Boolean(value))),
-  ].sort();
+    ...new Set(
+      events.map((event) => event.provider).filter((value): value is string => Boolean(value)),
+    ),
+  ].toSorted();
   const availableHosts = [
-    ...new Set(events.map((event) => event.host).filter((value): value is string => Boolean(value))),
-  ].sort();
+    ...new Set(
+      events.map((event) => event.host).filter((value): value is string => Boolean(value)),
+    ),
+  ].toSorted();
   const normalizedSearch = state.captureSearchText.trim().toLowerCase();
   const activeFilters: string[] = [];
   if (state.captureKindFilter.length > 0) {
@@ -1615,7 +1639,10 @@ function renderCaptureView(state: UiState): string {
     if (state.captureKindFilter.length > 0 && !state.captureKindFilter.includes(event.kind)) {
       return false;
     }
-    if (state.captureProviderFilter.length > 0 && !state.captureProviderFilter.includes(event.provider || "")) {
+    if (
+      state.captureProviderFilter.length > 0 &&
+      !state.captureProviderFilter.includes(event.provider || "")
+    ) {
       return false;
     }
     if (state.captureHostFilter.length > 0 && !state.captureHostFilter.includes(event.host || "")) {
@@ -1650,8 +1677,10 @@ function renderCaptureView(state: UiState): string {
     }
     return true;
   });
-  const minTs = baseFilteredEvents.length > 0 ? Math.min(...baseFilteredEvents.map((event) => event.ts)) : 0;
-  const maxTs = baseFilteredEvents.length > 0 ? Math.max(...baseFilteredEvents.map((event) => event.ts)) : 0;
+  const minTs =
+    baseFilteredEvents.length > 0 ? Math.min(...baseFilteredEvents.map((event) => event.ts)) : 0;
+  const maxTs =
+    baseFilteredEvents.length > 0 ? Math.max(...baseFilteredEvents.map((event) => event.ts)) : 0;
   const totalSpanMs = Math.max(1, maxTs - minTs);
   const activeWindowStartPct =
     state.captureTimelineWindowStartPct != null && state.captureTimelineWindowEndPct != null
@@ -1683,7 +1712,9 @@ function renderCaptureView(state: UiState): string {
     activeFilters.push(`window: ${activeWindowLabel}`);
   }
   const filteredEvents =
-    state.captureViewMode === "timeline" && activeWindowStartPct != null && activeWindowEndPct != null
+    state.captureViewMode === "timeline" &&
+    activeWindowStartPct != null &&
+    activeWindowEndPct != null
       ? baseFilteredEvents.filter((event) => {
           const percent = ((event.ts - minTs) / totalSpanMs) * 100;
           return percent >= activeWindowStartPct && percent <= activeWindowEndPct;
@@ -1691,21 +1722,25 @@ function renderCaptureView(state: UiState): string {
       : baseFilteredEvents;
   const analysisEnabled = state.captureQueryPreset !== "none";
   const selectedSessions = sessions.filter((session) => sessionIds.includes(session.id));
-  const singleSelectedSession = selectedSessions.length === 1 ? selectedSessions[0] ?? null : null;
-  const selectedSessionEventCount = selectedSessions.reduce((sum, session) => sum + session.eventCount, 0);
+  const singleSelectedSession =
+    selectedSessions.length === 1 ? (selectedSessions[0] ?? null) : null;
+  const selectedSessionEventCount = selectedSessions.reduce(
+    (sum, session) => sum + session.eventCount,
+    0,
+  );
   const selectedEvent =
     filteredEvents.find((event) => {
       const key = captureEventKey(event);
       return key === state.selectedCaptureEventKey;
-    }) ?? filteredEvents[0] ?? null;
+    }) ??
+    filteredEvents[0] ??
+    null;
   const selectedEventKey = selectedEvent == null ? null : captureEventKey(selectedEvent);
   const kindCounts = new Map<string, number>();
   for (const event of filteredEvents) {
     kindCounts.set(event.kind, (kindCounts.get(event.kind) ?? 0) + 1);
   }
-  const topKinds = [...kindCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4);
+  const topKinds = [...kindCounts.entries()].toSorted((a, b) => b[1] - a[1]).slice(0, 4);
   const topProviders = state.captureCoverage?.providers.slice(0, 4) ?? [];
   const topModels = state.captureCoverage?.models.slice(0, 3) ?? [];
   const selectedFlowId = selectedEvent?.flowId?.trim() || "";
@@ -1713,11 +1748,19 @@ function renderCaptureView(state: UiState): string {
     selectedFlowId.length > 0
       ? events
           .filter((event) => event.flowId === selectedFlowId)
-          .sort((left, right) => left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)))
+          .toSorted(
+            (left, right) =>
+              left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
+          )
       : [];
   const selectedFlowIndex =
-    selectedEvent == null ? -1 : selectedFlowEvents.findIndex((event) => captureEventKey(event) === captureEventKey(selectedEvent));
-  const previousFlowEvent = selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
+    selectedEvent == null
+      ? -1
+      : selectedFlowEvents.findIndex(
+          (event) => captureEventKey(event) === captureEventKey(selectedEvent),
+        );
+  const previousFlowEvent =
+    selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
   const nextFlowEvent =
     selectedFlowIndex >= 0 && selectedFlowIndex < selectedFlowEvents.length - 1
       ? selectedFlowEvents[selectedFlowIndex + 1]
@@ -1726,16 +1769,23 @@ function renderCaptureView(state: UiState): string {
   const pairedEvent = selectedPairing.counterpart;
   const pairedEventKey = pairedEvent ? captureEventKey(pairedEvent) : null;
   const pairedEventVisible =
-    pairedEventKey != null && filteredEvents.some((event) => captureEventKey(event) === pairedEventKey);
+    pairedEventKey != null &&
+    filteredEvents.some((event) => captureEventKey(event) === pairedEventKey);
   const pairingLatencyMs =
     selectedEvent && pairedEvent ? Math.max(0, Math.abs(pairedEvent.ts - selectedEvent.ts)) : null;
   const previousFlowEventVisible =
-    previousFlowEvent != null && filteredEvents.some((event) => captureEventKey(event) === captureEventKey(previousFlowEvent));
+    previousFlowEvent != null &&
+    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(previousFlowEvent));
   const nextFlowEventVisible =
-    nextFlowEvent != null && filteredEvents.some((event) => captureEventKey(event) === captureEventKey(nextFlowEvent));
+    nextFlowEvent != null &&
+    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(nextFlowEvent));
   const timelineTrackWidthPx = Math.round(960 * (state.captureTimelineZoom / 100));
   const timelineWidthStyle = `--capture-timeline-track-width:${timelineTrackWidthPx}px`;
-  const renderTimelineWindow = (startPct: number | null, endPct: number | null, className: string): string => {
+  const renderTimelineWindow = (
+    startPct: number | null,
+    endPct: number | null,
+    className: string,
+  ): string => {
     if (startPct == null || endPct == null) {
       return "";
     }
@@ -1750,7 +1800,11 @@ function renderCaptureView(state: UiState): string {
       pct,
       label: formatTime(ts),
       edgeClass:
-        index === 0 ? "capture-timeline-axis-tick-start" : index === 4 ? "capture-timeline-axis-tick-end" : "",
+        index === 0
+          ? "capture-timeline-axis-tick-start"
+          : index === 4
+            ? "capture-timeline-axis-tick-end"
+            : "",
     };
   });
   const renderLaneSparkline = (eventsForLane: CaptureEventView[], laneId: string) => {
@@ -1759,12 +1813,19 @@ function renderCaptureView(state: UiState): string {
     }
     const binCount = 18;
     const bins = Array.from({ length: binCount }, () => 0);
-    const laneMinTs = eventsForLane.reduce((min, event) => Math.min(min, event.ts), eventsForLane[0]?.ts ?? minTs);
-    const laneMaxTs = eventsForLane.reduce((max, event) => Math.max(max, event.ts), eventsForLane[0]?.ts ?? maxTs);
+    const laneMinTs = eventsForLane.reduce(
+      (min, event) => Math.min(min, event.ts),
+      eventsForLane[0]?.ts ?? minTs,
+    );
+    const laneMaxTs = eventsForLane.reduce(
+      (max, event) => Math.max(max, event.ts),
+      eventsForLane[0]?.ts ?? maxTs,
+    );
     const laneSpanMs = Math.max(1, laneMaxTs - laneMinTs);
     for (const event of eventsForLane) {
       const spanStart = state.captureTimelineSparklineMode === "lane-relative" ? laneMinTs : minTs;
-      const spanMs = state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
+      const spanMs =
+        state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
       const rawIndex = spanMs <= 0 ? 0 : Math.floor(((event.ts - spanStart) / spanMs) * binCount);
       const index = Math.max(0, Math.min(binCount - 1, rawIndex));
       bins[index] += 1;
@@ -1812,7 +1873,13 @@ function renderCaptureView(state: UiState): string {
         : eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0) / Math.max(1, maxTs);
     const errorShare = total > 0 ? errorCount / total : 0;
     const focusedShare = total > 0 ? focusedCount / total : 0;
-    return errorCount * 10 + errorShare * 30 + focusedShare * 35 + recencyScore * 8 + Math.min(total, 40) * 0.2;
+    return (
+      errorCount * 10 +
+      errorShare * 30 +
+      focusedShare * 35 +
+      recencyScore * 8 +
+      Math.min(total, 40) * 0.2
+    );
   };
   const describeLaneSeverity = (eventsForLane: CaptureEventView[]) => {
     const total = eventsForLane.length;
@@ -1822,8 +1889,10 @@ function renderCaptureView(state: UiState): string {
     const focusedCount = selectedFlowId
       ? eventsForLane.filter((event) => event.flowId === selectedFlowId).length
       : 0;
-    const newestTs = total === 0 ? 0 : eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0);
-    const recencyMinutes = newestTs > 0 ? Math.max(0, Math.round((maxTs - newestTs) / 60000)) : null;
+    const newestTs =
+      total === 0 ? 0 : eventsForLane.reduce((max, event) => Math.max(max, event.ts), 0);
+    const recencyMinutes =
+      newestTs > 0 ? Math.max(0, Math.round((maxTs - newestTs) / 60000)) : null;
     const focusedPercent = total > 0 ? Math.round((focusedCount / total) * 100) : 0;
     const errorPercent = total > 0 ? Math.round((errorCount / total) * 100) : 0;
     const reasons: string[] = [];
@@ -1845,17 +1914,7 @@ function renderCaptureView(state: UiState): string {
     };
   };
   const unsortedTimelineLanes = Array.from(
-    filteredEvents.reduce<
-      Map<
-        string,
-        {
-          id: string;
-          label: string;
-          meta: string;
-          events: CaptureEventView[];
-        }
-      >
-    >((lanes, event) => {
+    filteredEvents.reduce((lanes, event) => {
       const providerLabel = event.provider || "unlabeled";
       const flowLabel = event.flowId || "(no flow id)";
       const laneConfig =
@@ -1882,7 +1941,12 @@ function renderCaptureView(state: UiState): string {
         existing.events.push(event);
         return lanes;
       }
-      lanes.set(laneId, { id: laneId, label: laneConfig.label, meta: laneConfig.meta, events: [event] });
+      lanes.set(laneId, {
+        id: laneId,
+        label: laneConfig.label,
+        meta: laneConfig.meta,
+        events: [event],
+      });
       return lanes;
     }, new Map()),
   ).map(([, lane]) => lane);
@@ -1890,9 +1954,13 @@ function renderCaptureView(state: UiState): string {
     lanes: Array<{ id: string; label: string; meta: string; events: CaptureEventView[] }>,
     mode: UiState["captureTimelineLaneSort"],
   ) =>
-    [...lanes].sort((a, b) => {
-      const aErrorCount = a.events.filter((event) => Boolean(event.errorText) || (event.status ?? 0) >= 400).length;
-      const bErrorCount = b.events.filter((event) => Boolean(event.errorText) || (event.status ?? 0) >= 400).length;
+    [...lanes].toSorted((a, b) => {
+      const aErrorCount = a.events.filter(
+        (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
+      ).length;
+      const bErrorCount = b.events.filter(
+        (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
+      ).length;
       if (mode === "severity") {
         return (
           computeLaneSeverity(b.events) - computeLaneSeverity(a.events) ||
@@ -1911,7 +1979,11 @@ function renderCaptureView(state: UiState): string {
       if (mode === "alphabetical") {
         return a.label.localeCompare(b.label);
       }
-      return b.events.length - a.events.length || bErrorCount - aErrorCount || a.label.localeCompare(b.label);
+      return (
+        b.events.length - a.events.length ||
+        bErrorCount - aErrorCount ||
+        a.label.localeCompare(b.label)
+      );
     });
   const timelineLanes = sortTimelineLanes(unsortedTimelineLanes, state.captureTimelineLaneSort);
   const previousTimelineLanes =
@@ -1961,10 +2033,7 @@ function renderCaptureView(state: UiState): string {
     if (!laneSearch) {
       return pinnedLaneIds.size === 0 || !pinnedLaneIds.has(lane.id);
     }
-    const haystack = [lane.label, lane.meta]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
+    const haystack = [lane.label, lane.meta].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(laneSearch);
   });
   const summaryChips = [
@@ -1981,7 +2050,9 @@ function renderCaptureView(state: UiState): string {
   const summaryMeta = [
     `${filteredEvents.length} visible`,
     selectedSessions.length > 0 ? `${selectedSessionEventCount} stored` : null,
-    state.captureViewMode === "timeline" && activeWindowLabel ? `window ${activeWindowLabel}` : null,
+    state.captureViewMode === "timeline" && activeWindowLabel
+      ? `window ${activeWindowLabel}`
+      : null,
     state.captureViewMode === "timeline"
       ? `${visibleTimelineLanes.length}/${timelineLanes.length} lanes${pinnedLaneIds.size > 0 ? ` · ${pinnedLaneIds.size} pinned` : ""}`
       : null,
@@ -1993,12 +2064,7 @@ function renderCaptureView(state: UiState): string {
     state.captureGroupMode === "none" || state.captureGroupMode === "burst"
       ? [{ id: "__all__", label: "All Events", meta: "", events: filteredEvents }]
       : Array.from(
-          filteredEvents.reduce<
-            Map<
-              string,
-              { id: string; label: string; meta: string; events: CaptureEventView[] }
-            >
-          >((groups, event) => {
+          filteredEvents.reduce((groups, event) => {
             const key =
               state.captureGroupMode === "flow"
                 ? event.flowId || "(no flow)"
@@ -2025,8 +2091,9 @@ function renderCaptureView(state: UiState): string {
           }, new Map()),
         ).map(([, group]) => group);
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
-    const sorted = [...eventsForGroup].sort(
-      (left, right) => left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
+    const sorted = [...eventsForGroup].toSorted(
+      (left, right) =>
+        left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
     );
     const clusters: Array<{
       key: string;
@@ -2071,10 +2138,14 @@ function renderCaptureView(state: UiState): string {
   const selectedSensitiveHeaderCount = selectedHeaders
     ? Object.keys(selectedHeaders).filter((label) => isSensitiveCaptureField(label)).length
     : 0;
-  const selectedPayload = renderCapturePayload(selectedEvent?.dataText, selectedEvent?.contentType, {
-    payloadEventSort: state.capturePayloadEventSort,
-    payloadEventFilter: state.capturePayloadEventFilter,
-  });
+  const selectedPayload = renderCapturePayload(
+    selectedEvent?.dataText,
+    selectedEvent?.contentType,
+    {
+      payloadEventSort: state.capturePayloadEventSort,
+      payloadEventFilter: state.capturePayloadEventFilter,
+    },
+  );
   const selectedMetaRows = selectedEvent
     ? [
         { label: "provider", value: selectedEvent.provider ?? "unlabeled" },
@@ -2109,7 +2180,7 @@ function renderCaptureView(state: UiState): string {
       value: "payload",
       label: "Payload",
       available: Boolean(selectedEvent?.dataText?.length || selectedEvent?.dataBlobId),
-      recommended: Boolean(selectedPayload.byteLength > 0),
+      recommended: selectedPayload.byteLength > 0,
     },
     {
       value: "headers",
@@ -2119,7 +2190,7 @@ function renderCaptureView(state: UiState): string {
     },
   ];
   if (!availableDetailViews.some((view) => view.recommended && view.available)) {
-    availableDetailViews[0]!.recommended = true;
+    availableDetailViews[0].recommended = true;
   }
   const preferredDetailView = state.capturePreferredDetailView;
   const effectiveDetailView = availableDetailViews.some(
@@ -2128,13 +2199,15 @@ function renderCaptureView(state: UiState): string {
     ? (preferredDetailView ?? "overview")
     : availableDetailViews.some((view) => view.value === state.captureDetailView && view.available)
       ? state.captureDetailView
-      : (availableDetailViews.find((view) => view.recommended && view.available)?.value ?? "overview");
+      : (availableDetailViews.find((view) => view.recommended && view.available)?.value ??
+        "overview");
   const effectiveFlowLayout =
     state.captureFlowDetailLayout ??
-    ((selectedEvent?.kind === "request" || selectedEvent?.kind === "response") && pairedEvent ? "pair-first" : "nav-first");
+    ((selectedEvent?.kind === "request" || selectedEvent?.kind === "response") && pairedEvent
+      ? "pair-first"
+      : "nav-first");
   const effectivePayloadLayout =
-    state.capturePayloadDetailLayout ??
-    (selectedPayload.looksStructured ? "formatted" : "raw");
+    state.capturePayloadDetailLayout ?? (selectedPayload.looksStructured ? "formatted" : "raw");
   const effectivePayloadExtent = state.capturePayloadExtent;
   const flowSections = {
     navigation:
@@ -2171,9 +2244,8 @@ function renderCaptureView(state: UiState): string {
             </div>
           </section>`
         : '<div class="empty-state">This event does not have a usable flow.</div>',
-    pair:
-      pairedEvent
-        ? `<section class="capture-detail-section">
+    pair: pairedEvent
+      ? `<section class="capture-detail-section">
             <div class="capture-summary-header">
               <div class="capture-summary-label">Paired ${esc(selectedPairing.role || "counterpart")}</div>
               <div class="capture-detail-mini-meta">
@@ -2192,21 +2264,25 @@ function renderCaptureView(state: UiState): string {
                 ${pairedEvent.status ? `<span class="text-dimmed text-sm">status ${pairedEvent.status}</span>` : ""}
               </div>
               <div class="capture-pair-card-target">${esc(
-                [pairedEvent.method, pairedEvent.host, pairedEvent.path].filter(Boolean).join(" ") || pairedEvent.flowId,
+                [pairedEvent.method, pairedEvent.host, pairedEvent.path]
+                  .filter(Boolean)
+                  .join(" ") || pairedEvent.flowId,
               )}</div>
               <div class="text-dimmed text-sm">${esc(
-                [pairedEvent.provider, pairedEvent.model, pairedEvent.api].filter(Boolean).join(" · ") || "same flow",
+                [pairedEvent.provider, pairedEvent.model, pairedEvent.api]
+                  .filter(Boolean)
+                  .join(" · ") || "same flow",
               )}</div>
             </button>
           </section>`
-        : selectedEvent?.kind === "request" || selectedEvent?.kind === "response"
-          ? `<section class="capture-detail-section">
-              <div class="capture-summary-label">Paired ${
-                esc(selectedEvent.kind === "request" ? "response" : "request")
-              }</div>
+      : selectedEvent?.kind === "request" || selectedEvent?.kind === "response"
+        ? `<section class="capture-detail-section">
+              <div class="capture-summary-label">Paired ${esc(
+                selectedEvent.kind === "request" ? "response" : "request",
+              )}</div>
               <div class="empty-state">No unambiguous counterpart was found on this flow.</div>
             </section>`
-          : "",
+        : "",
   };
   const renderDetailView = () => {
     if (!selectedEvent) {
@@ -2374,8 +2450,20 @@ function renderCaptureView(state: UiState): string {
           <div class="capture-summary-label">Overview</div>
           ${renderCaptureKeyValueGrid([
             { label: "time", value: new Date(selectedEvent.ts).toLocaleString() },
-            { label: "target", value: [selectedEvent.method, selectedEvent.host, selectedEvent.path].filter(Boolean).join(" ") || "n/a" },
-            { label: "provider route", value: [selectedEvent.provider, selectedEvent.model, selectedEvent.api].filter(Boolean).join(" · ") || "unlabeled" },
+            {
+              label: "target",
+              value:
+                [selectedEvent.method, selectedEvent.host, selectedEvent.path]
+                  .filter(Boolean)
+                  .join(" ") || "n/a",
+            },
+            {
+              label: "provider route",
+              value:
+                [selectedEvent.provider, selectedEvent.model, selectedEvent.api]
+                  .filter(Boolean)
+                  .join(" · ") || "unlabeled",
+            },
             { label: "capture origin", value: selectedEvent.captureOrigin || "runtime/default" },
           ])}
         </section>
@@ -2446,9 +2534,10 @@ function renderCaptureView(state: UiState): string {
           <select id="capture-session" multiple size="${Math.min(3, Math.max(2, sessions.length || 2))}">
             ${sessions
               .map(
-                (session) => `<option value="${esc(session.id)}"${
-                  sessionIds.includes(session.id) ? " selected" : ""
-                }>${esc(new Date(session.startedAt).toLocaleString())} · ${esc(session.mode)} · ${session.eventCount} events</option>`,
+                (session) =>
+                  `<option value="${esc(session.id)}"${
+                    sessionIds.includes(session.id) ? " selected" : ""
+                  }>${esc(new Date(session.startedAt).toLocaleString())} · ${esc(session.mode)} · ${session.eventCount} events</option>`,
               )
               .join("")}
           </select>
@@ -2824,7 +2913,9 @@ function renderCaptureView(state: UiState): string {
                               ${renderTimelineWindow(draftWindowStartPct, draftWindowEndPct, "capture-timeline-window capture-timeline-window-draft")}
                               ${timelineAxisTicks
                                 .map(
-                                  (tick) => `<div class="capture-timeline-axis-tick ${tick.edgeClass}" style="left:${tick.pct.toFixed(2)}%">
+                                  (
+                                    tick,
+                                  ) => `<div class="capture-timeline-axis-tick ${tick.edgeClass}" style="left:${tick.pct.toFixed(2)}%">
                                     <span class="capture-timeline-axis-tick-line"></span>
                                     <span class="capture-timeline-axis-tick-label">${esc(tick.label)}</span>
                                   </div>`,
@@ -2833,168 +2924,207 @@ function renderCaptureView(state: UiState): string {
                             </div>
                           </div>
                         </div>
-                        ${visibleTimelineLanes.length === 0
-                          ? '<div class="empty-state" style="padding:20px">No timeline lanes match the current lane search.</div>'
-                          : visibleTimelineLanes
-                          .map((lane) => {
-                            const laneErrorCount = lane.events.filter(
-                              (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-                            ).length;
-                            const laneRequestCount = lane.events.filter((event) => event.kind === "request").length;
-                            const laneResponseCount = lane.events.filter((event) => event.kind === "response").length;
-                            const collapsed = collapsedLaneIds.has(lane.id);
-                            const pinned = pinnedLaneIds.has(lane.id);
-                            const sortedLaneEvents = [...lane.events].sort((left, right) => left.ts - right.ts);
-                            const markerGapPx = 16;
-                            const rowStridePx = 18;
-                            const baselineTopPx = 18;
-                            const rowRightEdges: number[] = [];
-                            const packedMarkers = sortedLaneEvents.map((event) => {
-                              const key = captureEventKey(event);
-                              const leftPct = ((event.ts - minTs) / totalSpanMs) * 100;
-                              const leftPx = (leftPct / 100) * timelineTrackWidthPx;
-                              let rowIndex = 0;
-                              while (
-                                rowIndex < rowRightEdges.length &&
-                                rowRightEdges[rowIndex] > leftPx - markerGapPx
-                              ) {
-                                rowIndex += 1;
-                              }
-                              rowRightEdges[rowIndex] = leftPx + markerGapPx;
-                              const topPx = baselineTopPx + rowIndex * rowStridePx;
-                              return { event, key, leftPct, leftPx, rowIndex, topPx };
-                            });
-                            const laneRowCount = Math.max(
-                              1,
-                              packedMarkers.reduce((max, marker) => Math.max(max, marker.rowIndex + 1), 1),
-                            );
-                            const laneTrackHeightPx = collapsed ? 18 : Math.max(42, baselineTopPx + (laneRowCount - 1) * rowStridePx + 18);
-                            const selectedLaneEvent =
-                              lane.events.find((event) => {
-                                const key = captureEventKey(event);
-                                return key === selectedEventKey;
-                              }) ?? null;
-                            const selectedFlowId = selectedLaneEvent?.flowId || selectedEvent?.flowId || "";
-                            const focusSelectedFlow =
-                              state.captureTimelineFocusSelectedFlow && selectedFlowId.length > 0;
-                            const laneFocusedEventCount = focusSelectedFlow
-                              ? lane.events.filter((event) => event.flowId === selectedFlowId).length
-                              : 0;
-                            const laneBackgroundEventCount = focusSelectedFlow
-                              ? lane.events.length - laneFocusedEventCount
-                              : 0;
-                            const laneFocusedPercent =
-                              focusSelectedFlow && lane.events.length > 0
-                                ? Math.round((laneFocusedEventCount / lane.events.length) * 100)
-                                : 0;
-                            const laneSelected = selectedLaneEvent != null;
-                            const laneSeverity = describeLaneSeverity(lane.events);
-                            const laneMeetsThreshold = focusSelectedFlow
-                              ? laneMeetsFocusedThreshold(laneFocusedEventCount, lane.events.length)
-                              : false;
-                            const autoCollapsed =
-                              focusSelectedFlow &&
-                              focusedLaneMode === "collapse-background" &&
-                              !laneMeetsThreshold;
-                            const laneCompactMetaParts = [
-                              focusSelectedFlow
-                                ? `${laneFocusedPercent}% focus${laneBackgroundEventCount > 0 ? ` · ${laneBackgroundEventCount} bg` : ""}`
-                                : null,
-                              laneErrorCount > 0 ? `${laneErrorCount} err` : null,
-                              state.captureTimelineLaneSort === "severity" ? laneSeverity.summary : null,
-                              autoCollapsed ? "auto-collapsed" : null,
-                            ].filter((value): value is string => Boolean(value));
-                            const previousIndex = previousLanePosition.get(lane.id);
-                            const currentIndex = timelineLanes.findIndex((candidate) => candidate.id === lane.id);
-                            const laneMovement =
-                              previousIndex == null
-                                ? null
-                                : previousIndex - currentIndex;
-                            const laneIsCollapsed = collapsed || autoCollapsed;
-                            const flowLinks = laneIsCollapsed
-                              ? ""
-                              : Array.from(
-                                  packedMarkers.reduce<Map<string, typeof packedMarkers>>((flows, marker) => {
-                                    const flowId = marker.event.flowId?.trim();
-                                    if (!flowId) {
-                                      return flows;
+                        ${
+                          visibleTimelineLanes.length === 0
+                            ? '<div class="empty-state" style="padding:20px">No timeline lanes match the current lane search.</div>'
+                            : visibleTimelineLanes
+                                .map((lane) => {
+                                  const laneErrorCount = lane.events.filter(
+                                    (event) =>
+                                      Boolean(event.errorText) || (event.status ?? 0) >= 400,
+                                  ).length;
+                                  const laneRequestCount = lane.events.filter(
+                                    (event) => event.kind === "request",
+                                  ).length;
+                                  const laneResponseCount = lane.events.filter(
+                                    (event) => event.kind === "response",
+                                  ).length;
+                                  const collapsed = collapsedLaneIds.has(lane.id);
+                                  const pinned = pinnedLaneIds.has(lane.id);
+                                  const sortedLaneEvents = [...lane.events].toSorted(
+                                    (left, right) => left.ts - right.ts,
+                                  );
+                                  const markerGapPx = 16;
+                                  const rowStridePx = 18;
+                                  const baselineTopPx = 18;
+                                  const rowRightEdges: number[] = [];
+                                  const packedMarkers = sortedLaneEvents.map((event) => {
+                                    const key = captureEventKey(event);
+                                    const leftPct = ((event.ts - minTs) / totalSpanMs) * 100;
+                                    const leftPx = (leftPct / 100) * timelineTrackWidthPx;
+                                    let rowIndex = 0;
+                                    while (
+                                      rowIndex < rowRightEdges.length &&
+                                      rowRightEdges[rowIndex] > leftPx - markerGapPx
+                                    ) {
+                                      rowIndex += 1;
                                     }
-                                    const existing = flows.get(flowId) ?? [];
-                                    existing.push(marker);
-                                    flows.set(flowId, existing);
-                                    return flows;
-                                  }, new Map()),
-                                )
-                                  .flatMap(([, markers]) => {
-                                    if (markers.length < 2) {
-                                      return [];
-                                    }
-                                    return markers.slice(1).map((marker, index) => {
-                                      const previous = markers[index];
-                                      const dx = marker.leftPx - previous.leftPx;
-                                      const dy = marker.topPx - previous.topPx;
-                                      const length = Math.sqrt(dx * dx + dy * dy);
-                                      const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-                                      const selected =
-                                        selectedFlowId.length > 0 && marker.event.flowId === selectedFlowId;
-                                      const dimmed = focusSelectedFlow && marker.event.flowId !== selectedFlowId;
-                                      const paired =
-                                        pairedEventKey != null && captureEventKey(marker.event) === pairedEventKey;
-                                      return `<div
+                                    rowRightEdges[rowIndex] = leftPx + markerGapPx;
+                                    const topPx = baselineTopPx + rowIndex * rowStridePx;
+                                    return { event, key, leftPct, leftPx, rowIndex, topPx };
+                                  });
+                                  const laneRowCount = Math.max(
+                                    1,
+                                    packedMarkers.reduce(
+                                      (max, marker) => Math.max(max, marker.rowIndex + 1),
+                                      1,
+                                    ),
+                                  );
+                                  const laneTrackHeightPx = collapsed
+                                    ? 18
+                                    : Math.max(
+                                        42,
+                                        baselineTopPx + (laneRowCount - 1) * rowStridePx + 18,
+                                      );
+                                  const selectedLaneEvent =
+                                    lane.events.find((event) => {
+                                      const key = captureEventKey(event);
+                                      return key === selectedEventKey;
+                                    }) ?? null;
+                                  const selectedFlowId =
+                                    selectedLaneEvent?.flowId || selectedEvent?.flowId || "";
+                                  const focusSelectedFlow =
+                                    state.captureTimelineFocusSelectedFlow &&
+                                    selectedFlowId.length > 0;
+                                  const laneFocusedEventCount = focusSelectedFlow
+                                    ? lane.events.filter((event) => event.flowId === selectedFlowId)
+                                        .length
+                                    : 0;
+                                  const laneBackgroundEventCount = focusSelectedFlow
+                                    ? lane.events.length - laneFocusedEventCount
+                                    : 0;
+                                  const laneFocusedPercent =
+                                    focusSelectedFlow && lane.events.length > 0
+                                      ? Math.round(
+                                          (laneFocusedEventCount / lane.events.length) * 100,
+                                        )
+                                      : 0;
+                                  const laneSelected = selectedLaneEvent != null;
+                                  const laneSeverity = describeLaneSeverity(lane.events);
+                                  const laneMeetsThreshold = focusSelectedFlow
+                                    ? laneMeetsFocusedThreshold(
+                                        laneFocusedEventCount,
+                                        lane.events.length,
+                                      )
+                                    : false;
+                                  const autoCollapsed =
+                                    focusSelectedFlow &&
+                                    focusedLaneMode === "collapse-background" &&
+                                    !laneMeetsThreshold;
+                                  const laneCompactMetaParts = [
+                                    focusSelectedFlow
+                                      ? `${laneFocusedPercent}% focus${laneBackgroundEventCount > 0 ? ` · ${laneBackgroundEventCount} bg` : ""}`
+                                      : null,
+                                    laneErrorCount > 0 ? `${laneErrorCount} err` : null,
+                                    state.captureTimelineLaneSort === "severity"
+                                      ? laneSeverity.summary
+                                      : null,
+                                    autoCollapsed ? "auto-collapsed" : null,
+                                  ].filter((value): value is string => Boolean(value));
+                                  const previousIndex = previousLanePosition.get(lane.id);
+                                  const currentIndex = timelineLanes.findIndex(
+                                    (candidate) => candidate.id === lane.id,
+                                  );
+                                  const laneMovement =
+                                    previousIndex == null ? null : previousIndex - currentIndex;
+                                  const laneIsCollapsed = collapsed || autoCollapsed;
+                                  const flowLinks = laneIsCollapsed
+                                    ? ""
+                                    : Array.from(
+                                        packedMarkers.reduce<Map<string, typeof packedMarkers>>(
+                                          (flows, marker) => {
+                                            const flowId = marker.event.flowId?.trim();
+                                            if (!flowId) {
+                                              return flows;
+                                            }
+                                            const existing = flows.get(flowId) ?? [];
+                                            existing.push(marker);
+                                            flows.set(flowId, existing);
+                                            return flows;
+                                          },
+                                          new Map(),
+                                        ),
+                                      )
+                                        .flatMap(([, markers]) => {
+                                          if (markers.length < 2) {
+                                            return [];
+                                          }
+                                          return markers.slice(1).map((marker, index) => {
+                                            const previous = markers[index];
+                                            const dx = marker.leftPx - previous.leftPx;
+                                            const dy = marker.topPx - previous.topPx;
+                                            const length = Math.sqrt(dx * dx + dy * dy);
+                                            const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+                                            const selected =
+                                              selectedFlowId.length > 0 &&
+                                              marker.event.flowId === selectedFlowId;
+                                            const dimmed =
+                                              focusSelectedFlow &&
+                                              marker.event.flowId !== selectedFlowId;
+                                            const paired =
+                                              pairedEventKey != null &&
+                                              captureEventKey(marker.event) === pairedEventKey;
+                                            return `<div
                                         class="capture-timeline-flow-link${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                         style="left:${previous.leftPct.toFixed(2)}%;top:${previous.topPx}px;width:${length.toFixed(2)}px;transform:translateY(-50%) rotate(${angle.toFixed(2)}deg)"
                                       ></div>`;
-                                    });
-                                  })
-                                  .join("");
-                            const laneGuides = timelineAxisTicks
-                              .slice(1, -1)
-                              .map(
-                                (tick) => `<div
+                                          });
+                                        })
+                                        .join("");
+                                  const laneGuides = timelineAxisTicks
+                                    .slice(1, -1)
+                                    .map(
+                                      (tick) => `<div
                                   class="capture-timeline-guide"
                                   style="left:${tick.pct.toFixed(2)}%"
                                   aria-hidden="true"
                                 ></div>`,
-                              )
-                              .join("");
-                            const markers = packedMarkers
-                              .map(({ event, key, leftPct, topPx }) => {
-                                const selected = selectedEventKey != null && key === selectedEventKey;
-                                const kindClass = `capture-timeline-marker-${event.kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
-                                const dimmed = focusSelectedFlow && event.flowId !== selectedFlowId;
-                                const paired = pairedEventKey != null && key === pairedEventKey;
-                                const label = [
-                                  formatTime(event.ts),
-                                  event.provider,
-                                  event.model,
-                                  event.kind,
-                                  event.method,
-                                  event.host,
-                                  event.path,
-                                  event.status ? `status ${event.status}` : "",
-                                  event.errorText ?? "",
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ");
-                                return `<button
+                                    )
+                                    .join("");
+                                  const markers = packedMarkers
+                                    .map(({ event, key, leftPct, topPx }) => {
+                                      const selected =
+                                        selectedEventKey != null && key === selectedEventKey;
+                                      const kindClass = `capture-timeline-marker-${event.kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+                                      const dimmed =
+                                        focusSelectedFlow && event.flowId !== selectedFlowId;
+                                      const paired =
+                                        pairedEventKey != null && key === pairedEventKey;
+                                      const label = [
+                                        formatTime(event.ts),
+                                        event.provider,
+                                        event.model,
+                                        event.kind,
+                                        event.method,
+                                        event.host,
+                                        event.path,
+                                        event.status ? `status ${event.status}` : "",
+                                        event.errorText ?? "",
+                                      ]
+                                        .filter(Boolean)
+                                        .join(" · ");
+                                      return `<button
                                   class="capture-timeline-marker ${kindClass}${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                   data-capture-event="${esc(key)}"
                                   type="button"
                                   style="left:${leftPct.toFixed(2)}%;top:${topPx}px"
                                   title="${esc(label)}"
                                 ></button>`;
-                              })
-                              .join("");
-                            const collapsedMarkers = laneIsCollapsed
-                              ? packedMarkers
-                                  .map(({ event, key, leftPct }) => {
-                                    const selected = selectedEventKey != null && key === selectedEventKey;
-                                    const kindClass = `capture-timeline-marker-${event.kind
-                                      .replace(/[^a-z0-9]+/gi, "-")
-                                      .toLowerCase()}`;
-                                    const dimmed = focusSelectedFlow && event.flowId !== selectedFlowId;
-                                    const paired = pairedEventKey != null && key === pairedEventKey;
-                                    return `<button
+                                    })
+                                    .join("");
+                                  const collapsedMarkers = laneIsCollapsed
+                                    ? packedMarkers
+                                        .map(({ event, key, leftPct }) => {
+                                          const selected =
+                                            selectedEventKey != null && key === selectedEventKey;
+                                          const kindClass = `capture-timeline-marker-${event.kind
+                                            .replace(/[^a-z0-9]+/gi, "-")
+                                            .toLowerCase()}`;
+                                          const dimmed =
+                                            focusSelectedFlow && event.flowId !== selectedFlowId;
+                                          const paired =
+                                            pairedEventKey != null && key === pairedEventKey;
+                                          return `<button
                                       class="capture-timeline-marker capture-timeline-marker-mini ${kindClass}${
                                         selected ? " selected" : ""
                                       }${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
@@ -3007,22 +3137,22 @@ function renderCaptureView(state: UiState): string {
                                           .join(" · "),
                                       )}"
                                     ></button>`;
-                                  })
-                                  .join("")
-                              : "";
-                            const selectedLaneLeft =
-                              selectedLaneEvent == null
-                                ? 50
-                                : Math.min(
-                                    84,
-                                    Math.max(
-                                      16,
-                                      ((selectedLaneEvent.ts - minTs) / totalSpanMs) * 100,
-                                    ),
-                                  );
-                            const quickPreview =
-                              selectedLaneEvent && !laneIsCollapsed
-                                ? `<div class="capture-timeline-quick-preview" style="left:${selectedLaneLeft.toFixed(2)}%">
+                                        })
+                                        .join("")
+                                    : "";
+                                  const selectedLaneLeft =
+                                    selectedLaneEvent == null
+                                      ? 50
+                                      : Math.min(
+                                          84,
+                                          Math.max(
+                                            16,
+                                            ((selectedLaneEvent.ts - minTs) / totalSpanMs) * 100,
+                                          ),
+                                        );
+                                  const quickPreview =
+                                    selectedLaneEvent && !laneIsCollapsed
+                                      ? `<div class="capture-timeline-quick-preview" style="left:${selectedLaneLeft.toFixed(2)}%">
                                     <div class="capture-timeline-quick-preview-row">
                                       <span class="capture-chip">${esc(selectedLaneEvent.kind)}</span>
                                       ${
@@ -3037,7 +3167,11 @@ function renderCaptureView(state: UiState): string {
                                       }
                                     </div>
                                     <div class="capture-timeline-quick-preview-title">${esc(
-                                      [selectedLaneEvent.method, selectedLaneEvent.host, selectedLaneEvent.path]
+                                      [
+                                        selectedLaneEvent.method,
+                                        selectedLaneEvent.host,
+                                        selectedLaneEvent.path,
+                                      ]
                                         .filter(Boolean)
                                         .join(" ") || selectedLaneEvent.flowId,
                                     )}</div>
@@ -3058,8 +3192,8 @@ function renderCaptureView(state: UiState): string {
                                           : ""
                                     }
                                   </div>`
-                                : "";
-                            return `<div class="capture-timeline-lane${laneSelected ? " selected" : ""}">
+                                      : "";
+                                  return `<div class="capture-timeline-lane${laneSelected ? " selected" : ""}">
                                 <div class="capture-timeline-lane-label${laneSelected ? " selected" : ""}">
                                   <div class="capture-timeline-lane-toolbar">
                                     <button class="capture-timeline-lane-toggle" data-capture-lane-toggle="${esc(lane.id)}" type="button">
@@ -3152,7 +3286,9 @@ function renderCaptureView(state: UiState): string {
                                     }
                                   </div>
                                   ${
-                                    laneSelected && (state.captureTimelineLaneSort === "severity" || laneMovement != null)
+                                    laneSelected &&
+                                    (state.captureTimelineLaneSort === "severity" ||
+                                      laneMovement != null)
                                       ? `<div class="capture-timeline-lane-severity">${
                                           laneMovement == null || laneMovement === 0
                                             ? ""
@@ -3161,7 +3297,9 @@ function renderCaptureView(state: UiState): string {
                                                   ? `Moved up ${laneMovement} from ${state.captureTimelinePreviousLaneSort}`
                                                   : `Moved down ${Math.abs(laneMovement)} from ${state.captureTimelinePreviousLaneSort}`
                                               }</span>${
-                                                state.captureTimelineLaneSort === "severity" ? " · " : ""
+                                                state.captureTimelineLaneSort === "severity"
+                                                  ? " · "
+                                                  : ""
                                               }`
                                         }${
                                           state.captureTimelineLaneSort === "severity"
@@ -3183,29 +3321,31 @@ function renderCaptureView(state: UiState): string {
                                   </div>
                                 </div>
                               </div>`;
-                          })
-                          .join("")}
+                                })
+                                .join("")
+                        }
                       </div>`
                         : groupedEvents
-                          .map((group) => {
-                            const groupMeta = [
-                              `${group.events.length} event${group.events.length === 1 ? "" : "s"}`,
-                              group.meta,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ");
-                            const rows =
-                              state.captureGroupMode === "burst"
-                                ? clusterEventBursts(group.events)
-                                    .map((cluster) => {
-                                      const event = cluster.representative;
-                                      const key = cluster.key;
-                                      const selected =
-                                        selectedEvent != null &&
-                                        key === captureEventKey(selectedEvent);
-                                      const paired = pairedEventKey != null && key === pairedEventKey;
-                                      const glyph = captureEventGlyph(event);
-                                      return `
+                            .map((group) => {
+                              const groupMeta = [
+                                `${group.events.length} event${group.events.length === 1 ? "" : "s"}`,
+                                group.meta,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ");
+                              const rows =
+                                state.captureGroupMode === "burst"
+                                  ? clusterEventBursts(group.events)
+                                      .map((cluster) => {
+                                        const event = cluster.representative;
+                                        const key = cluster.key;
+                                        const selected =
+                                          selectedEvent != null &&
+                                          key === captureEventKey(selectedEvent);
+                                        const paired =
+                                          pairedEventKey != null && key === pairedEventKey;
+                                        const glyph = captureEventGlyph(event);
+                                        return `
                                         <button class="capture-event-card capture-event-card-compact${selected ? " selected" : ""}${paired ? " paired" : ""}" data-capture-event="${esc(key)}" type="button">
                                           <div class="capture-event-card-rail">
                                             <span class="capture-glyph capture-glyph-${glyph.cls}">${esc(glyph.label)}</span>
@@ -3215,7 +3355,9 @@ function renderCaptureView(state: UiState): string {
                                               <div class="capture-event-card-title-row">
                                                 <strong>${esc(event.host || event.provider || event.kind)}</strong>
                                                 <span class="text-dimmed text-sm">${esc(
-                                                  [event.method, event.path].filter(Boolean).join(" ") || event.kind,
+                                                  [event.method, event.path]
+                                                    .filter(Boolean)
+                                                    .join(" ") || event.kind,
                                                 )}</span>
                                               </div>
                                               <div class="capture-event-card-meta-row">
@@ -3227,7 +3369,9 @@ function renderCaptureView(state: UiState): string {
                                             ${
                                               event.provider || event.model
                                                 ? `<div class="text-dimmed text-sm">${esc(
-                                                    [event.provider, event.model].filter(Boolean).join(" · "),
+                                                    [event.provider, event.model]
+                                                      .filter(Boolean)
+                                                      .join(" · "),
                                                   )}</div>`
                                                 : ""
                                             }
@@ -3239,17 +3383,18 @@ function renderCaptureView(state: UiState): string {
                                             }
                                           </div>
                                         </button>`;
-                                    })
-                                    .join("")
-                                : group.events
-                                    .map((event) => {
-                                const key = captureEventKey(event);
-                                const selected =
-                                  selectedEvent != null &&
-                                  key === captureEventKey(selectedEvent);
-                                const paired = pairedEventKey != null && key === pairedEventKey;
-                                const glyph = captureEventGlyph(event);
-                                return `
+                                      })
+                                      .join("")
+                                  : group.events
+                                      .map((event: CaptureEventView) => {
+                                        const key = captureEventKey(event);
+                                        const selected =
+                                          selectedEvent != null &&
+                                          key === captureEventKey(selectedEvent);
+                                        const paired =
+                                          pairedEventKey != null && key === pairedEventKey;
+                                        const glyph = captureEventGlyph(event);
+                                        return `
                                   <button class="capture-event-card capture-event-card-compact${selected ? " selected" : ""}${paired ? " paired" : ""}" data-capture-event="${esc(key)}" type="button">
                                     <div class="capture-event-card-rail">
                                       <span class="capture-glyph capture-glyph-${glyph.cls}">${esc(glyph.label)}</span>
@@ -3259,7 +3404,8 @@ function renderCaptureView(state: UiState): string {
                                         <div class="capture-event-card-title-row">
                                           <strong>${esc(event.host || event.provider || event.kind)}</strong>
                                           <span class="text-dimmed text-sm">${esc(
-                                            [event.method, event.path].filter(Boolean).join(" ") || event.kind,
+                                            [event.method, event.path].filter(Boolean).join(" ") ||
+                                              event.kind,
                                           )}</span>
                                         </div>
                                         <div class="capture-event-card-meta-row">
@@ -3273,7 +3419,9 @@ function renderCaptureView(state: UiState): string {
                                     ${
                                       event.provider || event.api || event.captureOrigin
                                         ? `<div class="text-dimmed text-sm">${esc(
-                                            [event.provider, event.api, event.captureOrigin].filter(Boolean).join(" · "),
+                                            [event.provider, event.api, event.captureOrigin]
+                                              .filter(Boolean)
+                                              .join(" · "),
                                           )}</div>`
                                         : ""
                                     }
@@ -3285,19 +3433,19 @@ function renderCaptureView(state: UiState): string {
                                     ${event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}
                                     </div>
                                   </button>`;
-                              })
-                              .join("");
-                            return state.captureGroupMode === "none"
-                              ? rows
-                              : `<section class="capture-group">
+                                      })
+                                      .join("");
+                              return state.captureGroupMode === "none"
+                                ? rows
+                                : `<section class="capture-group">
                                   <div class="capture-group-header">
                                     <div class="capture-group-title">${esc(group.label)}</div>
                                     <div class="capture-group-meta">${esc(groupMeta)}</div>
                                   </div>
                                   ${rows}
                                 </section>`;
-                          })
-                          .join("")
+                            })
+                            .join("")
                 }
               </div>
             </section>
@@ -3358,10 +3506,11 @@ function renderCaptureView(state: UiState): string {
           <div class="events-scroll" style="max-height: 520px">
             ${
               rows.length === 0
-                  ? '<div class="empty-state" style="padding:20px">This session has raw traffic, but nothing matched the selected analysis preset.</div>'
-                  : rows
+                ? '<div class="empty-state" style="padding:20px">This session has raw traffic, but nothing matched the selected analysis preset.</div>'
+                : rows
                     .map(
-                      (row) => `<pre class="report-pre" style="margin:0 0 10px 0">${esc(JSON.stringify(row, null, 2))}</pre>`,
+                      (row) =>
+                        `<pre class="report-pre" style="margin:0 0 10px 0">${esc(JSON.stringify(row, null, 2))}</pre>`,
                     )
                     .join("")
             }

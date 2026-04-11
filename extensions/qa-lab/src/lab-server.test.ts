@@ -678,7 +678,8 @@ describe("qa-lab server", () => {
     });
     process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
     process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
-    const { getDebugProxyCaptureStore } = await import("../../../src/proxy-capture/store.sqlite.js");
+    const { getDebugProxyCaptureStore } =
+      await import("../../../src/proxy-capture/store.sqlite.js");
     const store = getDebugProxyCaptureStore(
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,

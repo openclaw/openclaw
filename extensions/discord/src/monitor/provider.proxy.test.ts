@@ -281,9 +281,7 @@ describe("createDiscordGatewayPlugin", () => {
     createWebSocket("wss://gateway.discord.gg/?attempt=1");
     createWebSocket("wss://gateway.discord.gg/?attempt=2");
 
-    const openCalls = captureWsEventSpy.mock.calls.filter(
-      ([event]) => event?.kind === "ws-open",
-    );
+    const openCalls = captureWsEventSpy.mock.calls.filter(([event]) => event?.kind === "ws-open");
     expect(openCalls).toHaveLength(2);
     expect(openCalls[0]?.[0]?.flowId).not.toBe(openCalls[1]?.[0]?.flowId);
   });

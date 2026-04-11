@@ -42,7 +42,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-rest",
     label: "Discord REST monitor fetch",
-    modulePath: "extensions/discord/src/monitor/rest-fetch.ts",
+    modulePath: "extensions/discord/monitor/rest-fetch.ts",
     protocols: ["http", "https"],
     status: "captured",
     notes: "Discord monitor REST calls inherit the debug proxy and record HTTP exchanges.",
@@ -50,7 +50,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-gateway",
     label: "Discord gateway monitor",
-    modulePath: "extensions/discord/src/monitor/gateway-plugin.ts",
+    modulePath: "extensions/discord/monitor/gateway-plugin.ts",
     protocols: ["https", "wss"],
     status: "captured",
     notes:
@@ -59,7 +59,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "telegram-fetch",
     label: "Telegram fetch resolver",
-    modulePath: "extensions/telegram/src/fetch.ts",
+    modulePath: "extensions/telegram/fetch.ts",
     protocols: ["http", "https"],
     status: "captured",
     notes:
@@ -68,7 +68,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "mattermost-ws",
     label: "Mattermost monitor websocket",
-    modulePath: "extensions/mattermost/src/mattermost/monitor-websocket.ts",
+    modulePath: "extensions/mattermost/mattermost/monitor-websocket.ts",
     protocols: ["ws", "wss"],
     status: "captured",
     notes: "Mattermost websocket monitor uses the debug proxy agent and records frame activity.",
@@ -112,7 +112,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-http",
     label: "Feishu SDK HTTP client",
-    modulePath: "extensions/feishu/src/client.ts",
+    modulePath: "extensions/feishu/client.ts",
     protocols: ["https"],
     status: "proxy-only",
     notes:
@@ -121,7 +121,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-ws",
     label: "Feishu SDK websocket client",
-    modulePath: "extensions/feishu/src/client.ts",
+    modulePath: "extensions/feishu/client.ts",
     protocols: ["wss"],
     status: "proxy-only",
     notes:

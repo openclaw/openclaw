@@ -3,7 +3,7 @@ import {
   getActivePluginChannelRegistryVersionFromState,
 } from "../../plugins/runtime-channel-state.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
 export type LoadedChannelPlugin = {
   id: string;
