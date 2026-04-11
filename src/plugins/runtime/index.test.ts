@@ -190,6 +190,24 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes canonical runtime.tasks.runs and runtime.tasks.flows while keeping legacy TaskFlow aliases",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expectFunctionKeys(runtime.tasks.flows as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expectFunctionKeys(runtime.tasks.flow as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expect(runtime.taskFlow).toBe(runtime.tasks.flow);
+      },
+    },
+    {
       name: "exposes runtime.agent host helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expect(runtime.agent.defaults).toEqual({
@@ -197,6 +215,7 @@ describe("plugin runtime command execution", () => {
           provider: DEFAULT_PROVIDER,
         });
         expectFunctionKeys(runtime.agent as Record<string, unknown>, [
+          "runEmbeddedAgent",
           "runEmbeddedPiAgent",
           "resolveAgentDir",
         ]);
@@ -206,11 +225,12 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider",
+      name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expect(runtime.modelAuth).toBeDefined();
         expectFunctionKeys(runtime.modelAuth as Record<string, unknown>, [
           "getApiKeyForModel",
+          "getRuntimeAuthForModel",
           "resolveApiKeyForProvider",
         ]);
       },

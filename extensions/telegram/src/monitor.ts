@@ -1,4 +1,6 @@
 import type { RunOptions } from "@grammyjs/runner";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -8,28 +10,16 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import type { MonitorTelegramOpts } from "./monitor.types.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 
-export type MonitorTelegramOpts = {
-  token?: string;
-  accountId?: string;
-  config?: OpenClawConfig;
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  useWebhook?: boolean;
-  webhookPath?: string;
-  webhookPort?: number;
-  webhookSecret?: string;
-  webhookHost?: string;
-  proxyFetch?: typeof fetch;
-  webhookUrl?: string;
-  webhookCertPath?: string;
-};
+export type { MonitorTelegramOpts } from "./monitor.types.js";
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
@@ -75,9 +65,6 @@ type TelegramMonitorPollingRuntime = typeof import("./monitor-polling.runtime.js
 type TelegramPollingSessionInstance = InstanceType<
   TelegramMonitorPollingRuntime["TelegramPollingSession"]
 >;
-type TelegramExecApprovalHandlerInstance = InstanceType<
-  TelegramMonitorPollingRuntime["TelegramExecApprovalHandler"]
->;
 
 let telegramMonitorPollingRuntimePromise:
   | Promise<typeof import("./monitor-polling.runtime.js")>
@@ -100,7 +87,6 @@ async function loadTelegramMonitorWebhookRuntime() {
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSessionInstance | undefined;
-  let execApprovalsHandler: TelegramExecApprovalHandlerInstance | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
@@ -143,15 +129,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
     if (opts.useWebhook) {
-      const { TelegramExecApprovalHandler, startTelegramWebhook } =
-        await loadTelegramMonitorWebhookRuntime();
-      execApprovalsHandler = new TelegramExecApprovalHandler({
-        token,
-        accountId: account.accountId,
-        cfg,
-        runtime: opts.runtime,
-      });
-      await execApprovalsHandler.start();
+      const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
+      if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
+        registerChannelRuntimeContext({
+          channelRuntime: opts.channelRuntime,
+          channelId: "telegram",
+          accountId: account.accountId,
+          capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+          context: { token },
+          abortSignal: opts.abortSignal,
+        });
+      }
       await startTelegramWebhook({
         token,
         accountId: account.accountId,
@@ -170,20 +158,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
-    const {
-      TelegramExecApprovalHandler,
-      TelegramPollingSession,
-      readTelegramUpdateOffset,
-      writeTelegramUpdateOffset,
-    } = await loadTelegramMonitorPollingRuntime();
+    const { TelegramPollingSession, readTelegramUpdateOffset, writeTelegramUpdateOffset } =
+      await loadTelegramMonitorPollingRuntime();
 
-    execApprovalsHandler = new TelegramExecApprovalHandler({
-      token,
-      accountId: account.accountId,
-      cfg,
-      runtime: opts.runtime,
-    });
-    await execApprovalsHandler.start();
+    if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
+      registerChannelRuntimeContext({
+        channelRuntime: opts.channelRuntime,
+        channelId: "telegram",
+        accountId: account.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: { token },
+        abortSignal: opts.abortSignal,
+      });
+    }
 
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
@@ -243,7 +230,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
-    await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
 }

@@ -3,7 +3,9 @@ import path from "path";
 import { Readable } from "stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
+import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -105,9 +107,8 @@ function readHeaderValue(
   if (!headers) {
     return undefined;
   }
-  const target = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== target) {
+    if (normalizeLowercaseStringOrEmpty(key) !== normalizeLowercaseStringOrEmpty(name)) {
       continue;
     }
     if (typeof value === "string" && value.trim()) {
@@ -356,7 +357,7 @@ export async function uploadImageFeishu(params: {
  * in chat (regression in v2026.3.2).
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  return fileName.replace(/[\x00-\x1F\x7F\r\n"\\]/g, "_");
+  return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
 /**
@@ -495,7 +496,7 @@ export async function sendFileFeishu(params: {
 export function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
-  const ext = path.extname(fileName).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   switch (ext) {
     case ".opus":
     case ".ogg":
@@ -525,7 +526,7 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
   msgType: "image" | "file" | "audio" | "media";
 } {
   const { fileName, contentType } = params;
-  const ext = path.extname(fileName).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   const mimeKind = mediaKindFromMime(contentType);
 
   const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(

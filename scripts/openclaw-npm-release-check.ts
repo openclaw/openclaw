@@ -8,7 +8,6 @@ import {
   compareReleaseVersions as compareReleaseVersionsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  resolveNpmPublishPlan as resolveNpmPublishPlanBase,
 } from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
@@ -57,6 +56,23 @@ const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const FORBIDDEN_PACKED_PATH_RULES = [
+  {
+    prefix: "docs/.generated/",
+    describe: (packedPath: string) =>
+      `npm package must not include generated docs artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-lab/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA lab artifact "${packedPath}".`,
+  },
+] as const;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 
@@ -82,9 +98,32 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 
 export function resolveNpmPublishPlan(
   version: string,
-  currentBetaVersion?: string | null,
+  _currentBetaVersion?: string | null,
+  requestedPublishTag?: "latest" | "beta" | null,
 ): NpmPublishPlan {
-  return resolveNpmPublishPlanBase(version, currentBetaVersion) as NpmPublishPlan;
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
+
+  if (parsedVersion.channel === "beta") {
+    if (publishTag !== "beta") {
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
+    }
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  return {
+    channel: "stable",
+    publishTag,
+    mirrorDistTags: [],
+  };
 }
 
 export function resolveNpmDistTagMirrorAuth(params?: {
@@ -415,7 +454,24 @@ function collectPackedTarballErrors(): string[] {
       .filter((path): path is string => typeof path === "string" && path.length > 0),
   );
 
-  return collectControlUiPackErrors(packedPaths);
+  return [
+    ...collectControlUiPackErrors(packedPaths),
+    ...collectForbiddenPackedPathErrors(packedPaths),
+  ];
+}
+
+export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
+      packedPath.startsWith(rule.prefix),
+    );
+    if (!matchedRule) {
+      continue;
+    }
+    errors.push(matchedRule.describe(packedPath));
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 function main(): number {

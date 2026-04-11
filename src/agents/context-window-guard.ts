@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
@@ -23,19 +23,25 @@ export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  modelContextTokens?: number;
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
-      | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
+      | Record<
+          string,
+          { models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }> }
+        >
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
     const match = models.find((m) => m?.id === params.modelId);
-    return normalizePositiveInt(match?.contextWindow);
+    return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
-  const fromModel = normalizePositiveInt(params.modelContextWindow);
+  const fromModel =
+    normalizePositiveInt(params.modelContextTokens) ??
+    normalizePositiveInt(params.modelContextWindow);
   const baseInfo = fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
     : fromModel

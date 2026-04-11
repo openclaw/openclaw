@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
+import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
 import type { GatewayConnectionDetails } from "./call.js";
 
 function details(overrides: Partial<GatewayConnectionDetails>): GatewayConnectionDetails {

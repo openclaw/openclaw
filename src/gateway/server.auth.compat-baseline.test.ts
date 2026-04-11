@@ -13,7 +13,10 @@ import {
   restoreGatewayToken,
   startGatewayServer,
   testState,
+  installGatewayTestHooks,
 } from "./server.auth.shared.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 function expectAuthErrorDetails(params: {
   details: unknown;
@@ -190,7 +193,22 @@ describe("gateway auth compatibility baseline", () => {
           scopes: ["operator.admin"],
         });
         expect(res.ok).toBe(true);
-        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+        const payload = res.payload as
+          | {
+              type?: string;
+              snapshot?: {
+                configPath?: string;
+                stateDir?: string;
+                authMode?: string;
+              };
+            }
+          | undefined;
+        expect(payload?.type).toBe("hello-ok");
+        expect(typeof payload?.snapshot?.configPath).toBe("string");
+        expect((payload?.snapshot?.configPath ?? "").length).toBeGreaterThan(0);
+        expect(typeof payload?.snapshot?.stateDir).toBe("string");
+        expect((payload?.snapshot?.stateDir ?? "").length).toBeGreaterThan(0);
+        expect(payload?.snapshot?.authMode).toBe("token");
       } finally {
         ws.close();
       }

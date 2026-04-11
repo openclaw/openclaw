@@ -10,9 +10,14 @@ import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../agents/pi-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
@@ -40,7 +45,14 @@ export function createPluginToolsMcpServer(
   } = {},
 ): Server {
   const cfg = params.config ?? loadConfig();
-  const tools = params.tools ?? resolveTools(cfg);
+  const tools = (params.tools ?? resolveTools(cfg)).map((tool) => {
+    if (isToolWrappedWithBeforeToolCallHook(tool)) {
+      return tool;
+    }
+    // The ACPX MCP bridge should enforce the same pre-execution hook boundary
+    // as the agent and HTTP tool execution paths.
+    return wrapToolWithBeforeToolCallHook(tool);
+  });
 
   const toolMap = new Map<string, AnyAgentTool>();
   for (const tool of tools) {
@@ -77,9 +89,7 @@ export function createPluginToolsMcpServer(
       };
     } catch (err) {
       return {
-        content: [
-          { type: "text", text: `Tool error: ${err instanceof Error ? err.message : String(err)}` },
-        ],
+        content: [{ type: "text", text: `Tool error: ${formatErrorMessage(err)}` }],
         isError: true,
       };
     }
@@ -124,9 +134,7 @@ export async function servePluginToolsMcp(): Promise<void> {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   servePluginToolsMcp().catch((err) => {
-    process.stderr.write(
-      `plugin-tools-serve: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });
 }

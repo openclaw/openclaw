@@ -1,10 +1,13 @@
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
-import { parseDiscordTarget } from "./targets.js";
+import {
+  getExecApprovalReplyMetadata,
+  isChannelExecApprovalClientEnabledFromConfig,
+  resolveApprovalApprovers,
+} from "./approval-runtime.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 function normalizeDiscordApproverId(value: string): string | undefined {
   const trimmed = value.trim();
@@ -53,14 +56,14 @@ export function isDiscordExecApprovalClientEnabled(params: {
   configOverride?: DiscordExecApprovalConfig | null;
 }): boolean {
   const config = params.configOverride ?? resolveDiscordAccount(params).config.execApprovals;
-  return Boolean(
-    config?.enabled &&
-    getDiscordExecApprovalApprovers({
+  return isChannelExecApprovalClientEnabledFromConfig({
+    enabled: config?.enabled,
+    approverCount: getDiscordExecApprovalApprovers({
       cfg: params.cfg,
       accountId: params.accountId,
       configOverride: params.configOverride,
-    }).length > 0,
-  );
+    }).length,
+  });
 }
 
 export function isDiscordExecApprovalApprover(params: {

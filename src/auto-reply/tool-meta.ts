@@ -1,4 +1,5 @@
 import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 type ToolAggregateOptions = {
@@ -80,7 +81,7 @@ function formatMetaForDisplay(
   meta: string,
   markdown?: boolean,
 ): string {
-  const normalized = (toolName ?? "").trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (normalized === "exec" || normalized === "bash") {
     const { flags, body } = splitExecFlags(meta);
     if (flags.length > 0) {

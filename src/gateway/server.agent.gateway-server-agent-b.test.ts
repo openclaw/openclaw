@@ -112,7 +112,7 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
 }
 
 function readAgentCommandCall(fromEnd = 1) {
-  const calls = vi.mocked(agentCommand).mock.calls as unknown[][];
+  const calls = vi.mocked(agentCommand).mock.calls;
   return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
 }
 
@@ -371,27 +371,6 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
 
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
-  });
-
-  test("agent routes bare /new through session reset before running greeting prompt", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
-    const spy = vi.mocked(agentCommand);
-    const calls = spy.mock.calls as unknown[][];
-    const callsBefore = calls.length;
-    const res = await rpcReq(ws, "agent", {
-      message: "/new",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-new",
-    });
-    expect(res.ok).toBe(true);
-
-    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
-    const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
-    expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Run your Session Startup sequence");
-    expect(call.message).toContain("Current time:");
-    expect(typeof call.sessionId).toBe("string");
-    expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {

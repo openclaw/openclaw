@@ -2,6 +2,19 @@
 // Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
+import {
+  createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-loader.js";
+
+type MatrixFacadeModule = typeof import("@openclaw/matrix/contract-api.js");
+
+function loadMatrixFacadeModule(): MatrixFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<MatrixFacadeModule>({
+    dirName: "matrix",
+    artifactBasename: "contract-api.js",
+  });
+}
 
 export {
   createActionGate,
@@ -74,7 +87,7 @@ export type {
   ChannelResolveResult,
   ChannelSetupInput,
   ChannelToolSend,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
@@ -97,6 +110,7 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type {
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   GroupToolPolicyConfig,
@@ -177,6 +191,18 @@ export {
   resetMatrixThreadBindingsForTests,
 } from "./matrix-surface.js";
 export { setMatrixRuntime } from "./matrix-runtime-surface.js";
+
+export const singleAccountKeysToMove: MatrixFacadeModule["singleAccountKeysToMove"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().singleAccountKeysToMove);
+
+export const namedAccountPromotionKeys: MatrixFacadeModule["namedAccountPromotionKeys"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().namedAccountPromotionKeys);
+
+export const resolveSingleAccountPromotionTarget: MatrixFacadeModule["resolveSingleAccountPromotionTarget"] =
+  ((...args) =>
+    loadMatrixFacadeModule().resolveSingleAccountPromotionTarget(
+      ...args,
+    )) as MatrixFacadeModule["resolveSingleAccountPromotionTarget"];
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

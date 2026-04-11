@@ -1,55 +1,28 @@
-import { resolveMergedAccountConfig } from "../channels/plugins/account-helpers.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
 } from "../channels/plugins/config-helpers.js";
+import {
+  authorizeConfigWriteShared,
+  canBypassConfigWritePolicyShared,
+  formatConfigWriteDeniedMessageShared,
+  resolveChannelConfigWritesShared,
+  type ConfigWriteAuthorizationResultLike,
+  type ConfigWriteScopeLike,
+  type ConfigWriteTargetLike,
+} from "../channels/plugins/config-write-policy-shared.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
-type SimpleDirectMessageConfig = {
-  allowFrom?: Array<string | number>;
-  defaultTo?: string | number | null;
-};
-
-type SimpleScopedChannelConfig = SimpleDirectMessageConfig & {
-  accounts?: Record<string, Partial<SimpleDirectMessageConfig>>;
-};
-
-const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
-const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
-type AccountConfigWithWrites = {
-  configWrites?: boolean;
-};
-
-type ChannelConfigWithAccounts = {
-  configWrites?: boolean;
-  accounts?: Record<string, AccountConfigWithWrites>;
-};
-
-export type ConfigWriteScope = {
-  channelId?: string | null;
-  accountId?: string | null;
-};
-
-export type ConfigWriteTarget =
-  | { kind: "global" }
-  | { kind: "channel"; scope: { channelId: string } }
-  | { kind: "account"; scope: { channelId: string; accountId: string } }
-  | { kind: "ambiguous"; scopes: ConfigWriteScope[] };
-
-export type ConfigWriteAuthorizationResult =
-  | { allowed: true }
-  | {
-      allowed: false;
-      reason: "ambiguous-target" | "origin-disabled" | "target-disabled";
-      blockedScope?: { kind: "origin" | "target"; scope: ConfigWriteScope };
-    };
+export type ConfigWriteScope = ConfigWriteScopeLike;
+export type ConfigWriteTarget = ConfigWriteTargetLike;
+export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 type ChannelCrudConfigAdapter<ResolvedAccount> = Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -117,88 +90,12 @@ function buildAccountScopedDmSecurityPolicy(params: {
   };
 }
 
-function normalizeLocalE164(number: string): string {
-  const withoutPrefix = number.replace(/^whatsapp:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
-}
-
-function stripWhatsAppTargetPrefixes(value: string): string {
-  let candidate = value.trim();
-  for (;;) {
-    const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) {
-      return candidate;
-    }
-  }
-}
-
-function normalizeLocalWhatsAppTarget(value: string): string | null {
-  const candidate = stripWhatsAppTargetPrefixes(value);
-  if (!candidate) {
-    return null;
-  }
-  if (candidate.toLowerCase().endsWith("@g.us")) {
-    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-    return /^[0-9]+(-[0-9]+)*$/.test(localPart) ? `${localPart}@g.us` : null;
-  }
-  const userMatch = candidate.match(WHATSAPP_USER_JID_RE);
-  const lidMatch = candidate.match(WHATSAPP_LID_RE);
-  const phone = userMatch?.[1] ?? lidMatch?.[1];
-  if (phone) {
-    const normalized = normalizeLocalE164(phone);
-    return normalized.length > 1 ? normalized : null;
-  }
-  if (candidate.includes("@")) {
-    return null;
-  }
-  const normalized = normalizeLocalE164(candidate);
-  return normalized.length > 1 ? normalized : null;
-}
-
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId?: string | null,
-): ChannelConfigWithAccounts | undefined {
-  if (!channelId) {
-    return undefined;
-  }
-  return (cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined)?.[channelId];
-}
-
-function resolveChannelAccountConfig(
-  channelConfig: ChannelConfigWithAccounts,
-  accountId?: string | null,
-): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
-}
-
-function listConfigWriteTargetScopes(target?: ConfigWriteTarget): ConfigWriteScope[] {
-  if (!target || target.kind === "global") {
-    return [];
-  }
-  if (target.kind === "ambiguous") {
-    return target.scopes;
-  }
-  return [target.scope];
-}
-
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
   accountId?: string | null;
 }): boolean {
-  const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
-  if (!channelConfig) {
-    return true;
-  }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
-  const value = accountConfig?.configWrites ?? channelConfig.configWrites;
-  return value !== false;
+  return resolveChannelConfigWritesShared(params);
 }
 
 export function authorizeConfigWrite(params: {
@@ -207,81 +104,25 @@ export function authorizeConfigWrite(params: {
   target?: ConfigWriteTarget;
   allowBypass?: boolean;
 }): ConfigWriteAuthorizationResult {
-  if (params.allowBypass) {
-    return { allowed: true };
-  }
-  if (params.target?.kind === "ambiguous") {
-    return { allowed: false, reason: "ambiguous-target" };
-  }
-  if (
-    params.origin?.channelId &&
-    !resolveChannelConfigWrites({
-      cfg: params.cfg,
-      channelId: params.origin.channelId,
-      accountId: params.origin.accountId,
-    })
-  ) {
-    return {
-      allowed: false,
-      reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: params.origin },
-    };
-  }
-  const seen = new Set<string>();
-  for (const target of listConfigWriteTargetScopes(params.target)) {
-    if (!target.channelId) {
-      continue;
-    }
-    const key = `${target.channelId}:${normalizeAccountId(target.accountId)}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    if (
-      !resolveChannelConfigWrites({
-        cfg: params.cfg,
-        channelId: target.channelId,
-        accountId: target.accountId,
-      })
-    ) {
-      return {
-        allowed: false,
-        reason: "target-disabled",
-        blockedScope: { kind: "target", scope: target },
-      };
-    }
-  }
-  return { allowed: true };
+  return authorizeConfigWriteShared(params);
 }
 
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
 }): boolean {
-  return (
-    params.channel?.trim().toLowerCase() === INTERNAL_MESSAGE_CHANNEL &&
-    params.gatewayClientScopes?.includes("operator.admin") === true
-  );
+  return canBypassConfigWritePolicyShared({
+    ...params,
+    isInternalMessageChannel: (channel) =>
+      normalizeOptionalLowercaseString(channel) === INTERNAL_MESSAGE_CHANNEL,
+  });
 }
 
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: string | null;
 }): string {
-  if (params.result.reason === "ambiguous-target") {
-    return "⚠️ Channel-initiated /config writes cannot replace channels, channel roots, or accounts collections. Use a more specific path or gateway operator.admin.";
-  }
-
-  const blocked = params.result.blockedScope?.scope;
-  const channelLabel = blocked?.channelId ?? params.fallbackChannelId ?? "this channel";
-  const hint = blocked?.channelId
-    ? blocked.accountId
-      ? `channels.${blocked.channelId}.accounts.${blocked.accountId}.configWrites=true`
-      : `channels.${blocked.channelId}.configWrites=true`
-    : params.fallbackChannelId
-      ? `channels.${params.fallbackChannelId}.configWrites=true`
-      : "channels.<channel>.configWrites=true";
-  return `⚠️ Config writes are disabled for ${channelLabel}. Set ${hint} to enable.`;
+  return formatConfigWriteDeniedMessageShared(params);
 }
 
 type ChannelConfigAccessorParams<Config extends OpenClawConfig = OpenClawConfig> = {
@@ -841,86 +682,3 @@ export function createScopedDmSecurityResolver<
 }
 
 export { buildAccountScopedDmSecurityPolicy };
-function resolveMergedSimpleChannelAccountConfig(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountId?: string | null;
-  omitKeys?: string[];
-}): SimpleDirectMessageConfig {
-  const channelRoot = params.cfg.channels?.[params.channelKey] as
-    | SimpleScopedChannelConfig
-    | undefined;
-  return resolveMergedAccountConfig<SimpleDirectMessageConfig>({
-    channelConfig: channelRoot,
-    accounts: channelRoot?.accounts,
-    accountId: normalizeAccountId(params.accountId),
-    omitKeys: params.omitKeys,
-  });
-}
-
-/** Read the effective WhatsApp allowlist from merged root/account config without registry indirection. */
-export function resolveWhatsAppConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).allowFrom,
-  );
-}
-
-/** Format WhatsApp allowlist entries with the same normalization used by the channel plugin. */
-export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => String(entry).trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => (entry === "*" ? entry : normalizeLocalWhatsAppTarget(entry)))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-/** Resolve the effective WhatsApp default recipient after account and root config fallback. */
-export function resolveWhatsAppConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).defaultTo,
-  );
-}
-
-/** Read iMessage allowlist entries from merged root/account config without registry indirection. */
-export function resolveIMessageConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).allowFrom,
-  );
-}
-
-/** Resolve the effective iMessage default recipient from merged root/account config. */
-export function resolveIMessageConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).defaultTo,
-  );
-}

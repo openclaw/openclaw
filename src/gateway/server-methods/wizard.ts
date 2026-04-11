@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultRuntime } from "../../runtime.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
@@ -46,7 +47,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = randomUUID();
     const opts = {
       mode: params.mode,
-      workspace: typeof params.workspace === "string" ? params.workspace : undefined,
+      workspace: readStringValue(params.workspace),
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),
@@ -74,7 +75,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await session.answer(String(answer.stepId ?? ""), answer.value);
+        await session.answer(answer.stepId ?? "", answer.value);
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;

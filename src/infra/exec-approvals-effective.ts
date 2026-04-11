@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
@@ -10,18 +10,25 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  type ExecTarget,
 } from "./exec-approvals.js";
 
-const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "allowlist";
-const DEFAULT_REQUESTED_ASK: ExecAsk = "on-miss";
+const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
+const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
 const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,
 } as const;
 type ExecPolicyConfig = {
+  host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
+};
+
+export type ExecPolicyHostSummary = {
+  requested: ExecTarget;
+  requestedSource: string;
 };
 
 export type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
@@ -37,6 +44,7 @@ export type ExecPolicyScopeSnapshot = {
   scopeLabel: string;
   configPath: string;
   agentId?: string;
+  host: ExecPolicyHostSummary;
   security: ExecPolicyFieldSummary<ExecSecurity>;
   ask: ExecPolicyFieldSummary<ExecAsk>;
   askFallback: {
@@ -49,6 +57,30 @@ export type ExecPolicyScopeSnapshot = {
 export type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
 
 type ExecPolicyRequestedField = "security" | "ask";
+
+function resolveRequestedHost(params: {
+  scopeExecConfig?: ExecPolicyConfig;
+  globalExecConfig?: ExecPolicyConfig;
+}): { value: ExecTarget; sourcePath: string } {
+  const scopeValue = params.scopeExecConfig?.host;
+  if (scopeValue !== undefined) {
+    return {
+      value: scopeValue,
+      sourcePath: "scope",
+    };
+  }
+  const globalValue = params.globalExecConfig?.host;
+  if (globalValue !== undefined) {
+    return {
+      value: globalValue,
+      sourcePath: "tools.exec",
+    };
+  }
+  return {
+    value: "auto",
+    sourcePath: "__default__",
+  };
+}
 
 function formatRequestedSource(params: {
   sourcePath: string;
@@ -107,9 +139,6 @@ function resolveAskNote(params: {
   hostAsk: ExecAsk;
   effectiveAsk: ExecAsk;
 }): string {
-  if (params.hostAsk === "off" && params.requestedAsk !== "off") {
-    return "host ask=off suppresses prompts";
-  }
   if (params.effectiveAsk === params.requestedAsk) {
     return "requested ask applies";
   }
@@ -185,6 +214,10 @@ export function resolveExecPolicyScopeSnapshot(params: {
     scopeExecConfig: params.scopeExecConfig,
     globalExecConfig: params.globalExecConfig,
   });
+  const requestedHost = resolveRequestedHost({
+    scopeExecConfig: params.scopeExecConfig,
+    globalExecConfig: params.globalExecConfig,
+  });
   const requestedAsk = resolveRequestedField<ExecAsk>({
     field: "ask",
     scopeExecConfig: params.scopeExecConfig,
@@ -200,12 +233,19 @@ export function resolveExecPolicyScopeSnapshot(params: {
   });
   const hostPath = params.hostPath ?? DEFAULT_HOST_PATH;
   const effectiveSecurity = minSecurity(requestedSecurity.value, resolved.agent.security);
-  const effectiveAsk =
-    resolved.agent.ask === "off" ? "off" : maxAsk(requestedAsk.value, resolved.agent.ask);
+  const effectiveAsk = maxAsk(requestedAsk.value, resolved.agent.ask);
+  const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);
   return {
     scopeLabel: params.scopeLabel,
     configPath: params.configPath,
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    host: {
+      requested: requestedHost.value,
+      requestedSource:
+        requestedHost.sourcePath === "__default__"
+          ? "OpenClaw default (auto)"
+          : `${requestedHost.sourcePath === "scope" ? params.configPath : requestedHost.sourcePath}.host`,
+    },
     security: {
       requested: requestedSecurity.value,
       requestedSource: formatRequestedSource({
@@ -250,7 +290,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       }),
     },
     askFallback: {
-      effective: resolved.agent.askFallback,
+      effective: effectiveAskFallback,
       source: formatHostFieldSource({
         hostPath,
         field: "askFallback",

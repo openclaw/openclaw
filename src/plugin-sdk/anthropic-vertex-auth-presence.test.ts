@@ -1,21 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-auth-presence.js";
+import { createPluginSdkTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDir } = createPluginSdkTestHarness();
 
 describe("hasAnthropicVertexAvailableAuth", () => {
   it("preserves unicode GOOGLE_APPLICATION_CREDENTIALS paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vertex-auth-"));
-    tempDirs.push(root);
+    const root = await createTempDir("openclaw-vertex-auth-");
     const unicodeDir = path.join(root, "認証情報");
     await fs.mkdir(unicodeDir, { recursive: true });
     const credentialsPath = path.join(unicodeDir, "application_default_credentials.json");

@@ -86,4 +86,119 @@ describe("openai codex provider", () => {
       "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
     );
   });
+
+  it("owns native reasoning output mode for Codex responses", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openai-codex",
+        modelApi: "openai-codex-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("resolves gpt-5.4 with native contextWindow plus default contextTokens cap", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.1-codex-mini") {
+            return {
+              id: "gpt-5.1-codex-mini",
+              name: "gpt-5.1-codex-mini",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return null;
+        },
+      } as never,
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-mini",
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+    });
+    expect(model).not.toHaveProperty("contextTokens");
+  });
+
+  it("augments catalog with gpt-5.4 native contextWindow and runtime cap", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-mini",
+        contextWindow: 272_000,
+      }),
+    );
+  });
 });

@@ -111,6 +111,7 @@ export type GatewayHelloOk = {
     scopes?: string[];
     issuedAtMs?: number;
   };
+  canvasHostUrl?: string;
   policy?: { tickIntervalMs?: number };
 };
 
@@ -294,10 +295,7 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -318,7 +316,7 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
-      const reason = String(ev.reason ?? "");
+      const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
@@ -347,7 +345,11 @@ export class GatewayBrowserClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+    this.clearConnectTimer();
+    this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private flushPending(err: Error) {
@@ -495,10 +497,7 @@ export class GatewayBrowserClient {
       return;
     }
     this.connectSent = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
 
     const plan = await this.buildConnectPlan();
     void this.request<GatewayHelloOk>("connect", this.buildConnectParams(plan))
@@ -612,11 +611,17 @@ export class GatewayBrowserClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-    }
+    this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
       void this.sendConnect();
     }, 750);
+  }
+
+  private clearConnectTimer() {
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 }

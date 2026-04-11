@@ -52,7 +52,7 @@ function mergeMatrixRoomEntries(
     return undefined;
   }
   const merged: MatrixRoomEntries = {
-    ...(inherited ?? {}),
+    ...inherited,
   };
   for (const [key, value] of Object.entries(accountEntries ?? {})) {
     const inheritedValue = merged[key];
@@ -121,7 +121,7 @@ export function resolveMatrixAccountConfig(params: {
       | undefined,
     accountId,
     normalizeAccountId,
-    nestedObjectKeys: ["dm", "actions"],
+    nestedObjectKeys: ["dm", "actions", "execApprovals"],
   });
   const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
   const groups = mergeMatrixRoomEntries(

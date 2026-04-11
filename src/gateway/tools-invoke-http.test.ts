@@ -35,13 +35,8 @@ vi.mock("../config/sessions.js", () => ({
     }
     const agents = params?.agents?.list ?? [];
     const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-    const agentId =
-      String(rawDefault ?? "main")
-        .trim()
-        .toLowerCase() || "main";
-    const mainKeyRaw = String(params?.session?.mainKey ?? "main")
-      .trim()
-      .toLowerCase();
+    const agentId = rawDefault.trim().toLowerCase() || "main";
+    const mainKeyRaw = (params?.session?.mainKey ?? "main").trim().toLowerCase();
     const mainKey = mainKeyRaw || "main";
     return `agent:${agentId}:${mainKey}`;
   },
@@ -55,9 +50,13 @@ vi.mock("../logger.js", () => ({
   logWarn: () => {},
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: () => false,
-}));
+vi.mock("../plugins/config-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/config-state.js")>();
+  return {
+    ...actual,
+    isTestDefaultMemorySlotDisabled: () => false,
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
@@ -390,6 +389,7 @@ describe("POST /tools/invoke", () => {
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("result");
     expect(lastCreateOpenClawToolsContext?.allowMediaInvokeCommands).toBe(true);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
     expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "agents_list",
@@ -408,6 +408,19 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("keeps plugin tools enabled for non-core tool invokes", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+
+    const res = await invokeToolAuthed({
+      tool: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {
@@ -456,6 +469,28 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
+  });
+
+  it("threads senderIsOwner into tool creation before owner-only filtering", async () => {
+    setMainAllowedTools({ allow: ["session_status", "owner_only_test"] });
+
+    const writeRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      tool: "session_status",
+      sessionKey: "main",
+    });
+    expect(writeRes.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+
+    const adminRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "session_status",
+      sessionKey: "main",
+    });
+    expect(adminRes.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("uses before_tool_call adjusted params for HTTP tool execution", async () => {
@@ -736,10 +771,16 @@ describe("POST /tools/invoke", () => {
 
   it("requires operator.write scope for HTTP tool invocation", async () => {
     allowAgentsListForMain();
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "trusted-proxy",
+    });
 
     const res = await invokeTool({
       port: sharedPort,
-      headers: {},
+      headers: {
+        "x-openclaw-scopes": "",
+      },
       tool: "agents_list",
       sessionKey: "main",
     });

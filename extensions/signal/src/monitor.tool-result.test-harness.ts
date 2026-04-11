@@ -27,6 +27,9 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalToolResultSessionStorePath = vi.hoisted(
+  () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
+);
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -71,7 +74,10 @@ export function createSignalToolResultConfig(
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 export function createMockSignalDaemonHandle(
   overrides: {
@@ -99,7 +105,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
     ...actual,
     loadConfig: () => config,
-    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    resolveStorePath: vi.fn(() => signalToolResultSessionStorePath),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -122,7 +128,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         waitForIdle?: () => Promise<void>;
       };
     }) => {
-      const resolved = await replyMock(params.ctx, {}, params.cfg);
+      const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
+        | { text?: string }
+        | undefined;
       const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
       if (text) {
         params.dispatcher.sendFinalReply({ text });
@@ -179,9 +187,9 @@ vi.mock("./daemon.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-runtime")>(
-    "openclaw/plugin-sdk/channel-runtime",
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
   );
   return {
     ...actual,
@@ -197,11 +205,12 @@ export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/channel-runtime"),
+      import("openclaw/plugin-sdk/infra-runtime"),
     ]);
     resetInboundDedupe();
     config = {
       messages: { responsePrefix: "PFX" },
+      session: { store: signalToolResultSessionStorePath },
       channels: {
         signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
       },

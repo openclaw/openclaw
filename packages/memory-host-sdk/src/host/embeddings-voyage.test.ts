@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../../../../src/agents/model-auth.js";
 import { type FetchMock, withFetchPreconnect } from "../../../../src/test-utils/fetch-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
@@ -42,17 +43,17 @@ function installFetchMock(fetchMock: typeof globalThis.fetch) {
   vi.stubGlobal("fetch", fetchMock);
 }
 
-let authModule: typeof import("../../../../src/agents/model-auth.js");
 let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").createVoyageEmbeddingProvider;
 let normalizeVoyageModel: typeof import("./embeddings-voyage.js").normalizeVoyageModel;
 
-beforeEach(async () => {
-  vi.useRealTimers();
-  vi.doUnmock("undici");
-  vi.resetModules();
-  authModule = await import("../../../../src/agents/model-auth.js");
+beforeAll(async () => {
   ({ createVoyageEmbeddingProvider, normalizeVoyageModel } =
     await import("./embeddings-voyage.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
 });
 
 function mockVoyageApiKey() {

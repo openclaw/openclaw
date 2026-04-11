@@ -11,8 +11,12 @@ export {
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,
 } from "../agents/model-auth-runtime-shared.js";
+export type { ProviderPreparedRuntimeAuth } from "../plugins/types.js";
+export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type GetRuntimeAuthForModel =
+  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;
 type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
 const RUNTIME_MODEL_AUTH_CANDIDATES = [
   "./runtime-model-auth.runtime",
@@ -42,4 +46,11 @@ export async function resolveApiKeyForProvider(
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   const { resolveApiKeyForProvider } = await loadRuntimeModelAuthModule();
   return resolveApiKeyForProvider(params);
+}
+
+export async function getRuntimeAuthForModel(
+  params: Parameters<GetRuntimeAuthForModel>[0],
+): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
+  const { getRuntimeAuthForModel } = await loadRuntimeModelAuthModule();
+  return getRuntimeAuthForModel(params);
 }

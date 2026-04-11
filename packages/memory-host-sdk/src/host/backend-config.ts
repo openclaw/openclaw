@@ -13,6 +13,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
 import { normalizeAgentId } from "../../../../src/routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
@@ -107,7 +108,7 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }
@@ -371,8 +372,9 @@ export function resolveMemoryBackendConfig(params: {
   const mergedExtraCollections = [
     ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
     ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
-  ].filter((value): value is MemoryQmdIndexPath =>
-    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
   );
 
   // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.

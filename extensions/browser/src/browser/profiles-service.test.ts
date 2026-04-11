@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: vi.fn(),
@@ -23,8 +23,10 @@ vi.mock("./chrome.js", () => ({
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
 }));
 
-let resolveBrowserConfig: typeof import("./config.js").resolveBrowserConfig;
-let createBrowserProfilesService: typeof import("./profiles-service.js").createBrowserProfilesService;
+const [{ resolveBrowserConfig }, { createBrowserProfilesService }] = await Promise.all([
+  import("./config.js"),
+  import("./profiles-service.js"),
+]);
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -57,11 +59,6 @@ async function createWorkProfileWithConfig(params: {
 }
 
 describe("BrowserProfilesService", () => {
-  beforeAll(async () => {
-    ({ resolveBrowserConfig } = await import("./config.js"));
-    ({ createBrowserProfilesService } = await import("./profiles-service.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -114,7 +111,9 @@ describe("BrowserProfilesService", () => {
   });
 
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({});
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
     const { ctx } = createCtx(resolved);
 
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
@@ -139,6 +138,30 @@ describe("BrowserProfilesService", () => {
         }),
       }),
     );
+  });
+
+  it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        profiles: {},
+      },
+    });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "remote",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("creates existing-session profiles as attach-only local entries", async () => {

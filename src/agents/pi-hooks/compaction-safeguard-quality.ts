@@ -1,4 +1,5 @@
-import { extractKeywords, isQueryStopWordToken } from "../../plugin-sdk/memory-core-host-query.js";
+import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
+import { localeLowercasePreservingWhitespace } from "../../shared/string-coerce.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
@@ -166,7 +167,7 @@ export function extractOpaqueIdentifiers(text: string): string[] {
 }
 
 function tokenizeAskOverlapText(text: string): string[] {
-  const normalized = text.toLocaleLowerCase().normalize("NFKC").trim();
+  const normalized = localeLowercasePreservingWhitespace(text.normalize("NFKC")).trim();
   if (!normalized) {
     return [];
   }

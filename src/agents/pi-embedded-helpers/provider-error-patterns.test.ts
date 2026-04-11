@@ -1,4 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const hoisted = vi.hoisted(() => ({
+  classifyProviderFailoverReasonWithPlugin: vi.fn(() => null),
+  matchesProviderContextOverflowWithPlugin: vi.fn(() => false),
+}));
+
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
+    matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
+  };
+});
+
 import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
 import {
   classifyProviderSpecificError,
@@ -6,6 +23,15 @@ import {
 } from "./provider-error-patterns.js";
 
 describe("matchesProviderContextOverflow", () => {
+  it("skips provider hook dispatch for unrelated errors", () => {
+    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
+
+    expect(
+      matchesProviderContextOverflow("Permission denied for /root/oc-acp-write-should-fail.txt."),
+    ).toBe(false);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
+  });
+
   it.each([
     // AWS Bedrock
     "ValidationException: The input is too long for the model",
@@ -24,6 +50,11 @@ describe("matchesProviderContextOverflow", () => {
     // Cohere
     "total tokens exceeds the model's maximum limit of 4096",
 
+    // llama.cpp HTTP server (slot ctx-size overflow)
+    "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
+    "request (130000 tokens) exceeds available context size (131072 tokens)",
+    "prompt (8500 tokens) exceeds the available context size (8192 tokens), try increasing it",
+
     // Generic
     "input is too long for model gpt-5.4",
   ])("matches provider-specific overflow: %s", (msg) => {
@@ -31,9 +62,11 @@ describe("matchesProviderContextOverflow", () => {
   });
 
   it("does not match unrelated errors", () => {
+    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
     expect(matchesProviderContextOverflow("rate limit exceeded")).toBe(false);
     expect(matchesProviderContextOverflow("invalid api key")).toBe(false);
     expect(matchesProviderContextOverflow("internal server error")).toBe(false);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
   });
 });
 
@@ -59,6 +92,12 @@ describe("classifyProviderSpecificError", () => {
     expect(classifyProviderSpecificError("concurrency limit reached")).toBe("rate_limit");
   });
 
+  it("classifies Cloudflare Workers AI quota errors as rate_limit", () => {
+    expect(classifyProviderSpecificError("workers_ai gateway error: quota limit exceeded")).toBe(
+      "rate_limit",
+    );
+  });
+
   it("does not match generic 'model is not ready' without Bedrock prefix", () => {
     expect(classifyProviderSpecificError("model is not ready")).toBeNull();
   });
@@ -77,6 +116,15 @@ describe("isContextOverflowError with provider patterns", () => {
 
   it("detects Ollama context overflow", () => {
     expect(isContextOverflowError("ollama error: context length exceeded")).toBe(true);
+  });
+
+  it("detects llama.cpp slot ctx-size overflow", () => {
+    // Native llama.cpp HTTP server overflow surfaced through openai-completions providers.
+    expect(
+      isContextOverflowError(
+        "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
+      ),
+    ).toBe(true);
   });
 
   it("still detects standard context overflow patterns", () => {

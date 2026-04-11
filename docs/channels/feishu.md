@@ -764,7 +764,8 @@ When the agent handles a Drive comment event, it receives:
 - the comment thread context for in-thread replies
 
 After making document edits, the agent is guided to use `feishu_drive.reply_comment` to notify the
-commenter and then output `NO_REPLY` to avoid duplicate sends.
+commenter and then output the exact silent token `NO_REPLY` / `no_reply` to
+avoid duplicate sends.
 
 ## Runtime action surface
 

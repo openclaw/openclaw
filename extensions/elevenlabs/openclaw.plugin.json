@@ -3,6 +3,15 @@
   "contracts": {
     "speechProviders": ["elevenlabs"]
   },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "talk.voiceId",
+      "talk.voiceAliases",
+      "talk.modelId",
+      "talk.outputFormat",
+      "talk.apiKey"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

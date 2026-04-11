@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   findBundledPluginSourceInMap,
@@ -22,6 +21,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
@@ -244,13 +244,16 @@ function loadChannelSetupPluginRegistry(params: {
   activate?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
-  const resolvedConfig = applyPluginAutoEnable({ config: params.cfg, env: process.env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
+  const resolvedConfig = autoEnabled.config;
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const log = createSubsystemLogger("plugins");
   return loadOpenClawPlugins({
     config: resolvedConfig,
+    activationSourceConfig: params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     cache: false,
     logger: createPluginLoaderLogger(log),
@@ -270,9 +273,12 @@ function resolveScopedChannelPluginId(params: {
   if (explicitPluginId) {
     return explicitPluginId;
   }
-  return getChannelPluginCatalogEntry(params.channel, {
-    workspaceDir: params.workspaceDir,
-  })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params);
+  return (
+    getTrustedChannelPluginCatalogEntry(params.channel, {
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params)
+  );
 }
 
 function resolveUniqueManifestScopedChannelPluginId(params: {

@@ -3,8 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 
 type DeliverMattermostReplyPayloadParams = Parameters<typeof deliverMattermostReplyPayload>[0];
@@ -13,7 +12,7 @@ type ReplyDeliveryMarkdownTableMode = Parameters<
 >[1];
 
 function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] {
-  return createPluginRuntimeMock({
+  return {
     channel: {
       text: {
         chunkByNewline: vi.fn((text: string) => [text]),
@@ -25,7 +24,7 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
         resolveChunkMode: vi.fn<() => ChunkMode>(() => "length"),
         resolveTextChunkLimit: vi.fn(
           (
-            _cfg: OpenClawConfig | undefined,
+            _cfg?: OpenClawConfig,
             _provider?: string,
             _accountId?: string | null,
             opts?: { fallbackLimit?: number },
@@ -35,7 +34,7 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
         chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
       },
     },
-  });
+  } as unknown as PluginRuntime;
 }
 
 describe("deliverMattermostReplyPayload", () => {

@@ -109,7 +109,7 @@ describe("failover-error", () => {
         status: 410,
         message: "invalid_api_key",
       }),
-    ).toBe("auth_permanent");
+    ).toBe("auth");
     expect(
       resolveFailoverReasonFromError({
         status: 410,
@@ -181,6 +181,53 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 404,
+        message: "No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "404 No endpoints found for deepseek/deepseek-r1:free.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("classifies generic model-does-not-exist messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The model gpt-foo does not exist.",
+      }),
+    ).toBe("model_not_found");
+  });
+
+  it("does not classify generic access errors as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The deployment does not exist or you do not have access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not classify generic deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The endpoint has been deprecated. Transition to v2 API for continued access.",
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies model-scoped deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      }),
+    ).toBe("model_not_found");
+  });
+
   it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -194,6 +241,46 @@ describe("failover-error", () => {
         message: '{"error":{"message":"The model is overloaded. Please try later"}}',
       }),
     ).toBe("overloaded");
+  });
+
+  it("classifies provider-scoped generic upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "Provider returned error",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not classify provider-scoped upstream errors without the matching provider", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
   });
 
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
@@ -473,13 +560,13 @@ describe("failover-error", () => {
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
-    expect(err?.model).toBe("claude-opus-4-5");
+    expect(err?.model).toBe("claude-opus-4-6");
   });
 
   it("maps overloaded to a 503 fallback status", () => {
@@ -500,9 +587,9 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "Forbidden" })).toBe("auth");
   });
 
-  it("401 with permanent auth message returns auth_permanent", () => {
+  it("401 with ambiguous auth message returns auth", () => {
     expect(resolveFailoverReasonFromError({ status: 401, message: "invalid_api_key" })).toBe(
-      "auth_permanent",
+      "auth",
     );
   });
 
@@ -512,30 +599,66 @@ describe("failover-error", () => {
     );
   });
 
+  it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
+    // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
+    // when the monthly key spending limit is reached. This must trigger billing failover
+    // (model fallback), not generic auth.
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "Key limit exceeded",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("401 billing-style message returns billing instead of generic auth", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 401,
+        message: "401 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("does not treat OpenRouter key-limit text as billing without provider context", () => {
+    expect(resolveFailoverReasonFromError({ message: "Key limit exceeded" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("auth");
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });
 
-  it("coerces permanent auth error with correct reason", () => {
+  it("coerces ambiguous auth error into the short auth lane", () => {
     const err = coerceToFailoverError(
       { status: 401, message: "invalid_api_key" },
       { provider: "anthropic", model: "claude-opus-4-6" },
     );
-    expect(err?.reason).toBe("auth_permanent");
+    expect(err?.reason).toBe("auth");
     expect(err?.provider).toBe("anthropic");
   });
 
-  it("403 permission_error returns auth_permanent", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 403,
-        message:
-          "permission_error: OAuth authentication is currently not allowed for this organization.",
-      }),
-    ).toBe("auth_permanent");
+  it("403 bare permission_error returns auth", () => {
+    expect(resolveFailoverReasonFromError({ status: 403, message: "permission_error" })).toBe(
+      "auth",
+    );
   });
 
-  it("permission_error in error message string classifies as auth_permanent", () => {
+  it("permission_error with organization denial stays auth_permanent", () => {
     const err = coerceToFailoverError(
       "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
       { provider: "anthropic", model: "claude-opus-4-6" },

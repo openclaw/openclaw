@@ -1,14 +1,12 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listChatChannels } from "../channels/chat-meta.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
-import {
-  formatChannelPrimerLine,
-  formatChannelSelectionLine,
-  listChatChannels,
-} from "../channels/registry.js";
+import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type {
   ChannelSetupWizardAdapter,
@@ -17,7 +15,7 @@ import type {
 } from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
@@ -30,7 +28,7 @@ export type ChannelStatusSummary = {
   statusLines: string[];
 };
 
-export type ChannelSetupSelectionContribution = FlowContribution<ChannelChoice> & {
+export type ChannelSetupSelectionContribution = FlowContribution & {
   kind: "channel";
   surface: "setup";
   channel: ChannelChoice;
@@ -79,6 +77,9 @@ export async function collectChannelStatus(params: {
       ));
   const statusEntries = await Promise.all(
     installedPlugins.flatMap((plugin) => {
+      if (!shouldShowChannelInSetup(plugin.meta)) {
+        return [];
+      }
       const adapter = resolveAdapter(plugin.id);
       if (!adapter) {
         return [];
@@ -92,6 +93,7 @@ export async function collectChannelStatus(params: {
   );
   const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
   const fallbackStatuses = listChatChannels()
+    .filter((meta) => shouldShowChannelInSetup(meta))
     .filter((meta) => !statusByChannel.has(meta.id))
     .map((meta) => {
       const configured = isChannelConfigured(params.cfg, meta.id);
@@ -235,22 +237,31 @@ export function resolveChannelSelectionNoteLines(params: {
 export function resolveChannelSetupSelectionContributions(params: {
   entries: Array<{
     id: ChannelChoice;
-    meta: { id: string; label: string; selectionLabel?: string };
+    meta: {
+      id: string;
+      label: string;
+      selectionLabel?: string;
+      exposure?: { setup?: boolean };
+      showConfigured?: boolean;
+      showInSetup?: boolean;
+    };
   }>;
   statusByChannel: Map<ChannelChoice, { selectionHint?: string }>;
   resolveDisabledHint: (channel: ChannelChoice) => string | undefined;
 }): ChannelSetupSelectionContribution[] {
-  return params.entries.map((entry) => {
-    const disabledHint = params.resolveDisabledHint(entry.id);
-    const hint =
-      [params.statusByChannel.get(entry.id)?.selectionHint, disabledHint]
-        .filter(Boolean)
-        .join(" · ") || undefined;
-    return buildChannelSetupSelectionContribution({
-      channel: entry.id,
-      label: entry.meta.selectionLabel ?? entry.meta.label,
-      hint,
-      source: listChatChannels().some((channel) => channel.id === entry.id) ? "core" : "plugin",
+  return params.entries
+    .filter((entry) => shouldShowChannelInSetup(entry.meta))
+    .map((entry) => {
+      const disabledHint = params.resolveDisabledHint(entry.id);
+      const hint =
+        [params.statusByChannel.get(entry.id)?.selectionHint, disabledHint]
+          .filter(Boolean)
+          .join(" · ") || undefined;
+      return buildChannelSetupSelectionContribution({
+        channel: entry.id,
+        label: entry.meta.selectionLabel ?? entry.meta.label,
+        hint,
+        source: listChatChannels().some((channel) => channel.id === entry.id) ? "core" : "plugin",
+      });
     });
-  });
 }
