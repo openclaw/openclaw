@@ -518,11 +518,12 @@ export function renderToolCardSidebar(
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
+  const preview = card.preview;
   const hasText = Boolean(card.outputText?.trim());
-  const hasPreview = Boolean(card.preview);
+  const hasPreview = Boolean(preview);
   const sidebarContent =
-    card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText)
+    preview?.kind === "canvas"
+      ? buildPreviewSidebarContent(preview, card.outputText)
       : buildSidebarContent(buildToolCardSidebarContent(card));
   const actionContent = sidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
   const canClick = Boolean(onOpenSidebar);
@@ -564,8 +565,8 @@ export function renderToolCardSidebar(
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
       ${isEmpty ? html`<div class="chat-tool-card__status-text muted">Completed</div>` : nothing}
-      ${hasPreview
-        ? html`${renderToolPreview(card.preview!, "chat_tool", {
+      ${preview
+        ? html`${renderToolPreview(preview, "chat_tool", {
             onOpenSidebar,
             rawText: card.outputText,
             canvasHostUrl,
@@ -577,7 +578,9 @@ export function renderToolCardSidebar(
             ${getTruncatedPreview(card.outputText!)}
           </div>`
         : nothing}
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.outputText}</div>` : nothing}
+      ${showInline
+        ? html`<div class="chat-tool-card__inline mono">${card.outputText}</div>`
+        : nothing}
     </div>
   `;
 }
