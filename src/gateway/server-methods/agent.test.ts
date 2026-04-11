@@ -225,6 +225,66 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  it("derives room-scoped sessions and forwards shared room context", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "room-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:room:breakout-123",
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      await updater(store);
+      capturedEntry = store["agent:main:room:breakout-123"] as Record<string, unknown>;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        idempotencyKey: "idem-room-context",
+        sharedRoomContext: {
+          roomId: "breakout-123",
+          participantId: "main",
+          participantLabel: "Codex",
+          seenThroughSeq: 2,
+          messages: [
+            { seq: 1, author: "Operator", text: "Say hello." },
+            { seq: 2, author: "Voltaris V2", text: "Hello from Voltaris." },
+          ],
+        },
+      },
+      { reqId: "idem-room-context" },
+    );
+
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:main:room:breakout-123");
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | {
+          sessionKey?: string;
+          sessionId?: string;
+          sharedRoomContext?: { roomId?: string };
+        }
+      | undefined;
+    expect(call?.sessionKey).toBe("agent:main:room:breakout-123");
+    expect(call?.sessionId).toBe("room-session-id");
+    expect(call?.sharedRoomContext?.roomId).toBe("breakout-123");
+    expect(capturedEntry?.sharedRoom).toEqual(
+      expect.objectContaining({
+        roomId: "breakout-123",
+        seenThroughSeq: 2,
+      }),
+    );
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",

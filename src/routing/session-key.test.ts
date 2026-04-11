@@ -5,6 +5,7 @@ import {
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentRoomSessionKey,
   classifySessionKeyShape,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
@@ -113,5 +114,14 @@ describe("session key canonicalization", () => {
         requestKey: "agent:main:main",
       }),
     ).toBe("agent:main:main");
+  });
+
+  it("builds a canonical room session key for agent-scoped room turns", () => {
+    const sessionKey = buildAgentRoomSessionKey({
+      agentId: "Codex",
+      roomId: "Vcq-KFSq0UCPAfFY6WYZh",
+    });
+    expect(sessionKey).toBe("agent:codex:room:vcq-kfsq0ucpaffy6wyzh");
+    expect(classifySessionKeyShape(sessionKey)).toBe("agent");
   });
 });

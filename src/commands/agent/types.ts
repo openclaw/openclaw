@@ -27,6 +27,34 @@ export type AgentRunContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+export type SharedRoomParticipant = {
+  id: string;
+  label?: string;
+  role?: string;
+  agentId?: string;
+  seat?: string;
+};
+
+export type SharedRoomMessage = {
+  seq: number;
+  author: string;
+  text: string;
+  participantId?: string;
+  kind?: string;
+  timestampMs?: number;
+};
+
+export type SharedRoomContext = {
+  roomId: string;
+  roomLabel?: string;
+  truthModel?: string;
+  participantId?: string;
+  participantLabel?: string;
+  seenThroughSeq?: number;
+  participants?: SharedRoomParticipant[];
+  messages?: SharedRoomMessage[];
+};
+
 export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
@@ -73,6 +101,7 @@ export type AgentCommandOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  sharedRoomContext?: SharedRoomContext;
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;

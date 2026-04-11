@@ -28,6 +28,10 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.5": "claude-sonnet-4-5",
 };
 const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
+const MEDIUM_DEFAULT_THINKING_MODEL_REFS = new Set([
+  "openai-codex/gpt-5.2-codex",
+  "github-copilot/gpt-5.2-codex",
+]);
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -561,6 +565,9 @@ export function resolveThinkingDefault(params: {
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
+  }
+  if (MEDIUM_DEFAULT_THINKING_MODEL_REFS.has(modelKey(params.provider, params.model))) {
+    return "medium";
   }
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,

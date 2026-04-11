@@ -207,6 +207,53 @@ describe("agentCommand", () => {
     });
   });
 
+  it("derives a room-scoped session and injects shared room context", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      mockConfig(home, storePattern, undefined, undefined, [{ id: "codex", default: true }]);
+
+      await agentCommand(
+        {
+          agentId: "codex",
+          message: "Reply in one sentence.",
+          extraSystemPrompt: "One sentence only.",
+          sharedRoomContext: {
+            roomId: "breakout-123",
+            roomLabel: "Break-Out Room",
+            participantId: "codex",
+            participantLabel: "Codex",
+            seenThroughSeq: 2,
+            participants: [
+              { id: "operator", label: "Operator", seat: "control" },
+              { id: "codex", label: "Codex", seat: "seat-1" },
+            ],
+            messages: [
+              { seq: 1, author: "Operator", text: "Say hello." },
+              { seq: 2, author: "Voltaris V2", text: "Hello from Voltaris." },
+            ],
+          },
+        },
+        runtime,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionKey).toBe("agent:codex:room:breakout-123");
+      expect(callArgs?.extraSystemPrompt).toContain("## Shared Room Context");
+      expect(callArgs?.extraSystemPrompt).toContain("One sentence only.");
+      expect(callArgs?.extraSystemPrompt).toContain("[#2] Voltaris V2: Hello from Voltaris.");
+
+      const store = JSON.parse(
+        fs.readFileSync(path.join(home, "sessions", "codex", "sessions.json"), "utf-8"),
+      ) as Record<string, { sharedRoom?: { roomId?: string; seenThroughSeq?: number } }>;
+      expect(store["agent:codex:room:breakout-123"]?.sharedRoom).toEqual(
+        expect.objectContaining({
+          roomId: "breakout-123",
+          seenThroughSeq: 2,
+        }),
+      );
+    });
+  });
+
   it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
     await withTempHome(async (home) => {
       const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");

@@ -78,6 +78,48 @@ export const AgentParamsSchema = Type.Object(
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
+    sharedRoomContext: Type.Optional(
+      Type.Object(
+        {
+          roomId: NonEmptyString,
+          roomLabel: Type.Optional(Type.String()),
+          truthModel: Type.Optional(Type.String()),
+          participantId: Type.Optional(Type.String()),
+          participantLabel: Type.Optional(Type.String()),
+          seenThroughSeq: Type.Optional(Type.Integer({ minimum: 0 })),
+          participants: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  id: NonEmptyString,
+                  label: Type.Optional(Type.String()),
+                  role: Type.Optional(Type.String()),
+                  agentId: Type.Optional(Type.String()),
+                  seat: Type.Optional(Type.String()),
+                },
+                { additionalProperties: false },
+              ),
+            ),
+          ),
+          messages: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  seq: Type.Integer({ minimum: 0 }),
+                  author: NonEmptyString,
+                  text: NonEmptyString,
+                  participantId: Type.Optional(Type.String()),
+                  kind: Type.Optional(Type.String()),
+                  timestampMs: Type.Optional(Type.Integer({ minimum: 0 })),
+                },
+                { additionalProperties: false },
+              ),
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     inputProvenance: Type.Optional(
       Type.Object(
         {

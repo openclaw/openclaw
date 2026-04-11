@@ -48,6 +48,17 @@ export type SessionAcpMeta = {
   lastError?: string;
 };
 
+export type SessionSharedRoomState = {
+  roomId: string;
+  roomLabel?: string;
+  truthModel?: string;
+  participantId?: string;
+  participantLabel?: string;
+  seenThroughSeq?: number;
+  lastMessageSeq?: number;
+  participantCount?: number;
+};
+
 export type AcpSessionRuntimeOptions = {
   /**
    * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
@@ -161,6 +172,7 @@ export type SessionEntry = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  sharedRoom?: SessionSharedRoomState;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;

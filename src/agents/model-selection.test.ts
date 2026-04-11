@@ -11,6 +11,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -211,6 +212,56 @@ describe("model-selection", () => {
           model: "anthropic/claude-sonnet-4-6",
         }),
       ).toBe("vercel-ai-gateway");
+    });
+  });
+
+  describe("resolveThinkingDefault", () => {
+    it("uses medium by default for openai-codex gpt-5.2-codex compatibility", () => {
+      const cfg = {
+        agents: {
+          defaults: {},
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "openai-codex",
+          model: "gpt-5.2-codex",
+          catalog: [
+            {
+              id: "gpt-5.2-codex",
+              name: "GPT-5.2 Codex",
+              provider: "openai-codex",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("medium");
+    });
+
+    it("still defaults other reasoning-capable models to low", () => {
+      const cfg = {
+        agents: {
+          defaults: {},
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          catalog: [
+            {
+              id: "claude-opus-4-5",
+              name: "Opus 4.5",
+              provider: "anthropic",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("low");
     });
   });
 

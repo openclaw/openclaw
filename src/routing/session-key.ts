@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
@@ -25,6 +26,9 @@ const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
+const SESSION_SEGMENT_INVALID_RE = /[^a-z0-9._-]+/g;
+const SESSION_SEGMENT_EDGE_DASH_RE = /^-+|-+$/g;
+const MAX_SESSION_SEGMENT_LENGTH = 64;
 
 function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
@@ -110,6 +114,32 @@ export function buildAgentMainSessionKey(params: {
   const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.mainKey);
   return `agent:${agentId}:${mainKey}`;
+}
+
+function normalizeSessionSegment(value: string, fallback: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+  const normalized = raw
+    .replace(SESSION_SEGMENT_INVALID_RE, "-")
+    .replace(SESSION_SEGMENT_EDGE_DASH_RE, "");
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === raw && normalized.length <= MAX_SESSION_SEGMENT_LENGTH) {
+    return normalized;
+  }
+  const hash = createHash("sha256").update(raw).digest("hex").slice(0, 8);
+  const baseMax = MAX_SESSION_SEGMENT_LENGTH - hash.length - 1;
+  const base = normalized.slice(0, baseMax).replace(SESSION_SEGMENT_EDGE_DASH_RE, "") || fallback;
+  return `${base}-${hash}`;
+}
+
+export function buildAgentRoomSessionKey(params: { agentId: string; roomId: string }): string {
+  const agentId = normalizeAgentId(params.agentId);
+  const roomSegment = normalizeSessionSegment(params.roomId, "room");
+  return `agent:${agentId}:room:${roomSegment}`;
 }
 
 export function buildAgentPeerSessionKey(params: {

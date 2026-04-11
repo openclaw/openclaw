@@ -71,6 +71,11 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
+import {
+  buildSharedRoomContextPrompt,
+  mergeExtraSystemPrompts,
+  summarizeSharedRoomContext,
+} from "./agent/shared-room-context.js";
 import type { AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
@@ -145,6 +150,7 @@ function runAgentAttempt(params: {
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
+  mergedExtraSystemPrompt: string | undefined;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
 }) {
@@ -167,7 +173,7 @@ function runAgentAttempt(params: {
       thinkLevel: params.resolvedThinkLevel,
       timeoutMs: params.timeoutMs,
       runId: params.runId,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
+      extraSystemPrompt: params.mergedExtraSystemPrompt,
       cliSessionId,
       images: params.isFallbackRetry ? undefined : params.opts.images,
       streamParams: params.opts.streamParams,
@@ -212,7 +218,7 @@ function runAgentAttempt(params: {
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
+    extraSystemPrompt: params.mergedExtraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
@@ -299,6 +305,7 @@ export async function agentCommand(
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
+    sharedRoomContext: opts.sharedRoomContext,
   });
 
   const {
@@ -322,6 +329,11 @@ export async function agentCommand(
     agentId: sessionAgentId,
     sessionKey,
   });
+  const sharedRoomState = summarizeSharedRoomContext(opts.sharedRoomContext);
+  const mergedExtraSystemPrompt = mergeExtraSystemPrompts(
+    buildSharedRoomContextPrompt(opts.sharedRoomContext),
+    opts.extraSystemPrompt,
+  );
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -528,6 +540,9 @@ export async function agentCommand(
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
+      }
+      if (sharedRoomState) {
+        next.sharedRoom = sharedRoomState;
       }
       applyVerboseOverride(next, verboseOverride);
       await persistSessionEntry({
@@ -748,6 +763,7 @@ export async function agentCommand(
             skillsSnapshot,
             resolvedVerboseLevel,
             agentDir,
+            mergedExtraSystemPrompt,
             primaryProvider: provider,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
