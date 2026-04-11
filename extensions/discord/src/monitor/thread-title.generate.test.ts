@@ -187,7 +187,7 @@ describe("generateThreadTitle", () => {
       ],
     });
     expect(completionArgs.options).toEqual({
-      maxTokens: 512,
+      maxTokens: 4096,
       signal: completionArgs.options?.signal,
     });
     expect(completionArgs.options?.signal).toBeInstanceOf(AbortSignal);
