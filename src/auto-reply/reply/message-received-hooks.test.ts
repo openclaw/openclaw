@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FinalizedMsgContext } from "../templating.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -34,10 +34,13 @@ vi.mock("../../hooks/internal-hooks.js", () => internalHookMocks);
 describe("emitMessageReceivedHooks", () => {
   let emitMessageReceivedHooks: typeof import("./message-received-hooks.js").emitMessageReceivedHooks;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ emitMessageReceivedHooks } = await import("./message-received-hooks.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     hookRunnerMock.hasHooks.mockReturnValue(false);
-    ({ emitMessageReceivedHooks } = await import("./message-received-hooks.js"));
   });
 
   function buildCtx(

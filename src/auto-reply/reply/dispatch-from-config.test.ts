@@ -2148,6 +2148,8 @@ describe("dispatchReplyFromConfig", () => {
 
     // Hook must have fired before the reply resolver ran
     expect(callOrder[0]).toBe("message_received");
+    expect(callOrder).toContain("reply_resolver");
+    expect(callOrder.indexOf("message_received")).toBeLessThan(callOrder.indexOf("reply_resolver"));
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledTimes(1);
   });
 
