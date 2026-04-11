@@ -135,12 +135,18 @@ function shouldAddMismatchHint(error: unknown) {
   return error instanceof Error && error.message.includes(EDIT_MISMATCH_MESSAGE);
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+const TRUNCATION_SIZE_THRESHOLD = 20_000;
+
+function appendMismatchHint(error: Error, currentContent: string, pathParam?: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`);
+  let hint = `${error.message}\nCurrent file contents:\n${snippet}`;
+  if (currentContent.length > TRUNCATION_SIZE_THRESHOLD) {
+    hint += `\nNote: This file (${currentContent.length} chars) exceeds the typical bootstrap file limit. It may have been truncated in the agent's context, causing this edit to fail. Consider using the \`write\` tool to rewrite the full file, or trim the file to fit within the limit.`;
+  }
+  const enhanced = new Error(hint);
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -206,7 +212,7 @@ export function wrapEditToolWithRecovery(
           err instanceof Error &&
           shouldAddMismatchHint(err)
         ) {
-          throw appendMismatchHint(err, currentContent);
+          throw appendMismatchHint(err, currentContent, pathParam);
         }
 
         throw err;

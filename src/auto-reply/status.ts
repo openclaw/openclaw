@@ -410,6 +410,43 @@ const formatVoiceModeLine = (
   return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
 };
 
+type WorkspaceFileEntry = {
+  name: string;
+  rawChars: number;
+  injectedChars: number;
+  truncated: boolean;
+  missing: boolean;
+};
+
+function formatWorkspaceFileLines(
+  files: WorkspaceFileEntry[] | undefined,
+  bootstrapMaxChars: number | undefined,
+): string | null {
+  if (!files || files.length === 0) {
+    return null;
+  }
+  const maxChars = bootstrapMaxChars ?? 20_000;
+  const nearLimitRatio = 0.85;
+  const lines: string[] = ["📂 Workspace files:"];
+  for (const file of files) {
+    if (file.missing) {
+      lines.push(`  ${file.name}: MISSING`);
+      continue;
+    }
+    const pct = Math.round((file.rawChars / maxChars) * 100);
+    if (file.truncated) {
+      lines.push(
+        `  ${file.name}: ${formatInt(file.rawChars)} chars ❌ TRUNCATED (injected as ${formatInt(file.injectedChars)})`,
+      );
+    } else if (file.rawChars >= maxChars * nearLimitRatio) {
+      lines.push(`  ${file.name}: ${formatInt(file.rawChars)} chars ⚠️ NEAR LIMIT (${pct}% of ${formatInt(maxChars)})`);
+    } else {
+      lines.push(`  ${file.name}: ${formatInt(file.rawChars)} chars`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -821,7 +858,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
 
-  return [
+  const statusBase = [
     versionLine,
     args.timeLine,
     modelLine,
@@ -839,9 +876,14 @@ export function buildStatusMessage(args: StatusArgs): string {
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
+
+  // Append workspace file health if available from the session's system prompt report.
+  const workspaceFileLines = formatWorkspaceFileLines(
+    entry?.systemPromptReport?.injectedWorkspaceFiles,
+    entry?.systemPromptReport?.bootstrapMaxChars,
+  );
+  return workspaceFileLines ? `${statusBase}\n${workspaceFileLines}` : statusBase;
 }
 
 type ToolsMessageItem = {
