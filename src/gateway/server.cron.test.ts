@@ -962,6 +962,139 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("uses per-run delivery ids and real execution timestamps for command delivery", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-command-delivery-run-meta-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      resolveDeliveryTargetMockState.enabled = true;
+      resolveDeliveryTargetMockState.mock.mockResolvedValue({
+        ok: true,
+        channel: "telegram",
+        to: "19098680",
+        mode: "explicit",
+      });
+      dispatchCronDeliveryMockState.enabled = true;
+      dispatchCronDeliveryMockState.mock.mockImplementation(
+        async (params: { deliveryPayloads: unknown[] }) => ({
+          delivered: true,
+          deliveryAttempted: true,
+          deliveryPayloads: params.deliveryPayloads,
+        }),
+      );
+
+      const addRes = await rpcReq(ws, "cron.add", {
+        ...buildCommandJob({
+          args: ["-e", 'setTimeout(() => process.stdout.write("cron command ok"), 60)'],
+        }),
+        delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const firstFinished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await firstFinished;
+
+      const secondFinished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await secondFinished;
+
+      expect(dispatchCronDeliveryMockState.mock).toHaveBeenCalledTimes(2);
+      const firstCall = dispatchCronDeliveryMockState.mock.mock.calls[0]?.[0] as
+        | {
+            runSessionId?: unknown;
+            runStartedAt?: unknown;
+            runEndedAt?: unknown;
+            agentSessionKey?: unknown;
+          }
+        | undefined;
+      const secondCall = dispatchCronDeliveryMockState.mock.mock.calls[1]?.[0] as
+        | {
+            runSessionId?: unknown;
+            runStartedAt?: unknown;
+            runEndedAt?: unknown;
+            agentSessionKey?: unknown;
+          }
+        | undefined;
+      expect(typeof firstCall?.runSessionId).toBe("string");
+      expect(typeof secondCall?.runSessionId).toBe("string");
+      expect(firstCall?.runSessionId).not.toBe(secondCall?.runSessionId);
+      expect(firstCall?.agentSessionKey).toBe(`cron-command:${jobId}`);
+      expect(secondCall?.agentSessionKey).toBe(`cron-command:${jobId}`);
+      expect(firstCall?.runStartedAt).toBeTypeOf("number");
+      expect(firstCall?.runEndedAt).toBeTypeOf("number");
+      expect(
+        (firstCall?.runEndedAt as number) - (firstCall?.runStartedAt as number),
+      ).toBeGreaterThanOrEqual(40);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("propagates strict command delivery dispatch failures", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-command-dispatch-failure-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      resolveDeliveryTargetMockState.enabled = true;
+      resolveDeliveryTargetMockState.mock.mockResolvedValueOnce({
+        ok: true,
+        channel: "telegram",
+        to: "19098680",
+        mode: "explicit",
+      });
+      dispatchCronDeliveryMockState.enabled = true;
+      dispatchCronDeliveryMockState.mock.mockResolvedValueOnce({
+        result: {
+          status: "error",
+          error: "delivery failed",
+          summary: "cron command ok",
+          outputText: "cron command ok",
+          deliveryAttempted: true,
+          delivered: false,
+        },
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryPayloads: [{ text: "cron command ok" }],
+      });
+
+      const addRes = await rpcReq(ws, "cron.add", {
+        ...buildCommandJob(),
+        delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      expect(await finished).toMatchObject({
+        jobId,
+        action: "finished",
+        status: "error",
+        error: "delivery failed",
+      });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("honors best-effort policy when command delivery target resolution fails", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-command-delivery-failure-",

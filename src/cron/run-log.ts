@@ -193,7 +193,13 @@ export async function readCronRunLogEntries(
 }
 
 function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {
-  if (status === "ok" || status === "error" || status === "skipped" || status === "all") {
+  if (
+    status === "ok" ||
+    status === "error" ||
+    status === "skipped" ||
+    status === "aborted" ||
+    status === "all"
+  ) {
     return status;
   }
   return "all";
@@ -206,7 +212,7 @@ function normalizeRunStatuses(opts?: {
   if (Array.isArray(opts?.statuses) && opts.statuses.length > 0) {
     const filtered = opts.statuses.filter(
       (status): status is CronRunStatus =>
-        status === "ok" || status === "error" || status === "skipped",
+        status === "ok" || status === "error" || status === "skipped" || status === "aborted",
     );
     if (filtered.length > 0) {
       return Array.from(new Set(filtered));

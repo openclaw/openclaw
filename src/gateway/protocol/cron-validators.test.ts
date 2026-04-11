@@ -120,6 +120,12 @@ describe("cron protocol validators", () => {
     ).toBe(true);
     expect(
       validateCronRunsParams({
+        scope: "all",
+        statuses: ["ok", "error", "skipped", "aborted"],
+      }),
+    ).toBe(true);
+    expect(
+      validateCronRunsParams({
         scope: "job",
         statuses: [],
       }),

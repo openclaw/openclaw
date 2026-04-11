@@ -426,6 +426,29 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("maps top-level command fields into payload for legacy add params", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy command root fields",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      command: "  /bin/echo  ",
+      args: [" hello ", " world "],
+      timeoutSeconds: 30,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "command",
+      command: "/bin/echo",
+      args: ["hello", "world"],
+      timeoutSeconds: 30,
+    });
+    expect((normalized as { command?: unknown }).command).toBeUndefined();
+    expect((normalized as { args?: unknown }).args).toBeUndefined();
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy no-timeout",
@@ -676,6 +699,25 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.toolsAllow).toEqual(["exec", "read"]);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("maps top-level command args and timeout into command payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      command: " /bin/echo ",
+      args: [" hello ", " world "],
+      timeoutSeconds: 12,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "command",
+      command: "/bin/echo",
+      args: ["hello", "world"],
+      timeoutSeconds: 12,
+    });
+    expect((normalized as { command?: unknown }).command).toBeUndefined();
+    expect((normalized as { args?: unknown }).args).toBeUndefined();
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

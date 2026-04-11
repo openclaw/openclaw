@@ -8,6 +8,7 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -270,6 +271,34 @@ describe("cron run log", () => {
       expect(entries[1]?.model).toBeUndefined();
       expect(entries[1]?.provider).toBeUndefined();
       expect(entries[1]?.usage?.input_tokens).toBeUndefined();
+    });
+  });
+
+  it("filters aborted run statuses", async () => {
+    await withRunLogDir("openclaw-cron-log-aborted-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "aborted",
+        error: "aborted",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+      });
+
+      const abortedOnly = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        jobId: "job-1",
+        status: "aborted",
+      });
+      expect(abortedOnly.entries).toHaveLength(1);
+      expect(abortedOnly.entries[0]?.status).toBe("aborted");
     });
   });
 

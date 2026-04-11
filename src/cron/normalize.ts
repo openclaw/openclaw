@@ -351,6 +351,24 @@ function inferTopLevelPayload(next: UnknownRecord) {
   return null;
 }
 
+function copyTopLevelCommandFields(next: UnknownRecord, payload: UnknownRecord) {
+  if (!normalizeOptionalString(payload.command)) {
+    const command = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.command);
+    if (command !== undefined) {
+      payload.command = command;
+    }
+  }
+  if (!("args" in payload) || payload.args === undefined) {
+    const args = normalizeTrimmedStringArray(next.args, { allowNull: true });
+    if (args !== undefined) {
+      payload.args = args;
+    }
+  }
+  if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
+    payload.timeoutSeconds = next.timeoutSeconds;
+  }
+}
+
 function unwrapJob(raw: UnknownRecord) {
   if (isRecord(raw.data)) {
     return raw.data;
@@ -438,6 +456,8 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
+  delete next.command;
+  delete next.args;
   delete next.deliver;
   delete next.channel;
   delete next.to;
@@ -544,6 +564,8 @@ export function normalizeCronJobInput(
   const payload = isRecord(next.payload) ? next.payload : null;
   if (payload && payload.kind === "agentTurn") {
     copyTopLevelAgentTurnFields(next, payload);
+  } else if (payload && payload.kind === "command") {
+    copyTopLevelCommandFields(next, payload);
   }
   stripLegacyTopLevelFields(next);
 

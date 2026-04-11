@@ -353,7 +353,7 @@ export const CronRunsParamsSchema = Type.Object(
     jobId: Type.Optional(CronRunLogJobIdSchema),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
-    statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
+    statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 4 })),
     status: Type.Optional(CronRunsStatusFilterSchema),
     deliveryStatuses: Type.Optional(
       Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),

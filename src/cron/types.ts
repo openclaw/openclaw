@@ -130,7 +130,9 @@ type CronAgentTurnPayloadPatch = {
 
 type CronCommandPayloadPatch = {
   kind: "command";
-} & Partial<CronCommandPayloadFields>;
+} & Partial<Omit<CronCommandPayloadFields, "args">> & {
+    args?: string[] | null;
+  };
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;

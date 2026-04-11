@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -457,7 +458,9 @@ export function buildGatewayCronService(params: {
       }
     },
     runCommandJob: async ({ job, command, args, timeoutSeconds, abortSignal }) => {
+      const runStartedAt = Date.now();
       const result = await runCronCommandJob({ command, args, timeoutSeconds, abortSignal });
+      const runEndedAt = Date.now();
       const primaryPlan = resolveCronDeliveryPlan(job);
       const deliveryBestEffort = job.delivery?.bestEffort === true;
       const summaryText =
@@ -495,7 +498,7 @@ export function buildGatewayCronService(params: {
         };
       }
 
-      const runSessionId = `cron-command:${job.id}`;
+      const runSessionId = `cron-command:${job.id}:${randomUUID()}`;
       const agentSessionKey = `cron-command:${job.id}`;
       const deliveryResult = await dispatchCronDelivery({
         cfg: runtimeConfig,
@@ -513,8 +516,8 @@ export function buildGatewayCronService(params: {
         deliveryPayloadHasStructuredContent: false,
         deliveryPayloads: [{ text: summaryText }],
         synthesizedText: summaryText,
-        runStartedAt: Date.now(),
-        runEndedAt: Date.now(),
+        runStartedAt,
+        runEndedAt,
         summary: summaryText,
         outputText: result.outputText,
         telemetry: {},
@@ -527,6 +530,18 @@ export function buildGatewayCronService(params: {
           sessionKey: agentSessionKey,
         }),
       });
+      if (deliveryResult.result) {
+        return {
+          ...result,
+          status: deliveryResult.result.status,
+          error: deliveryResult.result.error,
+          summary: deliveryResult.result.summary ?? result.summary,
+          outputText: deliveryResult.result.outputText ?? result.outputText,
+          delivered: deliveryResult.result.delivered,
+          deliveryAttempted:
+            deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+        };
+      }
       return {
         ...result,
         delivered: deliveryResult.delivered,
