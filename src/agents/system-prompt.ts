@@ -49,6 +49,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
   "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+const STATIC_NON_NATIVE_APPROVAL_CHANNELS = new Set(["signal"]);
 
 function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
@@ -330,7 +331,7 @@ function buildExecApprovalPromptGuidance(params: {
   const usesNativeApprovalUi =
     runtimeChannel === "webchat" ||
     params.inlineButtonsEnabled === true ||
-    (runtimeChannel
+    (runtimeChannel && !STATIC_NON_NATIVE_APPROVAL_CHANNELS.has(runtimeChannel)
       ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
       : false);
   if (usesNativeApprovalUi) {
