@@ -27,7 +27,10 @@ UPDATE_DIR="$(mktemp -d)"
 UPDATE_SERVER_PID=""
 UPDATE_SERVER_LOG="${UPDATE_DIR}/http.log"
 UPDATE_TGZ_FILE=""
+BASELINE_TGZ_FILE=""
 UPDATE_EXPECT_VERSION=""
+BASELINE_TAG_URL=""
+FRESH_TAG_URL=""
 UPDATE_TAG_URL=""
 UPDATE_DOCKER_HOST_ARGS=()
 
@@ -58,15 +61,18 @@ allocate_host_port() {
 
 prepare_update_tarball() {
   local pack_json
+  local baseline_pack_json
+  local pack_json_file
+  local baseline_pack_json_file
+  pack_json_file="${UPDATE_DIR}/pack.json"
+  baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
   if [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
     if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
       echo "ERROR: OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION is required with OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC" >&2
       exit 1
     fi
-    pack_json="$(
-      quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR"
-    )"
+    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
     if [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
@@ -76,20 +82,32 @@ prepare_update_tarball() {
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
-    pack_json="$(
-      quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR"
-    )"
+    quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
   UPDATE_TGZ_FILE="$(
-    PACK_JSON="$pack_json" node - <<'NODE'
-const raw = process.env.PACK_JSON || "[]";
+    node -e '
+const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
 const parsed = JSON.parse(raw);
 const last = Array.isArray(parsed) ? parsed.at(-1) : null;
 if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
   process.exit(1);
 }
 process.stdout.write(last.filename);
-NODE
+' "$pack_json_file"
+  )"
+
+  echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  BASELINE_TGZ_FILE="$(
+    node -e '
+const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
+  process.exit(1);
+}
+process.stdout.write(last.filename);
+' "$baseline_pack_json_file"
   )"
 }
 
@@ -106,8 +124,11 @@ start_update_server() {
   if [[ -z "$UPDATE_PORT" ]]; then
     UPDATE_PORT="$(allocate_host_port)"
   fi
+  BASELINE_TAG_URL="http://${UPDATE_HOST_ALIAS}:${UPDATE_PORT}/${BASELINE_TGZ_FILE}"
+  FRESH_TAG_URL="http://${UPDATE_HOST_ALIAS}:${UPDATE_PORT}/${UPDATE_TGZ_FILE}"
   UPDATE_TAG_URL="http://${UPDATE_HOST_ALIAS}:${UPDATE_PORT}/${UPDATE_TGZ_FILE}"
-  echo "==> Serve update tgz: $UPDATE_TAG_URL"
+  echo "==> Serve baseline tgz: $BASELINE_TAG_URL"
+  echo "==> Serve latest tgz: $FRESH_TAG_URL"
   (
     cd "$UPDATE_DIR"
     exec python3 -m http.server "$UPDATE_PORT" --bind 0.0.0.0
@@ -132,32 +153,33 @@ else
     "$ROOT_DIR/scripts/docker"
 fi
 
-echo "==> Run installer smoke test (root): $INSTALL_URL"
-docker run --rm -t \
-  --platform "$SMOKE_PLATFORM" \
-  -v "${LATEST_DIR}:/out" \
-  -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
-  -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
-  -e OPENCLAW_INSTALL_METHOD=npm \
-  -e OPENCLAW_INSTALL_LATEST_OUT="/out/latest" \
-  -e OPENCLAW_INSTALL_SMOKE_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-}" \
-  -e OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-0}" \
-  -e OPENCLAW_NO_ONBOARD=1 \
-  -e OPENCLAW_NO_PROMPT=1 \
-  -e DEBIAN_FRONTEND=noninteractive \
-  "$SMOKE_IMAGE"
-
-LATEST_VERSION=""
-if [[ -f "$LATEST_FILE" ]]; then
-  LATEST_VERSION="$(cat "$LATEST_FILE")"
-fi
-
 if [[ "$SKIP_UPDATE" == "1" ]]; then
   echo "==> Skip update smoke (OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE=1)"
 else
   prepare_update_tarball
   prepare_update_host_access
   start_update_server
+
+  echo "==> Run installer smoke test (root): $FRESH_TAG_URL"
+  docker run --rm -t \
+    --platform "$SMOKE_PLATFORM" \
+    "${UPDATE_DOCKER_HOST_ARGS[@]}" \
+    -v "${LATEST_DIR}:/out" \
+    -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
+    -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
+    -e OPENCLAW_INSTALL_METHOD=npm \
+    -e OPENCLAW_INSTALL_FRESH_VERSION="$UPDATE_EXPECT_VERSION" \
+    -e OPENCLAW_INSTALL_FRESH_TAG_URL="$FRESH_TAG_URL" \
+    -e OPENCLAW_INSTALL_LATEST_OUT="/out/latest" \
+    -e OPENCLAW_NO_ONBOARD=1 \
+    -e OPENCLAW_NO_PROMPT=1 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    "$SMOKE_IMAGE"
+
+  LATEST_VERSION=""
+  if [[ -f "$LATEST_FILE" ]]; then
+    LATEST_VERSION="$(cat "$LATEST_FILE")"
+  fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
   docker run --rm -t \
@@ -166,6 +188,7 @@ else
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
+    -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
     -e OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
     -e OPENCLAW_INSTALL_UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     -e OPENCLAW_NO_ONBOARD=1 \
@@ -173,6 +196,8 @@ else
     -e DEBIAN_FRONTEND=noninteractive \
     "$SMOKE_IMAGE"
 fi
+
+LATEST_VERSION="${LATEST_VERSION:-}"
 
 if [[ "$SKIP_NONROOT" == "1" ]]; then
   echo "==> Skip non-root installer smoke (OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1)"
