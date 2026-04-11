@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
+import { normalizeMediaProviderId } from "./provider-registry.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
-  normalizeMediaProviderId,
   runCapability,
   type ActiveMediaModel,
-} from "../plugin-sdk/media-runtime.js";
+} from "./runner.js";
 
 type MediaUnderstandingCapability = "image" | "audio" | "video";
 type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
