@@ -185,6 +185,19 @@ Hook guard semantics to keep in mind:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
 
+The `before_tool_call` event payload is additive and currently includes:
+
+```ts
+{
+  toolName: string;
+  params: Record<string, unknown>;
+  runId?: string;
+  toolCallId?: string;
+  precedingText?: string;
+  messageId?: string;
+}
+```
+
 The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 
 If custom approval plumbing needs to detect that same bounded fallback case,

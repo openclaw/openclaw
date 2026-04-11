@@ -7,6 +7,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -18,6 +19,8 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  precedingText?: string;
+  messageId?: string;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -93,6 +96,77 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
     }
   }
   return true;
+}
+
+function extractPrecedingTextFromAssistantMessage(
+  message: unknown,
+  toolCallId?: string,
+): string | undefined {
+  if (!toolCallId || !message || typeof message !== "object") {
+    return undefined;
+  }
+  const assistantMessage = message as {
+    role?: unknown;
+    content?: unknown;
+  };
+  if (assistantMessage.role !== "assistant" || !Array.isArray(assistantMessage.content)) {
+    return undefined;
+  }
+  const precedingBlocks: unknown[] = [];
+  let foundTarget = false;
+  for (const block of assistantMessage.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; id?: unknown };
+    if (
+      record.id === toolCallId &&
+      (record.type === "toolCall" || record.type === "toolUse" || record.type === "functionCall")
+    ) {
+      foundTarget = true;
+      break;
+    }
+    precedingBlocks.push(block);
+  }
+  if (!foundTarget) {
+    return undefined;
+  }
+  const precedingText = collectTextContentBlocks(precedingBlocks).join("\n").trim();
+  return precedingText || undefined;
+}
+
+export function extractBeforeToolCallMessageContext(args: {
+  extensionContext?: unknown;
+  toolCallId?: string;
+}): Pick<HookContext, "precedingText" | "messageId"> {
+  const sessionManager = (
+    args.extensionContext as
+      | {
+          sessionManager?: { getLeafEntry?: () => unknown };
+        }
+      | null
+      | undefined
+  )?.sessionManager;
+  const leafEntry = sessionManager?.getLeafEntry?.() as
+    | {
+        id?: unknown;
+        type?: unknown;
+        message?: unknown;
+      }
+    | undefined;
+  if (!leafEntry || leafEntry.type !== "message") {
+    return {};
+  }
+  const precedingText = extractPrecedingTextFromAssistantMessage(
+    leafEntry.message,
+    args.toolCallId,
+  );
+  const messageId =
+    typeof leafEntry.id === "string" && leafEntry.id.trim().length > 0 ? leafEntry.id : undefined;
+  return {
+    ...(precedingText ? { precedingText } : {}),
+    ...(messageId ? { messageId } : {}),
+  };
 }
 
 async function recordLoopOutcome(args: {
@@ -206,6 +280,8 @@ export async function runBeforeToolCallHook(args: {
         params: normalizedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(args.ctx?.precedingText && { precedingText: args.ctx.precedingText }),
+        ...(args.ctx?.messageId && { messageId: args.ctx.messageId }),
       },
       toolContext,
     );
@@ -388,12 +464,13 @@ export function wrapToolWithBeforeToolCallHook(
   const toolName = tool.name || "tool";
   const wrappedTool: AnyAgentTool = {
     ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (toolCallId, params, signal, onUpdate, extensionContext?: unknown) => {
+      const messageContext = extractBeforeToolCallMessageContext({ extensionContext, toolCallId });
       const outcome = await runBeforeToolCallHook({
         toolName,
         params,
         toolCallId,
-        ctx,
+        ctx: { ...ctx, ...messageContext },
         signal,
       });
       if (outcome.blocked) {
@@ -411,7 +488,13 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const result = await execute(
+          toolCallId,
+          outcome.params,
+          signal,
+          onUpdate,
+          extensionContext,
+        );
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,

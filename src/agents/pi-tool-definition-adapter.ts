@@ -11,6 +11,7 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
+  extractBeforeToolCallMessageContext,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
@@ -150,22 +151,25 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   params: unknown;
   onUpdate: AgentToolUpdateCallback<unknown> | undefined;
   signal: AbortSignal | undefined;
+  extensionContext: unknown;
 } {
   if (isLegacyToolExecuteArgs(args)) {
-    const [toolCallId, params, onUpdate, _ctx, signal] = args;
+    const [toolCallId, params, onUpdate, extensionContext, signal] = args;
     return {
       toolCallId,
       params,
       onUpdate,
       signal,
+      extensionContext,
     };
   }
-  const [toolCallId, params, signal, onUpdate] = args;
+  const [toolCallId, params, signal, onUpdate, extensionContext] = args;
   return {
     toolCallId,
     params,
     onUpdate,
     signal,
+    extensionContext,
   };
 }
 
@@ -180,21 +184,35 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       description: tool.description ?? "",
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const { toolCallId, params, onUpdate, signal, extensionContext } =
+          splitToolExecuteArgs(args);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
+            const messageContext = extractBeforeToolCallMessageContext({
+              extensionContext,
+              toolCallId,
+            });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params,
               toolCallId,
+              ctx: messageContext,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const rawResult = await (
+            tool.execute as (
+              toolCallId: string,
+              params: unknown,
+              signal: AbortSignal | undefined,
+              onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+              extensionContext?: unknown,
+            ) => Promise<unknown>
+          )(toolCallId, executeParams, signal, onUpdate, extensionContext);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
@@ -278,12 +296,16 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, extensionContext } = splitToolExecuteArgs(args);
+        const messageContext = extractBeforeToolCallMessageContext({
+          extensionContext,
+          toolCallId,
+        });
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
           toolCallId,
-          ctx: hookContext,
+          ctx: { ...hookContext, ...messageContext },
         });
         if (outcome.blocked) {
           throw new Error(outcome.reason);

@@ -2453,6 +2453,10 @@ export type PluginHookBeforeToolCallEvent = {
   runId?: string;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
+  /** Assistant text content that appeared before this tool call in the same message. */
+  precedingText?: string;
+  /** Session transcript entry id for the assistant message that requested this tool call. */
+  messageId?: string;
 };
 
 export const PluginApprovalResolutions = {
