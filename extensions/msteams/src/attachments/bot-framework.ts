@@ -5,6 +5,7 @@ import { ensureUserAgentHeader } from "../user-agent.js";
 import {
   inferPlaceholder,
   isUrlAllowed,
+  type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   resolveAttachmentFetchPolicy,
   resolveMediaSsrfPolicy,
@@ -139,6 +140,7 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
   preserveFilenames?: boolean;
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsInboundMedia | undefined> {
   if (!params.serviceUrl || !params.attachmentId || !params.tokenProvider) {
     return undefined;
@@ -156,7 +158,10 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   let accessToken: string;
   try {
     accessToken = await params.tokenProvider.getAccessToken(BOT_FRAMEWORK_SCOPE);
-  } catch {
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework token acquisition failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
   if (!accessToken) {
@@ -236,7 +241,10 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
       contentType: saved.contentType,
       placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: fileNameHint }),
     };
-  } catch {
+  } catch (err) {
+    params.logger?.warn?.("msteams botFramework save failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
 }
@@ -258,6 +266,7 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
   preserveFilenames?: boolean;
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsGraphMediaResult> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -290,12 +299,16 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
         fileNameHint: params.fileNameHint,
         contentTypeHint: params.contentTypeHint,
         preserveFilenames: params.preserveFilenames,
+        logger: params.logger,
       });
       if (item) {
         media.push(item);
       }
-    } catch {
-      // Ignore per-attachment failures and continue.
+    } catch (err) {
+      params.logger?.warn?.("msteams botFramework attachment download failed", {
+        error: err instanceof Error ? err.message : String(err),
+        attachmentId,
+      });
     }
   }
 
