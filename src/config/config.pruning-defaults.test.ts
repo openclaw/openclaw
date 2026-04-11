@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyConfigDefaults as applyAnthropicConfigDefaults } from "../../extensions/anthropic/provider-policy-api.js";
 import type { OpenClawConfig } from "./config.js";
+import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 
 function expectAnthropicPruningDefaults(cfg: OpenClawConfig, heartbeatEvery = "30m") {
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
@@ -8,10 +8,8 @@ function expectAnthropicPruningDefaults(cfg: OpenClawConfig, heartbeatEvery = "3
   expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
 }
 
-function applyAnthropicDefaultsForTest(
-  config: Parameters<typeof applyAnthropicConfigDefaults>[0]["config"],
-) {
-  return applyAnthropicConfigDefaults({ config, env: {} });
+function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
+  return applyProviderConfigDefaultsForConfig({ provider: "anthropic", config, env: {} });
 }
 
 describe("config pruning defaults", () => {
