@@ -61,7 +61,7 @@ vi.mock("node:fs", async () => {
     mkdirSync: hoisted.mkdirSyncMock,
     writeFileSync: hoisted.writeFileSyncMock,
     readFileSync: vi.fn((filePath: string) => {
-      if (String(filePath).endsWith("template.html")) {
+      if (filePath.endsWith("template.html")) {
         return "<html>{{CSS}}{{JS}}{{SESSION_DATA}}{{MARKED_JS}}{{HIGHLIGHT_JS}}</html>";
       }
       return "";

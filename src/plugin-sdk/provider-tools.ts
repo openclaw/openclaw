@@ -187,15 +187,9 @@ function normalizeOpenAIStrictCompatSchema(schema: unknown): unknown {
 }
 
 function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): boolean {
-  const provider = String(ctx.model?.provider ?? ctx.provider ?? "")
-    .trim()
-    .toLowerCase();
-  const api = String(ctx.model?.api ?? ctx.modelApi ?? "")
-    .trim()
-    .toLowerCase();
-  const baseUrl = String(ctx.model?.baseUrl ?? "")
-    .trim()
-    .toLowerCase();
+  const provider = (ctx.model?.provider ?? ctx.provider ?? "").trim().toLowerCase();
+  const api = (ctx.model?.api ?? ctx.modelApi ?? "").trim().toLowerCase();
+  const baseUrl = (ctx.model?.baseUrl ?? "").trim().toLowerCase();
 
   if (provider === "openai") {
     return api === "openai-responses" && (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl));
