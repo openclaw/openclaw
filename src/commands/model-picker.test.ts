@@ -13,6 +13,17 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog,
 }));
 
+const buildConfiguredModelCatalog = vi.hoisted(() => vi.fn());
+vi.mock("../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+    "../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    buildConfiguredModelCatalog,
+  };
+});
+
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({
     version: 1,
@@ -430,6 +441,53 @@ describe("router model filtering", () => {
     expectRouterModelFiltering(allowlistCall?.options as Array<{ value: string }>);
     expect(allowlistCall?.searchable).toBe(true);
     expect(runProviderPluginAuthMethod).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured catalog when models.mode is replace", async () => {
+    buildConfiguredModelCatalog.mockReturnValue([
+      {
+        provider: "custom",
+        id: "only-model",
+        name: "Only Model",
+      },
+    ]);
+    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
+
+    const select = vi.fn(async (params) => {
+      const first = params.options[0];
+      return first?.value ?? "";
+    });
+    const multiselect = createSelectAllMultiselect();
+    const defaultPrompter = makePrompter({ select });
+    const allowlistPrompter = makePrompter({ multiselect });
+    const config = {
+      models: { mode: "replace" },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter: defaultPrompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+    await promptModelAllowlist({ config, prompter: allowlistPrompter });
+
+    const defaultOptions = select.mock.calls[0]?.[0]?.options ?? [];
+    expect(defaultOptions.map((opt: { value: string }) => opt.value)).toContain(
+      "custom/only-model",
+    );
+    expect(defaultOptions.map((opt: { value: string }) => opt.value)).not.toContain(
+      "openrouter/meta-llama/llama-3.3-70b:free",
+    );
+
+    const allowlistOptions = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(allowlistOptions.map((opt: { value: string }) => opt.value)).toEqual([
+      "custom/only-model",
+    ]);
+    expect(buildConfiguredModelCatalog).toHaveBeenCalledTimes(2);
+    expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 });
 
