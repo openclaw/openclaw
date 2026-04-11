@@ -30,14 +30,14 @@ describe("loadOctoConfig — missing octo: block", () => {
     const result = loadOctoConfig({}, { logger });
     expect(result).toEqual(DEFAULT_OCTO_CONFIG);
     expect(logger).toHaveBeenCalledTimes(1);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
   });
 
   it("ignores unrelated top-level keys owned by other subsystems", () => {
     const logger = vi.fn();
     const result = loadOctoConfig({ tools: { exec: { mode: "strict" } }, models: {} }, { logger });
     expect(result).toEqual(DEFAULT_OCTO_CONFIG);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
   });
 
   it("treats octo: undefined as missing", () => {
@@ -71,7 +71,7 @@ describe("loadOctoConfig — minimal enabled block", () => {
       DEFAULT_OCTO_CONFIG.scheduler.weights.stickiness,
     );
     expect(result.classifier.defaultMode).toBe(DEFAULT_OCTO_CONFIG.classifier.defaultMode);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
   });
 });
 
@@ -364,21 +364,21 @@ describe("loadOctoConfig — logger injection", () => {
     const logger = vi.fn();
     loadOctoConfig({}, { logger });
     expect(logger).toHaveBeenCalledTimes(1);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
   });
 
   it("calls the logger exactly once on a successful enabled load", () => {
     const logger = vi.fn();
     loadOctoConfig({ octo: { enabled: true } }, { logger });
     expect(logger).toHaveBeenCalledTimes(1);
-    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+    expect(logger).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
   });
 
   it("falls back to console.info when no logger is provided", () => {
     const spy = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       loadOctoConfig({});
-      expect(spy).toHaveBeenCalledWith("octopus orchestrator: enabled=true");
+      expect(spy).toHaveBeenCalledWith("octopus orchestrator: enabled=false");
     } finally {
       spy.mockRestore();
     }

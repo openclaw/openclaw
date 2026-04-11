@@ -236,8 +236,8 @@ describe("First-Class Citizenship Checklist (M2-22)", () => {
     // OpenClaw release.
     expect(Value.Check(OctoConfigSchema, DEFAULT_OCTO_CONFIG)).toBe(true);
 
-    // Default config has enabled=true (M2 exit criterion)
-    expect(DEFAULT_OCTO_CONFIG.enabled).toBe(true);
+    // Default config has enabled=false (opt-in only)
+    expect(DEFAULT_OCTO_CONFIG.enabled).toBe(false);
 
     // Config loader round-trips the default config
     const loaded = loadOctoConfig({}, { logger: () => {} });

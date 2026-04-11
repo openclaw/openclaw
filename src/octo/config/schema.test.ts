@@ -32,8 +32,8 @@ describe("DEFAULT_OCTO_CONFIG", () => {
     expect(Value.Check(OctoConfigSchema, DEFAULT_OCTO_CONFIG)).toBe(true);
   });
 
-  it("defaults enabled to true (M2 exit — feature flag flipped)", () => {
-    expect(DEFAULT_OCTO_CONFIG.enabled).toBe(true);
+  it("defaults enabled to false (opt-in only)", () => {
+    expect(DEFAULT_OCTO_CONFIG.enabled).toBe(false);
   });
 
   it("defaults classifier.defaultMode to direct_execute (OCTO-DEC-039)", () => {
