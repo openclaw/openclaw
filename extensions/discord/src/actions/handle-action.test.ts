@@ -109,4 +109,26 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("forwards empty appliedTags array for clearing forum tags", async () => {
+    await handleDiscordMessageAction({
+      action: "channel-edit",
+      params: {
+        channelId: "thread-456",
+        appliedTags: [],
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { channels: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channelEdit",
+        channelId: "thread-456",
+        appliedTags: [],
+      }),
+      expect.any(Object),
+    );
+  });
 });

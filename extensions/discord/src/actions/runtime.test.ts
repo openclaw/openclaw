@@ -656,6 +656,30 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
   });
 
+  it("forwards empty appliedTags array to clear forum tags", async () => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        appliedTags: [],
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith({
+      channelId: "C1",
+      name: undefined,
+      topic: undefined,
+      position: undefined,
+      parentId: undefined,
+      nsfw: undefined,
+      rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
+      appliedTags: [],
+    });
+  });
+
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],

@@ -197,7 +197,9 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
       integer: true,
     });
-    const appliedTags = readStringArrayParam(actionParams, "appliedTags");
+    const appliedTags = Array.isArray(actionParams.appliedTags)
+      ? (actionParams.appliedTags as string[])
+      : undefined;
     const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {
