@@ -1,6 +1,14 @@
+import {
+  SUBAGENT_ENDED_OUTCOME_ERROR,
+  SUBAGENT_ENDED_OUTCOME_OK,
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_TARGET_KIND_ACP,
+} from "../../agents/subagent-lifecycle-events.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
@@ -736,6 +744,8 @@ export class AcpSessionManager {
           let sawTurnOutput = false;
           let retryFreshHandle = false;
           let skipPostTurnCleanup = false;
+          let turnSucceeded = false;
+          let turnError: AcpRuntimeError | undefined;
           try {
             const ensured = await this.ensureRuntimeHandle({
               cfg: input.cfg,
@@ -872,6 +882,7 @@ export class AcpSessionManager {
               state: "idle",
               clearLastError: true,
             });
+            turnSucceeded = true;
             return;
           } catch (error) {
             const acpError = toAcpRuntimeError({
@@ -914,6 +925,7 @@ export class AcpSessionManager {
               state: "error",
               lastError: acpError.message,
             });
+            turnError = acpError;
             throw acpError;
           } finally {
             if (input.signal && onCallerAbort) {
@@ -959,6 +971,16 @@ export class AcpSessionManager {
               } finally {
                 this.clearCachedRuntimeState(sessionKey);
               }
+              // Emit subagent_ended hook for ACP oneshot sessions so thread bindings can unbind
+              void this.emitAcpSessionEndedHook({
+                sessionKey,
+                reason: turnSucceeded
+                  ? SUBAGENT_ENDED_REASON_COMPLETE
+                  : SUBAGENT_ENDED_REASON_ERROR,
+                outcome: turnSucceeded ? SUBAGENT_ENDED_OUTCOME_OK : SUBAGENT_ENDED_OUTCOME_ERROR,
+                error: turnError?.message,
+                sendFarewell: true,
+              });
             }
           }
           if (retryFreshHandle) {
@@ -2216,6 +2238,45 @@ export class AcpSessionManager {
       });
     } catch (error) {
       logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    }
+  }
+
+  /**
+   * Emit subagent_ended hook for ACP sessions.
+   * This allows Discord/Telegram/etc. thread bindings to unbind and send farewell messages.
+   */
+  private async emitAcpSessionEndedHook(params: {
+    sessionKey: string;
+    reason: string;
+    outcome?: "ok" | "error" | "timeout";
+    error?: string;
+    sendFarewell?: boolean;
+  }): Promise<void> {
+    try {
+      const hookRunner = getGlobalHookRunner();
+      if (!hookRunner?.hasHooks("subagent_ended")) {
+        return;
+      }
+      await hookRunner.runSubagentEnded(
+        {
+          targetSessionKey: params.sessionKey,
+          targetKind: SUBAGENT_TARGET_KIND_ACP,
+          reason: params.reason,
+          sendFarewell: params.sendFarewell,
+          endedAt: Date.now(),
+          outcome: params.outcome,
+          error: params.error,
+        },
+        {
+          runId: undefined,
+          childSessionKey: params.sessionKey,
+          requesterSessionKey: undefined,
+        },
+      );
+    } catch (error) {
+      logVerbose(
+        `acp-manager: failed emitting subagent_ended hook for ${params.sessionKey}: ${String(error)}`,
+      );
     }
   }
 }
