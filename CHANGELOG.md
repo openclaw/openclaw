@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Tools/video_generate: allow providers and plugins to return URL-only generated video assets so agent delivery and `openclaw capability video generate --output ...` can forward or stream large videos without requiring the full file in memory first. (#61988) Thanks @xieyongliang.
+- Agents/AGENTS selection: add optional `agents.defaults.agentsFile`, `agents.defaults.agentsFilesByModel`, and matching `agents.defaults.subagents.*` / `agents.list[].*` keys so teams can swap the `AGENTS.md` that sub-agents receive or tune per-model variants (for example `AGENTS.gpt-5.4.md`) without rewriting the shared workspace prompt on every model switch. Selection order is per-agent model → defaults model → per-agent base → defaults base → workspace `AGENTS.md`; paths must stay inside the workspace root. A new `agents.defaults.bootstrapSignatureMode` (default `auto`) gates the transcript-signature drift check so upgrades without the new keys set stay byte-identical to prior continuation-skip behavior. Docs: https://docs.openclaw.ai/tools/subagents#model-aware-agents-selection. (#64263, #64504)
+
 ### Fixes
 
 - Gateway/startup: defer scheduled services until sidecars finish, gate chat history and model listing during sidecar resume, and let Control UI retry startup-gated history loads so Sandbox wake resumes channels first. (#65365) Thanks @lml2468.
@@ -99,6 +102,8 @@ Docs: https://docs.openclaw.ai
 - Telegram/sessions: keep topic-scoped session initialization on the canonical topic transcript path when inbound turns omit `MessageThreadId`, so one topic session no longer alternates between bare and topic-qualified transcript files. (#64869) Thanks @jalehman.
 - Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.
 - MiniMax/OAuth: write `api: "anthropic-messages"` and `authHeader: true` into the `minimax-portal` config patch during `openclaw configure`, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.
+- Agents/compaction: keep the effective AGENTS source (including per-model overrides and hook adjustments) consistent across compaction, retry, and reinjection so sub-agents cannot silently regain the broader main-agent prompt on a continuation turn. (#64264)
+- Agents/bootstrap signature checks: skip `agent:bootstrap` hook overrides when recomputing the bootstrap signature for a continuation-skip precheck, avoiding redundant hook I/O and side effects on fast-path turns. (#64265)
 
 ## 2026.4.10
 

@@ -953,6 +953,31 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+### `agents.defaults.bootstrapSignatureMode`
+
+Controls how the effective AGENTS bootstrap source is recorded in
+transcripts and compared on continuation-skip turns. Default: `"auto"`.
+
+- `"lenient"`: skip signature comparison entirely. Markers without a
+  recorded signature are accepted. Preserves pre-model-aware-AGENTS
+  continuation-skip semantics byte-for-byte.
+- `"strict"`: always record and compare a workspace-relative bootstrap
+  signature. A mismatch (including a missing signature on an existing
+  marker) forces bootstrap re-injection on the next continuation turn.
+  Use this when you want drift detection independently of whether any
+  `agentsFile` or `agentsFilesByModel` keys are set.
+- `"auto"` (default): resolves to `"strict"` when any `agentsFile` or
+  `agentsFilesByModel` key is set anywhere in the resolved agents config,
+  and to `"lenient"` otherwise. This keeps upgrade behavior byte-identical
+  for users who never opt into model-aware AGENTS selection while giving
+  drift detection automatically to users who do.
+
+```json5
+{
+  agents: { defaults: { bootstrapSignatureMode: "strict" } },
+}
+```
+
 ### `agents.defaults.agentsFile`
 
 Sets the default AGENTS source file for main/default runs. The file path may be

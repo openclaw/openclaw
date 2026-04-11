@@ -171,10 +171,149 @@ flowchart LR
     E --> F["Reuse same effective AGENTS source after continuation or compaction"]
 ```
 
-Migration note: if you previously used the SubAgent Context Limiter plugin only
-to swap `SubAgentMD` into sub-agent runs, the core config above is the direct
-replacement. The plugin is still useful for more custom hook behavior, but it is
-no longer required just to give sub-agents a different AGENTS file.
+### How to enable
+
+Model-aware AGENTS selection is opt-in. If none of the `agentsFile` /
+`agentsFilesByModel` keys are set, OpenClaw injects the workspace
+`AGENTS.md` for every run exactly as before.
+
+To enable it:
+
+1. Create the variant files in your workspace root, for example
+   `AGENTS.gpt-5.4.md`, `SUBAGENTS.md`, or `SUBAGENTS.gpt-5.4.md`.
+2. Add the keys under `agents.defaults` (workspace-wide) or per-agent under
+   `agents.list[].agentsFile` / `agents.list[].subagents.agentsFile` (per
+   agent id).
+3. Use canonical `provider/model` refs in any `agentsFilesByModel` map
+   (see the canonical refs subsection below).
+4. Reload the gateway. No session migration is needed. The next
+   continuation-skip turn will re-inject the bootstrap context automatically
+   when the effective AGENTS source changes.
+5. For workspaces that want bootstrap drift detection even without any
+   `agentsFile` override configured, set
+   `agents.defaults.bootstrapSignatureMode` to `strict`. The default
+   (`auto`) enables strict mode only when at least one `agentsFile` or
+   `agentsFilesByModel` key is set somewhere in the resolved agents config,
+   so unconfigured workspaces keep their previous continuation-skip
+   behavior.
+
+### Canonical provider and model refs
+
+Keys in `agentsFilesByModel` must match the runtime model ref that OpenClaw
+resolves after model normalization. The canonical form is
+`"<provider>/<model>"`, lowercase, with the provider id first.
+
+Correct:
+
+- `"openai/gpt-5.4"`
+- `"anthropic/claude-opus-4-6"`
+- `"anthropic/claude-sonnet-4-6"`
+
+Silently ignored (no warning is emitted because these look like arbitrary
+user keys):
+
+- `"gpt-5.4"` — missing the provider prefix.
+- `"OpenAI/gpt-5.4"` — wrong case.
+- `"openai/gpt-5-4"` — wrong model id; the normalizer does not alias the
+  dash form.
+
+If a key does not match the resolved runtime model, the selector falls
+through to the base override (if set) and then to the workspace
+`AGENTS.md`. Run `/status` or check the agent runtime line in the system
+prompt to confirm the exact canonical model id OpenClaw is using before
+writing the map.
+
+### Warnings
+
+All warnings for the AGENTS override path are emitted through the gateway
+log (not chat) and include the matching config key. If you set a bad
+override you will see one of:
+
+- `<label> must stay within the workspace root; ignoring "<path>"` —
+  emitted when a configured path escapes the workspace root. `<label>` is
+  the exact config path (for example
+  `agents.defaults.agentsFilesByModel.openai/gpt-5.4`).
+- `configured AGENTS file from <label> could not be loaded at <resolvedPath>; falling back (read failed)`
+  — the override path resolved inside the workspace but the file could
+  not be opened.
+- `... falling back (rejected by workspace validation)` — the workspace
+  guard refused the file (typically a symlink target outside the
+  workspace).
+- `... falling back (path was unavailable)` — the file resolver could
+  not produce a usable path.
+- `skipping bootstrap file "<name>" — missing or invalid "path" field` —
+  usually means a custom `agent:bootstrap` hook returned a malformed file
+  entry.
+
+In every case the selector falls back to the base override (if set) and
+finally to the workspace `AGENTS.md`, so the agent never starts without a
+base prompt.
+
+### Security
+
+All configured `agentsFile` and `agentsFilesByModel` paths are resolved
+relative to the active agent workspace and validated with
+`isPathWithinRoot` before being read. Filenames that start with a literal
+`..` character (for example `..agents.md`) are allowed because they are
+inside the workspace root; path escapes like `../outside/AGENTS.md` and
+symlinks whose target resolves outside the workspace are rejected with a
+warning and the selector falls back.
+
+Tilde-expanded paths are honored but must still resolve inside the active
+workspace. The bootstrap signature recorded in the transcript is
+workspace-relative, so moving a workspace to a different host does not
+invalidate continuation turns for already-running sessions.
+
+### Compaction continuity
+
+When the embedded runner compacts a session, the post-compaction context
+is rebuilt through the same resolver that selected the initial AGENTS
+source for the run. The effective AGENTS source (base override, model
+override, and any `agent:bootstrap` hook adjustments) is carried across
+the compaction boundary. A sub-agent that started with `SUBAGENTS.md`
+will continue to read `SUBAGENTS.md` after compaction rather than
+silently reverting to the workspace `AGENTS.md`.
+
+If you have `agentsFilesByModel` set and a later turn resolves a
+different model, the workspace-relative bootstrap signature changes and
+the next continuation-skip turn will re-inject the new effective source.
+
+### Migration from hook-based overrides
+
+Teams that previously used a custom `agent:bootstrap` hook just to swap
+`AGENTS.md` for sub-agent runs can move the swap into core config:
+
+**Before** (custom hook):
+
+```json5
+{
+  hooks: {
+    internal: {
+      entries: [{ event: "agent:bootstrap", handler: "swap-subagent-agents-file" }],
+    },
+  },
+}
+```
+
+**After** (core config):
+
+```json5
+{
+  agents: {
+    defaults: {
+      subagents: {
+        agentsFile: "SUBAGENTS.md",
+      },
+    },
+  },
+}
+```
+
+The `agent:bootstrap` hook path is still fully supported for custom
+behavior that core config cannot express (for example hooks that inspect
+the incoming message before picking a prompt file). The new core config
+does not replace the hook — it layers on top of it. Hooks still run
+against the file set that the resolver has already selected.
 
 ## Tool
 

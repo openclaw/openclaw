@@ -575,8 +575,10 @@ describe("resolveBootstrapContextForRun", () => {
 
     const signature = await resolveBootstrapSignatureForRun({ workspaceDir });
 
-    const expectedPath = path.join(workspaceDir, "AGENTS.md").replace(/\\/g, "/");
-    expect(signature).toBe(`agents:${expectedPath}`);
+    // Bootstrap signatures are recorded workspace-relative (see
+    // `fix(agents): tighten bootstrap path handling`) so they stay portable
+    // across workspace moves and prompt-cache-stable across machines.
+    expect(signature).toBe("agents:AGENTS.md");
     expect(hookCalls).toBe(0);
   });
 });
@@ -685,6 +687,76 @@ describe("hasCompletedBootstrapTurn", () => {
     );
 
     expect(await hasCompletedBootstrapTurn(sessionFile, "agents:/tmp/AGENTS.new.md")).toBe(false);
+  });
+
+  it("returns true when a signature is expected but the recorded marker has none AND signatureMode is lenient", async () => {
+    const sessionFile = path.join(tmpDir, "signature-missing-lenient.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    // In lenient mode, a marker without a recorded bootstrap signature is
+    // accepted even when the caller passes an expected signature. This
+    // preserves pre-model-aware-AGENTS continuation-skip semantics for
+    // transcripts written before the feature rolled out.
+    expect(
+      await hasCompletedBootstrapTurn(sessionFile, "agents:AGENTS.new.md", {
+        signatureMode: "lenient",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats an explicit lenient signatureMode as backward-compat shim regardless of expected signature", async () => {
+    const sessionFile = path.join(tmpDir, "signature-mismatch-lenient.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1, bootstrapSignature: "agents:AGENTS.old.md" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    // Lenient mode never rejects on signature mismatch: it short-circuits
+    // the comparison and returns the compaction-order semantics.
+    expect(
+      await hasCompletedBootstrapTurn(sessionFile, "agents:AGENTS.new.md", {
+        signatureMode: "lenient",
+      }),
+    ).toBe(true);
+  });
+
+  it("still rejects a signature mismatch in strict mode (default when no options passed)", async () => {
+    const sessionFile = path.join(tmpDir, "signature-mismatch-strict-default.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1, bootstrapSignature: "agents:AGENTS.old.md" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    // Missing options => default strict mode, same behavior as before the
+    // toggle landed.
+    expect(await hasCompletedBootstrapTurn(sessionFile, "agents:AGENTS.new.md")).toBe(false);
   });
 
   it("returns false when compaction happened after the last assistant turn", async () => {
