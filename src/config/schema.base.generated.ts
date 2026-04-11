@@ -3369,6 +3369,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    jsonlDialect: {
+                      type: "string",
+                      const: "claude-stream-json",
+                    },
                     input: {
                       anyOf: [
                         {

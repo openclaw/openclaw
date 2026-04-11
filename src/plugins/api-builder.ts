@@ -29,6 +29,7 @@ export type BuildPluginApiParams = {
       | "registerSecurityAuditCollector"
       | "registerService"
       | "registerCliBackend"
+      | "registerTextTransforms"
       | "registerConfigMigration"
       | "registerAutoEnableProbe"
       | "registerProvider"
@@ -71,6 +72,7 @@ const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAud
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
+const noopRegisterTextTransforms: OpenClawPluginApi["registerTextTransforms"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
@@ -134,6 +136,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
+    registerTextTransforms: handlers.registerTextTransforms ?? noopRegisterTextTransforms,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,

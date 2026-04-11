@@ -1095,6 +1095,24 @@ export type ProviderSystemPromptContributionContext = {
   agentId?: string;
 };
 
+export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {
+  systemPrompt: string;
+};
+
+export type PluginTextReplacement = {
+  from: string | RegExp;
+  to: string;
+};
+
+export type PluginTextTransforms = {
+  /** Rewrites applied to outbound prompt text before provider/CLI transport. */
+  input?: PluginTextReplacement[];
+  /** Rewrites applied to inbound assistant text before OpenClaw consumes it. */
+  output?: PluginTextReplacement[];
+};
+
+export type PluginTextTransformRegistration = PluginTextTransforms;
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -1467,6 +1485,22 @@ export type ProviderPlugin = {
   resolveSystemPromptContribution?: (
     ctx: ProviderSystemPromptContributionContext,
   ) => ProviderSystemPromptContribution | null | undefined;
+  /**
+   * Provider-owned final system-prompt transform.
+   *
+   * Use this sparingly when a provider transport needs small compatibility
+   * rewrites after OpenClaw has assembled the complete prompt. Return
+   * `undefined`/`null` to leave the prompt unchanged.
+   */
+  transformSystemPrompt?: (ctx: ProviderTransformSystemPromptContext) => string | null | undefined;
+  /**
+   * Provider-owned bidirectional text replacements.
+   *
+   * `input` applies to system prompts and text message content before transport.
+   * `output` applies to assistant text deltas/final text before OpenClaw handles
+   * its own control markers or channel delivery.
+   */
+  textTransforms?: PluginTextTransforms;
   /**
    * Provider-owned global config defaults.
    *
@@ -2091,6 +2125,28 @@ export type CliBackendPlugin = {
    * shapes need to stay working.
    */
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  /**
+   * Backend-owned final system-prompt transform.
+   *
+   * Use this for tiny CLI-specific compatibility rewrites without replacing
+   * the generic CLI runner or prompt builder.
+   */
+  transformSystemPrompt?: (ctx: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    provider: string;
+    modelId: string;
+    modelDisplay: string;
+    agentId?: string;
+    systemPrompt: string;
+  }) => string | null | undefined;
+  /**
+   * Backend-owned bidirectional text replacements.
+   *
+   * `input` applies to the system prompt and user prompt passed to the CLI.
+   * `output` applies to parsed/streamed assistant text from the CLI.
+   */
+  textTransforms?: PluginTextTransforms;
 };
 
 export type OpenClawPluginChannelRegistration = {
@@ -2199,6 +2255,8 @@ export type OpenClawPluginApi = {
   registerService: (service: OpenClawPluginService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
+  /** Register plugin-owned prompt/message compatibility text transforms. */
+  registerTextTransforms: (transforms: PluginTextTransformRegistration) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
