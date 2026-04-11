@@ -56,5 +56,13 @@ steps:
           expr: "!reportsDiscoveryScopeLeak(outbound.text)"
           message:
             expr: "`discovery report drifted beyond scope: ${outbound.text}`"
+      # Parity gate criterion 2 (no fake progress / fake tool completion):
+      # require an actual read tool call before the prose report. Without this,
+      # a model could fabricate a plausible Worked/Failed/Blocked/Follow-up
+      # report without ever touching the repo files the prompt names.
+      - assert:
+          expr: "!env.mock || [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].some((request) => String(request.allInputText ?? '').includes('worked, failed, blocked') && request.plannedToolName === 'read')"
+          message:
+            expr: "`expected at least one read tool call during discovery report scenario, saw plannedToolNames=${JSON.stringify([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].map((request) => request.plannedToolName ?? null))}`"
     detailsExpr: outbound.text
 ```
