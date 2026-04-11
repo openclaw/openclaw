@@ -469,15 +469,19 @@ export function createMatrixQaClient(params: {
       });
       since = response.body.next_batch?.trim() || since;
       const roomEvents = response.body.rooms?.join?.[opts.roomId]?.timeline?.events ?? [];
+      let matchedEvent: MatrixQaObservedEvent | null = null;
       for (const event of roomEvents) {
         const normalized = normalizeMatrixQaObservedEvent(opts.roomId, event);
         if (!normalized) {
           continue;
         }
         opts.observedEvents.push(normalized);
-        if (opts.predicate(normalized)) {
-          return { event: normalized, matched: true, since };
+        if (matchedEvent === null && opts.predicate(normalized)) {
+          matchedEvent = normalized;
         }
+      }
+      if (matchedEvent) {
+        return { event: matchedEvent, matched: true, since };
       }
     }
     return { matched: false, since };

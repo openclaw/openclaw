@@ -241,6 +241,73 @@ describe("matrix driver client", () => {
     );
   });
 
+  it("keeps recording later same-batch events after the first match", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          next_batch: "next-batch-2",
+          rooms: {
+            join: {
+              "!room:matrix-qa.test": {
+                timeline: {
+                  events: [
+                    {
+                      event_id: "$sut",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "target", msgtype: "m.text" },
+                    },
+                    {
+                      event_id: "$driver",
+                      sender: "@driver:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "trailing event", msgtype: "m.text" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+    const observedEvents: MatrixQaObservedEvent[] = [];
+
+    const result = await client.waitForOptionalRoomEvent({
+      observedEvents,
+      predicate: (event) => event.eventId === "$sut",
+      roomId: "!room:matrix-qa.test",
+      since: "start-batch",
+      timeoutMs: 1,
+    });
+
+    expect(result).toEqual({
+      event: expect.objectContaining({
+        eventId: "$sut",
+      }),
+      matched: true,
+      since: "next-batch-2",
+    });
+    expect(observedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: "target",
+          eventId: "$sut",
+        }),
+        expect.objectContaining({
+          body: "trailing event",
+          eventId: "$driver",
+        }),
+      ]),
+    );
+  });
+
   it("sends Matrix reactions through the protocol send endpoint", async () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       expect(resolveRequestUrl(input)).toContain(
