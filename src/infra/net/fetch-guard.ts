@@ -318,6 +318,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
+        // Validate hostname against SSRF policy even without DNS pinning.
+        // Callers opt out of the undici pinned dispatcher (e.g. to avoid
+        // FormData corruption) but still need private-IP / blocklist checks.
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
