@@ -129,10 +129,23 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
 | `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
 | `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
+| `OPENCLAW_INSTALL_GWS`         | Install Google Workspace CLI from the musl release artifact      |
 | `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
 | `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
 | `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+
+When `OPENCLAW_INSTALL_GWS=1` is set for `Dockerfile.custom`, the image installs
+`gws` from the musl GitHub release instead of the npm-provided glibc binary.
+This is useful on bookworm-based images where newer `gws` builds may require a
+newer glibc than the runtime base image provides. The image also sets these
+runtime defaults so `gws` can find the persisted OAuth files in the mounted
+workspace:
+
+```bash
+GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/home/node/.openclaw/workspace/.config/gws/credentials.json
+GOOGLE_WORKSPACE_CLI_CLIENT_SECRET_FILE=/home/node/.openclaw/workspace/.config/gws/client_secret.json
+```
 
 ### Health checks
 

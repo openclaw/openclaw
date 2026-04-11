@@ -234,6 +234,34 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       chown -R node:node /home/node/.cache/ms-playwright; \
     fi
 
+# Optionally install Google Workspace CLI via the musl release artifact.
+# Build with:
+#   docker build --build-arg OPENCLAW_INSTALL_GWS=1 -f Dockerfile.custom .
+# This avoids glibc version mismatches from the npm-installed gws binary on
+# bookworm-based runtime images.
+ARG OPENCLAW_INSTALL_GWS=""
+ARG OPENCLAW_GWS_VERSION="0.22.5"
+RUN if [ -n "$OPENCLAW_INSTALL_GWS" ]; then \
+      set -eux; \
+      arch="$(dpkg --print-architecture)"; \
+      case "$arch" in \
+        amd64) gws_target="x86_64-unknown-linux-musl" ;; \
+        arm64) gws_target="aarch64-unknown-linux-musl" ;; \
+        *) echo "Unsupported architecture for gws: $arch" >&2; exit 1 ;; \
+      esac; \
+      artifact="google-workspace-cli-${gws_target}.tar.gz"; \
+      base_url="https://github.com/googleworkspace/cli/releases/download/v${OPENCLAW_GWS_VERSION}"; \
+      tmpdir="$(mktemp -d)"; \
+      curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL -o "$tmpdir/$artifact" "$base_url/$artifact"; \
+      curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL -o "$tmpdir/$artifact.sha256" "$base_url/$artifact.sha256"; \
+      (cd "$tmpdir" && sha256sum -c "$artifact.sha256"); \
+      tar xf "$tmpdir/$artifact" -C "$tmpdir"; \
+      install -m 0755 "$tmpdir/gws" /usr/local/bin/gws; \
+      rm -rf "$tmpdir"; \
+    fi
+ENV GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/home/node/.openclaw/workspace/.config/gws/credentials.json
+ENV GOOGLE_WORKSPACE_CLI_CLIENT_SECRET_FILE=/home/node/.openclaw/workspace/.config/gws/client_secret.json
+
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
 # Adds ~50MB. Only the CLI is installed — no Docker daemon.
