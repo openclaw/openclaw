@@ -68,11 +68,12 @@ const SUSPICIOUS_PASS_PATTERNS = [
   /incomplete turn/i,
   /\btimed out\b/i,
   /\btimeout\b/i,
-  /\berror\b/i,
   /\bfailed to\b/i,
   /\bcould not\b/i,
   /\bunable to\b/i,
   /did not continue/i,
+  /error occurred/i,
+  /an error was/i,
 ] as const;
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {
@@ -144,6 +145,18 @@ function requiredCoverageStatus(
   return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
 }
 
+function scopeSummaryToParityPack(
+  summary: QaParitySuiteSummary,
+  parityTitleSet: ReadonlySet<string>,
+): QaParitySuiteSummary {
+  // The parity verdict must only consider the declared first-wave parity scenarios.
+  // Drop `counts` so the metric helper recomputes totals from the filtered scenario
+  // list instead of inheriting the caller's full-suite counters.
+  return {
+    scenarios: summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name)),
+  };
+}
+
 export function buildQaAgenticParityComparison(params: {
   candidateLabel: string;
   baselineLabel: string;
@@ -151,8 +164,17 @@ export function buildQaAgenticParityComparison(params: {
   baselineSummary: QaParitySuiteSummary;
   comparedAt?: string;
 }): QaAgenticParityComparison {
-  const candidateMetrics = computeQaAgenticParityMetrics(params.candidateSummary);
-  const baselineMetrics = computeQaAgenticParityMetrics(params.baselineSummary);
+  const parityTitleSet: ReadonlySet<string> = new Set<string>(QA_AGENTIC_PARITY_SCENARIO_TITLES);
+  // Rates and fake-success counts are computed from the parity-scoped summaries only,
+  // so extra non-parity scenarios in the input (for example when a caller feeds a full
+  // qa-suite-summary.json rather than a --parity-pack agentic run) cannot influence
+  // the gate verdict.
+  const candidateMetrics = computeQaAgenticParityMetrics(
+    scopeSummaryToParityPack(params.candidateSummary, parityTitleSet),
+  );
+  const baselineMetrics = computeQaAgenticParityMetrics(
+    scopeSummaryToParityPack(params.baselineSummary, parityTitleSet),
+  );
 
   const scenarioNames = new Set([
     ...QA_AGENTIC_PARITY_SCENARIO_TITLES,
@@ -201,8 +223,15 @@ export function buildQaAgenticParityComparison(params: {
       `Missing required parity scenario coverage for ${scenario.name}: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
     );
   }
+  // Required parity scenarios are already reported via `requiredScenarioCoverage`
+  // above; excluding them here keeps the operator-facing failure list from
+  // double-counting the same missing scenario (one "Missing required parity scenario
+  // coverage for X" line plus a "Scenario coverage mismatch for X" line on the same
+  // scenario).
   const coverageMismatch = scenarioComparisons.filter(
-    (scenario) => scenario.candidateStatus === "missing" || scenario.baselineStatus === "missing",
+    (scenario) =>
+      !parityTitleSet.has(scenario.name) &&
+      (scenario.candidateStatus === "missing" || scenario.baselineStatus === "missing"),
   );
   for (const scenario of coverageMismatch) {
     failures.push(
