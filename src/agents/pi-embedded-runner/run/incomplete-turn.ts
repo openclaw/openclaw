@@ -14,6 +14,7 @@ type IncompleteTurnAttempt = Pick<
   | "clientToolCall"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -45,6 +46,10 @@ export function isIncompleteTerminalAssistantTurn(params: {
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
   return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+}
+
+function isEmptyVisiblePayloadAfterNormalStop(stopReason: unknown): boolean {
+  return stopReason === "stop" || stopReason === "end_turn";
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -144,7 +149,14 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  if (!incompleteTerminalAssistant && stopReason !== "error") {
+  // Normal completion with no user-visible payloads (e.g. thinking-only while reasoning is off).
+  const emptyAfterNormalCompletion =
+    isEmptyVisiblePayloadAfterNormalStop(stopReason) && !incompleteTerminalAssistant;
+  if (!incompleteTerminalAssistant && stopReason !== "error" && !emptyAfterNormalCompletion) {
+    return null;
+  }
+
+  if (emptyAfterNormalCompletion && params.attempt.didSendViaMessagingTool) {
     return null;
   }
 

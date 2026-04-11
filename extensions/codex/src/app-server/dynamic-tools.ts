@@ -61,7 +61,9 @@ export function createCodexDynamicToolBridge(params: {
       }
       const args = jsonObjectToRecord(call.arguments);
       try {
-        const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const prepare = (tool as { prepareArguments?: (a: Record<string, unknown>) => unknown })
+          .prepareArguments;
+        const preparedArgs = typeof prepare === "function" ? prepare(args) : args;
         const result = await tool.execute(call.callId, preparedArgs, params.signal);
         collectToolTelemetry({
           toolName: tool.name,

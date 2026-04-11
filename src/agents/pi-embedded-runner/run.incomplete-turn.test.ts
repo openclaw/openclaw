@@ -13,6 +13,7 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   resolveAckExecutionFastPathInstruction,
+  resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -258,6 +259,87 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       explanation: "I'll inspect the code. Then I'll patch the issue. Finally I'll run tests.",
       steps: ["I'll inspect the code.", "Then I'll patch the issue.", "Finally I'll run tests."],
     });
+  });
+
+  it("surfaces incomplete turns when the model stops with no user-visible payloads", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        stopReason: "stop",
+        provider: "moonshot",
+        model: "kimi-k2.5-thinking",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("Please try again");
+  });
+
+  it("surfaces incomplete turns for end_turn with no user-visible payloads", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        stopReason: "end_turn",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("Please try again");
+  });
+
+  it("does not flag incomplete turns when a reply was already sent via messaging tool", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      didSendViaMessagingTool: true,
+      lastAssistant: {
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not treat other stop reasons as empty normal completions", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        stopReason: "maxTokens",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
   });
 
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
