@@ -207,6 +207,81 @@ describe("qa agentic parity report", () => {
     );
   });
 
+  it("fails the parity gate when a required parity scenario fails on both sides", () => {
+    // Regression for the loop-7 Codex-connector P1 finding: without this
+    // check, a required parity scenario that fails on both candidate and
+    // baseline still produces pass=true because the downstream metric
+    // comparisons are purely relative (candidate vs baseline). Cover the
+    // whole parity pack as pass on both sides except the one scenario we
+    // deliberately fail on both sides, so the assertion can pin the
+    // isolated gate failure under test.
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+      { name: "Subagent handoff", status: "pass" as const },
+      { name: "Subagent fanout synthesis", status: "pass" as const },
+      { name: "Memory recall after context switch", status: "pass" as const },
+      { name: "Thread memory isolation", status: "pass" as const },
+      { name: "Config restart capability flip", status: "pass" as const },
+    ];
+    const scenariosWithBothFail = parityPassScenarios.map((scenario, index) =>
+      index === 0 ? { ...scenario, status: "fail" as const } : scenario,
+    );
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: { scenarios: scenariosWithBothFail },
+      baselineSummary: { scenarios: scenariosWithBothFail },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.4=fail, anthropic/claude-opus-4-6=fail.",
+    );
+    // Metric comparisons are relative, so a same-on-both-sides failure
+    // must not appear as a relative metric failure. The required-scenario
+    // failure line is the only thing keeping the gate honest here.
+    expect(comparison.failures.some((failure) => failure.includes("completion rate"))).toBe(false);
+  });
+
+  it("fails the parity gate when a required parity scenario fails on the candidate only", () => {
+    // A candidate regression below a passing baseline is already caught
+    // by the relative completion-rate comparison, but surface it as a
+    // named required-scenario failure too so operators see a concrete
+    // scenario name alongside the rate differential.
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+      { name: "Subagent handoff", status: "pass" as const },
+      { name: "Subagent fanout synthesis", status: "pass" as const },
+      { name: "Memory recall after context switch", status: "pass" as const },
+      { name: "Thread memory isolation", status: "pass" as const },
+      { name: "Config restart capability flip", status: "pass" as const },
+    ];
+    const candidateWithOneFail = parityPassScenarios.map((scenario, index) =>
+      index === 0 ? { ...scenario, status: "fail" as const } : scenario,
+    );
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: { scenarios: candidateWithOneFail },
+      baselineSummary: { scenarios: parityPassScenarios },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.4=fail, anthropic/claude-opus-4-6=pass.",
+    );
+  });
+
   it("fails the parity gate when the baseline contains suspicious pass results", () => {
     // Cover the full second-wave pack on both sides so the suspicious-pass assertion
     // below is the isolated gate failure under test (no coverage-gap noise).
