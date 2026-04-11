@@ -535,6 +535,92 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+
+  test("handles transcript larger than a single read chunk without blocking on a giant string", () => {
+    const sessionId = "test-session-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // Build a transcript whose raw byte size exceeds the 256 KB internal
+    // chunk buffer so that `forEachTranscriptLine` must iterate multiple
+    // chunks.  Each filler line is ~1 KB, so 400 lines ≈ 400 KB > 256 KB.
+    const fillerText = "x".repeat(900);
+    const lines: string[] = [JSON.stringify({ type: "session", version: 1, id: sessionId })];
+    for (let i = 0; i < 400; i++) {
+      lines.push(JSON.stringify({ message: { role: "user", content: `${fillerText}-${i}` } }));
+      lines.push(JSON.stringify({ message: { role: "assistant", content: `reply-${i}` } }));
+    }
+    // Add a compaction entry in the middle to verify it survives chunked reading.
+    lines.push(
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-large",
+        timestamp: "2026-03-01T00:00:00.000Z",
+      }),
+    );
+    lines.push(JSON.stringify({ message: { role: "assistant", content: "final" } }));
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    // 400 user + 400 assistant + 1 compaction marker + 1 final assistant = 802
+    expect(out).toHaveLength(802);
+    // Verify first and last messages are correct.
+    expect(out[0]).toMatchObject({ role: "user" });
+    const last = out[out.length - 1] as { role: string; content: string };
+    expect(last.role).toBe("assistant");
+    expect(last.content).toBe("final");
+    // Verify compaction marker is present.
+    const compaction = out[out.length - 2] as { __openclaw?: { kind?: string } };
+    expect(compaction.__openclaw?.kind).toBe("compaction");
+    // Verify sequential seq numbering across chunk boundaries.
+    const lastSeq = (out[out.length - 1] as { __openclaw?: { seq?: number } }).__openclaw?.seq;
+    expect(lastSeq).toBe(802);
+  });
+
+  test("handles CRLF line endings in large transcripts", () => {
+    const sessionId = "test-session-crlf";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "crlf-hello" } }),
+      JSON.stringify({ message: { role: "assistant", content: "crlf-world" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\r\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ role: "user", content: "crlf-hello" });
+    expect(out[1]).toMatchObject({ role: "assistant", content: "crlf-world" });
+  });
+
+  test("preserves multi-byte UTF-8 characters that straddle chunk boundaries", () => {
+    const sessionId = "test-session-utf8-boundary";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // Use CJK / emoji content so multi-byte sequences are likely to land
+    // on a 256 KB chunk boundary.  We pad each line to ~1 KB so that
+    // ~260 lines push the total past the 256 KB chunk size.
+    const cjkPayload = "\u4f60\u597d\u4e16\u754c\ud83d\ude80\ud83c\udf1f\u6d4b\u8bd5\u5b8c\u6210";
+    const padding = "a".repeat(800);
+    const lines: string[] = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+    ];
+    for (let i = 0; i < 280; i++) {
+      lines.push(
+        JSON.stringify({ message: { role: "user", content: `${padding}-${cjkPayload}-${i}` } }),
+      );
+    }
+    lines.push(
+      JSON.stringify({ message: { role: "assistant", content: `\u56de\u590d\uff1a${cjkPayload}` } }),
+    );
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(281);
+    // Verify the last message contains intact CJK / emoji content.
+    const last = out[out.length - 1] as { role: string; content: string };
+    expect(last.content).toBe(`\u56de\u590d\uff1a${cjkPayload}`);
+    // Verify an arbitrary middle message also survived chunk boundaries.
+    const mid = out[140] as { role: string; content: string };
+    expect(mid.content).toContain(cjkPayload);
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
@@ -827,6 +913,46 @@ describe("readLatestSessionUsageFromTranscript", () => {
     ]);
 
     expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
+  });
+
+  test("aggregates usage across a transcript larger than the internal read chunk", () => {
+    const sessionId = "usage-large-chunked";
+    // Build a transcript whose byte size exceeds the 256 KB chunk buffer.
+    // Each filler user message is ~1 KB, so 300 pairs ≈ 300+ KB.
+    const fillerText = "y".repeat(900);
+    const transcriptLines: unknown[] = [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 1000, output: 200, cacheRead: 50, cost: { total: 0.003 } },
+        },
+      },
+    ];
+    for (let i = 0; i < 300; i++) {
+      transcriptLines.push({ message: { role: "user", content: `${fillerText}-${i}` } });
+    }
+    transcriptLines.push({
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        usage: { input: 500, output: 100, cacheRead: 25, cost: { total: 0.001 } },
+      },
+    });
+    writeTranscript(tmpDir, sessionId, transcriptLines);
+
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      inputTokens: 1500,
+      outputTokens: 300,
+      cacheRead: 75,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.004, 8);
   });
 });
 

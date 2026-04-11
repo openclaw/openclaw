@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -14,6 +15,94 @@ import {
   cleanupArchivedSessionTranscripts,
 } from "./session-transcript-files.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+
+/**
+ * Maximum buffer size for chunked transcript reads.
+ * Each chunk is read into a fixed-size buffer and decoded via a
+ * streaming `StringDecoder`, preventing V8 from allocating a single
+ * multi-hundred-MB string that blocks the event loop.
+ */
+const TRANSCRIPT_READ_CHUNK_BYTES = 256 * 1024;
+
+/**
+ * Hard cap on a single JSONL line length (in characters).  If `carry`
+ * exceeds this without encountering a newline the accumulated content
+ * is discarded.  This prevents unbounded memory growth from a
+ * malformed (or maliciously crafted) transcript that lacks newlines.
+ */
+const MAX_TRANSCRIPT_LINE_CHARS = 8 * 1024 * 1024; // 8 MB
+
+/**
+ * Read a JSONL transcript file in fixed-size chunks and invoke `onLine`
+ * for every non-empty line.  A streaming `StringDecoder` is used so
+ * that multi-byte UTF-8 sequences split across chunk boundaries are
+ * decoded correctly.  Even a 500 MB file never materialises as a
+ * single JS string — the peak string allocation stays bounded by
+ * `TRANSCRIPT_READ_CHUNK_BYTES` plus the longest single line.
+ */
+function forEachTranscriptLine(fd: number, fileSize: number, onLine: (line: string) => void): void {
+  const bufSize = Math.min(TRANSCRIPT_READ_CHUNK_BYTES, fileSize);
+  const buf = Buffer.allocUnsafe(bufSize);
+  const decoder = new StringDecoder("utf8");
+  let position = 0;
+  let carry = "";
+
+  while (position < fileSize) {
+    const toRead = Math.min(bufSize, fileSize - position);
+    const bytesRead = fs.readSync(fd, buf, 0, toRead, position);
+    if (bytesRead <= 0) {
+      break;
+    }
+    position += bytesRead;
+
+    // StringDecoder buffers incomplete multi-byte sequences so chunk
+    // boundaries never corrupt characters that span the boundary.
+    const chunk = decoder.write(buf.subarray(0, bytesRead));
+    const combined = carry + chunk;
+    // Manual indexOf-based split avoids regex on a potentially large
+    // combined string.  The combined string is at most
+    // `carry.length + TRANSCRIPT_READ_CHUNK_BYTES` characters.
+    let searchStart = 0;
+    let newlineIndex = combined.indexOf("\n", searchStart);
+    while (newlineIndex !== -1) {
+      const raw = combined.slice(searchStart, newlineIndex);
+      // Strip optional \r (CRLF files).
+      const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      if (line.length > 0) {
+        onLine(line);
+      }
+      searchStart = newlineIndex + 1;
+      newlineIndex = combined.indexOf("\n", searchStart);
+    }
+    carry = combined.slice(searchStart);
+
+    // Guard against a single line that grows without bound (e.g. a
+    // malformed file with no newlines).  Discard the accumulated
+    // content rather than risk OOM.
+    if (carry.length > MAX_TRANSCRIPT_LINE_CHARS) {
+      console.warn(
+        `[session-utils] Dropping oversized JSONL line fragment ` +
+          `(${carry.length} chars > ${MAX_TRANSCRIPT_LINE_CHARS} limit) ` +
+          `at byte offset ${position} — possible malformed transcript`,
+      );
+      carry = "";
+    }
+  }
+
+  // Flush any bytes the decoder was holding for an incomplete sequence.
+  const decoderRemainder = decoder.end();
+  if (decoderRemainder.length > 0) {
+    carry += decoderRemainder;
+  }
+
+  // Flush any trailing content that was not terminated by a newline.
+  if (carry.length > 0) {
+    const line = carry.endsWith("\r") ? carry.slice(0, -1) : carry;
+    if (line.length > 0) {
+      onLine(line);
+    }
+  }
+}
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -102,48 +191,69 @@ export function readSessionMessages(
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const messages: unknown[] = [];
-  let messageSeq = 0;
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) {
+      return [];
     }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
 
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
+    const messages: unknown[] = [];
+    let messageSeq = 0;
+
+    forEachTranscriptLine(fd, stat.size, (line) => {
+      if (!line.trim()) {
+        return;
       }
-    } catch {
-      // ignore bad lines
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message) {
+          messageSeq += 1;
+          messages.push(
+            attachOpenClawTranscriptMeta(parsed.message, {
+              ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+              seq: messageSeq,
+            }),
+          );
+          return;
+        }
+
+        // Compaction entries are not "message" records, but they're useful context for debugging.
+        // Emit a lightweight synthetic message that the Web UI can render as a divider.
+        if (parsed?.type === "compaction") {
+          const ts =
+            typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+          const timestamp = Number.isFinite(ts) ? ts : Date.now();
+          messageSeq += 1;
+          messages.push({
+            role: "system",
+            content: [{ type: "text", text: "Compaction" }],
+            timestamp,
+            __openclaw: {
+              kind: "compaction",
+              id: typeof parsed.id === "string" ? parsed.id : undefined,
+              seq: messageSeq,
+            },
+          });
+        }
+      } catch {
+        // ignore bad lines
+      }
+    });
+
+    return messages;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
     }
   }
-  return messages;
 }
 
 export {
@@ -441,10 +551,16 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function extractLatestUsageFromTranscriptChunk(
-  chunk: string,
+/**
+ * Chunked replacement for the former `extractLatestUsageFromTranscriptChunk`
+ * call that loaded the entire file into a single string.  This version
+ * streams the file through `forEachTranscriptLine` so the peak string
+ * allocation is bounded by `TRANSCRIPT_READ_CHUNK_BYTES`.
+ */
+function extractUsageFromTranscriptFd(
+  fd: number,
+  fileSize: number,
 ): SessionTranscriptUsageSnapshot | null {
-  const lines = chunk.split(/\r?\n/).filter((line) => line.trim().length > 0);
   const snapshot: SessionTranscriptUsageSnapshot = {};
   let sawSnapshot = false;
   let inputTokens = 0;
@@ -458,7 +574,7 @@ function extractLatestUsageFromTranscriptChunk(
   let costUsdTotal = 0;
   let sawCost = false;
 
-  for (const line of lines) {
+  forEachTranscriptLine(fd, fileSize, (line) => {
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
       const message =
@@ -466,11 +582,11 @@ function extractLatestUsageFromTranscriptChunk(
           ? (parsed.message as Record<string, unknown>)
           : undefined;
       if (!message) {
-        continue;
+        return;
       }
       const role = typeof message.role === "string" ? message.role : undefined;
       if (role && role !== "assistant") {
-        continue;
+        return;
       }
       const usageRaw =
         message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
@@ -500,10 +616,10 @@ function extractLatestUsageFromTranscriptChunk(
         (typeof costUsd === "number" && Number.isFinite(costUsd));
       const hasModelIdentity = Boolean(modelProvider || model);
       if (!hasMeaningfulUsage && !hasModelIdentity) {
-        continue;
+        return;
       }
       if (isDeliveryMirror && !hasMeaningfulUsage) {
-        continue;
+        return;
       }
 
       sawSnapshot = true;
@@ -542,7 +658,7 @@ function extractLatestUsageFromTranscriptChunk(
     } catch {
       // skip malformed lines
     }
-  }
+  });
 
   if (!sawSnapshot) {
     return null;
@@ -581,8 +697,7 @@ export function readLatestSessionUsageFromTranscript(
     if (stat.size === 0) {
       return null;
     }
-    const chunk = fs.readFileSync(fd, "utf-8");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    return extractUsageFromTranscriptFd(fd, stat.size);
   });
 }
 
