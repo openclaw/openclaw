@@ -1,6 +1,10 @@
 # GPT-5.4 / Codex Parity Maintainer Notes
 
-This note explains how to review the GPT-5.4 / Codex parity program as ten merge units without losing the original six-contract architecture. The program shipped as four initial PRs (A through D) that established the runtime contract, parity harness, and first-wave scenario pack, plus six follow-up PRs (E, F, H, J, K, L) that doubled the parity pack, auto-activated strict-agentic on GPT-5, tightened tool-call enforcement, covered the baseline provider for offline runs, and self-described each run in its summary artifact.
+This note explains how to review the GPT-5.4 / Codex parity program without losing the original six-contract architecture. The program ships as ten runtime/test merge units (PRs A, B, C, D, E, F, H, J, K, L) plus a separate documentation catch-up (PR M #64837 — this page). Wave 1 — the four initial PRs A, B, C, D — established the runtime contract, parity harness, and first-wave scenario pack and is now merged. Wave 2 — the six follow-up PRs E, F, H, J, K, L — doubles the parity pack, auto-activates strict-agentic on GPT-5, tightens tool-call enforcement, covers the baseline provider for offline runs, and self-describes each run in its summary artifact. PR F was closed as superseded after its three fixes were resolved upstream independently, so wave 2 lands as five code PRs plus PR M.
+
+## Program status
+
+Sections below describe each PR's scope, including wave-2 PRs that have not yet merged. This doc is merged as PR M after the wave-2 code PRs. Until then, "Owns" blocks for wave-2 PRs describe the intended end state of each slice.
 
 ## Merge units
 
@@ -140,6 +144,14 @@ Owns:
 - three new mermaid diagrams (dual-provider mock, parity run orchestration, tool-call assertion seam)
 - the end-to-end parity runbook section
 - the goal-to-evidence matrix update covering all 10 PRs
+- the program-status disclaimer that marks wave-2 sections as forward-looking until each wave-2 PR merges
+
+Does not own:
+
+- any runtime, test, or scenario registry change (documentation-only PR)
+- the `QA_AGENTIC_PARITY_SCENARIOS` registry expansion (PR E owns that)
+- the CLI flag reference (PR M describes `--model` / `--alt-model` as they exist on `main`; PR M does not change the CLI surface)
+- any architecture change to the mock server, parity report, or strict-agentic contract
 
 ## Mapping back to the original six contracts
 
