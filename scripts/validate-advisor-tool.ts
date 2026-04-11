@@ -28,6 +28,10 @@ async function main() {
     max_tokens: 1024,
     betas: ["advisor-tool-2026-03-01"],
     tools: [
+      // advisor_20260301 is a beta tool type not yet in the typed SDK union.
+      // Cast through unknown then a known tool-type literal to satisfy the
+      // SDK's discriminated union without importing the internal union type.
+      // The runtime payload is correct — only the type check is bypassed.
       {
         type: "advisor_20260301" as unknown as "computer_20250124",
         name: "advisor",

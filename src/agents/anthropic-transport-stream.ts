@@ -10,6 +10,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -26,6 +27,8 @@ import {
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+const log = createSubsystemLogger("agents/anthropic-transport-stream");
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_TOOLS = [
@@ -463,6 +466,11 @@ function mapStopReason(reason: string | undefined): string {
     case "compaction":
       return "length";
     default:
+      // Log so we can detect when Anthropic introduces new stop reasons
+      // that might need distinct handling (safety filters, billing limits, etc.)
+      if (reason !== undefined) {
+        log.warn(`unrecognized Anthropic stop_reason "${reason}"; mapping to "stop"`);
+      }
       return "stop";
   }
 }
