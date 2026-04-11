@@ -236,7 +236,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("falls back to generic file for unsupported audio formats", async () => {
+  it("routes mp3 as audio with opus file_type", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-mp3"),
       fileName: "song.mp3",
@@ -252,12 +252,12 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(fileCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ file_type: "stream" }),
+        data: expect.objectContaining({ file_type: "opus" }),
       }),
     );
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });
