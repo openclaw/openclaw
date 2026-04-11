@@ -3,12 +3,14 @@ import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-hel
 import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
+  resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
 
 describe("ollama provider models", () => {
   afterEach(() => {
+    resetOllamaModelShowInfoCacheForTest();
     vi.unstubAllGlobals();
   });
 
@@ -78,6 +80,68 @@ describe("ollama provider models", () => {
         capabilities: ["thinking", "completion", "tools"],
       },
     ]);
+  });
+
+  it("reuses cached /api/show metadata when the model digest is unchanged", async () => {
+    const models: OllamaTagModel[] = [
+      { name: "qwen3:32b", digest: "sha256:abc123", modified_at: "2026-04-11T00:00:00Z" },
+    ];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "qwen3.context_length": 131072 },
+        capabilities: ["thinking", "tools"],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+    const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached /api/show metadata when the model digest changes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          model_info: { "qwen3.context_length": 131072 },
+          capabilities: ["thinking", "tools"],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          model_info: { "qwen3.context_length": 262144 },
+          capabilities: ["vision", "thinking", "tools"],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
+      { name: "qwen3:32b", digest: "sha256:abc123" },
+    ]);
+    const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
+      { name: "qwen3:32b", digest: "sha256:def456" },
+    ]);
+
+    expect(first).toEqual([
+      {
+        name: "qwen3:32b",
+        digest: "sha256:abc123",
+        contextWindow: 131072,
+        capabilities: ["thinking", "tools"],
+      },
+    ]);
+    expect(second).toEqual([
+      {
+        name: "qwen3:32b",
+        digest: "sha256:def456",
+        contextWindow: 262144,
+        capabilities: ["vision", "thinking", "tools"],
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("buildOllamaModelDefinition sets input to text+image when vision capability is present", () => {

@@ -1,5 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -29,8 +29,10 @@ export type OllamaModelWithContext = OllamaTagModel & {
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
+const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
+const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 
-export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return undefined;
@@ -61,6 +63,29 @@ export type OllamaModelShowInfo = {
   contextWindow?: number;
   capabilities?: string[];
 };
+
+function buildOllamaModelShowCacheKey(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): string | undefined {
+  const version = model.digest?.trim() || model.modified_at?.trim();
+  if (!version) {
+    return undefined;
+  }
+  return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}`;
+}
+
+function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
+  if (ollamaModelShowInfoCache.has(key)) {
+    ollamaModelShowInfoCache.delete(key);
+  } else if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
+    const oldestKey = ollamaModelShowInfoCache.keys().next().value;
+    if (typeof oldestKey === "string") {
+      ollamaModelShowInfoCache.delete(oldestKey);
+    }
+  }
+  ollamaModelShowInfoCache.set(key, value);
+}
 
 export async function queryOllamaModelShowInfo(
   apiBase: string,
@@ -117,6 +142,25 @@ export async function queryOllamaModelShowInfo(
   }
 }
 
+async function queryOllamaModelShowInfoCached(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): Promise<OllamaModelShowInfo> {
+  const cacheKey = buildOllamaModelShowCacheKey(apiBase, model);
+  if (!cacheKey) {
+    return await queryOllamaModelShowInfo(apiBase, model.name);
+  }
+
+  const cached = ollamaModelShowInfoCache.get(cacheKey);
+  if (cached) {
+    return await cached;
+  }
+
+  const pending = queryOllamaModelShowInfo(apiBase, model.name);
+  setOllamaModelShowCacheEntry(cacheKey, pending);
+  return await pending;
+}
+
 /** @deprecated Use queryOllamaModelShowInfo instead. */
 export async function queryOllamaContextWindow(
   apiBase: string,
@@ -136,7 +180,7 @@ export async function enrichOllamaModelsWithContext(
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfo(apiBase, model.name);
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
         return {
           ...model,
           contextWindow: showInfo.contextWindow,
@@ -197,4 +241,8 @@ export async function fetchOllamaModels(
   } catch {
     return { reachable: false, models: [] };
   }
+}
+
+export function resetOllamaModelShowInfoCacheForTest(): void {
+  ollamaModelShowInfoCache.clear();
 }
