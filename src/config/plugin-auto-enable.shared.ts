@@ -608,17 +608,29 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   return next;
 }
 
-function resolveAutoEnableChangeReason(entry: PluginAutoEnableCandidate): string {
-  if (entry.kind !== "channel-configured") {
-    return resolvePluginAutoEnableCandidateReason(entry);
+function resolveChannelAutoEnableDisplayLabel(
+  entry: Extract<PluginAutoEnableCandidate, { kind: "channel-configured" }>,
+  manifestRegistry: PluginManifestRegistry,
+): string | undefined {
+  const builtInChannelId = normalizeChatChannelId(entry.channelId);
+  if (builtInChannelId) {
+    return getChatChannelMeta(builtInChannelId).label;
   }
-  const channelId = normalizeChatChannelId(entry.channelId);
-  const label = channelId ? getChatChannelMeta(channelId)?.label : undefined;
-  return `${label ?? entry.channelId} configured`;
+  const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
+  return plugin?.channelConfigs?.[entry.channelId]?.label ?? plugin?.channelCatalogMeta?.label;
 }
 
-function formatAutoEnableChange(entry: PluginAutoEnableCandidate): string {
-  return `${resolveAutoEnableChangeReason(entry).trim()}, enabled automatically.`;
+function formatAutoEnableChange(
+  entry: PluginAutoEnableCandidate,
+  manifestRegistry: PluginManifestRegistry,
+): string {
+  if (entry.kind === "channel-configured") {
+    const label = resolveChannelAutoEnableDisplayLabel(entry, manifestRegistry);
+    if (label) {
+      return `${label} configured, enabled automatically.`;
+    }
+  }
+  return `${resolvePluginAutoEnableCandidateReason(entry).trim()}, enabled automatically.`;
 }
 
 export function resolvePluginAutoEnableManifestRegistry(params: {
@@ -684,7 +696,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       ...(autoEnabledReasons.get(entry.pluginId) ?? []),
       reason,
     ]);
-    changes.push(formatAutoEnableChange(entry));
+    changes.push(formatAutoEnableChange(entry, params.manifestRegistry));
   }
 
   next = materializeConfiguredPluginEntryAllowlist({
