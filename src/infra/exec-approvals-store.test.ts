@@ -190,7 +190,7 @@ describe("exec approvals store helpers", () => {
   it("allows a symlinked OPENCLAW_HOME (top-level symlink is resolved)", () => {
     const realHome = makeTempDir();
     const linkedHome = `${realHome}-link`;
-    tempDirs.push(realHome);
+    tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome);
     process.env.OPENCLAW_HOME = linkedHome;
 
@@ -199,21 +199,21 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(true);
   });
 
-  it("refuses to traverse a symlinked component INSIDE the resolved home", () => {
+  it("refuses to traverse a symlinked .openclaw component INSIDE the resolved home", () => {
     const realHome = makeTempDir();
+    // Create the real .openclaw target elsewhere
+    const realOcDir = path.join(realHome, "real-openclaw-dir");
+    fs.mkdirSync(realOcDir, { recursive: true });
+    // Make .openclaw a symlink inside the home dir
+    const symlinkOcDir = path.join(realHome, ".openclaw");
+    fs.symlinkSync(realOcDir, symlinkOcDir);
     process.env.OPENCLAW_HOME = realHome;
-    // Create .openclaw dir, then add a symlinked subdir inside it
-    const ocDir = path.join(realHome, ".openclaw");
-    fs.mkdirSync(ocDir, { recursive: true });
-    const realSubDir = path.join(ocDir, "real-sub");
-    fs.mkdirSync(realSubDir);
-    const linkedSubDir = path.join(ocDir, "linked-sub");
-    fs.symlinkSync(realSubDir, linkedSubDir);
-    // Create a file target through the symlinked subdir
-    const targetFile = path.join(linkedSubDir, "exec-approvals.json");
-    fs.writeFileSync(targetFile, '{"sentinel":true}\n');
-    // The check should refuse symlinks inside the resolved root
-    // (This is tested indirectly via the assertSafeExecApprovalsDestination path)
+
+    // saveExecApprovals walks $HOME -> .openclaw (symlink) -> exec-approvals.json
+    // The symlinked .openclaw is INSIDE the resolved home, so it must be rejected
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to use unsafe exec approvals directory/);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {
