@@ -36,6 +36,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: openclaw:local
     environment:
       HOME: /home/node
       TERM: xterm-256color
