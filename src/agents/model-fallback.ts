@@ -345,7 +345,7 @@ function resolveImageFallbackCandidates(params: {
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
@@ -395,8 +395,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = normalizeOptionalString(String(params.provider ?? "")) || defaultProvider;
-  const modelRaw = normalizeOptionalString(String(params.model ?? "")) || defaultModel;
+  const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
+  const modelRaw = normalizeOptionalString(params.model) || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -423,7 +423,7 @@ function resolveFallbackCandidates(params: {
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw,
           defaultProvider,
           aliasIndex,
         });
@@ -437,7 +437,7 @@ function resolveFallbackCandidates(params: {
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider,
       aliasIndex,
     });
@@ -464,7 +464,7 @@ const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = normalizeOptionalString(String(agentDir ?? "")) ?? "";
+  const scope = normalizeOptionalString(agentDir) ?? "";
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
@@ -779,10 +779,6 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      // Expose prior failure reasons to the run callback so it can decide
-      // whether to persist a session-level model override.  Auth failures
-      // are config issues (not model health issues) and should not cause a
-      // sticky override that outlives the fix.
       // Only pass options when there is something meaningful to convey, so
       // that existing tests/callers that don't expect a third argument are
       // not broken.
@@ -911,7 +907,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
@@ -973,7 +969,7 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
