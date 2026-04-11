@@ -21,14 +21,24 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
   trigger?: EmbeddedRunTrigger;
+  runTimeoutMs?: number;
 }): number {
+  const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
     return 0;
   }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
+    return clampTimeoutMs(raw * 1000);
+  }
+
+  const runTimeoutMs = params?.runTimeoutMs;
+  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
+      return 0;
+    }
+    return clampTimeoutMs(runTimeoutMs);
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -37,7 +47,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
   ) {
-    return Math.min(Math.floor(agentTimeoutSeconds) * 1000, MAX_SAFE_TIMEOUT_MS);
+    return clampTimeoutMs(agentTimeoutSeconds * 1000);
   }
 
   if (params?.trigger === "cron") {

@@ -108,6 +108,7 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../../usage.js";
@@ -1249,9 +1250,13 @@ export async function runEmbeddedAttempt(
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
       // Wrap stream with idle timeout detection
+      const configuredRunTimeoutMs = resolveAgentTimeoutMs({
+        cfg: params.config,
+      });
       const idleTimeoutMs = resolveLlmIdleTimeoutMs({
         cfg: params.config,
         trigger: params.trigger,
+        runTimeoutMs: params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined,
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
