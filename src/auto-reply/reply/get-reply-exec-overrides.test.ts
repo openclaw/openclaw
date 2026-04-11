@@ -130,6 +130,43 @@ describe("reply exec overrides", () => {
     ).toEqual(AGENT_EXEC_DEFAULTS);
   });
 
+  it("ignores inline exec directives for non-owner senders (prevents prompt injection)", () => {
+    // A non-owner sender includes /exec security=full in their message.
+    // This must NOT bypass the deny guard.
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("/exec security=full host=auto"),
+        sessionEntry: createSessionEntry(),
+        senderIsOwner: false,
+      }),
+    ).toEqual({ security: "deny", ask: "always" });
+  });
+
+  it("ignores session exec overrides for non-owner senders", () => {
+    const sessionEntry = createSessionEntry({
+      execHost: "gateway",
+      execSecurity: "full",
+    });
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("run a command"),
+        sessionEntry,
+        senderIsOwner: false,
+      }),
+    ).toEqual({ security: "deny", ask: "always" });
+  });
+
+  it("non-owner with agentExecDefaults uses agent defaults over deny", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineDirectives("/exec security=full"),
+        sessionEntry: createSessionEntry({ execSecurity: "full" }),
+        agentExecDefaults: AGENT_EXEC_DEFAULTS,
+        senderIsOwner: false,
+      }),
+    ).toEqual(AGENT_EXEC_DEFAULTS);
+  });
+
   it("resolves the latest persisted exec directive for later turns", async () => {
     const sessionEntry = createSessionEntry();
     const sessionStore = { "agent:main:main": sessionEntry };
