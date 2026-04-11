@@ -376,17 +376,18 @@ const CREDENTIAL_ENV_VARS = [
 ] as const;
 
 // Memoize the SDK credential probe so IMDS is contacted at most once per
-// process. This avoids repeated network requests in environments where
-// IMDS returns errors (e.g. 403 in sandboxed environments like NVIDIA
-// NemoClaw) while preserving correct behavior for EC2 instance roles.
-let _cachedProbeResult: true | undefined;
-let _lastFailureTime: number | undefined;
-const PROBE_RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// CACHE_TTL_MS interval. This avoids repeated network requests in
+// environments where IMDS returns errors (e.g. 403 in sandboxed
+// environments like NVIDIA NemoClaw) while allowing credential changes
+// (SSO refresh, delayed IMDS) to be picked up on the next interval.
+let _cachedResult: boolean | undefined;
+let _cacheTimestamp: number | undefined;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** @internal Visible for testing – resets the memoized credential probe state. */
 export function _resetCredentialCache(): void {
-  _cachedProbeResult = undefined;
-  _lastFailureTime = undefined;
+  _cachedResult = undefined;
+  _cacheTimestamp = undefined;
 }
 
 export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -399,24 +400,13 @@ export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): P
 
   // Only cache when using the real process.env (production path).
   // Test callers passing a custom env object bypass the cache.
-  //
-  // Successful probes are cached permanently (credentials found).
-  // Failed probes are cached for PROBE_RETRY_INTERVAL_MS (5 min) to
-  // suppress IMDS retry spam, then retried so credentials that become
-  // available after startup (delayed IMDS, SSO refresh) are picked up.
   if (env === process.env) {
-    if (_cachedProbeResult) {
-      return true;
-    }
-    if (_lastFailureTime !== undefined && Date.now() - _lastFailureTime < PROBE_RETRY_INTERVAL_MS) {
-      return false;
+    if (_cachedResult !== undefined && Date.now() - _cacheTimestamp! < CACHE_TTL_MS) {
+      return _cachedResult;
     }
     const result = await probeAwsCredentials();
-    if (result) {
-      _cachedProbeResult = true;
-    } else {
-      _lastFailureTime = Date.now();
-    }
+    _cachedResult = result;
+    _cacheTimestamp = Date.now();
     return result;
   }
   return probeAwsCredentials();
