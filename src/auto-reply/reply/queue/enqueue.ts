@@ -1,4 +1,12 @@
+import { fireAndForgetHook } from "../../../hooks/fire-and-forget.js";
+import {
+  toInternalMessageReceivedContext,
+  toPluginMessageContext,
+  toPluginMessageReceivedEvent,
+} from "../../../hooks/message-hook-mappers.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../../hooks/internal-hooks.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
@@ -32,6 +40,34 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
     run.originatingThreadId == null ? "" : String(run.originatingThreadId),
     messageId,
   ]);
+}
+
+function emitQueuedMessageReceivedHooks(run: FollowupRun): void {
+  const canonical = run.inboundHookContext;
+  if (!canonical) {
+    return;
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_received")) {
+    fireAndForgetHook(
+      hookRunner.runMessageReceived(
+        toPluginMessageReceivedEvent(canonical),
+        toPluginMessageContext(canonical),
+      ),
+      "queue/enqueue: message_received plugin hook failed",
+    );
+  }
+  if (run.run.sessionKey) {
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("message", "received", run.run.sessionKey, {
+          ...toInternalMessageReceivedContext(canonical),
+          timestamp: canonical.timestamp,
+        }),
+      ),
+      "queue/enqueue: message_received internal hook failed",
+    );
+  }
 }
 
 function isRunAlreadyQueued(
@@ -94,6 +130,7 @@ export function enqueueFollowupRun(
   }
 
   queue.items.push(run);
+  emitQueuedMessageReceivedHooks(run);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

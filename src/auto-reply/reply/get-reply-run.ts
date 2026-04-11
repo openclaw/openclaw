@@ -11,6 +11,7 @@ import {
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -549,9 +550,10 @@ export async function runPreparedReply(
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
+  const queuedMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const followupRun = {
     prompt: queuedBody,
-    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    messageId: queuedMessageId,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     // Originating channel for reply routing.
@@ -560,6 +562,9 @@ export async function runPreparedReply(
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
+    inboundHookContext: deriveInboundMessageHookContext(ctx, {
+      messageId: queuedMessageId,
+    }),
     run: {
       agentId,
       agentDir,
