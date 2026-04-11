@@ -56,7 +56,7 @@ export type PluginRuntimeCore = {
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
@@ -146,10 +146,10 @@ export type PluginRuntimeCore = {
     runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
     flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {

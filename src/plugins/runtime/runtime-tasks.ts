@@ -22,7 +22,7 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { OpenClawPluginToolContext } from "../tool-types.js";
-import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.js";
+import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
 import type {
   TaskFlowDetail,
   TaskFlowView,
