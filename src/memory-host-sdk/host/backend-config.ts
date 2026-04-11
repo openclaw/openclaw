@@ -5,8 +5,10 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionSendPolicyConfig } from "../../config/types.base.js";
 import type {
+  AgentMemoryConfig,
   MemoryBackend,
   MemoryCitationsMode,
+  MemoryConfig,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
@@ -343,24 +345,64 @@ function resolveDefaultCollections(
   }));
 }
 
+function mergeOptionalObject<T extends object>(base?: T, override?: T): T | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  return { ...(base ?? {}), ...(override ?? {}) };
+}
+
+function mergeMemoryQmdConfig(
+  base?: MemoryQmdConfig,
+  override?: AgentMemoryConfig["qmd"],
+): MemoryQmdConfig | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+    mcporter: mergeOptionalObject(base?.mcporter, override?.mcporter),
+    sessions: mergeOptionalObject(base?.sessions, override?.sessions),
+    update: mergeOptionalObject(base?.update, override?.update),
+    limits: mergeOptionalObject(base?.limits, override?.limits),
+    scope: mergeOptionalObject(base?.scope, override?.scope),
+  };
+}
+
+function mergeMemoryConfig(
+  base?: MemoryConfig,
+  override?: AgentMemoryConfig,
+): MemoryConfig | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+    qmd: mergeMemoryQmdConfig(base?.qmd, override?.qmd),
+  };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const normalizedAgentId = normalizeAgentId(params.agentId);
-  const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
+  const agentEntry = params.cfg.agents?.list?.find(
+    (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
+  );
+  const memoryCfg = mergeMemoryConfig(params.cfg.memory, agentEntry?.memory);
+  const backend = memoryCfg?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, normalizedAgentId);
-  const qmdCfg = params.cfg.memory?.qmd;
+  const qmdCfg = memoryCfg?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
-  const agentEntry = params.cfg.agents?.list?.find(
-    (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
-  );
   const mergedExtraPaths = [
     ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
     ...(agentEntry?.memorySearch?.extraPaths ?? []),

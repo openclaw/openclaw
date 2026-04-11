@@ -398,6 +398,11 @@ override QMD's models globally, set environment variables such as
 `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway
 runtime environment.
 
+Root-level `memory` remains the default for every agent. To enable a different
+backend for one agent only, set `agents.list[].memory.backend`. Agent-level
+`memory.qmd` fields overlay the root `memory.qmd` config, so unspecified QMD
+settings still inherit the global defaults.
+
 ### Update schedule
 
 | Key                       | Type      | Default | Description                           |
@@ -450,6 +455,33 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 | `auto` (default) | Include `Source: <path#line>` footer in snippets    |
 | `on`             | Always include footer                               |
 | `off`            | Omit footer (path still passed to agent internally) |
+
+### Per-agent backend overrides
+
+```json5
+{
+  memory: {
+    backend: "builtin",
+    qmd: {
+      searchMode: "query",
+      update: { commandTimeoutMs: 12000 },
+    },
+  },
+  agents: {
+    list: [
+      { id: "main" },
+      { id: "research", memory: { backend: "qmd" } },
+      {
+        id: "reviewer",
+        memory: {
+          backend: "qmd",
+          qmd: { searchMode: "vsearch" },
+        },
+      },
+    ],
+  },
+}
+```
 
 ### Full QMD example
 

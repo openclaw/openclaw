@@ -306,6 +306,149 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.searchMode).toBe("query");
     expect(resolved.qmd?.searchTool).toBe("hybrid_search");
   });
+
+  it("allows a single agent to opt into qmd without changing other agents", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          { id: "main", default: true, workspace: "/workspace/root" },
+          {
+            id: "research",
+            workspace: "/workspace/research",
+            memory: {
+              backend: "qmd",
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "builtin",
+        citations: "off",
+        qmd: {
+          searchMode: "query",
+          update: {
+            commandTimeoutMs: 12_000,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const mainResolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const researchResolved = resolveMemoryBackendConfig({ cfg, agentId: "research" });
+
+    expect(mainResolved).toEqual({ backend: "builtin", citations: "off" });
+    expect(researchResolved.backend).toBe("qmd");
+    expect(researchResolved.citations).toBe("off");
+    expect(researchResolved.qmd?.searchMode).toBe("query");
+    expect(researchResolved.qmd?.update.commandTimeoutMs).toBe(12_000);
+  });
+
+  it("applies per-agent qmd overrides on top of root qmd defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          { id: "main", default: true, workspace: "/workspace/root" },
+          {
+            id: "research",
+            workspace: "/workspace/research",
+            memory: {
+              qmd: {
+                searchMode: "vsearch",
+                includeDefaultMemory: false,
+                update: {
+                  waitForBootSync: true,
+                },
+                sessions: {
+                  retentionDays: 7,
+                },
+                limits: {
+                  maxResults: 5,
+                },
+                mcporter: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: '"qmd" --daemon',
+          searchMode: "query",
+          includeDefaultMemory: true,
+          update: {
+            commandTimeoutMs: 45_000,
+          },
+          sessions: {
+            enabled: true,
+            retentionDays: 3,
+          },
+          limits: {
+            maxResults: 10,
+            timeoutMs: 2_500,
+          },
+          mcporter: {
+            enabled: false,
+            serverName: "team-qmd",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "research" });
+
+    expect(resolved.backend).toBe("qmd");
+    expect(resolved.qmd?.command).toBe("qmd");
+    expect(resolved.qmd?.searchMode).toBe("vsearch");
+    expect(resolved.qmd?.includeDefaultMemory).toBe(false);
+    expect(resolved.qmd?.update.waitForBootSync).toBe(true);
+    expect(resolved.qmd?.update.commandTimeoutMs).toBe(45_000);
+    expect(resolved.qmd?.sessions.enabled).toBe(true);
+    expect(resolved.qmd?.sessions.retentionDays).toBe(7);
+    expect(resolved.qmd?.limits.maxResults).toBe(5);
+    expect(resolved.qmd?.limits.timeoutMs).toBe(2_500);
+    expect(resolved.qmd?.mcporter.enabled).toBe(true);
+    expect(resolved.qmd?.mcporter.serverName).toBe("team-qmd");
+  });
+
+  it("keeps per-agent memory overrides isolated between agents", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          {
+            id: "alpha",
+            workspace: "/workspace/alpha",
+            memory: {
+              qmd: {
+                searchMode: "vsearch",
+              },
+            },
+          },
+          {
+            id: "beta",
+            workspace: "/workspace/beta",
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+        },
+      },
+    } as OpenClawConfig;
+
+    const alphaResolved = resolveMemoryBackendConfig({ cfg, agentId: "alpha" });
+    const betaResolved = resolveMemoryBackendConfig({ cfg, agentId: "beta" });
+
+    expect(alphaResolved.qmd?.searchMode).toBe("vsearch");
+    expect(betaResolved.qmd?.searchMode).toBe("query");
+  });
 });
 
 describe("memorySearch.extraPaths integration", () => {

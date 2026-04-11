@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -756,6 +757,77 @@ export const MemorySearchSchema = z
   .optional();
 export { AgentModelSchema };
 
+const AgentMemoryQmdScopeSchema = createAllowDenyChannelRulesSchema();
+
+const AgentMemoryQmdPathSchema = z
+  .object({
+    path: z.string(),
+    name: z.string().optional(),
+    pattern: z.string().optional(),
+  })
+  .strict();
+
+const AgentMemoryQmdSessionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    exportDir: z.string().optional(),
+    retentionDays: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const AgentMemoryQmdUpdateSchema = z
+  .object({
+    interval: z.string().optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
+    onBoot: z.boolean().optional(),
+    waitForBootSync: z.boolean().optional(),
+    embedInterval: z.string().optional(),
+    commandTimeoutMs: z.number().int().nonnegative().optional(),
+    updateTimeoutMs: z.number().int().nonnegative().optional(),
+    embedTimeoutMs: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const AgentMemoryQmdLimitsSchema = z
+  .object({
+    maxResults: z.number().int().positive().optional(),
+    maxSnippetChars: z.number().int().positive().optional(),
+    maxInjectedChars: z.number().int().positive().optional(),
+    timeoutMs: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const AgentMemoryQmdMcporterSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    serverName: z.string().optional(),
+    startDaemon: z.boolean().optional(),
+  })
+  .strict();
+
+const AgentMemoryQmdSchema = z
+  .object({
+    command: z.string().optional(),
+    mcporter: AgentMemoryQmdMcporterSchema.optional(),
+    searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    searchTool: z.string().trim().min(1).optional(),
+    includeDefaultMemory: z.boolean().optional(),
+    paths: z.array(AgentMemoryQmdPathSchema).optional(),
+    sessions: AgentMemoryQmdSessionSchema.optional(),
+    update: AgentMemoryQmdUpdateSchema.optional(),
+    limits: AgentMemoryQmdLimitsSchema.optional(),
+    scope: AgentMemoryQmdScopeSchema,
+  })
+  .strict();
+
+const AgentMemorySchema = z
+  .object({
+    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    qmd: AgentMemoryQmdSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentRuntimeAcpSchema = z
   .object({
     agent: z.string().optional(),
@@ -806,6 +878,7 @@ export const AgentEntrySchema = z
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    memory: AgentMemorySchema,
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,

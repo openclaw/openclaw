@@ -147,6 +147,55 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list[].memory backend and qmd overrides", () => {
+    const res = validateConfigObject({
+      memory: {
+        backend: "builtin",
+        qmd: {
+          searchMode: "query",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            memory: {
+              backend: "qmd",
+              qmd: {
+                searchMode: "vsearch",
+                update: {
+                  waitForBootSync: true,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects agents.list[].memory.citations overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "research",
+            memory: {
+              citations: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path.includes("agents.list.0.memory"))).toBe(true);
+    }
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = IMessageConfigSchema.safeParse({
       remoteHost: "bot@gateway-host",

@@ -10,6 +10,11 @@ export type MemoryConfig = {
   qmd?: MemoryQmdConfig;
 };
 
+export type AgentMemoryConfig = {
+  backend?: MemoryBackend;
+  qmd?: MemoryQmdConfig;
+};
+
 export type MemoryQmdConfig = {
   command?: string;
   mcporter?: MemoryQmdMcporterConfig;
