@@ -354,11 +354,14 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
   const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
   if (!rawMode || rawMode === "status") {
+    const sessionAgentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const state = resolveFastModeState({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
       sessionEntry: params.sessionEntry,
     });
     const suffix =

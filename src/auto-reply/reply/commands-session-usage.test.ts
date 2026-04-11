@@ -5,7 +5,7 @@ import type {
   CostUsageTotals,
   SessionCostSummary,
 } from "../../infra/session-cost-usage.js";
-import { handleUsageCommand } from "./commands-session.js";
+import { handleFastCommand, handleUsageCommand } from "./commands-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
@@ -32,6 +32,9 @@ const loadCostUsageSummaryMock = vi.hoisted(() =>
     },
   })),
 );
+const resolveFastModeStateMock = vi.hoisted(() =>
+  vi.fn(() => ({ enabled: true, source: "agent" })),
+);
 
 vi.mock("../../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
@@ -46,6 +49,10 @@ vi.mock("../../agents/agent-scope.js", async () => {
 vi.mock("../../infra/session-cost-usage.js", () => ({
   loadSessionCostSummary: loadSessionCostSummaryMock,
   loadCostUsageSummary: loadCostUsageSummaryMock,
+}));
+
+vi.mock("../../agents/fast-mode.js", () => ({
+  resolveFastModeState: resolveFastModeStateMock,
 }));
 
 function buildUsageParams(): HandleCommandsParams {
@@ -129,5 +136,32 @@ describe("handleUsageCommand", () => {
         sessionId: "session-1",
       }),
     );
+  });
+});
+
+describe("handleFastCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveSessionAgentIdMock.mockReturnValue("target");
+    resolveFastModeStateMock.mockReturnValue({ enabled: true, source: "agent" });
+  });
+
+  it("uses the canonical target session agent for /fast status", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast status";
+    params.provider = "openai";
+    params.model = "gpt-5.4";
+
+    const result = await handleFastCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(resolveFastModeStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Current fast mode: on");
   });
 });
