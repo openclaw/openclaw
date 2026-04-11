@@ -1,26 +1,43 @@
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  chunkMarkdownWithBalancedFences,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 
 export type ChunkDiscordTextOpts = {
-  /** Max characters per Discord message. Default: 2000. */
+  /** Max characters per Discord message. Default: 1950. */
   maxChars?: number;
   /**
-   * Soft max line count per message. Default: 17.
+   * Optional soft max line count per message.
    *
-   * Discord clients can clip/collapse very tall messages in the UI; splitting
-   * by lines keeps long multi-paragraph replies readable.
+   * When omitted, Discord chunking prioritizes minimizing message count and
+   * only splits on character limits.
    */
   maxLines?: number;
 };
 
 type OpenFence = {
+  hasInfoString: boolean;
   indent: string;
   markerChar: string;
   markerLen: number;
   openLine: string;
 };
 
-const DEFAULT_MAX_CHARS = 2000;
-const DEFAULT_MAX_LINES = 17;
+type FenceSpan = OpenFence & {
+  closed: boolean;
+  start: number;
+  end: number;
+};
+
+type FenceState = {
+  leadingOpenFence: FenceSpan | null;
+  spans: FenceSpan[];
+  trailingOpenFence: FenceSpan | null;
+};
+
+const DEFAULT_MAX_CHARS = 1950;
+const DEFAULT_MAX_LINES = Number.MAX_SAFE_INTEGER;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
 function countLines(text: string) {
@@ -37,7 +54,9 @@ function parseFenceLine(line: string): OpenFence | null {
   }
   const indent = match[1] ?? "";
   const marker = match[2] ?? "";
+  const suffix = match[3] ?? "";
   return {
+    hasInfoString: suffix.trim().length > 0,
     indent,
     markerChar: marker[0] ?? "`",
     markerLen: marker.length,
@@ -61,6 +80,81 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
     return `${text}\n${closeLine}`;
   }
   return `${text}${closeLine}`;
+}
+
+function parseFenceSpans(text: string): FenceSpan[] {
+  const spans: FenceSpan[] = [];
+  let openFence: FenceSpan | null = null;
+  let offset = 0;
+  while (offset <= text.length) {
+    const nextNewline = text.indexOf("\n", offset);
+    const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+    const line = text.slice(offset, lineEnd);
+    const fence = parseFenceLine(line);
+    if (fence) {
+      if (!openFence) {
+        openFence = {
+          closed: false,
+          ...fence,
+          start: offset,
+          end: text.length,
+        };
+      } else if (
+        openFence.markerChar === fence.markerChar &&
+        fence.markerLen >= openFence.markerLen
+      ) {
+        openFence.end = lineEnd;
+        openFence.closed = true;
+        spans.push(openFence);
+        openFence = null;
+      }
+    }
+    if (nextNewline === -1) {
+      break;
+    }
+    offset = nextNewline + 1;
+  }
+  if (openFence) {
+    spans.push(openFence);
+  }
+  return spans;
+}
+
+function findTrailingOpenFence(spans: FenceSpan[]): FenceSpan | null {
+  const last = spans.at(-1);
+  if (!last || last.closed) {
+    return null;
+  }
+  return last;
+}
+
+function getFenceState(text: string): FenceState {
+  const spans = parseFenceSpans(text);
+  const trailingOpenFence = findTrailingOpenFence(spans);
+  return {
+    spans,
+    trailingOpenFence,
+    leadingOpenFence: trailingOpenFence?.start === 0 ? trailingOpenFence : null,
+  };
+}
+
+function renderChunkWithFence(text: string, openFence: OpenFence | null): string {
+  return closeFenceIfNeeded(text, openFence);
+}
+
+function getStandaloneChunkFence(text: string, fenceState: FenceState): FenceSpan | null {
+  if (fenceState.leadingOpenFence) {
+    return fenceState.leadingOpenFence;
+  }
+  const trailing = fenceState.trailingOpenFence;
+  if (!trailing) {
+    return null;
+  }
+  if (trailing.hasInfoString || trailing.start === 0) {
+    return trailing;
+  }
+  const trailingBody = text.slice(trailing.start + trailing.openLine.length);
+  return trailingBody.length > 0 ? trailing : null;
 }
 
 function splitLongLine(
@@ -92,7 +186,6 @@ function splitLongLine(
       breakIdx = limit;
     }
     out.push(remaining.slice(0, breakIdx));
-    // Keep the separator for the next segment so words don't get glued together.
     remaining = remaining.slice(breakIdx);
   }
   if (remaining.length) {
@@ -101,11 +194,7 @@ function splitLongLine(
   return out;
 }
 
-/**
- * Chunks outbound Discord text by both character count and (soft) line count,
- * while keeping fenced code blocks balanced across chunks.
- */
-export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
+function chunkDiscordTextByLines(text: string, opts: ChunkDiscordTextOpts): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
 
@@ -114,9 +203,11 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     return [];
   }
 
-  const alreadyOk = body.length <= maxChars && countLines(body) <= maxLines;
+  const bodyFenceState = getFenceState(body);
+  const renderedBody = renderChunkWithFence(body, getStandaloneChunkFence(body, bodyFenceState));
+  const alreadyOk = renderedBody.length <= maxChars && countLines(renderedBody) <= maxLines;
   if (alreadyOk) {
-    return [body];
+    return [renderedBody];
   }
 
   const lines = body.split("\n");
@@ -172,26 +263,39 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      const addition = `${delimiter}${segment}`;
-      const nextLen = current.length + addition.length;
-      const nextLines = currentLines + (isLineContinuation ? 0 : 1);
+      while (true) {
+        const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+        const addition = `${delimiter}${segment}`;
+        const nextLen = current.length + addition.length;
+        const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
-      const wouldExceedChars = nextLen > charLimit;
-      const wouldExceedLines = nextLines > lineLimit;
+        const wouldExceedChars = nextLen > charLimit;
+        const wouldExceedLines = nextLines > lineLimit;
 
-      if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
-        flush();
-      }
-
-      if (current.length > 0) {
-        current += addition;
-        if (!isLineContinuation) {
-          currentLines += 1;
+        if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
+          const beforeFlush = current;
+          flush();
+          if (current === beforeFlush) {
+            // Reopening the exact same buffer would loop forever. Keep a minimal
+            // fence marker so following content stays fenced without exceeding
+            // the explicit line-mode char budget.
+            current = nextOpenFence ? closeFenceLine(nextOpenFence) : "";
+            currentLines = current.length > 0 ? 1 : 0;
+            openFence = nextOpenFence;
+          }
+          continue;
         }
-      } else {
-        current = segment;
-        currentLines = 1;
+
+        if (current.length > 0) {
+          current += addition;
+          if (!isLineContinuation) {
+            currentLines += 1;
+          }
+        } else {
+          current = segment;
+          currentLines = 1;
+        }
+        break;
       }
     }
 
@@ -206,6 +310,26 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   }
 
   return rebalanceReasoningItalics(text, chunks);
+}
+
+export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
+  const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
+  const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
+  const body = text ?? "";
+  if (!body) {
+    return [];
+  }
+
+  if (maxLines < Number.MAX_SAFE_INTEGER) {
+    return chunkDiscordTextByLines(text, opts);
+  }
+
+  return rebalanceReasoningItalics(
+    text,
+    chunkMarkdownWithBalancedFences(body, {
+      maxChars,
+    }),
+  );
 }
 
 export function chunkDiscordTextWithMode(
@@ -233,10 +357,6 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
-// Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
-// When Discord chunking splits the message, we close italics at the end of
-// each chunk and reopen at the start of the next so every chunk renders
-// consistently.
 function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   if (chunks.length <= 1) {
     return chunks;
@@ -253,7 +373,6 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     const isLast = i === adjusted.length - 1;
     const current = adjusted[i];
 
-    // Ensure current chunk closes italics so Discord renders it italicized.
     const needsClosing = !current.trimEnd().endsWith("_");
     if (needsClosing) {
       adjusted[i] = `${current}_`;
@@ -263,7 +382,6 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       break;
     }
 
-    // Re-open italics on the next chunk if needed.
     const next = adjusted[i + 1];
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);

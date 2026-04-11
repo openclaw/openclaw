@@ -10,6 +10,7 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
+export { chunkMarkdownWithBalancedFences } from "../markdown/chunk.js";
 export {
   dispatchInboundMessage,
   dispatchInboundMessageWithBufferedDispatcher,

@@ -480,7 +480,11 @@ describe("plugin-sdk subpath exports", () => {
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
     ]);
-    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
+    expectSourceMentions("reply-chunking", [
+      "chunkMarkdownWithBalancedFences",
+      "chunkText",
+      "chunkTextWithMode",
+    ]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
