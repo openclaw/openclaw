@@ -114,12 +114,7 @@ function parseExportArgs(commandBodyNormalized: string): { outputPath?: string }
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseExportArgs(params.command.commandBodyNormalized);
 
-  // 1. Resolve session file
-  const sessionEntry = params.sessionEntry;
-  if (!sessionEntry?.sessionId) {
-    return { text: "❌ No active session found." };
-  }
-
+  // 1. Resolve target session entry and session file from the canonical target store.
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
   const store = loadSessionStore(storePath, { skipCache: true });
@@ -152,7 +147,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const leafId = sessionManager.getLeafId();
 
   // 3. Build full system prompt
-  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle(params);
+  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
+    ...params,
+    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
+  });
 
   // 4. Prepare session data
   const sessionData: SessionData = {
