@@ -37,10 +37,10 @@ jobs:
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
-      checks_fast_extensions_matrix: ${{ steps.manifest.outputs.checks_fast_extensions_matrix }}
+      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
-      checks_node_test_matrix: ${{ steps.manifest.outputs.checks_node_test_matrix }}
+      checks_node_core_test_matrix: ${{ steps.manifest.outputs.checks_node_core_test_matrix }}
       run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
       extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
@@ -215,7 +215,7 @@ jobs:
                   ]
                 : [],
             ),
-            checks_fast_extensions_matrix: extensionShardMatrix,
+            checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNode,
             checks_matrix: createMatrix(
               runNode
@@ -235,7 +235,7 @@ jobs:
                   ]
                 : [],
             ),
-            checks_node_test_matrix: createMatrix(
+            checks_node_core_test_matrix: createMatrix(
               runNode
                 ? createNodeTestShards().map((shard) => ({
                     check_name: shard.checkName,
@@ -484,7 +484,7 @@ jobs:
               ;;
           esac
 
-  checks-fast-extensions-shard:
+  checks-node-extensions-shard:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
@@ -492,7 +492,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -511,16 +511,16 @@ jobs:
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
-  checks-fast-extensions:
-    name: checks-fast-extensions
-    needs: [preflight, checks-fast-extensions-shard]
+  checks-node-extensions:
+    name: checks-node-extensions
+    needs: [preflight, checks-node-extensions-shard]
     if: always() && needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify extension shards
         env:
-          SHARD_RESULT: ${{ needs.checks-fast-extensions-shard.result }}
+          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
         run: |
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Extension shard checks failed: $SHARD_RESULT" >&2
@@ -613,7 +613,7 @@ jobs:
               ;;
           esac
 
-  checks-node-test-shard:
+  checks-node-core-test-shard:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
@@ -621,7 +621,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_test_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_test_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -693,16 +693,16 @@ jobs:
           }
           EOF
 
-  checks-node-test:
-    name: checks-node-test
-    needs: [preflight, checks-node-test-shard]
+  checks-node-core-test:
+    name: checks-node-core-test
+    needs: [preflight, checks-node-core-test-shard]
     if: always() && needs.preflight.outputs.run_checks == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify node test shards
         env:
-          SHARD_RESULT: ${{ needs.checks-node-test-shard.result }}
+          SHARD_RESULT: ${{ needs.checks-node-core-test-shard.result }}
         run: |
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Node test shards failed: $SHARD_RESULT" >&2

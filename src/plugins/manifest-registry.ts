@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -26,6 +26,7 @@ import {
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type {
   PluginBundleFormat,
@@ -33,7 +34,6 @@ import type {
   PluginDiagnostic,
   PluginFormat,
   PluginKind,
-  PluginOrigin,
 } from "./types.js";
 
 type PluginManifestContractListKey =

@@ -67,12 +67,13 @@ describe("google video generation provider", () => {
       audio: true,
     });
 
-    expect(generateVideosMock).toHaveBeenCalledWith(
+    expect(generateVideosMock).toHaveBeenCalledTimes(1);
+    const [request] = generateVideosMock.mock.calls[0] ?? [];
+    expect(request).toEqual(
       expect.objectContaining({
         model: "veo-3.1-fast-generate-preview",
         prompt: "A tiny robot watering a windowsill garden",
         config: expect.objectContaining({
-          numberOfVideos: 1,
           durationSeconds: 4,
           aspectRatio: "16:9",
           resolution: "720p",
@@ -80,6 +81,7 @@ describe("google video generation provider", () => {
         }),
       }),
     );
+    expect(request?.config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(GoogleGenAIMock).toHaveBeenCalledWith(

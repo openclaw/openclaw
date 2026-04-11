@@ -226,10 +226,9 @@ export async function readDockerContainerEnvVar(
 }
 
 export async function readDockerNetworkDriver(network: string): Promise<string | null> {
-  const result = await execDocker(
-    ["network", "inspect", "-f", "{{.Driver}}", network],
-    { allowFailure: true },
-  );
+  const result = await execDocker(["network", "inspect", "-f", "{{.Driver}}", network], {
+    allowFailure: true,
+  });
   if (result.code !== 0) {
     return null;
   }

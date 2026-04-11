@@ -22,32 +22,56 @@ import {
   safeCodexControlRequest,
 } from "./command-rpc.js";
 
+export type CodexCommandDeps = {
+  codexControlRequest: typeof codexControlRequest;
+  listCodexAppServerModels: typeof listCodexAppServerModels;
+  readCodexStatusProbes: typeof readCodexStatusProbes;
+  readCodexAppServerBinding: typeof readCodexAppServerBinding;
+  requestOptions: typeof requestOptions;
+  safeCodexControlRequest: typeof safeCodexControlRequest;
+  writeCodexAppServerBinding: typeof writeCodexAppServerBinding;
+};
+
+const defaultCodexCommandDeps: CodexCommandDeps = {
+  codexControlRequest,
+  listCodexAppServerModels,
+  readCodexStatusProbes,
+  readCodexAppServerBinding,
+  requestOptions,
+  safeCodexControlRequest,
+  writeCodexAppServerBinding,
+};
+
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
-  options: { pluginConfig?: unknown },
+  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
 ): Promise<{ text: string }> {
+  const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
   const [subcommand = "status", ...rest] = splitArgs(ctx.args);
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
   }
   if (normalized === "status") {
-    return { text: formatCodexStatus(await readCodexStatusProbes(options.pluginConfig)) };
+    return { text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig)) };
   }
   if (normalized === "models") {
     return {
-      text: formatModels(await listCodexAppServerModels(requestOptions(options.pluginConfig, 100))),
+      text: formatModels(
+        await deps.listCodexAppServerModels(deps.requestOptions(options.pluginConfig, 100)),
+      ),
     };
   }
   if (normalized === "threads") {
-    return { text: await buildThreads(options.pluginConfig, rest.join(" ")) };
+    return { text: await buildThreads(deps, options.pluginConfig, rest.join(" ")) };
   }
   if (normalized === "resume") {
-    return { text: await resumeThread(ctx, options.pluginConfig, rest[0]) };
+    return { text: await resumeThread(deps, ctx, options.pluginConfig, rest[0]) };
   }
   if (normalized === "compact") {
     return {
       text: await startThreadAction(
+        deps,
         ctx,
         options.pluginConfig,
         CODEX_CONTROL_METHODS.compact,
@@ -58,6 +82,7 @@ export async function handleCodexSubcommand(
   if (normalized === "review") {
     return {
       text: await startThreadAction(
+        deps,
         ctx,
         options.pluginConfig,
         CODEX_CONTROL_METHODS.review,
@@ -68,7 +93,7 @@ export async function handleCodexSubcommand(
   if (normalized === "mcp") {
     return {
       text: formatList(
-        await codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listMcpServers, {
+        await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listMcpServers, {
           limit: 100,
         }),
         "MCP servers",
@@ -78,23 +103,27 @@ export async function handleCodexSubcommand(
   if (normalized === "skills") {
     return {
       text: formatList(
-        await codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
+        await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
         "Codex skills",
       ),
     };
   }
   if (normalized === "account") {
     const [account, limits] = await Promise.all([
-      safeCodexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.account, {}),
-      safeCodexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.rateLimits, {}),
+      deps.safeCodexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.account, {}),
+      deps.safeCodexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.rateLimits, {}),
     ]);
     return { text: formatAccount(account, limits) };
   }
   return { text: `Unknown Codex command: ${subcommand}\n\n${buildHelp()}` };
 }
 
-async function buildThreads(pluginConfig: unknown, filter: string): Promise<string> {
-  const response = await codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listThreads, {
+async function buildThreads(
+  deps: CodexCommandDeps,
+  pluginConfig: unknown,
+  filter: string,
+): Promise<string> {
+  const response = await deps.codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listThreads, {
     limit: 10,
     ...(filter.trim() ? { filter: filter.trim() } : {}),
   });
@@ -102,6 +131,7 @@ async function buildThreads(pluginConfig: unknown, filter: string): Promise<stri
 }
 
 async function resumeThread(
+  deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
   threadId: string | undefined,
@@ -113,13 +143,17 @@ async function resumeThread(
   if (!ctx.sessionFile) {
     return "Cannot attach a Codex thread because this command did not include an OpenClaw session file.";
   }
-  const response = await codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.resumeThread, {
-    threadId: normalizedThreadId,
-    persistExtendedHistory: true,
-  });
+  const response = await deps.codexControlRequest(
+    pluginConfig,
+    CODEX_CONTROL_METHODS.resumeThread,
+    {
+      threadId: normalizedThreadId,
+      persistExtendedHistory: true,
+    },
+  );
   const thread = isJsonObject(response) && isJsonObject(response.thread) ? response.thread : {};
   const effectiveThreadId = readString(thread, "id") ?? normalizedThreadId;
-  await writeCodexAppServerBinding(ctx.sessionFile, {
+  await deps.writeCodexAppServerBinding(ctx.sessionFile, {
     threadId: effectiveThreadId,
     cwd: readString(thread, "cwd") ?? "",
     model: isJsonObject(response) ? readString(response, "model") : undefined,
@@ -129,6 +163,7 @@ async function resumeThread(
 }
 
 async function startThreadAction(
+  deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
   method: typeof CODEX_CONTROL_METHODS.compact | typeof CODEX_CONTROL_METHODS.review,
@@ -137,11 +172,11 @@ async function startThreadAction(
   if (!ctx.sessionFile) {
     return `Cannot start Codex ${label} because this command did not include an OpenClaw session file.`;
   }
-  const binding = await readCodexAppServerBinding(ctx.sessionFile);
+  const binding = await deps.readCodexAppServerBinding(ctx.sessionFile);
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
-  await codexControlRequest(pluginConfig, method, { threadId: binding.threadId });
+  await deps.codexControlRequest(pluginConfig, method, { threadId: binding.threadId });
   return `Started Codex ${label} for thread ${binding.threadId}.`;
 }
 
