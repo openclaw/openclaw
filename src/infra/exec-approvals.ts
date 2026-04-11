@@ -231,44 +231,48 @@ function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
   assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
-  const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+  // Use statSync (not lstatSync) so that a symlinked top-level ~/.openclaw
+  // directory is followed to its real target. assertNoSymlinkPathComponents
+  // already guards against symlinks *inside* the resolved root.
+  const dirStat = fs.statSync(dir);
+  if (!dirStat.isDirectory()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
   return dir;
 }
 
 function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
-  // Resolve trustedRoot through top-level symlinks (e.g. ~/.openclaw -> real path)
-  // so that a symlinked OPENCLAW_HOME itself is accepted, while still
-  // rejecting symlinks *inside* the resolved root.
-  let resolvedRoot: string;
-  try {
-    resolvedRoot = fs.realpathSync(path.resolve(trustedRoot));
-  } catch {
-    resolvedRoot = path.resolve(trustedRoot);
+  const resolvedTarget = path.resolve(targetPath);
+  const lexicalRoot = path.resolve(trustedRoot);
+
+  if (resolvedTarget !== lexicalRoot && !resolvedTarget.startsWith(`${lexicalRoot}${path.sep}`)) {
+    return; // outside trusted root, skip check
   }
 
-  let resolvedTarget: string;
-  try {
-    resolvedTarget = fs.realpathSync(path.resolve(targetPath));
-  } catch {
-    resolvedTarget = path.resolve(targetPath);
-  }
-
-  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
-    return;
-  }
-
-  // Only check path segments WITHIN the resolved root for symlinks
-  const relative = path.relative(resolvedRoot, resolvedTarget);
+  const relative = path.relative(lexicalRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
-  let current = resolvedRoot;
-  for (const segment of segments) {
-    current = path.join(current, segment);
+
+  // Walk from the lexical root through each child segment, but allow
+  // the immediate first child to be a symlink when it is the well-known
+  // .openclaw config directory. This supports setups where ~/.openclaw is
+  // a symlink managed by GNU Stow or similar dotfile managers.
+  let current = lexicalRoot;
+  for (let i = 0; i < segments.length; i++) {
+    current = path.join(current, segments[i]);
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
+        // Allow the first-level .openclaw symlink directly under the home dir
+        if (i === 0 && segments[i] === ".openclaw") {
+          // Resolve through the symlink and continue checking from the real path
+          try {
+            current = fs.realpathSync(current);
+          } catch {
+            // If realpathSync fails, the original error applies
+            throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+          }
+          continue;
+        }
         throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
       }
     } catch (err) {
