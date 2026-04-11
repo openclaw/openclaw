@@ -106,6 +106,26 @@ describe("resolveMissingPluginCommandMessage", () => {
     ).toBeNull();
   });
 
+  it("returns null for the built-in help command even when plugins.allow is restrictive", () => {
+    expect(
+      resolveMissingPluginCommandMessage("help", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for non-plugin command names that are not in the manifest registry", () => {
+    expect(
+      resolveMissingPluginCommandMessage("tool", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("explains that dreaming is a runtime slash command, not a CLI command", () => {
     const message = resolveMissingPluginCommandMessage("dreaming", {});
     expect(message).toContain("runtime slash command");

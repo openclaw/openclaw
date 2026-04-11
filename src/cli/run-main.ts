@@ -12,6 +12,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -79,11 +80,19 @@ export function resolveMissingPluginCommandMessage(
           .map((entry) => normalizeOptionalLowercaseString(entry))
           .filter(Boolean)
       : [];
+  const registry = loadPluginManifestRegistry({ config });
   const commandAlias = resolveManifestCommandAliasOwner({
     command: normalizedPluginId,
     config,
+    registry,
   });
   const parentPluginId = commandAlias?.pluginId;
+  const hasDirectPluginId = registry.plugins.some(
+    (plugin) => normalizeOptionalLowercaseString(plugin.id) === normalizedPluginId,
+  );
+  if (!parentPluginId && !hasDirectPluginId) {
+    return null;
+  }
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
       return (
