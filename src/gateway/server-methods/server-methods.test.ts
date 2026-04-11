@@ -16,7 +16,7 @@ import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sanitizeChatSendMessageInput } from "./chat.js";
+import { CHAT_SEND_MESSAGE_MAX_BYTES, sanitizeChatSendMessageInput } from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
@@ -307,6 +307,33 @@ describe("sanitizeChatSendMessageInput", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
+  });
+
+  it("accepts message at exactly max byte length (ASCII)", () => {
+    const msg = "a".repeat(CHAT_SEND_MESSAGE_MAX_BYTES);
+    const result = sanitizeChatSendMessageInput(msg);
+    expect(result).toEqual({ ok: true, message: msg });
+  });
+
+  it("rejects message over max byte length", () => {
+    const msg = "a".repeat(CHAT_SEND_MESSAGE_MAX_BYTES + 1);
+    const result = sanitizeChatSendMessageInput(msg);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("512");
+      expect(result.error).toContain("maximum length");
+      expect(result.error).toContain("Shorten or split");
+    }
+  });
+
+  it("rejects by UTF-8 byte length not character count (multi-byte)", () => {
+    // 3 bytes per char in UTF-8; 200k chars = 600k bytes > 512k limit
+    const msg = "中文".repeat(200_000);
+    const result = sanitizeChatSendMessageInput(msg);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("maximum length");
+    }
   });
 });
 

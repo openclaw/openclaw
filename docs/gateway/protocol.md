@@ -473,6 +473,11 @@ implemented in `src/gateway/server-methods/*.ts`.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
 
+### Chat methods
+
+- `chat.send`: the message body is limited to **512 KB** (UTF-8 byte length). Requests with a
+  larger body are rejected; clients should shorten or split the message.
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.

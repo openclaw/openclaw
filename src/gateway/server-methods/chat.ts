@@ -139,6 +139,9 @@ function buildWebchatAudioOnlyAssistantMessage(
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+
+/** Max UTF-8 byte length for a single chat.send message. Prevents DoS and keeps sessions stable. */
+export const CHAT_SEND_MESSAGE_MAX_BYTES = 512 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -332,6 +335,14 @@ export function sanitizeChatSendMessageInput(
   const normalized = message.normalize("NFC");
   if (normalized.includes("\u0000")) {
     return { ok: false, error: "message must not contain null bytes" };
+  }
+  const byteLength = Buffer.byteLength(normalized, "utf8");
+  if (byteLength > CHAT_SEND_MESSAGE_MAX_BYTES) {
+    const maxKb = Math.floor(CHAT_SEND_MESSAGE_MAX_BYTES / 1024);
+    return {
+      ok: false,
+      error: `message exceeds maximum length (max ${maxKb} KB). Shorten or split your message.`,
+    };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
 }
