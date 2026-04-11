@@ -339,6 +339,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
+    resolveContextInjectionMode: vi.fn(() => "always"),
     resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
   }));
 

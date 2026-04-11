@@ -3447,6 +3447,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "continuation-skip",
                   },
+                  {
+                    type: "string",
+                    const: "never",
+                  },
                 ],
                 title: "Context Injection",
                 description:

@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default. Thanks @lsdsjy.
 - CLI/Gateway: make `gateway status` start faster by skipping plugin loading on the read-only status path. (#71364) Thanks @andyylin.
 - Plugins/compatibility: add a central plugin compatibility registry and docs for SDK/config/setup/runtime deprecation records, including dated migration metadata for legacy harness naming and other plugin-facing aliases. Thanks @vincentkoc.
+- Agents/bootstrap: add `agents.defaults.contextInjection: "never"` to disable workspace bootstrap file injection for agents that fully own their prompt lifecycle. (#65006) Thanks @xDarkicex.
 
 ### Fixes
 

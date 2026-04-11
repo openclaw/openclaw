@@ -37,7 +37,11 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolCapabilities,
@@ -471,17 +475,19 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const { contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      warn: makeBootstrapWarn({
-        sessionLabel,
-        workspaceDir: effectiveWorkspace,
-        warn: (message) => log.warn(message),
-      }),
-    });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const { contextFiles } = contextInjectionMode === "never"
+      ? { contextFiles: [] }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            warn: (message) => log.warn(message),
+          }),
+        });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;

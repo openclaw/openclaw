@@ -52,8 +52,13 @@ describe("agent defaults schema", () => {
     expect(result.contextInjection).toBe("continuation-skip");
   });
 
+  it("accepts contextInjection: never", () => {
+    const result = AgentDefaultsSchema.parse({ contextInjection: "never" })!;
+    expect(result.contextInjection).toBe("never");
+  });
+
   it("rejects invalid contextInjection values", () => {
-    expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
   });
 
   it("accepts embeddedPi.executionContract", () => {
