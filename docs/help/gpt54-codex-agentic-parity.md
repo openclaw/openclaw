@@ -8,7 +8,25 @@ OpenClaw already worked well with tool-using frontier models, but GPT-5.4 and Co
 - they could lose long-running task state during replay or compaction
 - parity claims against Claude Opus 4.6 were based on anecdotes instead of repeatable scenarios
 
-This parity program fixes those gaps in ten reviewable slices. PRs A through D landed first and established the runtime contract, parity harness, and first-wave scenario pack. PRs E, H, J, K, and L are follow-up slices that doubled the parity pack, tightened the runtime contract, added tool-call enforcement to the gate, expanded the mock server to cover both providers for offline parity runs, and self-described each run in its summary artifact.
+This parity program ships as ten reviewable slices plus a documentation follow-up (this page). PRs A through D landed first and established the runtime contract, parity harness, and first-wave scenario pack. PRs E, H, J, K, and L are follow-up slices that double the parity pack, tighten the runtime contract, add tool-call enforcement to the gate, expand the mock server to cover both providers for offline parity runs, and self-describe each run in its summary artifact.
+
+## Program status
+
+Sections that describe "after PR X" behavior are forward-looking and reflect the post-merge end state of the program, not what is currently on `main`. Reviewers and operators should read the wave-2 sections below through that lens until each wave-2 PR merges.
+
+| PR          | Title                                                  | Status                                                                 |
+| ----------- | ------------------------------------------------------ | ---------------------------------------------------------------------- |
+| PR A #64241 | strict-agentic execution                               | merged                                                                 |
+| PR B #64439 | runtime truthfulness                                   | merged                                                                 |
+| PR C #64300 | execution correctness                                  | merged                                                                 |
+| PR D #64441 | first-wave parity harness                              | merged                                                                 |
+| PR F #64675 | post-parity main stabilization                         | closed as superseded (all three fixes resolved upstream independently) |
+| PR E #64662 | second-wave parity scenarios                           | open                                                                   |
+| PR H #64679 | strict-agentic auto-activation + blocked-exit liveness | open                                                                   |
+| PR J #64681 | parity scenario tool-call enforcement                  | open                                                                   |
+| PR K #64685 | Anthropic `/v1/messages` mock route                    | open                                                                   |
+| PR L #64789 | `qa-suite-summary.json` run metadata                   | open                                                                   |
+| PR M #64837 | parity documentation catch-up (this page)              | open                                                                   |
 
 ## What changed
 
@@ -169,20 +187,22 @@ flowchart LR
 
 ## Dual-provider mock architecture
 
-The qa-lab mock server now exposes both an OpenAI `/v1/responses` route and an Anthropic `/v1/messages` route. Both routes feed into the same scenario dispatcher, so each parity scenario has one source of truth and both providers exercise the same response plans.
+After PR K #64685 merges, the qa-lab mock server exposes both an OpenAI `/v1/responses` route and an Anthropic `/v1/messages` route. Both routes feed into the same scenario dispatcher, so each parity scenario has one source of truth and both providers exercise the same response plans. Today (pre-PR-K on `main`) only the `/v1/responses` route exists.
 
 ```mermaid
 flowchart LR
-    A[QA suite runner] -- "candidate: gpt-5.4" --> B["POST /v1/responses"]
-    A -- "baseline: claude-opus-4-6" --> C["POST /v1/messages"]
-    B --> D[buildResponsesPayload]
-    C --> E[convertAnthropicMessagesToResponsesInput]
-    E --> D
-    D --> F[Scenario dispatcher]
-    F --> G["/debug/requests log"]
-    F --> H[Scenario-specific response]
-    H --> B
-    H --> C
+    Runner[QA suite runner]
+    Runner -- "candidate: gpt-5.4" --> ResponsesRoute["POST /v1/responses"]
+    Runner -- "baseline: claude-opus-4-6" --> MessagesRoute["POST /v1/messages"]
+    ResponsesRoute -- "OpenAI request body" --> Payload[buildResponsesPayload]
+    MessagesRoute -- "Anthropic request body" --> Adapter[convertAnthropicMessagesToResponsesInput]
+    Adapter -- "shared ResponsesInputItem[]" --> Payload
+    Payload --> Dispatcher[Scenario dispatcher]
+    Dispatcher --> DebugLog["/debug/requests log"]
+    Dispatcher --> OpenAIResponse[OpenAI-shaped response]
+    Dispatcher --> AnthropicResponse[Anthropic-shaped response]
+    OpenAIResponse -- "HTTP 200 JSON" --> Runner
+    AnthropicResponse -- "HTTP 200 JSON" --> Runner
 ```
 
 ## Parity run orchestration
@@ -202,20 +222,23 @@ flowchart TD
 
 ## Tool-call assertion seam
 
-Several parity scenarios gate on the prose shape of the agent's reply. That is necessary but not sufficient, because a model can produce a plausible protocol report without ever reading the files or delegating to a subagent. The tool-call assertion seam closes that gap by requiring the scenario to actually invoke the expected tool before the prose is accepted.
+Several parity scenarios gate on the prose shape of the agent's reply. That is necessary but not sufficient, because a model can produce a plausible protocol report without ever reading the files or delegating to a subagent. After PR J #64681 merges, the `source-docs-discovery-report` and `subagent-handoff` scenarios also read the mock server's `/debug/requests` log and require the scenario to actually invoke the expected tool (`read` for discovery, `sessions_spawn` for delegation) before the prose reply is accepted. Today (pre-PR-J on `main`) these scenarios only assert the prose shape.
 
 ```mermaid
 flowchart LR
-    A[Scenario YAML qa-flow] -- "runAgentPrompt" --> B[Embedded Pi runner]
-    B -- "Responses API call" --> C[mock-openai-server]
-    C -- "record plannedToolName" --> D["/debug/requests store"]
-    A -- "fetchJson /debug/requests" --> D
-    A -- "assert plannedToolName matches" --> E[Pass or Fail]
+    Scenario[Scenario YAML qa-flow] -- "runAgentPrompt" --> Runner[Embedded Pi runner]
+    Runner -- "Responses API call" --> Mock[mock-openai-server]
+    Mock -- "record plannedToolName" --> DebugStore["/debug/requests store"]
+    Scenario -- "fetchJson /debug/requests" --> DebugStore
+    DebugStore -- "plannedToolName" --> Scenario
+    Scenario -- "assert matches expected tool" --> Verdict[Pass or Fail]
 ```
 
 ## Scenario pack
 
-The parity pack covers ten scenarios after the second-wave expansion:
+Wave 1 (PR D #64441, merged) registers the first five scenarios in the parity pack. Wave 2 (PR E #64662, open) registers the next five. The `QA_AGENTIC_PARITY_SCENARIOS` array in `extensions/qa-lab/src/agentic-parity.ts` is the single source of truth; reviewers can count the entries there to see which scenarios are currently wired into the gate.
+
+**Wave 1 scenarios (live on main):**
 
 ### `approval-turn-tool-followthrough`
 
@@ -236,6 +259,8 @@ Checks that mixed-mode tasks involving attachments remain actionable and do not 
 ### `compaction-retry-mutating-tool`
 
 Checks that a task with a real mutating write keeps replay-unsafety explicit instead of quietly looking replay-safe if the run compacts, retries, or loses reply state under pressure.
+
+**Wave 2 scenarios (registered in the pack after PR E #64662 merges; the scenario files already live under `qa/scenarios/` and run standalone):**
 
 ### `subagent-handoff`
 
@@ -274,13 +299,15 @@ Checks that a live capability change survives a config restart on the agent and 
 
 ## Running the parity gate end-to-end
 
-The parity gate is a three-step flow. Each step is reproducible against the qa-lab mock server so an operator can run the whole thing offline before a release candidate reaches live providers.
+The parity gate is a three-step flow. Each step is reproducible against the qa-lab mock server so an operator can run the whole thing offline before a release candidate reaches live providers. The shell commands below use the real CLI flag names (`--model` / `--alt-model` on `openclaw qa suite`, `--candidate-summary` / `--baseline-summary` on `openclaw qa parity-report`).
+
+The baseline lane only runs end-to-end against the qa-lab mock server after PR K #64685 merges the Anthropic `/v1/messages` route. Until then, the baseline lane requires real Anthropic credentials.
 
 1. Run the suite against the candidate provider/model:
 
    ```bash
    pnpm openclaw qa suite \
-     --primary-model openai/gpt-5.4 \
+     --model openai/gpt-5.4 \
      --parity-pack agentic \
      --output-dir .artifacts/qa-e2e/gpt54
    ```
@@ -289,7 +316,7 @@ The parity gate is a three-step flow. Each step is reproducible against the qa-l
 
    ```bash
    pnpm openclaw qa suite \
-     --primary-model anthropic/claude-opus-4-6 \
+     --model anthropic/claude-opus-4-6 \
      --parity-pack agentic \
      --output-dir .artifacts/qa-e2e/opus46
    ```
@@ -304,7 +331,7 @@ The parity gate is a three-step flow. Each step is reproducible against the qa-l
      --output-dir .artifacts/qa-e2e/parity
    ```
 
-Each `qa-suite-summary.json` now carries a `run` block with `primaryProvider`, `primaryModel`, `providerMode`, and `scenarioIds`. The parity report consumes those fields to label the inputs in the Markdown report, so an operator can tell which side of the comparison came from which provider without opening the suite config. On a gate failure, `qa-agentic-parity-summary.json` records a machine-readable verdict and the parity-report command returns a nonzero exit code so CI can block the release.
+After PR L #64789 merges, each `qa-suite-summary.json` carries a `run` block with `primaryProvider`, `primaryModel`, `providerMode`, and `scenarioIds`. The parity report consumes those fields to label the inputs in the Markdown report, so an operator can tell which side of the comparison came from which provider without opening the suite config. Until PR L merges, the summary only carries `{ scenarios, counts }` and the parity report trusts the caller-supplied labels. On a gate failure, `qa-agentic-parity-summary.json` records a machine-readable verdict and the parity-report command returns a nonzero exit code so CI can block the release.
 
 ## Release gate
 
