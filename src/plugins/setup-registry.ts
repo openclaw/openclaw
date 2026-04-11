@@ -7,7 +7,7 @@ import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -65,10 +65,32 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
+const MAX_SETUP_LOOKUP_CACHE_ENTRIES = 128;
+
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const setupRegistryCache = new Map<string, PluginSetupRegistry>();
 const setupProviderCache = new Map<string, ProviderPlugin | null>();
 const setupCliBackendCache = new Map<string, SetupCliBackendEntry | null>();
+let setupLookupCacheEntryCap = MAX_SETUP_LOOKUP_CACHE_ENTRIES;
+
+export const __testing = {
+  get maxSetupLookupCacheEntries() {
+    return setupLookupCacheEntryCap;
+  },
+  setMaxSetupLookupCacheEntriesForTest(value?: number) {
+    setupLookupCacheEntryCap =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.max(1, Math.floor(value))
+        : MAX_SETUP_LOOKUP_CACHE_ENTRIES;
+  },
+  getCacheSizes() {
+    return {
+      setupRegistry: setupRegistryCache.size,
+      setupProvider: setupProviderCache.size,
+      setupCliBackend: setupCliBackendCache.size,
+    };
+  },
+} as const;
 
 export function clearPluginSetupRegistryCache(): void {
   jitiLoaders.clear();
@@ -83,6 +105,33 @@ function getJiti(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
   });
+}
+
+function getCachedSetupValue<T>(
+  cache: Map<string, T>,
+  key: string,
+): { hit: true; value: T } | { hit: false } {
+  if (!cache.has(key)) {
+    return { hit: false };
+  }
+  const cached = cache.get(key) as T;
+  cache.delete(key);
+  cache.set(key, cached);
+  return { hit: true, value: cached };
+}
+
+function setCachedSetupValue<T>(cache: Map<string, T>, key: string, value: T): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+  cache.set(key, value);
+  while (cache.size > setupLookupCacheEntryCap) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
 }
 
 function buildSetupRegistryCacheKey(params: {
@@ -246,6 +295,22 @@ function loadSetupManifestRegistry(params?: { workspaceDir?: string; env?: NodeJ
   });
 }
 
+function findUniqueSetupManifestOwner(params: {
+  registry: ReturnType<typeof loadSetupManifestRegistry>;
+  normalizedId: string;
+  listIds: (record: PluginManifestRecord) => readonly string[];
+}): PluginManifestRecord | undefined {
+  const matches = params.registry.plugins.filter((entry) =>
+    params.listIds(entry).some((id) => normalizeProviderId(id) === params.normalizedId),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  // Setup lookup can execute plugin code. Refuse ambiguous ownership instead of
+  // depending on manifest ordering across bundled/workspace/global sources.
+  return new Set(matches.map((entry) => entry.id)).size === 1 ? matches[0] : undefined;
+}
+
 export function resolvePluginSetupRegistry(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -257,9 +322,9 @@ export function resolvePluginSetupRegistry(params?: {
     env,
     pluginIds: params?.pluginIds,
   });
-  const cached = setupRegistryCache.get(cacheKey);
-  if (cached) {
-    return cached;
+  const cached = getCachedSetupValue(setupRegistryCache, cacheKey);
+  if (cached.hit) {
+    return cached.value;
   }
 
   const selectedPluginIds = params?.pluginIds
@@ -272,7 +337,7 @@ export function resolvePluginSetupRegistry(params?: {
       configMigrations: [],
       autoEnableProbes: [],
     } satisfies PluginSetupRegistry;
-    setupRegistryCache.set(cacheKey, empty);
+    setCachedSetupValue(setupRegistryCache, cacheKey, empty);
     return empty;
   }
 
@@ -371,7 +436,7 @@ export function resolvePluginSetupRegistry(params?: {
     configMigrations,
     autoEnableProbes,
   } satisfies PluginSetupRegistry;
-  setupRegistryCache.set(cacheKey, registry);
+  setCachedSetupValue(setupRegistryCache, cacheKey, registry);
   return registry;
 }
 
@@ -381,8 +446,9 @@ export function resolvePluginSetupProvider(params: {
   env?: NodeJS.ProcessEnv;
 }): SetupProviderPlugin | undefined {
   const cacheKey = buildSetupProviderCacheKey(params);
-  if (setupProviderCache.has(cacheKey)) {
-    return setupProviderCache.get(cacheKey) ?? undefined;
+  const cached = getCachedSetupValue(setupProviderCache, cacheKey);
+  if (cached.hit) {
+    return cached.value ?? undefined;
   }
 
   const env = params.env ?? process.env;
@@ -391,19 +457,19 @@ export function resolvePluginSetupProvider(params: {
     workspaceDir: params.workspaceDir,
     env,
   });
-  const record = manifestRegistry.plugins.find((entry) =>
-    listSetupProviderIds(entry).some(
-      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-    ),
-  );
+  const record = findUniqueSetupManifestOwner({
+    registry: manifestRegistry,
+    normalizedId: normalizedProvider,
+    listIds: listSetupProviderIds,
+  });
   if (!record) {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
   const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
   if (!setupSource) {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
@@ -411,17 +477,17 @@ export function resolvePluginSetupProvider(params: {
   try {
     mod = getJiti(setupSource)(setupSource) as SetupOnlyPluginModule;
   } catch {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
   const resolved = resolveRegister((mod as { default?: SetupOnlyPluginModule }).default ?? mod);
   if (!resolved.register) {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
   if (resolved.definition?.id && resolved.definition.id !== record.id) {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
@@ -452,11 +518,11 @@ export function resolvePluginSetupProvider(params: {
       // Keep setup registration sync-only.
     }
   } catch {
-    setupProviderCache.set(cacheKey, null);
+    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
-  setupProviderCache.set(cacheKey, matchedProvider ?? null);
+  setCachedSetupValue(setupProviderCache, cacheKey, matchedProvider ?? null);
   return matchedProvider;
 }
 
@@ -466,8 +532,9 @@ export function resolvePluginSetupCliBackend(params: {
   env?: NodeJS.ProcessEnv;
 }): SetupCliBackendEntry | undefined {
   const cacheKey = buildSetupCliBackendCacheKey(params);
-  if (setupCliBackendCache.has(cacheKey)) {
-    return setupCliBackendCache.get(cacheKey) ?? undefined;
+  const cached = getCachedSetupValue(setupCliBackendCache, cacheKey);
+  if (cached.hit) {
+    return cached.value ?? undefined;
   }
 
   const normalized = normalizeProviderId(params.backend);
@@ -480,19 +547,19 @@ export function resolvePluginSetupCliBackend(params: {
     workspaceDir: params.workspaceDir,
     env,
   });
-  const record = manifestRegistry.plugins.find((entry) =>
-    listSetupCliBackendIds(entry).some(
-      (backendId) => normalizeProviderId(backendId) === normalized,
-    ),
-  );
+  const record = findUniqueSetupManifestOwner({
+    registry: manifestRegistry,
+    normalizedId: normalized,
+    listIds: listSetupCliBackendIds,
+  });
   if (!record) {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
   const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
   if (!setupSource) {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
@@ -500,16 +567,16 @@ export function resolvePluginSetupCliBackend(params: {
   try {
     mod = getJiti(setupSource)(setupSource) as SetupOnlyPluginModule;
   } catch {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
   const resolved = resolveRegister((mod as { default?: SetupOnlyPluginModule }).default ?? mod);
   if (!resolved.register) {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
   if (resolved.definition?.id && resolved.definition.id !== record.id) {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
@@ -537,16 +604,16 @@ export function resolvePluginSetupCliBackend(params: {
   try {
     const result = resolved.register(api);
     if (result && typeof result.then === "function") {
-      setupCliBackendCache.set(cacheKey, null);
+      setCachedSetupValue(setupCliBackendCache, cacheKey, null);
       return undefined;
     }
   } catch {
-    setupCliBackendCache.set(cacheKey, null);
+    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
   const resolvedEntry = matchedBackend ? { pluginId: record.id, backend: matchedBackend } : null;
-  setupCliBackendCache.set(cacheKey, resolvedEntry);
+  setCachedSetupValue(setupCliBackendCache, cacheKey, resolvedEntry);
   return resolvedEntry ?? undefined;
 }
 
