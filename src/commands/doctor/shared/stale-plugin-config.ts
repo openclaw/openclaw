@@ -15,6 +15,7 @@ type StalePluginConfigHit = {
 
 type StalePluginRegistryState = {
   knownIds: Set<string>;
+  commandAliases: Set<string>;
   hasDiscoveryErrors: boolean;
 };
 
@@ -30,6 +31,13 @@ function collectPluginRegistryState(
   });
   return {
     knownIds: new Set(registry.plugins.map((plugin) => plugin.id)),
+    commandAliases: new Set(
+      registry.plugins.flatMap((plugin) =>
+        Array.isArray((plugin as Record<string, unknown>).commandAliases)
+          ? ((plugin as Record<string, unknown>).commandAliases as string[])
+          : [],
+      ),
+    ),
     hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
   };
 }
@@ -50,7 +58,7 @@ export function scanStalePluginConfig(
     return [];
   }
 
-  const { knownIds } = collectPluginRegistryState(cfg, env);
+  const { knownIds, commandAliases } = collectPluginRegistryState(cfg, env);
   const hits: StalePluginConfigHit[] = [];
 
   const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
@@ -59,7 +67,7 @@ export function scanStalePluginConfig(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || commandAliases.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -74,7 +82,7 @@ export function scanStalePluginConfig(
     return hits;
   }
   for (const rawPluginId of Object.keys(entries)) {
-    if (knownIds.has(normalizePluginId(rawPluginId))) {
+    if (knownIds.has(normalizePluginId(rawPluginId)) || commandAliases.has(normalizePluginId(rawPluginId))) {
       continue;
     }
     hits.push({
