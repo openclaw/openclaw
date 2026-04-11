@@ -1509,8 +1509,11 @@ resource "aws_organizations_account" "audit" {{
         if not landing_zone_name:
             print("❌ Landing zone name cannot be empty")
             sys.exit(1)
-        if not validate_landing_zone_name(landing_zone_name):
+        name_errors = validate_landing_zone_name(landing_zone_name)
+        if name_errors:
             print("❌ Landing zone name must be 3-63 chars and use only lowercase letters, numbers, and hyphens.")
+            for e in name_errors:
+                print(f"   - {e}")
             sys.exit(1)
         if landing_zone_name != name.lower().replace(" ", "-").replace("_", "-"):
             print(f"  ℹ️  Normalized landing zone name to '{landing_zone_name}' before deriving the trail bucket")
