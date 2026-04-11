@@ -561,3 +561,86 @@ describe("server-side tool block handling", () => {
     expect(translateServerToolResultBlock({ type: "tool_use" })).toBeNull();
   });
 });
+
+describe("convertAnthropicMessages serverToolDisplay handling", () => {
+  let convertAnthropicMessages: (
+    messages: never,
+    model: never,
+    isOAuthToken: boolean,
+  ) => Array<Record<string, unknown>>;
+
+  beforeAll(async () => {
+    const mod = await import("./anthropic-transport-stream.js");
+    convertAnthropicMessages = mod.__testing.convertAnthropicMessages as never;
+  });
+
+  const model = {
+    provider: "anthropic",
+    api: "anthropic-messages",
+    id: "claude-sonnet-4-6",
+    input: ["text"],
+  } as never;
+
+  it("skips serverToolDisplay blocks when regular text is also present", () => {
+    const messages = [
+      { role: "user", content: "Tell me about TCP" },
+      {
+        role: "assistant",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        content: [
+          {
+            type: "text",
+            text: "[Advisor] You should cover reliability.",
+            serverToolDisplay: true,
+          },
+          { type: "text", text: "TCP is a reliable transport protocol." },
+        ],
+      },
+    ] as never;
+    const result = convertAnthropicMessages(messages, model, false);
+    const assistant = result.find((p) => p.role === "assistant");
+    expect(assistant).toBeDefined();
+    const content = assistant?.content as Array<Record<string, unknown>>;
+    // Only the real text block should remain — advisor display is dropped
+    expect(content).toHaveLength(1);
+    expect(content[0]).toMatchObject({
+      type: "text",
+      text: "TCP is a reliable transport protocol.",
+    });
+  });
+
+  it("falls back to serverToolDisplay text when it's the only assistant content", () => {
+    const messages = [
+      { role: "user", content: "What does the advisor think?" },
+      {
+        role: "assistant",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        content: [
+          {
+            type: "text",
+            text: "[Advisor] Use gRPC for internal services.",
+            serverToolDisplay: true,
+          },
+        ],
+      },
+      { role: "user", content: "Elaborate on that" },
+    ] as never;
+    const result = convertAnthropicMessages(messages, model, false);
+    // The assistant message must be preserved — otherwise we'd have two
+    // consecutive user messages which the API rejects.
+    const assistant = result.find((p) => p.role === "assistant");
+    expect(assistant).toBeDefined();
+    const content = assistant?.content as Array<Record<string, unknown>>;
+    expect(content).toHaveLength(1);
+    expect(content[0]).toMatchObject({
+      type: "text",
+      text: "[Advisor] Use gRPC for internal services.",
+    });
+    // Verify the turn order is preserved
+    expect(result.map((p) => p.role)).toEqual(["user", "assistant", "user"]);
+  });
+});

@@ -268,11 +268,22 @@ function convertAnthropicMessages(
     }
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
+      const serverToolDisplayFallback: Array<Record<string, unknown>> = [];
       for (const block of msg.content) {
         if (block.type === "text") {
           // Skip synthetic display text for server tool results — these are
-          // only for local rendering, not for the API transcript.
+          // only for local rendering, not for the API transcript. But keep
+          // them in a fallback list: if the assistant turn has NO regular
+          // content, we'll use the display text to preserve the turn (avoids
+          // dropping the assistant message entirely and creating consecutive
+          // user messages which the API rejects).
           if ((block as unknown as Record<string, unknown>).serverToolDisplay) {
+            if (block.text.trim().length > 0) {
+              serverToolDisplayFallback.push({
+                type: "text",
+                text: sanitizeTransportPayloadText(block.text),
+              });
+            }
             continue;
           }
           if (block.text.trim().length > 0) {
@@ -318,10 +329,15 @@ function convertAnthropicMessages(
           continue;
         }
       }
-      if (blocks.length > 0) {
+      // If the assistant turn had no real content, fall back to the server
+      // tool display text so we don't drop the turn entirely. This preserves
+      // conversation continuity in the edge case where the model emits only
+      // advisor/server-tool output with no follow-up text.
+      const finalBlocks = blocks.length > 0 ? blocks : serverToolDisplayFallback;
+      if (finalBlocks.length > 0) {
         params.push({
           role: "assistant",
-          content: blocks,
+          content: finalBlocks,
         });
       }
       continue;
@@ -970,4 +986,5 @@ export const __testing = {
   mapStopReason,
   isServerToolUseBlock,
   translateServerToolResultBlock,
+  convertAnthropicMessages,
 };
