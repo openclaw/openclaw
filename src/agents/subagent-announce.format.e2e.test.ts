@@ -1310,6 +1310,59 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps queued cron announce internal when no resolved external target exists", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:cron:daily-check": {
+        sessionId: "session-cron-queued-missing-target",
+        lastChannel: "telegram",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-queued-missing-target",
+      requesterSessionKey: "agent:main:cron:daily-check",
+      requesterDisplayKey: "agent:main:cron:daily-check",
+      announceType: "cron job",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const params = await getSingleAgentCallParams();
+    expect(params.deliver).toBe(false);
+    expect(params.channel).toBeUndefined();
+    expect(params.to).toBeUndefined();
+  });
+
+  it("keeps direct cron announce internal when no resolved external target exists", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:cron:daily-check": {
+        sessionId: "session-cron-direct-missing-target",
+        lastChannel: "telegram",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-direct-missing-target",
+      requesterSessionKey: "agent:main:cron:daily-check",
+      requesterDisplayKey: "agent:main:cron:daily-check",
+      announceType: "cron job",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const params = await getSingleAgentCallParams();
+    expect(params.deliver).toBe(false);
+    expect(params.channel).toBeUndefined();
+    expect(params.to).toBeUndefined();
+  });
+
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);

@@ -12,7 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
+import { isCronSessionKey, normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
@@ -83,6 +83,16 @@ function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boo
   // Only treat nested sub-agent sessions as internal. Cron sessions are allowed
   // to deliver externally when they provide an explicit delivery target.
   return getSubagentDepthFromSessionStore(sessionKey) >= 1;
+}
+
+function requiresResolvedExternalAnnounceTarget(params: {
+  requesterIsSubagent: boolean;
+  requesterSessionKey: string;
+}): boolean {
+  if (params.requesterIsSubagent) {
+    return false;
+  }
+  return isCronSessionKey(params.requesterSessionKey);
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -598,6 +608,15 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
+  const channelRaw = typeof origin?.channel === "string" ? origin.channel.trim() : "";
+  const hasResolvedTarget =
+    Boolean(origin?.to) && Boolean(channelRaw) && isDeliverableMessageChannel(channelRaw);
+  const shouldDeliverExternally = requiresResolvedExternalAnnounceTarget({
+    requesterIsSubagent,
+    requesterSessionKey: item.sessionKey,
+  })
+    ? hasResolvedTarget
+    : !requesterIsSubagent;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
   const idempotencyKey = buildAnnounceIdempotencyKey(
@@ -612,11 +631,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: shouldDeliverExternally ? origin?.channel : undefined,
+      accountId: shouldDeliverExternally ? origin?.accountId : undefined,
+      to: shouldDeliverExternally ? origin?.to : undefined,
+      threadId: shouldDeliverExternally ? threadId : undefined,
+      deliver: shouldDeliverExternally,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -787,7 +806,14 @@ async function sendSubagentAnnounceDirectly(params: {
     // may run with delivery.channel="last" before any recipient exists (or with
     // missing origin metadata), and in that case we must keep the announce
     // internal/fallback-safe (avoid throwing "Action send requires a target").
-    const shouldDeliverExternally = hasDeliverableDirectTarget;
+    const shouldDeliverExternally = params.expectsCompletionMessage
+      ? hasDeliverableDirectTarget
+      : requiresResolvedExternalAnnounceTarget({
+            requesterIsSubagent: params.requesterIsSubagent,
+            requesterSessionKey: canonicalRequesterSessionKey,
+          })
+        ? hasDeliverableDirectTarget
+        : !params.requesterIsSubagent;
 
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
