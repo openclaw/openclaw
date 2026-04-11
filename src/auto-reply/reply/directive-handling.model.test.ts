@@ -309,24 +309,6 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
   });
 
-  it("uses the active agent context for legacy /model list replies", async () => {
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model list"),
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
-          list: [{ id: "support", model: "localai/ultra-chat" }],
-        },
-      } as unknown as OpenClawConfig,
-      activeAgentId: "support",
-      agentDir: TEST_AGENT_DIR,
-    });
-
-    expect(reply?.text).toContain("Providers:");
-    expect(reply?.text).toContain("localai");
-  });
-
   it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
     const reply = await resolveModelInfoReply({
       directives: parseInlineDirectives("/model status"),

@@ -221,6 +221,28 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Unknown provider");
   });
 
+  it("uses the active agent context for model list replies", async () => {
+    const multiAgentCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models", multiAgentCfg, "discord", {
+        agentId: "support",
+        sessionKey: "agent:support:main",
+      }),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Providers:");
+    expect(result?.reply?.text).toContain("localai");
+  });
+
   it("honors model allowlists and config-only providers", async () => {
     const allowlistedCfg = {
       commands: { text: true },
