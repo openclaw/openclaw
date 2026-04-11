@@ -144,7 +144,7 @@ export async function generateImage(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "image generation",
     attempts,
     lastError,

@@ -511,7 +511,7 @@ describe("exec-policy CLI", () => {
   it("does not clobber a newer approvals write during rollback", async () => {
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
-    const originalSnapshot: ExecApprovalsSnapshot = {
+    const originalSnapshot = {
       path: "/tmp/exec-approvals.json",
       exists: true,
       raw: originalRaw,

@@ -73,7 +73,7 @@ describe("openrouter provider hooks", () => {
       thinkingLevel: "high",
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       {
         provider: "openrouter",
         api: "openai-completions",

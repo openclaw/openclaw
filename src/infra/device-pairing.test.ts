@@ -16,6 +16,7 @@ import {
   requestDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
+  updatePairedDeviceMetadata,
   verifyDeviceToken,
   type PairedDevice,
   type RotateDeviceTokenResult,
@@ -160,6 +161,37 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
+  test("re-requesting with identical params preserves the original ts to prevent queue-jumping", async () => {
+    // Regression: refreshPendingDevicePairingRequest must not bump ts to Date.now().
+    // An attacker who reconnects with the same key/role/scopes could otherwise
+    // silently move their request to the top of the implicit --latest approval queue.
+    const baseDir = await makeDevicePairingDir();
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    const originalTs = first.request.ts;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+    expect(second.request.ts).toBe(originalTs);
+  });
+
   test("supersedes pending requests when requested roles/scopes change", async () => {
     const baseDir = await makeDevicePairingDir();
     const first = await requestDevicePairing(
@@ -289,21 +321,21 @@ describe("device pairing tokens", () => {
       name: "node custom scope",
       roles: ["node"],
       scopes: ["vault.admin"],
-      missingScope: "vault.admin",
+      scope: "vault.admin",
       callerScopes: [],
     },
     {
       name: "operator custom scope",
       roles: ["operator"],
       scopes: ["vault.admin"],
-      missingScope: "vault.admin",
+      scope: "vault.admin",
       callerScopes: ["operator.pairing"],
     },
     {
       name: "node requesting operator scope",
       roles: ["node"],
       scopes: ["operator.read"],
-      missingScope: "operator.read",
+      scope: "operator.read",
       callerScopes: ["operator.read"],
     },
   ])("rejects requested scopes outside requested roles: $name", async (params) => {
@@ -326,7 +358,8 @@ describe("device pairing tokens", () => {
       ),
     ).resolves.toEqual({
       status: "forbidden",
-      missingScope: params.missingScope,
+      reason: "scope-outside-requested-roles",
+      scope: params.scope,
     });
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
@@ -472,7 +505,8 @@ describe("device pairing tokens", () => {
 
     await expect(approveDevicePairing(request.request.requestId, baseDir)).resolves.toEqual({
       status: "forbidden",
-      missingScope: "operator.admin",
+      reason: "caller-scopes-required",
+      scope: "operator.admin",
     });
 
     await expect(
@@ -489,6 +523,35 @@ describe("device pairing tokens", () => {
         requestId: request.request.requestId,
       }),
     );
+  });
+
+  test("metadata refresh cannot mutate approved role and scope fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+
+    await updatePairedDeviceMetadata(
+      "node-1",
+      {
+        displayName: "renamed-node",
+        role: "operator",
+        roles: ["operator"],
+        scopes: ["operator.admin"],
+        approvedScopes: ["operator.admin"],
+        tokens: {},
+        publicKey: "attacker-key",
+      } as unknown as Parameters<typeof updatePairedDeviceMetadata>[1],
+      baseDir,
+    );
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(paired?.displayName).toBe("renamed-node");
+    expect(paired?.publicKey).toBe("public-key-node-1");
+    expect(paired?.role).toBe("node");
+    expect(paired?.roles).toEqual(["node"]);
+    expect(paired?.scopes).toEqual([]);
+    expect(paired?.approvedScopes).toEqual([]);
+    expect(paired?.tokens?.node).toBeTruthy();
+    expect(paired?.tokens?.operator).toBeUndefined();
   });
 
   test("generates base64url device tokens with 256-bit entropy output length", async () => {

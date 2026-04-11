@@ -453,7 +453,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const health = await callGateway<{ ok?: boolean }>({ method: "health" });
+      const health = await callGateway({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
       expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);

@@ -69,6 +69,8 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -412,8 +414,8 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
-  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
+  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -426,7 +428,54 @@ export function renderApp(state: AppViewState) {
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const refreshDreaming = () => {
-    void Promise.all([loadDreamingStatus(state), loadDreamDiary(state)]);
+    void Promise.all([
+      loadDreamingStatus(state),
+      loadDreamDiary(state),
+      loadWikiImportInsights(state),
+      loadWikiMemoryPalace(state),
+    ]);
+  };
+  const openWikiPage = async (lookup: string) => {
+    if (!state.client || !state.connected) {
+      return null;
+    }
+    const payload = (await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 5000,
+    })) as {
+      title?: unknown;
+      path?: unknown;
+      content?: unknown;
+      updatedAt?: unknown;
+      totalLines?: unknown;
+      truncated?: unknown;
+    } | null;
+    const title =
+      typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
+    const path =
+      typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : lookup;
+    const content =
+      typeof payload?.content === "string" && payload.content.length > 0
+        ? payload.content
+        : "No wiki content available.";
+    const updatedAt =
+      typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
+        ? payload.updatedAt.trim()
+        : undefined;
+    const totalLines =
+      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+        ? Math.max(0, Math.floor(payload.totalLines))
+        : undefined;
+    const truncated = payload?.truncated === true;
+    return {
+      title,
+      path,
+      content,
+      ...(totalLines !== undefined ? { totalLines } : {}),
+      ...(truncated ? { truncated } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
+    };
   };
   const applyDreamingEnabled = (enabled: boolean) => {
     if (state.dreamingModeSaving || dreamingOn === enabled) {
@@ -729,17 +778,21 @@ export function renderApp(state: AppViewState) {
     }
     switch (state.agentsPanel) {
       case "files":
-        return void loadAgentFiles(state, agentId);
+        void loadAgentFiles(state, agentId);
+        return;
       case "skills":
-        return void loadAgentSkills(state, agentId);
+        void loadAgentSkills(state, agentId);
+        return;
       case "tools":
         void loadToolsCatalog(state, agentId);
-        return void refreshVisibleToolsEffectiveForCurrentSession(state);
+        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
     if (panel === "channels") {
-      return void loadChannels(state, false);
+      void loadChannels(state, false);
+      return;
     }
     if (panel === "cron") {
       void state.loadCron();
@@ -1770,23 +1823,7 @@ export function renderApp(state: AppViewState) {
           ? renderChat({
               sessionKey: state.sessionKey,
               onSessionKeyChange: (next) => {
-                state.sessionKey = next;
-                state.chatMessage = "";
-                state.chatAttachments = [];
-                state.chatStream = null;
-                state.chatStreamStartedAt = null;
-                state.chatRunId = null;
-                state.chatQueue = [];
-                state.resetToolStream();
-                state.resetChatScroll();
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: next,
-                  lastActiveSessionKey: next,
-                });
-                void state.loadAssistantIdentity();
-                void loadChatHistory(state);
-                void refreshChatAvatar(state);
+                switchChatSession(state, next);
               },
               thinkingLevel: state.chatThinkingLevel,
               showThinking,
@@ -1797,6 +1834,7 @@ export function renderApp(state: AppViewState) {
               fallbackStatus: state.fallbackStatus,
               assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
+              sideResult: state.chatSideResult,
               toolMessages: state.chatToolMessages,
               streamSegments: state.chatStreamSegments,
               stream: state.chatStream,
@@ -1810,6 +1848,7 @@ export function renderApp(state: AppViewState) {
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               onRefresh: () => {
+                state.chatSideResult = null;
                 state.resetToolStream();
                 return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
@@ -1832,6 +1871,9 @@ export function renderApp(state: AppViewState) {
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onDismissSideResult: () => {
+                state.chatSideResult = null;
+              },
               onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
@@ -1840,6 +1882,7 @@ export function renderApp(state: AppViewState) {
                 try {
                   await state.client.request("sessions.reset", { key: state.sessionKey });
                   state.chatMessages = [];
+                  state.chatSideResult = null;
                   state.chatStream = null;
                   state.chatRunId = null;
                   await loadChatHistory(state);
@@ -1850,17 +1893,7 @@ export function renderApp(state: AppViewState) {
               agentsList: state.agentsList,
               currentAgentId: resolvedAgentId ?? "main",
               onAgentChange: (agentId: string) => {
-                state.sessionKey = buildAgentMainSessionKey({ agentId });
-                state.chatMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: state.sessionKey,
-                  lastActiveSessionKey: state.sessionKey,
-                });
-                void loadChatHistory(state);
-                void state.loadAssistantIdentity();
+                switchChatSession(state, buildAgentMainSessionKey({ agentId }));
               },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
@@ -1949,8 +1982,17 @@ export function renderApp(state: AppViewState) {
               dreamDiaryError: state.dreamDiaryError,
               dreamDiaryPath: state.dreamDiaryPath,
               dreamDiaryContent: state.dreamDiaryContent,
+              wikiImportInsightsLoading: state.wikiImportInsightsLoading,
+              wikiImportInsightsError: state.wikiImportInsightsError,
+              wikiImportInsights: state.wikiImportInsights,
+              wikiMemoryPalaceLoading: state.wikiMemoryPalaceLoading,
+              wikiMemoryPalaceError: state.wikiMemoryPalaceError,
+              wikiMemoryPalace: state.wikiMemoryPalace,
               onRefresh: refreshDreaming,
               onRefreshDiary: () => loadDreamDiary(state),
+              onRefreshImports: () => loadWikiImportInsights(state),
+              onRefreshMemoryPalace: () => loadWikiMemoryPalace(state),
+              onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
