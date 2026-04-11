@@ -12,6 +12,7 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.js";
+import { requestHeartbeatNow } from "./heartbeat-wake.js";
 
 export type SystemEvent = {
   text: string;
@@ -38,6 +39,10 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  wake?: {
+    reason?: string;
+    coalesceMs?: number;
+  };
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -110,6 +115,13 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
+  }
+  if (options?.wake) {
+    requestHeartbeatNow({
+      reason: options.wake.reason,
+      sessionKey: key,
+      ...(options.wake.coalesceMs != null ? { coalesceMs: options.wake.coalesceMs } : {}),
+    });
   }
   return true;
 }

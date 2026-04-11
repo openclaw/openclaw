@@ -216,6 +216,17 @@ describe("resolveSlackSystemEventSessionKey", () => {
     ).toBe("agent:ops:slack:channel:c123");
   });
 
+  it("routes thread system events to the thread session key", () => {
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: "1775397688.472349",
+      }),
+    ).toBe("agent:main:slack:channel:c123:thread:1775397688.472349");
+  });
+
   it("routes DM system events through direct-peer bindings when sender is known", () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
