@@ -49,6 +49,10 @@ function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): st
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
+function resolveSystemdSystemUnitPathForName(name: string): string {
+  return path.posix.join("/etc", "systemd", "system", `${name}.service`);
+}
+
 function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
@@ -61,8 +65,35 @@ function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
+function resolveSystemdSystemUnitPath(env: GatewayServiceEnv): string {
+  return resolveSystemdSystemUnitPathForName(resolveSystemdServiceName(env));
+}
+
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
+}
+
+type ResolvedSystemdStatusUnit = {
+  unitPath: string;
+  scope: "user" | "system";
+};
+
+async function resolveSystemdStatusUnit(
+  env: GatewayServiceEnv,
+): Promise<ResolvedSystemdStatusUnit | null> {
+  const candidates: ResolvedSystemdStatusUnit[] = [
+    { unitPath: resolveSystemdUnitPath(env), scope: "user" },
+    { unitPath: resolveSystemdSystemUnitPath(env), scope: "system" },
+  ];
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate.unitPath);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -73,64 +104,67 @@ export type { SystemdUserLingerStatus };
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const unitPath = resolveSystemdUnitPath(env);
-  try {
-    const content = await fs.readFile(unitPath, "utf8");
-    let execStart = "";
-    let workingDirectory = "";
-    const inlineEnvironment: Record<string, string> = {};
-    const environmentFileSpecs: string[] = [];
-    for (const rawLine of content.split("\n")) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#")) {
-        continue;
-      }
-      if (line.startsWith("ExecStart=")) {
-        execStart = line.slice("ExecStart=".length).trim();
-      } else if (line.startsWith("WorkingDirectory=")) {
-        workingDirectory = line.slice("WorkingDirectory=".length).trim();
-      } else if (line.startsWith("Environment=")) {
-        const raw = line.slice("Environment=".length).trim();
-        const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) {
-          inlineEnvironment[parsed.key] = parsed.value;
+  const unitPaths = [resolveSystemdUnitPath(env), resolveSystemdSystemUnitPath(env)];
+  for (const unitPath of unitPaths) {
+    try {
+      const content = await fs.readFile(unitPath, "utf8");
+      let execStart = "";
+      let workingDirectory = "";
+      const inlineEnvironment: Record<string, string> = {};
+      const environmentFileSpecs: string[] = [];
+      for (const rawLine of content.split("\n")) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) {
+          continue;
         }
-      } else if (line.startsWith("EnvironmentFile=")) {
-        const raw = line.slice("EnvironmentFile=".length).trim();
-        if (raw) {
-          environmentFileSpecs.push(raw);
+        if (line.startsWith("ExecStart=")) {
+          execStart = line.slice("ExecStart=".length).trim();
+        } else if (line.startsWith("WorkingDirectory=")) {
+          workingDirectory = line.slice("WorkingDirectory=".length).trim();
+        } else if (line.startsWith("Environment=")) {
+          const raw = line.slice("Environment=".length).trim();
+          const parsed = parseSystemdEnvAssignment(raw);
+          if (parsed) {
+            inlineEnvironment[parsed.key] = parsed.value;
+          }
+        } else if (line.startsWith("EnvironmentFile=")) {
+          const raw = line.slice("EnvironmentFile=".length).trim();
+          if (raw) {
+            environmentFileSpecs.push(raw);
+          }
         }
       }
+      if (!execStart) {
+        return null;
+      }
+      const environmentFromFiles = await resolveSystemdEnvironmentFiles({
+        environmentFileSpecs,
+        env,
+        unitPath,
+      });
+      const mergedEnvironment = {
+        ...inlineEnvironment,
+        ...environmentFromFiles.environment,
+      };
+      const mergedEnvironmentSources = {
+        ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
+        ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
+      };
+      const programArguments = parseSystemdExecStart(execStart);
+      return {
+        programArguments,
+        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(Object.keys(mergedEnvironment).length > 0 ? { environment: mergedEnvironment } : {}),
+        ...(Object.keys(mergedEnvironmentSources).length > 0
+          ? { environmentValueSources: mergedEnvironmentSources }
+          : {}),
+        sourcePath: unitPath,
+      };
+    } catch {
+      continue;
     }
-    if (!execStart) {
-      return null;
-    }
-    const environmentFromFiles = await resolveSystemdEnvironmentFiles({
-      environmentFileSpecs,
-      env,
-      unitPath,
-    });
-    const mergedEnvironment = {
-      ...inlineEnvironment,
-      ...environmentFromFiles.environment,
-    };
-    const mergedEnvironmentSources = {
-      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
-      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
-    };
-    const programArguments = parseSystemdExecStart(execStart);
-    return {
-      programArguments,
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(mergedEnvironment).length > 0 ? { environment: mergedEnvironment } : {}),
-      ...(Object.keys(mergedEnvironmentSources).length > 0
-        ? { environmentValueSources: mergedEnvironmentSources }
-        : {}),
-      sourcePath: unitPath,
-    };
-  } catch {
-    return null;
   }
+  return null;
 }
 
 function buildEnvironmentValueSources(
@@ -267,6 +301,17 @@ async function execSystemctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return await execFileUtf8("systemctl", args);
+}
+
+async function execSystemctlForScope(
+  env: GatewayServiceEnv,
+  scope: "user" | "system",
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (scope === "system") {
+    return await execSystemctl(args);
+  }
+  return await execSystemctlUser(env, args);
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -645,18 +690,14 @@ export async function restartSystemdService({
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  try {
-    await fs.access(resolveSystemdUnitPath(env));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
+  const resolvedUnit = await resolveSystemdStatusUnit(env);
+  if (!resolvedUnit) {
+    return false;
   }
 
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, ["is-enabled", unitName]);
+  const res = await execSystemctlForScope(env, resolvedUnit.scope, ["is-enabled", unitName]);
   if (res.code === 0) {
     return true;
   }
@@ -670,17 +711,20 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSystemdAvailable(env);
-  } catch (err) {
-    return {
-      status: "unknown",
-      detail: formatErrorMessage(err),
-    };
+  const resolvedUnit = await resolveSystemdStatusUnit(env);
+  if (!resolvedUnit) {
+    try {
+      await assertSystemdAvailable(env);
+    } catch (err) {
+      return {
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      };
+    }
   }
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, [
+  const res = await execSystemctlForScope(env, resolvedUnit?.scope ?? "user", [
     "show",
     unitName,
     "--no-page",

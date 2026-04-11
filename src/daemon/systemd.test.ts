@@ -25,6 +25,7 @@ import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
+  readSystemdServiceRuntime,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stageSystemdService,
@@ -79,6 +80,10 @@ function assertUserSystemctlArgs(args: string[], ...command: string[]) {
 
 function assertMachineUserSystemctlArgs(args: string[], user: string, ...command: string[]) {
   expect(args).toEqual(["--machine", `${user}@`, "--user", ...command]);
+}
+
+function assertSystemSystemctlArgs(args: string[], ...command: string[]) {
+  expect(args).toEqual(command);
 }
 
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
@@ -226,12 +231,35 @@ describe("isSystemdServiceEnabled", () => {
   it("returns false without calling systemctl when the managed unit file is missing", async () => {
     const err = new Error("missing unit") as NodeJS.ErrnoException;
     err.code = "ENOENT";
-    vi.spyOn(fs, "access").mockRejectedValueOnce(err);
+    vi.spyOn(fs, "access").mockRejectedValue(err);
 
     const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
 
     expect(result).toBe(false);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the system unit when the user unit is missing", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === "/tmp/openclaw-test-home/.config/systemd/user/openclaw-gateway.service") {
+        const err = new Error("missing user unit") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      if (pathValue === "/etc/systemd/system/openclaw-gateway.service") {
+        return undefined;
+      }
+      throw new Error(`unexpected access path: ${pathValue}`);
+    });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertSystemSystemctlArgs(args, "is-enabled", GATEWAY_SERVICE);
+      cb(null, "enabled", "");
+    });
+
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
+
+    expect(result).toBe(true);
   });
 
   it("calls systemctl is-enabled when systemctl is present", async () => {
@@ -519,6 +547,46 @@ describe("readSystemdServiceExecStart", () => {
     vi.restoreAllMocks();
   });
 
+  it("falls back to the system unit when the user unit is missing", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}`) {
+        const err = new Error("missing user unit") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return undefined;
+      }
+      throw new Error(`unexpected access path: ${pathValue}`);
+    });
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/local/bin/node /root/openclaw/scripts/run-node.mjs gateway --port 18789",
+          "EnvironmentFile=/root/.openclaw/secrets/gateway.env",
+        ].join("\n");
+      }
+      if (pathValue === "/root/.openclaw/secrets/gateway.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=system-token\n"; // pragma: allowlist secret
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
+    expect(command?.programArguments).toEqual([
+      "/usr/local/bin/node",
+      "/root/openclaw/scripts/run-node.mjs",
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("system-token");
+    expect(command?.sourcePath).toBe(`/etc/systemd/system/${GATEWAY_SERVICE}`);
+  });
+
   it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile", async () => {
     const readFileSpy = mockReadGatewayServiceFile(
       ["[Service]", "ExecStart=/usr/bin/openclaw gateway run", "EnvironmentFile=%h/.openclaw/.env"],
@@ -638,6 +706,50 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+    });
+  });
+});
+
+describe("readSystemdServiceRuntime", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("falls back to system scope when the user unit is missing", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `${TEST_MANAGED_HOME}/.config/systemd/user/${GATEWAY_SERVICE}`) {
+        const err = new Error("missing user unit") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return undefined;
+      }
+      throw new Error(`unexpected access path: ${pathValue}`);
+    });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertSystemSystemctlArgs(
+        args,
+        "show",
+        GATEWAY_SERVICE,
+        "--no-page",
+        "--property",
+        "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+      );
+      cb(null, ["ActiveState=active", "SubState=running", "MainPID=443767"].join("\n"), "");
+    });
+
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+
+    expect(runtime).toEqual({
+      status: "running",
+      state: "active",
+      subState: "running",
+      pid: 443767,
+      lastExitStatus: undefined,
+      lastExitReason: undefined,
     });
   });
 });
