@@ -131,7 +131,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
   stt: {
-    transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
+    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;

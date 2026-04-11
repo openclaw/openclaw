@@ -1,27 +1,8 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
+import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 import { normalizeMessageChannel } from "./message-channel.js";
-
-export type DeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-export type DeliveryContextSessionSource = {
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  deliveryContext?: DeliveryContext;
-};
+export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {

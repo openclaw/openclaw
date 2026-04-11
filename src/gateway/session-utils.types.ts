@@ -6,7 +6,7 @@ import type {
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;

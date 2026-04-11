@@ -1,4 +1,4 @@
-import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
