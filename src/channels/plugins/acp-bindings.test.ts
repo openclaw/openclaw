@@ -237,9 +237,10 @@ describe("configured binding registry", () => {
     getChannelPluginMock.mockReturnValue(plugin);
     const bindingRegistry = await importConfiguredBindings();
 
-    // The config binding targets the parent channel, not any specific thread.
-    // Reverse lookup materialises using rule.target (parent channel ID), so it can never
-    // reconstruct session keys that embed a runtime thread ID.
+    // The config binding targets the parent channel (compile-time conversationId).
+    // Per-thread session keys hash the runtime thread ID, which is never stored in compiled
+    // bindings, so reverse lookup by session key cannot reconstruct the thread binding.
+    // Callers must go through resolveConfiguredBindingRecord with the live conversationId pair.
     const threadSessionKey = buildConfiguredAcpSessionKey({
       channel: "discord",
       accountId: "default",

@@ -100,8 +100,37 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
 
-  it("falls back to close-only resets when no configured binding exists", async () => {
+  it("clears metadata for configured-format session keys even when config registry has no match", async () => {
+    // Simulates a per-thread session key: format matches acp:binding but the config lookup
+    // returns null because the hash encodes the runtime thread ID, not the compiled parent.
     const sessionKey = "agent:claude:acp:binding:demo-binding:default:9373ab192b2317f4";
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+      },
+    });
+
+    const result = await resetAcpSessionInPlace({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey).toHaveBeenCalledTimes(1);
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        clearMeta: true,
+      }),
+    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("does not clear metadata for dynamic ACP session keys outside the configured format", async () => {
+    const sessionKey = "agent:claude:acp:sms:+15555550123";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "claude",
