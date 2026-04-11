@@ -27,6 +27,11 @@ import {
 import { releaseSharedClientInstance } from "../client/shared.js";
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixStartupAbortError } from "../startup-abort.js";
+import {
+  isMatrixDisconnectedSyncState,
+  isMatrixReadySyncState,
+  type MatrixSyncState,
+} from "../sync-state.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -184,6 +189,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         await releaseSharedClientInstance(client, mode);
       }
     } finally {
+      client?.off("sync.state", onSyncState);
       syncLifecycle?.dispose();
       statusController.markStopped();
       setActiveMatrixClient(null, auth.accountId);
@@ -242,6 +248,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
   let healthySyncSinceMs: number | undefined;
+  const noteSyncHealthState = (state: MatrixSyncState, at = Date.now()) => {
+    if (isMatrixReadySyncState(state)) {
+      healthySyncSinceMs = at;
+      return;
+    }
+    if (isMatrixDisconnectedSyncState(state)) {
+      healthySyncSinceMs = undefined;
+    }
+  };
+  const onSyncState = (state: MatrixSyncState) => {
+    noteSyncHealthState(state);
+  };
 
   try {
     client = await resolveSharedMatrixClient({
@@ -260,6 +278,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       statusController,
       isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
     });
+    client.on("sync.state", onSyncState);
     // Cold starts should ignore old room history, but once we have a persisted
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
@@ -375,7 +394,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
     });
-    healthySyncSinceMs ??= Date.now();
     logVerboseMessage("matrix: client started");
 
     // Shared client is already started via resolveSharedMatrixClient.
