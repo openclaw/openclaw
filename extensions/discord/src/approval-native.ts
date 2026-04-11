@@ -161,7 +161,7 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
       }),
     resolveApprovers: ({ cfg, accountId }) =>
       getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }),
-    mapApprover: (approver) => ({ to: String(approver) }),
+    mapApprover: (approver) => ({ to: approver }),
   });
 }
 
