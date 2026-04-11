@@ -243,6 +243,60 @@ resolve_latest_version() {
   npm view openclaw version --userconfig "$(mktemp)"
 }
 
+vm_status() {
+  local json vm_name
+  vm_name="$1"
+  json="$(prlctl list --all --json)"
+  PRL_VM_JSON="$json" VM_NAME="$vm_name" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+
+name = os.environ["VM_NAME"]
+for vm in json.loads(os.environ["PRL_VM_JSON"]):
+    if vm.get("name") == name:
+        print(vm.get("status", "unknown"))
+        break
+else:
+    print("missing")
+PY
+}
+
+ensure_vm_running_for_update() {
+  local vm_name status deadline
+  vm_name="$1"
+  deadline=$((SECONDS + 180))
+
+  while :; do
+    status="$(vm_status "$vm_name")"
+    case "$status" in
+      running)
+        return 0
+        ;;
+      stopped)
+        say "Start $vm_name before update phase"
+        prlctl start "$vm_name" >/dev/null
+        ;;
+      suspended|paused)
+        say "Resume $vm_name before update phase"
+        prlctl resume "$vm_name" >/dev/null
+        ;;
+      restoring|stopping|starting|pausing|suspending|resuming)
+        ;;
+      missing)
+        die "VM not found before update phase: $vm_name"
+        ;;
+      *)
+        warn "unexpected VM state for $vm_name before update phase: $status"
+        ;;
+    esac
+
+    if (( SECONDS >= deadline )); then
+      die "VM did not become running before update phase: $vm_name ($status)"
+    fi
+    sleep 5
+  done
+}
+
 resolve_host_ip() {
   local detected
   detected="$(ifconfig | awk '/inet 10\.211\./ { print $2; exit }')"
@@ -778,7 +832,7 @@ EOF
   stream_windows_update_log() {
     set +e
     guest_log="$(
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      guest_powershell_poll 60 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
     )"
     log_rc=$?
     set -e
@@ -806,7 +860,7 @@ PY
   while :; do
     set +e
     done_status="$(
-      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 60 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
     poll_rc=$?
     set -e
@@ -838,7 +892,7 @@ PY
     if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
       set +e
       launcher_state="$(
-        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+        guest_powershell_poll 60 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
       )"
       state_rc=$?
       set -e
@@ -1057,6 +1111,9 @@ fi
 windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
 
 say "Run same-guest openclaw update to $UPDATE_TARGET_EFFECTIVE"
+ensure_vm_running_for_update "$MACOS_VM"
+ensure_vm_running_for_update "$WINDOWS_VM"
+ensure_vm_running_for_update "$LINUX_VM"
 run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
 macos_update_pid=$!
 run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
