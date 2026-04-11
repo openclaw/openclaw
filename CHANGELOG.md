@@ -118,6 +118,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat/config: accept and honor `agents.defaults.heartbeat.timeoutSeconds` and per-agent heartbeat timeout overrides for heartbeat agent turns. (#64491) Thanks @cedillarack.
 - OpenAI/Codex: add required Codex OAuth scopes, classify provider/runtime failures more clearly, and stop suggesting `/elevated full` when auto-approved host exec is unavailable. (#64439) Thanks @100yenadmin.
 - Providers/OpenAI: add OpenAI/Codex tool-schema compatibility and preserve embedded-run replay/liveness truth across compaction retries and mutating side effects. (#64300) Thanks @100yenadmin.
+- Agents/model fallback: clear persisted `auto` failover session overrides and sticky runtime model fields during inbound model selection so the configured primary is consulted again instead of staying pinned on the last fallback model. (#64571)
 
 ## 2026.4.9
 

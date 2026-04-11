@@ -17,7 +17,10 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  clearAutoFailoverSessionModelStickyState,
+} from "../../sessions/model-overrides.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ThinkLevel } from "./directives.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
@@ -299,6 +302,24 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    clearAutoFailoverSessionModelStickyState(sessionEntry)
+  ) {
+    sessionStore[sessionKey] = sessionEntry;
+    if (storePath) {
+      await (
+        await loadSessionStoreRuntime()
+      ).updateSessionStore(storePath, (store) => {
+        store[sessionKey] = sessionEntry;
+      });
+    }
+    resetModelOverride = true;
+  }
+
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,

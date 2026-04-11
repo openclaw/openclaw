@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  clearAutoFailoverSessionModelStickyState,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -171,5 +174,66 @@ describe("applyModelOverrideToSessionEntry", () => {
     });
     expect(withFlag.updated).toBe(true);
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
+  });
+});
+
+describe("clearAutoFailoverSessionModelStickyState", () => {
+  it("clears auto failover overrides, runtime model identity, and related fields", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-auto",
+      updatedAt: before,
+      modelOverrideSource: "auto",
+      providerOverride: "azure",
+      modelOverride: "gpt-5.4",
+      modelProvider: "azure",
+      model: "gpt-5.4",
+      authProfileOverride: "p1",
+      authProfileOverrideSource: "auto",
+      contextTokens: 120_000,
+      fallbackNoticeSelectedModel: "azure/gpt-5.4",
+      fallbackNoticeActiveModel: "azure/gpt-5.4",
+      fallbackNoticeReason: "failover",
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(true);
+
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("returns false when the session is not an auto failover override", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-user",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(false);
+    expect(entry.modelOverride).toBe("gpt-4o");
+  });
+
+  it("returns false when modelOverrideSource is user", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-explicit",
+      updatedAt: Date.now(),
+      modelOverrideSource: "user",
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    };
+
+    expect(clearAutoFailoverSessionModelStickyState(entry)).toBe(false);
+    expect(entry.modelOverride).toBe("gpt-4o");
   });
 });
