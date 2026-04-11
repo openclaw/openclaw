@@ -25,7 +25,6 @@ const DEFAULT_FETCH_MAX_CHARS = 50_000;
 export type MrScraperFetchHtmlParams = {
   cfg?: OpenClawConfig;
   url: string;
-  extractMode: "markdown" | "text";
   maxChars?: number;
   timeoutSeconds?: number;
   geoCode?: string;
@@ -322,9 +321,6 @@ export async function runMrScraperFetchHtml(
   const maxChars = normalizeMaxChars(params.maxChars);
   const htmlResult = truncate(html, maxChars);
   const textResult = truncate(plainText, maxChars);
-  const requestedText = params.extractMode === "text" ? textResult.text : htmlResult.text;
-  const requestedTruncated =
-    params.extractMode === "text" ? textResult.truncated : htmlResult.truncated;
 
   return {
     url: params.url,
@@ -333,15 +329,11 @@ export async function runMrScraperFetchHtml(
     contentType: "text/html",
     extractor: "mrscraper",
     tookMs: Date.now() - start,
-    truncated: requestedTruncated,
-    warning:
-      params.extractMode === "markdown"
-        ? "MrScraper returns rendered HTML for unblocker requests; markdown mode returns the rendered HTML payload."
-        : undefined,
-    text:
-      params.extractMode === "text"
-        ? requestedText
-        : wrapExternalContent(requestedText, { source: "web_fetch", includeWarning: false }),
+    truncated: htmlResult.truncated,
+    text: wrapExternalContent(htmlResult.text, {
+      source: "web_fetch",
+      includeWarning: false,
+    }),
     html: wrapExternalContent(htmlResult.text, { source: "web_fetch", includeWarning: false }),
     renderedText: wrapExternalContent(textResult.text, {
       source: "web_fetch",

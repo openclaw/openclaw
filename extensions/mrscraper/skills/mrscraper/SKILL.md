@@ -26,11 +26,10 @@ metadata:
 When `mrscraper` is the selected `web_fetch` provider, OpenClaw routes normal
 `web_fetch` calls through MrScraper's unblocker.
 
-| Parameter     | Description                 |
-| ------------- | --------------------------- |
-| `url`         | HTTP or HTTPS URL to fetch  |
-| `extractMode` | `markdown` or `text`        |
-| `maxChars`    | Maximum returned characters |
+| Parameter  | Description                 |
+| ---------- | --------------------------- |
+| `url`      | HTTP or HTTPS URL to fetch  |
+| `maxChars` | Maximum returned characters |
 
 ## mrscraper_fetch_html
 
@@ -40,7 +39,6 @@ and extracted text back in one tool result.
 | Parameter        | Description                                     |
 | ---------------- | ----------------------------------------------- |
 | `url`            | HTTP or HTTPS URL to fetch                      |
-| `extractMode`    | `markdown` or `text`                            |
 | `maxChars`       | Maximum returned characters                     |
 | `timeoutSeconds` | Request timeout                                 |
 | `geoCode`        | Optional country routing code like `US` or `SG` |

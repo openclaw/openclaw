@@ -10,14 +10,6 @@ import { runMrScraperFetchHtml } from "./mrscraper-client.js";
 const MrScraperFetchHtmlSchema = Type.Object(
   {
     url: Type.String({ description: "HTTP or HTTPS URL to fetch through MrScraper." }),
-    extractMode: Type.Optional(
-      Type.Unsafe<"markdown" | "text">({
-        type: "string",
-        enum: ["markdown", "text"],
-        description:
-          '"markdown" returns the rendered HTML payload; "text" returns stripped plain text. Default: markdown.',
-      }),
-    ),
     maxChars: Type.Optional(
       Type.Number({
         description: "Maximum characters to return.",
@@ -53,8 +45,6 @@ export function createMrScraperFetchHtmlTool(api: OpenClawPluginApi) {
     parameters: MrScraperFetchHtmlSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const url = readStringParam(rawParams, "url", { required: true });
-      const extractMode =
-        readStringParam(rawParams, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(rawParams, "maxChars", { integer: true });
       const timeoutSeconds = readNumberParam(rawParams, "timeoutSeconds", { integer: true });
       const geoCode = readStringParam(rawParams, "geoCode");
@@ -65,7 +55,6 @@ export function createMrScraperFetchHtmlTool(api: OpenClawPluginApi) {
         await runMrScraperFetchHtml({
           cfg: api.config,
           url,
-          extractMode,
           maxChars,
           timeoutSeconds,
           geoCode,

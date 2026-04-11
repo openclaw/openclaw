@@ -7,14 +7,6 @@ import { runMrScraperFetchHtml } from "./mrscraper-client.js";
 const MrScraperWebFetchSchema = Type.Object(
   {
     url: Type.String({ description: "HTTP or HTTPS URL to fetch through MrScraper." }),
-    extractMode: Type.Optional(
-      Type.Unsafe<"markdown" | "text">({
-        type: "string",
-        enum: ["markdown", "text"],
-        description:
-          '"markdown" returns the rendered HTML payload; "text" returns stripped plain text. Default: markdown.',
-      }),
-    ),
     maxChars: Type.Optional(
       Type.Number({
         description: "Maximum characters to return.",
@@ -52,7 +44,7 @@ export function createMrScraperWebFetchProvider(): WebFetchProviderPlugin {
     label: "MrScraper",
     hint: "Fetch blocked pages with a stealth browser and IP rotation.",
     envVars: ["MRSCRAPER_API_TOKEN"],
-    placeholder: "mrs_...",
+    placeholder: "atk_...",
     signupUrl: "https://mrscraper.com/",
     docsUrl: "https://mrscraper.com/",
     autoDetectOrder: 60,
@@ -95,7 +87,6 @@ export function createMrScraperWebFetchProvider(): WebFetchProviderPlugin {
         await runMrScraperFetchHtml({
           cfg: config,
           url: typeof args.url === "string" ? args.url : "",
-          extractMode: args.extractMode === "text" ? "text" : "markdown",
           maxChars:
             typeof args.maxChars === "number" && Number.isFinite(args.maxChars)
               ? Math.floor(args.maxChars)

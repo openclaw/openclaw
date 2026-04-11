@@ -132,7 +132,6 @@ describe("mrscraper tools", () => {
 
     await tool.execute({
       url: "https://example.com",
-      extractMode: "text",
       maxChars: 1234,
       timeoutSeconds: 30,
       geoCode: "SG",
@@ -142,7 +141,6 @@ describe("mrscraper tools", () => {
     expect(runMrScraperFetchHtml).toHaveBeenCalledWith({
       cfg: { test: true },
       url: "https://example.com",
-      extractMode: "text",
       maxChars: 1234,
       timeoutSeconds: 30,
       geoCode: "SG",
@@ -157,7 +155,6 @@ describe("mrscraper tools", () => {
 
     const result = await tool.execute("call-1", {
       url: "https://example.com",
-      extractMode: "markdown",
       maxChars: 1500,
       timeoutSeconds: 45,
       geoCode: "US",
@@ -167,7 +164,6 @@ describe("mrscraper tools", () => {
     expect(runMrScraperFetchHtml).toHaveBeenCalledWith({
       cfg: { env: "test" },
       url: "https://example.com",
-      extractMode: "markdown",
       maxChars: 1500,
       timeoutSeconds: 45,
       geoCode: "US",

@@ -286,7 +286,6 @@ async function promptPluginFields(params: {
         ...config.plugins?.entries,
         [plugin.id]: {
           ...config.plugins?.entries?.[plugin.id],
-          enabled: true,
           config: updatedConfig,
         },
       },
