@@ -1195,7 +1195,7 @@ export async function startQaGatewayChild(params: {
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
         await runningRpcClient.stop().catch(() => {});
-        await terminateChildProcess(runningChild);
+        await stopQaGatewayChildProcessTree(runningChild);
         await closeWriteStream(stdoutLog);
         await closeWriteStream(stderrLog);
         if (opts?.preserveToDir && !(opts?.keepTemp ?? keepTemp)) {

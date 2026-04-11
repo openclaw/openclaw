@@ -193,6 +193,40 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes rejected stop tasks during manual abort", async () => {
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      const startAccount = vi.fn(
+        async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          await new Promise<void>((_resolve, reject) => {
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      installTestRegistry(
+        createTestPlugin({
+          startAccount,
+        }),
+      );
+      const manager = createManager();
+
+      await manager.startChannels();
+      vi.runAllTicks();
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      await Promise.resolve();
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+    }
+  });
+
   it("does not allow a second account task to start when stop times out", async () => {
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>

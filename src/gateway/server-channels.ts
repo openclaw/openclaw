@@ -86,14 +86,15 @@ async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, 
       }
     }, timeoutMs);
     timer.unref?.();
-    void task.finally(() => {
+    const resolveSettled = () => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       resolve(true);
-    });
+    };
+    void task.then(resolveSettled, resolveSettled);
   });
 }
 
