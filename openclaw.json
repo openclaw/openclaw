@@ -1,13 +1,23 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.2.6-3",
-    "lastTouchedAt": "2026-02-07T17:40:56.310Z"
+    "lastTouchedVersion": "2026.2.13",
+    "lastTouchedAt": "2026-02-22T10:06:46.502Z"
   },
   "wizard": {
     "lastRunAt": "2026-02-07T16:02:46.036Z",
     "lastRunVersion": "2026.2.6-3",
     "lastRunCommand": "onboard",
     "lastRunMode": "local"
+  },
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "docker",
+    "profiles": {
+      "docker": {
+        "cdpUrl": "http://172.20.0.10:9222",
+        "color": "#00AA00"
+      }
+    }
   },
   "auth": {
     "profiles": {
@@ -22,18 +32,6 @@
       "model": {
         "primary": "openrouter/minimax/minimax-m2.5"
       },
-    "sandbox": {
-            "mode": "non-main",
-            "scope": "session",
-            "workspaceAccess": "ro",
-            "browser": {
-                "enabled": true,
-                "cdpPort": 9222,
-                "headless": true,
-                "enableNoVnc": false,
-                "autoStart": true
-            }
-    },
       "models": {
         "openrouter/auto": {
           "alias": "OpenRouter"
@@ -51,19 +49,89 @@
       "maxConcurrent": 4,
       "subagents": {
         "maxConcurrent": 8
+      },
+      "sandbox": {
+        "mode": "non-main",
+        "workspaceAccess": "rw",
+        "scope": "session",
+        "browser": {
+          "enabled": true,
+          "cdpPort": 9222,
+          "headless": true,
+          "enableNoVnc": false,
+          "autoStart": true
+        }
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "cron",
+            "gateway",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "nodes",
+            "web_search",
+            "web_fetch",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
+      },
+      {
+        "id": "vision",
+        "name": "vision",
+        "workspace": "/home/node/.openclaw/workspace-vision",
+        "agentDir": "/home/node/.openclaw/agents/vision/agent",
+        "model": "openrouter/z-ai/glm-4.6v"
+      },
+      {
+        "id": "life-coach",
+        "name": "life-coach",
+        "workspace": "/home/node/.openclaw/workspace-life-coach",
+        "agentDir": "/home/node/.openclaw/agents/life-coach/agent",
+        "model": "openrouter/minimax/minimax-m2.5"
+      }
+    ]
+  },
+  "tools": {
+    "deny": []
+    },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "telegram",
+        "accountId": "default"
+      }
+    },
+    {
+      "agentId": "vision",
+      "match": {
+        "channel": "telegram",
+        "accountId": "vision"
+      }
+    },
+    {
+      "agentId": "life-coach",
+      "match": {
+        "channel": "telegram",
+        "accountId": "life-coach"
       }
     }
-  },
-  "browser": {
-    "enabled": true,
-    "defaultProfile": "docker",
-    "profiles": {
-      "docker": {
-        "cdpUrl": "http://172.20.0.10:9222",
-        "color": "#00AA00"
-      }
-    }
-  },
+  ],
   "messages": {
     "ackReactionScope": "group-mentions"
   },
@@ -76,7 +144,28 @@
       "enabled": true,
       "dmPolicy": "pairing",
       "groupPolicy": "allowlist",
-      "streamMode": "partial"
+      "streamMode": "block",
+      "accounts": {
+        "default": {
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN}",
+          "groupPolicy": "allowlist",
+          "streamMode": "block"
+        },
+        "vision": {
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN_VISION}",
+          "groupPolicy": "allowlist",
+          "streamMode": "block"
+        },
+        "life-coach": {
+          "enabled": true,
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN_LIFE_COACH}",
+          "groupPolicy": "allowlist",
+          "streamMode": "block"
+        }
+      }
     }
   },
   "gateway": {
@@ -95,8 +184,7 @@
     "install": {
       "nodeManager": "npm"
     },
-    "entries": {
-    }
+    "entries": {}
   },
   "plugins": {
     "entries": {
