@@ -126,4 +126,26 @@ describe("modelsExplainCommand", () => {
       2,
     );
   });
+
+  it("renders a more human-readable text explanation", async () => {
+    const log = vi.fn();
+    const runtime = {
+      log,
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    } as unknown as RuntimeEnv & { writeJson: (value: unknown, space?: number) => void };
+
+    await modelsExplainCommand(
+      {
+        model: "gpt-5.4",
+      },
+      runtime as never,
+    );
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Default resolved"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Model override"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Final resolved"));
+  });
 });

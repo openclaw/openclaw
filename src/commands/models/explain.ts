@@ -4,6 +4,8 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
+import { colorize, theme } from "../../terminal/theme.js";
+import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
 
@@ -94,18 +96,36 @@ export async function modelsExplainCommand(
     return;
   }
 
-  runtime.log(`Agent: ${payload.agentId}`);
-  runtime.log(`Input provider override: ${payload.input.providerOverride ?? "-"}`);
-  runtime.log(`Input model override: ${payload.input.modelOverride ?? "-"}`);
-  runtime.log(`Default resolved: ${payload.defaults.provider}/${payload.defaults.model}`);
+  const rich = process.stdout.isTTY;
+  const label = (value: string) => colorize(rich, theme.accent, value.padEnd(28));
+  const muted = (value: string) => colorize(rich, theme.muted, value);
+  const info = (value: string) => colorize(rich, theme.info, value);
+  const success = (value: string) => colorize(rich, theme.success, value);
+
+  runtime.log(`${label("Agent")}${muted(": ")}${info(payload.agentId)}`);
+  if (payload.session) {
+    runtime.log(
+      `${label("Session")}${muted(": ")}${info(payload.session.key)}${muted(` (${shortenHomePath(payload.session.storePath ?? "")})`)}`,
+    );
+  }
   runtime.log(
-    `Explicit provider override applied: ${payload.resolution.explicitProviderOverrideApplied ?? "-"}`,
+    `${label("Default resolved")}${muted(": ")}${info(`${payload.defaults.provider}/${payload.defaults.model}`)}`,
   );
   runtime.log(
-    `Explicit model override applied: ${payload.resolution.explicitModelOverrideApplied ?? "-"}`,
+    `${label("Provider override")}${muted(": ")}${info(payload.resolution.explicitProviderOverrideApplied ?? "-")}`,
   );
   runtime.log(
-    `Family inference applied: ${payload.resolution.familyInferenceApplied ? "yes" : "no"}`,
+    `${label("Model override")}${muted(": ")}${info(payload.resolution.explicitModelOverrideApplied ?? "-")}`,
   );
-  runtime.log(`Final resolved: ${payload.resolved.provider}/${payload.resolved.model}`);
+  if (payload.input.runtimeProvider || payload.input.runtimeModel) {
+    runtime.log(
+      `${label("Persisted runtime ref")}${muted(": ")}${info(`${payload.input.runtimeProvider ?? "-"}/${payload.input.runtimeModel ?? "-"}`)}`,
+    );
+  }
+  runtime.log(
+    `${label("Family inference")}${muted(": ")}${payload.resolution.familyInferenceApplied ? success("yes") : muted("no")}`,
+  );
+  runtime.log(
+    `${label("Final resolved")}${muted(": ")}${success(`${payload.resolved.provider}/${payload.resolved.model}`)}`,
+  );
 }
