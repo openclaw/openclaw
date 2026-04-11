@@ -177,7 +177,7 @@ describe("zai web search tool execution", () => {
   it("passes domain_filter through to the MCP search call", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const searchFn = mockSearchFn([]) as ReturnType<typeof vi.fn>;
+    const searchFn = vi.fn<ZaiMcpSearchFn>().mockResolvedValue([]);
     const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
     await tool.execute({ query: "python docs", domain_filter: "docs.python.org" });
 
@@ -189,7 +189,7 @@ describe("zai web search tool execution", () => {
   it("maps freshness values to Z.AI recency filter strings in MCP call", async () => {
     vi.stubEnv("ZAI_API_KEY", "zai-test-key");
 
-    const searchFn = mockSearchFn([]) as ReturnType<typeof vi.fn>;
+    const searchFn = vi.fn<ZaiMcpSearchFn>().mockResolvedValue([]);
     const tool = createZaiToolDefinition({ zai: { apiKey: "zai-test-key" } }, searchFn);
     await tool.execute({ query: "news", freshness: "week" });
 
