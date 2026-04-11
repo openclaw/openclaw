@@ -199,13 +199,19 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
-  // Session/config tool policy is the caller's requested contract. The host file
-  // may tighten that contract, but it must not silently broaden it.
-  const effectiveRequestedSecurity =
-    params.security === "full"
+  // If the user's tool config explicitly requests "full" security, and the
+  // approvals file did NOT explicitly override it (i.e., it fell back to the
+  // default), preserve the user's "full" to honor their explicit intent.
+  // This preserves the host-can-tighten invariant: explicit host overrides
+  // (from agents.*.security or agents.<id>.security) can still restrict "full".
+  const approvalsSourceIsDefault =
+    !approvals.agentSources?.security ||
+    approvals.agentSources.security === "defaults.security";
+  const effectiveSecurity =
+    params.security === "full" && approvalsSourceIsDefault
       ? "full"
       : minSecurity(params.security, approvals.agent.security);
-  const hostSecurity = effectiveRequestedSecurity;
+  const hostSecurity = effectiveSecurity;
   const hostAsk = maxAsk(params.ask, approvals.agent.ask);
   const askFallback = minSecurity(hostSecurity, approvals.agent.askFallback);
   if (hostSecurity === "deny") {
