@@ -554,7 +554,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedPiSession({
+    const subscription = subscribeEmbeddedPiSession({
       session,
       runId: "run-replay-invalid-compaction",
       onAgentEvent,
@@ -576,6 +576,8 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
     emit({ type: "agent_end" });
 
+    expect(subscription.getReplayInvalid()).toBe(true);
+    expect(subscription.getHadPotentialSideEffects()).toBe(true);
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toContainEqual(
       expect.objectContaining({

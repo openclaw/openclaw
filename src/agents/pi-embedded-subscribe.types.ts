@@ -13,6 +13,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
   initialReplayInvalid?: boolean;
+  initialHadPotentialSideEffects?: boolean;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;

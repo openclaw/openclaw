@@ -233,6 +233,31 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("marks incomplete tool-use lifecycle end state before runner finalization", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("flushes orphaned tool media as a media-only block reply", async () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];

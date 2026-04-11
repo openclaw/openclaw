@@ -565,6 +565,7 @@ export async function runEmbeddedPiAgent(
         };
         let authRetryPending = false;
         let accumulatedReplayInvalid = false;
+        let accumulatedHadPotentialSideEffects = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -676,6 +677,7 @@ export async function runEmbeddedPiAgent(
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayInvalid: accumulatedReplayInvalid,
+            initialHadPotentialSideEffects: accumulatedHadPotentialSideEffects,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
@@ -759,6 +761,9 @@ export async function runEmbeddedPiAgent(
             });
           if (resolveReplayInvalidForAttempt(null)) {
             accumulatedReplayInvalid = true;
+          }
+          if (attempt.replayMetadata.hadPotentialSideEffects) {
+            accumulatedHadPotentialSideEffects = true;
           }
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {

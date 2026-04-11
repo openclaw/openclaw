@@ -39,17 +39,18 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
-  const replayInvalid = ctx.state.replayInvalid === true ? true : undefined;
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
-  const hadDeterministicSideEffect =
-    (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
-    (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
-    (ctx.state.successfulCronAdds ?? 0) > 0;
+  const incompleteTerminalAssistant =
+    !hasAssistantVisibleText &&
+    isAssistantMessage(lastAssistant) &&
+    lastAssistant.stopReason === "toolUse";
+  const replayInvalid =
+    ctx.state.replayInvalid === true || incompleteTerminalAssistant ? true : undefined;
   const derivedWorkingTerminalState = isError
     ? "blocked"
-    : replayInvalid && !hasAssistantVisibleText && !hadDeterministicSideEffect
+    : replayInvalid && !hasAssistantVisibleText
       ? "abandoned"
       : ctx.state.livenessState;
   const livenessState =

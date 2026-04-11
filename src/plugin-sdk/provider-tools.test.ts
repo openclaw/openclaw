@@ -101,6 +101,39 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   });
 
+  it("preserves nested empty property schemas and object annotations", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const parameters = {
+      type: "object",
+      properties: {
+        payload: {},
+        mode: {
+          type: "string",
+          default: {},
+          const: {},
+        },
+      },
+      required: ["payload", "mode"],
+      additionalProperties: false,
+    };
+    const tools = [{ name: "demo", description: "", parameters }] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual(parameters);
+  });
+
   it("does not tighten permissive object schemas just to satisfy strict mode", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const permissiveParameters = {
