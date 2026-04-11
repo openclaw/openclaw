@@ -813,25 +813,40 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('volcengine-plan') uses volcengine auth candidates", async () => {
-    await withEnvAsync(
-      {
-        VOLCANO_ENGINE_API_KEY: "volcengine-plan-key",
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("volcengine-plan");
-        expect(resolved?.apiKey).toBe("volcengine-plan-key");
-        expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
-      },
-    );
-  });
-
   it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
     } as NodeJS.ProcessEnv);
 
     expect(resolved).toBeNull();
+  });
+
+  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", async () => {
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_CLOUD_API_KEY: "google-cloud-api-key",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved?.apiKey).toBe("google-cloud-api-key");
+    expect(resolved?.source).toBe("gcloud adc");
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {

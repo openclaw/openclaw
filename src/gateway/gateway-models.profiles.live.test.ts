@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -19,8 +19,10 @@ import {
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
   isHighSignalLiveModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
@@ -134,12 +136,17 @@ function toInt(value: string | undefined, fallback: number): number {
 }
 
 function resolveGatewayLiveMaxModels(): number {
-  const gatewayMax = toInt(process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS, -1);
-  if (gatewayMax >= 0) {
-    return gatewayMax;
+  const gatewayRaw = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS?.trim();
+  if (gatewayRaw) {
+    return Math.max(0, toInt(gatewayRaw, 0));
   }
-  // Reuse shared live-model cap when gateway-specific cap is not provided.
-  return Math.max(0, toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0));
+  const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
+  const useExplicitModels = Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all";
+  return resolveHighSignalLiveModelLimit({
+    rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
+    useExplicitModels,
+    defaultLimit: DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  });
 }
 
 function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
@@ -467,6 +474,44 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
   });
 });
 
+describe("resolveGatewayLiveMaxModels", () => {
+  const originalGatewayModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
+  const originalGatewayMax = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+  const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
+  function restoreEnvValue(name: string, value: string | undefined): void {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+
+  afterEach(() => {
+    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
+    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
+    restoreEnvValue("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
+  });
+
+  it("defaults modern gateway sweeps to the curated high-signal cap", () => {
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.4,anthropic/claude-opus-4-6";
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(0);
+
+    process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS = "2";
+    expect(resolveGatewayLiveMaxModels()).toBe(2);
+  });
+});
+
 function isGoogleModelNotFoundText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -622,10 +667,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(1);
+    ).toBe(2);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(2);
+    ).toBe(3);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1108,7 +1153,7 @@ async function requestGatewayAgentText(params: {
     params.modelKey,
   ).length;
   const accepted = await withGatewayLiveProbeTimeout(
-    params.client.request<{ runId?: unknown; status?: unknown }>("agent", {
+    params.client.request("agent", {
       sessionKey: params.sessionKey,
       idempotencyKey: params.idempotencyKey,
       message: params.message,

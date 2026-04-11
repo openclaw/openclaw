@@ -25,8 +25,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => undefined),
   }));
-  vi.doMock("../context-engine/index.js", () => ({
+  vi.doMock("../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -184,6 +186,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   return {
     aborted: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
     promptErrorSource: null,

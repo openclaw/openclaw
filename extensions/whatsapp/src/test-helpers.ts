@@ -82,6 +82,47 @@ function loadSessionStoreMock(storePath: string) {
   }
 }
 
+type BufferedDispatchReplyParams = {
+  ctx: Record<string, unknown>;
+  replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
+  dispatcherOptions: {
+    deliver: (
+      payload: Record<string, unknown>,
+      info: { kind: "tool" | "block" | "final" },
+    ) => Promise<void>;
+    onReplyStart?: (() => Promise<void>) | (() => void);
+  };
+};
+
+function createBufferedDispatchReplyMock() {
+  return vi.fn(async (params: BufferedDispatchReplyParams) => {
+    await params.dispatcherOptions.onReplyStart?.();
+    const payload = await params.replyResolver(params.ctx);
+    if (!payload || typeof payload !== "object") {
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    const hasMedia =
+      typeof payload.mediaUrl === "string" ||
+      typeof payload.mediaPath === "string" ||
+      typeof payload.fileUrl === "string";
+    if (!text && !hasMedia) {
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }
+    await params.dispatcherOptions.deliver(payload, { kind: "final" });
+    return {
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    };
+  });
+}
+
 function resolveChannelContextVisibilityModeMock(params: {
   cfg: {
     channels?: Record<
@@ -225,44 +266,7 @@ vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: (jid: string) => {
@@ -304,44 +308,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: (params: { body: string; senderLabel?: string }) =>
     `${params.senderLabel ? `${params.senderLabel}: ` : ""}${params.body}`,
@@ -352,7 +319,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   },
   logVerbose: (_msg: string) => undefined,
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   readStoreAllowFromForDmPolicy: async () => [] as string[],
@@ -396,7 +363,7 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
   implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   parseActivationCommand: (body: string) => ({

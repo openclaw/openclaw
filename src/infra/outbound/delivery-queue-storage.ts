@@ -38,7 +38,7 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastError?: string;
 }
 
-function resolveQueueDir(stateDir?: string): string {
+export function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
 }
@@ -186,6 +186,30 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   await writeQueueEntry(filePath, entry);
+}
+
+/** Load a single pending delivery entry by ID from the queue directory. */
+export async function loadPendingDelivery(
+  id: string,
+  stateDir?: string,
+): Promise<QueuedDelivery | null> {
+  const { jsonPath } = resolveQueueEntryPaths(id, stateDir);
+  try {
+    const stat = await fs.promises.stat(jsonPath);
+    if (!stat.isFile()) {
+      return null;
+    }
+    const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(await readQueueEntry(jsonPath));
+    if (migrated) {
+      await writeQueueEntry(jsonPath, entry);
+    }
+    return entry;
+  } catch (err) {
+    if (getErrnoCode(err) === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */

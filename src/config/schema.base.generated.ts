@@ -618,7 +618,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Browser Dangerously Allow Private Network",
                 description:
-                  "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+                  "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
               },
               allowedHostnames: {
                 type: "array",
@@ -2695,11 +2695,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Optional TLS settings used when connecting directly to the upstream model endpoint.",
                     },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                      title: "Model Provider Request Allow Private Network",
+                      description:
+                        "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Model Provider Request Overrides",
                   description:
-                    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
+                    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
                 },
                 models: {
                   type: "array",
@@ -2947,6 +2953,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   type: "string",
                 },
                 additionalProperties: {},
+              },
+              embeddedHarness: {
+                type: "object",
+                properties: {
+                  runtime: {
+                    type: "string",
+                    title: "Default Embedded Harness Runtime",
+                    description:
+                      "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                  },
+                  fallback: {
+                    type: "string",
+                    enum: ["pi", "none"],
+                    title: "Default Embedded Harness Fallback",
+                    description:
+                      "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Default Embedded Harness",
+                description:
+                  "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
               },
               model: {
                 anyOf: [
@@ -3341,6 +3369,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    jsonlDialect: {
+                      type: "string",
+                      const: "claude-stream-json",
+                    },
                     input: {
                       anyOf: [
                         {
@@ -3423,6 +3455,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                     },
                     systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptFileConfigArg: {
+                      type: "string",
+                    },
+                    systemPromptFileConfigKey: {
                       type: "string",
                     },
                     systemPromptMode: {
@@ -4214,7 +4252,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   idleTimeoutSeconds: {
                     description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
@@ -4450,6 +4488,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Embedded Pi Project Settings Policy",
                     description:
                       'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
+                  },
+                  executionContract: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "default",
+                      },
+                      {
+                        type: "string",
+                        const: "strict-agentic",
+                      },
+                    ],
+                    title: "Embedded Pi Execution Contract",
+                    description:
+                      'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
                   },
                 },
                 additionalProperties: false,
@@ -4754,6 +4807,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Heartbeat Suppress Tool Error Warnings",
                     description: "Suppress tool error warning payloads during heartbeat runs.",
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Heartbeat Timeout (Seconds)",
+                    description:
+                      "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
                   },
                   lightContext: {
                     type: "boolean",
@@ -5403,6 +5464,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 systemPromptOverride: {
                   type: "string",
                 },
+                embeddedHarness: {
+                  type: "object",
+                  properties: {
+                    runtime: {
+                      type: "string",
+                      title: "Agent Embedded Harness Runtime",
+                      description:
+                        "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                    },
+                    fallback: {
+                      type: "string",
+                      enum: ["pi", "none"],
+                      title: "Agent Embedded Harness Fallback",
+                      description:
+                        "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Embedded Harness",
+                  description:
+                    "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+                },
                 model: {
                   anyOf: [
                     {
@@ -5975,8 +6058,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     suppressToolErrorWarnings: {
                       type: "boolean",
-                      title: "Agent Heartbeat Suppress Tool Error Warnings",
+                      title: "Heartbeat Suppress Tool Error Warnings",
                       description: "Suppress tool error warning payloads during heartbeat runs.",
+                    },
+                    timeoutSeconds: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Heartbeat Timeout (Seconds)",
+                      description:
+                        "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
                     },
                     lightContext: {
                       type: "boolean",
@@ -6064,6 +6155,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                   },
                   additionalProperties: false,
+                },
+                embeddedPi: {
+                  type: "object",
+                  properties: {
+                    executionContract: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "default",
+                        },
+                        {
+                          type: "string",
+                          const: "strict-agentic",
+                        },
+                      ],
+                      title: "Agent Embedded Pi Execution Contract",
+                      description:
+                        'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Embedded Pi",
+                  description:
+                    "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
                 },
                 sandbox: {
                   type: "object",
@@ -7346,6 +7461,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Web Fetch Readability Extraction",
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+                  },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      allowRfc2544BenchmarkRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow RFC 2544 Benchmark Range",
+                        description:
+                          "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Web Fetch SSRF Policy",
+                    description:
+                      "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
                   },
                   firecrawl: {
                     type: "object",
@@ -8735,6 +8865,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Media Understanding Concurrency",
                 description:
                   "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
+              },
+              asyncCompletion: {
+                type: "object",
+                properties: {
+                  directSend: {
+                    type: "boolean",
+                    title: "Async Media Completion Direct Send",
+                    description:
+                      "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+                  },
+                },
+                additionalProperties: false,
               },
               image: {
                 type: "object",
@@ -17180,7 +17322,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Enable Structured Plan Tool",
                 description:
-                  "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
+                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
               },
             },
             additionalProperties: false,
@@ -20444,6 +20586,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
               },
+              embedSandbox: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "strict",
+                  },
+                  {
+                    type: "string",
+                    const: "scripts",
+                  },
+                  {
+                    type: "string",
+                    const: "trusted",
+                  },
+                ],
+                title: "Control UI Embed Sandbox Mode",
+                description:
+                  'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+              },
+              allowExternalEmbedUrls: {
+                type: "boolean",
+                title: "Allow External Control UI Embed URLs",
+                description:
+                  "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
               allowedOrigins: {
                 type: "array",
                 items: {
@@ -22835,10 +23002,40 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
       tags: ["advanced"],
     },
+    "agents.defaults.embeddedHarness": {
+      label: "Default Embedded Harness",
+      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.runtime": {
+      label: "Default Embedded Harness Runtime",
+      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.fallback": {
+      label: "Default Embedded Harness Fallback",
+      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+      tags: ["reliability"],
+    },
     "agents.list": {
       label: "Agent List",
       help: "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
       tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness": {
+      label: "Agent Embedded Harness",
+      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.runtime": {
+      label: "Agent Embedded Harness Runtime",
+      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.fallback": {
+      label: "Agent Embedded Harness Fallback",
+      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -23556,7 +23753,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.experimental.planTool": {
       label: "Enable Structured Plan Tool",
-      help: "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
+      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
       tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
@@ -23879,6 +24076,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
     },
+    "tools.web.fetch.ssrfPolicy": {
+      label: "Web Fetch SSRF Policy",
+      help: "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Fetch Allow RFC 2544 Benchmark Range",
+      help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+      tags: ["access", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -23890,6 +24097,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
       placeholder: "dist/control-ui",
       tags: ["network"],
+    },
+    "gateway.controlUi.embedSandbox": {
+      label: "Control UI Embed Sandbox Mode",
+      help: 'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+      tags: ["security", "access", "advanced"],
+    },
+    "gateway.controlUi.allowExternalEmbedUrls": {
+      label: "Allow External Control UI Embed URLs",
+      help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+      tags: ["security", "access", "network", "advanced"],
     },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
@@ -24802,7 +25019,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.request": {
       label: "Model Provider Request Overrides",
-      help: "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
+      help: "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
       tags: ["models"],
     },
     "models.providers.*.request.headers": {
@@ -24934,6 +25151,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Model Provider Request TLS Skip Verify",
       help: "Skips upstream TLS certificate verification. Use only for controlled development environments.",
       tags: ["security", "models", "advanced"],
+    },
+    "models.providers.*.request.allowPrivateNetwork": {
+      label: "Model Provider Request Allow Private Network",
+      help: "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+      tags: ["access", "models"],
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",
@@ -25225,6 +25447,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
     },
+    "agents.defaults.embeddedPi.executionContract": {
+      label: "Embedded Pi Execution Contract",
+      help: 'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
+      tags: ["advanced"],
+    },
     "agents.defaults.heartbeat.includeSystemPromptSection": {
       label: "Heartbeat Include System Prompt Section",
       help: "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
@@ -25234,6 +25461,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Include System Prompt Section",
       help: "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
       tags: ["automation"],
+    },
+    "agents.list[].embeddedPi": {
+      label: "Agent Embedded Pi",
+      help: "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
+      tags: ["advanced"],
+    },
+    "agents.list[].embeddedPi.executionContract": {
+      label: "Agent Embedded Pi Execution Contract",
+      help: 'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+      tags: ["advanced"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",
@@ -25249,6 +25486,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Suppress Tool Error Warnings",
       help: "Suppress tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.suppressToolErrorWarnings": {
+      label: "Heartbeat Suppress Tool Error Warnings",
+      tags: ["automation"],
+    },
+    "agents.defaults.heartbeat.timeoutSeconds": {
+      label: "Heartbeat Timeout (Seconds)",
+      help: "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+      tags: ["performance", "automation"],
+    },
+    "agents.list.*.heartbeat.timeoutSeconds": {
+      label: "Heartbeat Timeout (Seconds)",
+      tags: ["performance", "automation"],
     },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
@@ -25393,7 +25643,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
       label: "Browser Dangerously Allow Private Network",
-      help: "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+      help: "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
       tags: ["security", "access", "advanced"],
     },
     "browser.ssrfPolicy.allowedHostnames": {
@@ -26313,6 +26563,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Suppress tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
     },
+    "agents.list[].heartbeat.timeoutSeconds": {
+      label: "Agent Heartbeat Timeout (Seconds)",
+      help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
+      tags: ["performance", "automation"],
+    },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
       help: "Per-agent override for sandbox browser Docker network.",
@@ -26904,6 +27159,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.9",
+  version: "2026.4.11-beta.1",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

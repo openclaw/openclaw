@@ -225,30 +225,7 @@ function mergeConfig(
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
     overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
   };
-  const sync = {
-    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
-    onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
-    watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
-    watchDebounceMs:
-      overrides?.sync?.watchDebounceMs ??
-      defaults?.sync?.watchDebounceMs ??
-      DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
-    sessions: {
-      deltaBytes:
-        overrides?.sync?.sessions?.deltaBytes ??
-        defaults?.sync?.sessions?.deltaBytes ??
-        DEFAULT_SESSION_DELTA_BYTES,
-      deltaMessages:
-        overrides?.sync?.sessions?.deltaMessages ??
-        defaults?.sync?.sessions?.deltaMessages ??
-        DEFAULT_SESSION_DELTA_MESSAGES,
-      postCompactionForce:
-        overrides?.sync?.sessions?.postCompactionForce ??
-        defaults?.sync?.sessions?.postCompactionForce ??
-        true,
-    },
-  };
+  const sync = resolveSyncConfig(defaults, overrides);
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
@@ -343,24 +320,24 @@ function mergeConfig(
       ...query,
       minScore,
       hybrid: {
-        enabled: Boolean(hybrid.enabled),
+        enabled: hybrid.enabled,
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
         mmr: {
-          enabled: Boolean(hybrid.mmr.enabled),
+          enabled: hybrid.mmr.enabled,
           lambda: Number.isFinite(hybrid.mmr.lambda)
             ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
             : DEFAULT_MMR_LAMBDA,
         },
         temporalDecay: {
-          enabled: Boolean(hybrid.temporalDecay.enabled),
+          enabled: hybrid.temporalDecay.enabled,
           halfLifeDays: temporalDecayHalfLifeDays,
         },
       },
     },
     cache: {
-      enabled: Boolean(cache.enabled),
+      enabled: cache.enabled,
       maxEntries:
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))

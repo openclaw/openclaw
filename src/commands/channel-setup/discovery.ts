@@ -1,15 +1,17 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  listChannelPluginCatalogEntries,
-  type ChannelPluginCatalogEntry,
-} from "../../channels/plugins/catalog.js";
+import { listChatChannels } from "../../channels/chat-meta.js";
+import { type ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
-import type { ChannelMeta, ChannelPlugin } from "../../channels/plugins/types.js";
-import { listChatChannels } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
+import {
+  listSetupDiscoveryChannelPluginCatalogEntries,
+  listTrustedChannelPluginCatalogEntries,
+} from "./trusted-catalog.js";
 
 type ChannelCatalogEntry = {
   id: ChannelChoice;
@@ -75,14 +77,25 @@ export function resolveChannelSetupEntries(params: {
     env: params.env,
   });
   const installedPluginIds = new Set(params.installedPlugins.map((plugin) => plugin.id));
-  const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir });
-  const installedCatalogEntries = catalogEntries.filter(
+  // Discovery keeps workspace-only install candidates visible, while the
+  // installed bucket must still reflect what setup can safely auto-load.
+  const installedCatalogEntriesSource = listTrustedChannelPluginCatalogEntries({
+    cfg: params.cfg,
+    workspaceDir,
+    env: params.env,
+  });
+  const installableCatalogEntriesSource = listSetupDiscoveryChannelPluginCatalogEntries({
+    cfg: params.cfg,
+    workspaceDir,
+    env: params.env,
+  });
+  const installedCatalogEntries = installedCatalogEntriesSource.filter(
     (entry) =>
       !installedPluginIds.has(entry.id) &&
       manifestInstalledIds.has(entry.id as ChannelChoice) &&
       shouldShowChannelInSetup(entry.meta),
   );
-  const installableCatalogEntries = catalogEntries.filter(
+  const installableCatalogEntries = installableCatalogEntriesSource.filter(
     (entry) =>
       !installedPluginIds.has(entry.id) &&
       !manifestInstalledIds.has(entry.id as ChannelChoice) &&

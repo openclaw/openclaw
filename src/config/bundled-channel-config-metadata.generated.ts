@@ -8161,6 +8161,33 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           minimum: 0,
           maximum: 9007199254740991,
         },
+        delegatedAuth: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            scopes: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        sso: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            connectionName: {
+              type: "string",
+            },
+          },
+          additionalProperties: false,
+        },
       },
       required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
@@ -9311,6 +9338,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["doc", "hot-reload"],
         },
+        streaming: {
+          anyOf: [
+            {
+              type: "boolean",
+            },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  default: "partial",
+                  type: "string",
+                  enum: ["off", "partial"],
+                },
+              },
+              required: ["mode"],
+              additionalProperties: {},
+            },
+          ],
+        },
         tts: {
           type: "object",
           properties: {
@@ -9512,15 +9558,34 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
                 enum: ["doc", "hot-reload"],
               },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      mode: {
+                        default: "partial",
+                        type: "string",
+                        enum: ["off", "partial"],
+                      },
+                    },
+                    required: ["mode"],
+                    additionalProperties: {},
+                  },
+                ],
+              },
             },
-            additionalProperties: false,
+            additionalProperties: {},
           },
         },
         defaultAccount: {
           type: "string",
         },
       },
-      additionalProperties: false,
+      additionalProperties: {},
     },
   },
   {

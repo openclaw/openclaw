@@ -13,9 +13,24 @@ DEFAULT_PROVIDER="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-}"
 CLI_PROVIDER="${CLI_MODEL%%/*}"
 CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
+CLI_AUTH_MODE="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
 
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
   CLI_PROVIDER="$DEFAULT_PROVIDER"
+fi
+
+case "$CLI_AUTH_MODE" in
+  auto | api-key | subscription)
+    ;;
+  *)
+    echo "ERROR: OPENCLAW_LIVE_CLI_BACKEND_AUTH must be one of: auto, api-key, subscription." >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$CLI_AUTH_MODE" == "subscription" && "$CLI_PROVIDER" != "claude-cli" ]]; then
+  echo "ERROR: OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription is only supported for claude-cli." >&2
+  exit 1
 fi
 
 CLI_METADATA_JSON="$(node --import tsx "$ROOT_DIR/scripts/print-cli-backend-live-metadata.ts" "$CLI_PROVIDER")"
@@ -33,10 +48,64 @@ CLI_DOCKER_NPM_PACKAGE="$(read_metadata_field dockerNpmPackage 2>/dev/null || tr
 CLI_DOCKER_BINARY_NAME="$(read_metadata_field dockerBinaryName 2>/dev/null || true)"
 
 if [[ "$CLI_PROVIDER" == "claude-cli" && -z "$CLI_DISABLE_MCP_CONFIG" ]]; then
-  CLI_DISABLE_MCP_CONFIG="0"
+  if [[ "$CLI_AUTH_MODE" == "subscription" ]]; then
+    CLI_DISABLE_MCP_CONFIG="1"
+  else
+    CLI_DISABLE_MCP_CONFIG="0"
+  fi
 fi
 
 mkdir -p "$CLI_TOOLS_DIR"
+
+if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
+  CLAUDE_CREDS_FILE="$HOME/.claude/.credentials.json"
+  CLAUDE_SUBSCRIPTION_AUTH_SOURCE=""
+  CLAUDE_SUBSCRIPTION_TYPE=""
+  if [[ -f "$CLAUDE_CREDS_FILE" ]]; then
+    CLAUDE_SUBSCRIPTION_TYPE="$(
+      node -e '
+        const fs = require("node:fs");
+        const file = process.argv[1];
+        const data = JSON.parse(fs.readFileSync(file, "utf8"));
+        const subscriptionType = String(data?.claudeAiOauth?.subscriptionType ?? "").trim();
+        if (!subscriptionType || subscriptionType === "unknown") process.exit(2);
+        process.stdout.write(subscriptionType);
+      ' "$CLAUDE_CREDS_FILE" 2>/dev/null
+    )" || {
+      echo "ERROR: $CLAUDE_CREDS_FILE does not look like Claude subscription OAuth auth." >&2
+      echo "Expected claudeAiOauth.subscriptionType to be present." >&2
+      exit 1
+    }
+    CLAUDE_SUBSCRIPTION_AUTH_SOURCE="credentials-file"
+  elif [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    CLAUDE_SUBSCRIPTION_TYPE="oauth-token"
+    CLAUDE_SUBSCRIPTION_AUTH_SOURCE="env-token"
+  else
+    echo "ERROR: Claude subscription auth requires either:" >&2
+    echo "  - $CLAUDE_CREDS_FILE with claudeAiOauth.subscriptionType, or" >&2
+    echo "  - CLAUDE_CODE_OAUTH_TOKEN from 'claude setup-token'." >&2
+    exit 1
+  fi
+  if [[ -z "${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]]; then
+    if [[ "$CLAUDE_SUBSCRIPTION_AUTH_SOURCE" == "env-token" ]]; then
+      export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV='["CLAUDE_CODE_OAUTH_TOKEN"]'
+    else
+      export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="[]"
+    fi
+  fi
+  if [[ "$OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV" == *ANTHROPIC_API_KEY* ]]; then
+    echo "ERROR: subscription auth smoke must not preserve Anthropic API-key env vars." >&2
+    exit 1
+  fi
+  if [[ "$CLAUDE_SUBSCRIPTION_AUTH_SOURCE" == "env-token" && "$OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV" != *CLAUDE_CODE_OAUTH_TOKEN* ]]; then
+    echo "ERROR: CLAUDE_CODE_OAUTH_TOKEN subscription smoke must preserve CLAUDE_CODE_OAUTH_TOKEN for the Gateway child process." >&2
+    exit 1
+  fi
+  export OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE:-0}"
+  export OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE:-1}"
+  export OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-0}"
+  export OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-0}"
+fi
 
 PROFILE_MOUNT=()
 if [[ -f "$PROFILE_FILE" ]]; then
@@ -131,6 +200,30 @@ if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CL
   npm_config_prefix="$HOME/.npm-global" npm install -g "$docker_package"
 fi
 if [ "$provider" = "claude-cli" ]; then
+  auth_mode="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
+  if [ "$auth_mode" = "subscription" ]; then
+    unset ANTHROPIC_API_KEY
+    unset ANTHROPIC_API_KEY_OLD
+    unset ANTHROPIC_API_TOKEN
+    unset ANTHROPIC_AUTH_TOKEN
+    unset ANTHROPIC_OAUTH_TOKEN
+    node - <<'NODE'
+const fs = require("node:fs");
+const file = `${process.env.HOME}/.claude/.credentials.json`;
+if (fs.existsSync(file)) {
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const subscriptionType = String(data?.claudeAiOauth?.subscriptionType ?? "").trim();
+  if (!subscriptionType || subscriptionType === "unknown") {
+    throw new Error("Claude subscription OAuth credentials are missing subscriptionType.");
+  }
+  console.error(`[claude-subscription] subscriptionType=${subscriptionType}`);
+} else if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+  console.error("[claude-subscription] using CLAUDE_CODE_OAUTH_TOKEN from environment");
+} else {
+  throw new Error("Claude subscription OAuth token or credentials file is required.");
+}
+NODE
+  fi
   real_claude="$HOME/.npm-global/bin/claude-real"
   if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
     mv "$HOME/.npm-global/bin/claude" "$real_claude"
@@ -152,7 +245,29 @@ WRAP
   if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]; then
     export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'
   fi
-  claude auth status || true
+  if [ "$auth_mode" = "subscription" ]; then
+    claude --version
+    direct_token="OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT"
+    direct_output="$(
+      claude \
+        -p "Reply exactly: $direct_token" \
+        --output-format text \
+        --model sonnet \
+        --permission-mode bypassPermissions \
+        --setting-sources user \
+        --strict-mcp-config \
+        --mcp-config '{"mcpServers":{}}' \
+        --no-session-persistence
+    )"
+    if [[ "$direct_output" != *"$direct_token"* ]]; then
+      echo "ERROR: direct Claude subscription probe did not return expected token." >&2
+      echo "$direct_output" >&2
+      exit 1
+    fi
+    echo "[claude-subscription] direct claude -p probe ok"
+  else
+    claude auth status || true
+  fi
 fi
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -175,21 +290,44 @@ cd "$tmp_dir"
 pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
-echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
+  echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
+else
+  echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
+  docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+fi
 
 echo "==> Run CLI backend live test in Docker"
 echo "==> Model: $CLI_MODEL"
 echo "==> Provider: $CLI_PROVIDER"
+echo "==> Auth mode: $CLI_AUTH_MODE"
+if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
+  echo "==> Claude subscription: $CLAUDE_SUBSCRIPTION_TYPE"
+  echo "==> Claude subscription source: $CLAUDE_SUBSCRIPTION_AUTH_SOURCE"
+fi
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
+DOCKER_AUTH_ENV=(
+  -e OPENCLAW_LIVE_CLI_BACKEND_AUTH="$CLI_AUTH_MODE"
+)
+if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
+  DOCKER_AUTH_ENV+=(
+    -e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+    -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="$OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV"
+  )
+else
+  DOCKER_AUTH_ENV+=(
+    -e ANTHROPIC_API_KEY
+    -e ANTHROPIC_API_KEY_OLD
+    -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+    -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}"
+    -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}"
+  )
+fi
+
 docker run --rm -t \
   -u node \
   --entrypoint bash \
-  -e ANTHROPIC_API_KEY \
-  -e ANTHROPIC_API_KEY_OLD \
-  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
@@ -203,15 +341,17 @@ docker run --rm -t \
   -e OPENCLAW_DOCKER_CLI_BACKEND_BINARY_NAME="$CLI_DOCKER_BINARY_NAME" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND=1 \
+  -e OPENCLAW_LIVE_CLI_BACKEND_DEBUG="${OPENCLAW_LIVE_CLI_BACKEND_DEBUG:-}" \
+  -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \
   -e OPENCLAW_LIVE_CLI_BACKEND_COMMAND="${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_ARGS="${OPENCLAW_LIVE_CLI_BACKEND_ARGS:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV="${OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG="$CLI_DISABLE_MCP_CONFIG" \
   -e OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}" \
   -v "$ROOT_DIR":/src:ro \
@@ -219,6 +359,7 @@ docker run --rm -t \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
   -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   "${EXTERNAL_AUTH_MOUNTS[@]}" \
+  "${DOCKER_AUTH_ENV[@]}" \
   "${PROFILE_MOUNT[@]}" \
   "$LIVE_IMAGE_NAME" \
   -lc "$LIVE_TEST_CMD"

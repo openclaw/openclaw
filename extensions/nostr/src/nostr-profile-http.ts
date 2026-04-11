@@ -16,13 +16,14 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
-  isBlockedHostnameOrIp,
+  getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "../api.js";
+} from "../runtime-api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
@@ -103,30 +104,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
   }
 }
 
-// ============================================================================
-// SSRF Protection
-// ============================================================================
-
-function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
-  try {
-    const url = new URL(urlStr);
-
-    if (url.protocol !== "https:") {
-      return { ok: false, error: "URL must use https:// protocol" };
-    }
-
-    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-
-    if (isBlockedHostnameOrIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "Invalid URL format" };
-  }
-}
-
 // Export for use in import validation
 export { validateUrlSafety };
 
@@ -151,6 +128,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -322,6 +301,21 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
+function enforceGatewayMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
+  return false;
+}
+
 // ============================================================================
 // HTTP Handler
 // ============================================================================
@@ -404,6 +398,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -507,6 +504,9 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }

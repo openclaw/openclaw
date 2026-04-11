@@ -1,9 +1,9 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentRouteBinding } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -12,21 +12,21 @@ import type { ChannelChoice } from "./onboard-types.js";
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);
-  return [identityKey, accountId].join("|");
+  return JSON.stringify([identityKey, accountId]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles)
     ? Array.from(new Set(normalizeStringEntries(match.roles).toSorted()))
     : [];
-  return [
+  return JSON.stringify([
     match.channel,
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
     match.teamId ?? "",
     roles.join(","),
-  ].join("|");
+  ]);
 }
 
 function canUpgradeBindingAccountScope(params: {

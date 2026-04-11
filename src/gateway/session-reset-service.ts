@@ -22,6 +22,7 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
@@ -61,6 +62,48 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
+type ResetPreservedSelectionState = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
+function resolveResetPreservedSelection(params: {
+  entry?: SessionEntry;
+}): Partial<ResetPreservedSelectionState> {
+  const { entry } = params;
+  if (!entry) {
+    return {};
+  }
+
+  const preserved: Partial<ResetPreservedSelectionState> = {};
+  // `modelOverrideSource` is new. Older persisted sessions can still carry
+  // user-selected overrides without the source field, so treat an absent
+  // source as legacy user state during reset and backfill it forward.
+  const preserveLegacyUserModelOverride =
+    entry.modelOverrideSource === "user" ||
+    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+  if (preserveLegacyUserModelOverride && entry.modelOverride) {
+    preserved.providerOverride = entry.providerOverride;
+    preserved.modelOverride = entry.modelOverride;
+    preserved.modelOverrideSource = "user";
+  }
+
+  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
+    preserved.authProfileOverride = entry.authProfileOverride;
+    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
+    if (entry.authProfileOverrideCompactionCount !== undefined) {
+      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
+  }
+
+  return preserved;
+}
+
 export function archiveSessionTranscriptsForSession(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -91,7 +134,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
 }
 
 export function emitGatewaySessionEndPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   storePath: string;
@@ -132,7 +175,7 @@ export function emitGatewaySessionEndPluginHook(params: {
 }
 
 export function emitGatewaySessionStartPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
@@ -189,7 +232,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 }
 
 async function ensureSessionRuntimeCleanup(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
@@ -251,7 +294,7 @@ async function runAcpCleanupStep(params: {
 }
 
 async function closeAcpRuntimeForSession(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   entry?: SessionEntry;
   reason: "session-reset" | "session-delete";
@@ -337,7 +380,7 @@ function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta 
 }
 
 async function ensureFreshAcpResetState(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   reason: "session-reset" | "session-delete";
   entry?: SessionEntry;
@@ -383,7 +426,7 @@ async function ensureFreshAcpResetState(params: {
 }
 
 export async function cleanupSessionBeforeMutation(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   entry: SessionEntry | undefined;
@@ -409,7 +452,7 @@ export async function cleanupSessionBeforeMutation(params: {
 }
 
 function emitGatewayBeforeResetPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
@@ -507,9 +550,21 @@ export async function performGatewaySessionReset(params: {
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const resetPreservedSelection = resolveResetPreservedSelection({
+      entry: currentEntry,
+    });
+    const resetEntry = {
+      ...stripRuntimeModelState(currentEntry),
+      providerOverride: undefined,
+      modelOverride: undefined,
+      modelOverrideSource: undefined,
+      authProfileOverride: undefined,
+      authProfileOverrideSource: undefined,
+      authProfileOverrideCompactionCount: undefined,
+      ...resetPreservedSelection,
+    };
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
@@ -540,11 +595,9 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
-      authProfileOverride: currentEntry?.authProfileOverride,
-      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
-      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
+      // Resets should keep the user's explicit selection, but clear any
+      // temporary fallback model that was pinned during the previous run.
+      ...resetPreservedSelection,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

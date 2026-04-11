@@ -5,6 +5,7 @@ import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
 
 type QaManualLaneParams = {
   repoRoot: string;
@@ -12,6 +13,7 @@ type QaManualLaneParams = {
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
   message: string;
   timeoutMs?: number;
 };
@@ -61,6 +63,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
+    thinkingDefault: params.thinkingDefault,
     controlUiEnabled: false,
   });
 
@@ -105,11 +108,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     const reply =
       lab.state
         .getSnapshot()
-        .messages.filter(
+        .messages.findLast(
           (candidate) =>
             candidate.direction === "outbound" && candidate.conversation.id === "qa-operator",
-        )
-        .at(-1)?.text ?? null;
+        )?.text ?? null;
 
     return {
       model: params.primaryModel,

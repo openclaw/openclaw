@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { closeQaHttpServer } from "./bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -64,6 +65,40 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function countApproxTokens(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+}
+
+function extractEmbeddingInputTexts(input: unknown): string[] {
+  if (typeof input === "string") {
+    return [input];
+  }
+  if (Array.isArray(input)) {
+    return input.flatMap((entry) => extractEmbeddingInputTexts(entry));
+  }
+  if (
+    input &&
+    typeof input === "object" &&
+    typeof (input as { text?: unknown }).text === "string"
+  ) {
+    return [(input as { text: string }).text];
+  }
+  return [];
+}
+
+function buildDeterministicEmbedding(text: string, dimensions = 16) {
+  const values = Array.from({ length: dimensions }, () => 0);
+  for (let index = 0; index < text.length; index += 1) {
+    values[index % dimensions] += text.charCodeAt(index) / 255;
+  }
+  const magnitude = Math.hypot(...values) || 1;
+  return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
@@ -285,9 +320,30 @@ function extractOrbitCode(text: string) {
   return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
+function extractLastCapture(text: string, pattern: RegExp) {
+  let lastMatch: RegExpExecArray | null = null;
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
+    lastMatch = match;
+  }
+  return lastMatch?.[1]?.trim() || null;
+}
+
 function extractExactReplyDirective(text: string) {
-  const match = /reply with exactly:\s*([^\n]+)/i.exec(text);
-  return match?.[1]?.trim() || null;
+  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  if (colonMatch) {
+    return colonMatch;
+  }
+  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
+}
+
+function extractExactMarkerDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 function isHeartbeatPrompt(text: string) {
@@ -311,10 +367,14 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective = extractExactReplyDirective(allInputText);
+  const exactMarkerDirective = extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
+  }
+  if (/remember this fact/i.test(prompt) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (/remember this fact/i.test(prompt) && rememberedFact) {
     return `Protocol note: acknowledged. I will remember ${rememberedFact}.`;
@@ -327,6 +387,9 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
+  }
+  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+    return exactMarkerDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";
@@ -377,7 +440,8 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
     return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
-    return `Protocol note: delegated result acknowledged. The bounded subagent task returned and is folded back into the main thread.`;
+    const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
+    return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
   }
   if (toolOutput && /worked, failed, blocked|worked\/failed\/blocked|follow-up/i.test(prompt)) {
     return `Worked:\n- Read seeded QA material.\n- Expanded the report structure.\nFailed:\n- None observed in mock mode.\nBlocked:\n- No live provider evidence in this lane.\nFollow-up:\n- Re-run with a real model for qualitative coverage.`;
@@ -387,6 +451,17 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
       return "";
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
+  }
+  if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
+    if (
+      toolOutput.includes("Replay safety: unsafe after write.") ||
+      /compaction-retry-summary\.txt/i.test(toolOutput) ||
+      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
+      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
+    ) {
+      return "Protocol note: replay unsafe after write.";
+    }
+    return "";
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -474,6 +549,17 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   <head><meta charset="utf-8" /><title>Lobster Invaders</title></head>
   <body><h1>Lobster Invaders</h1><p>Tiny playable stub.</p></body>
 </html>`,
+      });
+    }
+  }
+  if (/compaction retry mutating tool check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
+    }
+    if (toolOutput.includes("compaction retry evidence")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "compaction-retry-summary.txt",
+        content: "Replay safety: unsafe after write.\n",
       });
     }
   }
@@ -647,6 +733,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.4", object: "model" },
           { id: "gpt-5.4-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
+          { id: "text-embedding-3-small", object: "model" },
         ],
       });
       return;
@@ -677,6 +764,28 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
             revised_prompt: "A QA lighthouse with protocol droid silhouette.",
           },
         ],
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+      const raw = await readBody(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      const inputs = extractEmbeddingInputTexts(body.input);
+      writeJson(res, 200, {
+        object: "list",
+        data: inputs.map((text, index) => ({
+          object: "embedding",
+          index,
+          embedding: buildDeterministicEmbedding(text),
+        })),
+        model:
+          typeof body.model === "string" && body.model.trim()
+            ? body.model
+            : "text-embedding-3-small",
+        usage: {
+          prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+          total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+        },
       });
       return;
     }
@@ -727,9 +836,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }
