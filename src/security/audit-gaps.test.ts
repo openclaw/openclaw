@@ -72,6 +72,19 @@ describe("gateway.token_no_expiry", () => {
     expectNoFinding(res, "gateway.token_no_expiry");
   });
 
+  it("warns when tokenRotation is present but disabled", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "a-long-enough-secret-token-1234",
+          tokenRotation: { enabled: false, intervalDays: 30 },
+        },
+      },
+    };
+    const res = await audit(cfg, { env: {} });
+    expectFinding(res, "gateway.token_no_expiry", "warn");
+  });
+
   it("does not warn when no token is configured", async () => {
     const cfg: OpenClawConfig = {
       gateway: { auth: {} },
@@ -147,15 +160,15 @@ describe("env.dangerous_vars_set", () => {
     const cfg: OpenClawConfig = {};
     const res = await audit(cfg, {
       env: {
-        NODE_OPTIONS: "--max-old-space-size=4096",
         GLIBC_TUNABLES: "glibc.tune.hwcaps=-AVX512F",
+        LD_PRELOAD: "/tmp/fake.so",
       },
     });
     expectFinding(res, "env.dangerous_vars_set", "warn");
 
     const finding = res.findings.find((f) => f.checkId === "env.dangerous_vars_set");
-    expect(finding?.detail).toContain("NODE_OPTIONS");
     expect(finding?.detail).toContain("GLIBC_TUNABLES");
+    expect(finding?.detail).toContain("LD_PRELOAD");
   });
 
   it("does not warn when no dangerous env vars are set", async () => {
@@ -184,6 +197,23 @@ describe("env.dangerous_vars_set", () => {
     });
     expectNoFinding(res, "env.dangerous_vars_set");
     expectFinding(res, "env.lang_tooling_vars_set", "info");
+  });
+
+  it("emits info (not warn) for non-injection NODE_OPTIONS", async () => {
+    const cfg: OpenClawConfig = {};
+    const res = await audit(cfg, {
+      env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+    });
+    expectNoFinding(res, "env.dangerous_vars_set");
+    expectFinding(res, "env.lang_tooling_vars_set", "info");
+  });
+
+  it("warns for NODE_OPTIONS injection flags", async () => {
+    const cfg: OpenClawConfig = {};
+    const res = await audit(cfg, {
+      env: { NODE_OPTIONS: "--require ./evil.js" },
+    });
+    expectFinding(res, "env.dangerous_vars_set", "warn");
   });
 });
 
@@ -223,6 +253,24 @@ describe("tools.web_fetch.no_url_allowlist", () => {
     const cfg: OpenClawConfig = {
       gateway: { bind: "lan", auth: { token: "secret-token-long-enough" } },
       tools: { webFetch: { allowedUrls: ["https://api.example.com"] } },
+    };
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "tools.web_fetch.no_url_allowlist");
+  });
+
+  it("does not warn when web_fetch is denied by tool policy", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { bind: "lan", auth: { token: "secret-token-long-enough" } },
+      tools: { deny: ["web_fetch"] },
+    };
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "tools.web_fetch.no_url_allowlist");
+  });
+
+  it("does not warn when web_fetch is denied via group policy", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { bind: "lan", auth: { token: "secret-token-long-enough" } },
+      tools: { deny: ["group:web"] },
     };
     const res = await audit(cfg, { env: {} });
     expectNoFinding(res, "tools.web_fetch.no_url_allowlist");

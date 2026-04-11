@@ -1,8 +1,10 @@
-import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
+import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
@@ -50,6 +52,7 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -204,11 +207,14 @@ function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
   return false;
 }
 
-function isInsideGitRepo(startDir: string): string | null {
+async function isInsideGitRepo(startDir: string): Promise<string | null> {
   let dir = path.resolve(startDir);
   while (true) {
-    if (existsSync(path.resolve(dir, ".git"))) {
+    try {
+      await access(path.resolve(dir, ".git"));
       return dir;
+    } catch {
+      // continue walking up to root
     }
     const parent = path.dirname(dir);
     if (parent === dir) {
@@ -348,7 +354,7 @@ async function collectFilesystemFindings(params: {
   }
 
   const configDir = path.dirname(params.configPath);
-  const gitRoot = isInsideGitRepo(configDir);
+  const gitRoot = await isInsideGitRepo(configDir);
   if (gitRoot) {
     const rel = path.relative(gitRoot, configDir).replace(/\\/g, "/");
     const gitignoreEntry = rel === "" ? "openclaw.json" : rel + "/";
@@ -649,7 +655,7 @@ function collectGatewayConfigFindings(
     auth.mode === "token" &&
     tokenConfigured &&
     !asRecord(cfg.gateway?.auth)?.tokenExpiry &&
-    !asRecord(cfg.gateway?.auth)?.tokenRotation
+    asRecord(asRecord(cfg.gateway?.auth)?.tokenRotation)?.enabled !== true
   ) {
     findings.push({
       checkId: "gateway.token_no_expiry",
@@ -1298,7 +1304,6 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   // T-DISC-004: check for dangerous env vars in current environment
   // High-risk: native code injection vectors — always warn
   const HIGH_RISK_ENV_VARS = [
-    "NODE_OPTIONS",
     "GLIBC_TUNABLES",
     "LD_AUDIT",
     "LD_PRELOAD",
@@ -1311,6 +1316,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   // Lower-risk: language tooling vars routinely set by virtualenvs,
   // IDEs, and bundler wrappers — surface as info, not warn
   const LANG_TOOLING_ENV_VARS = [
+    "NODE_OPTIONS",
     "PYTHONPATH",
     "PYTHONSTARTUP",
     "JAVA_TOOL_OPTIONS",
@@ -1321,11 +1327,25 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const isNonEmpty = (v: string) => typeof env[v] === "string" && env[v].trim().length > 0;
   const highRiskSet = HIGH_RISK_ENV_VARS.filter(isNonEmpty);
   const langToolingSet = LANG_TOOLING_ENV_VARS.filter(isNonEmpty);
+  const nodeOptions = typeof env.NODE_OPTIONS === "string" ? env.NODE_OPTIONS.trim() : "";
+  const hasNodeOptionsInjectionFlags =
+    nodeOptions.length > 0 &&
+    /(?:^|\s)(?:-r|--require|--loader|--import)(?:\s|=|$)/i.test(nodeOptions);
+  if (hasNodeOptionsInjectionFlags) {
+    const idx = langToolingSet.indexOf("NODE_OPTIONS");
+    if (idx >= 0) {
+      langToolingSet.splice(idx, 1);
+    }
+    if (!highRiskSet.includes("NODE_OPTIONS")) {
+      highRiskSet.push("NODE_OPTIONS");
+    }
+  }
   if (highRiskSet.length > 0) {
     findings.push({
       checkId: "env.dangerous_vars_set",
       severity: "warn",
       title: highRiskSet.length + " high-risk environment variable(s) set",
+      detail:
         "The following native-injection or key-disclosure variables are set: " +
         highRiskSet.join(", ") +
         ". " +
@@ -1357,7 +1377,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   // T-EXFIL-001: web_fetch without URL allowlist
   {
     const webFetchPolicy = asRecord(cfg.tools)?.webFetch ?? asRecord(cfg.tools)?.web_fetch;
-    const webFetchEnabled = webFetchPolicy !== false && webFetchPolicy?.enabled !== false;
+    const profilePolicy = resolveToolProfilePolicy(cfg.tools?.profile);
+    const globalPolicy = pickSandboxToolPolicy(cfg.tools);
+    const webFetchAllowedByPolicy = isToolAllowedByPolicies("web_fetch", [
+      profilePolicy,
+      globalPolicy,
+    ]);
+    const webFetchEnabled =
+      webFetchPolicy !== false &&
+      webFetchPolicy?.enabled !== false &&
+      webFetchAllowedByPolicy;
     const webFetchAllowlist = Array.isArray(webFetchPolicy?.allowedUrls)
       ? webFetchPolicy.allowedUrls
       : [];
