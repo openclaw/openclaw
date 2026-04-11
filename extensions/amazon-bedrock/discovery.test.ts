@@ -87,7 +87,6 @@ describe("bedrock discovery", () => {
       name: "Claude 3.7 Sonnet",
       reasoning: false,
       input: ["text", "image"],
-      contextWindow: 32000,
       maxTokens: 4096,
     });
   });
@@ -111,7 +110,7 @@ describe("bedrock discovery", () => {
       config: { defaultContextWindow: 64000, defaultMaxTokens: 8192 },
       clientFactory,
     });
-    expect(models[0]).toMatchObject({ contextWindow: 64000, maxTokens: 8192 });
+    expect(models[0]).toMatchObject({ maxTokens: 8192 });
   });
 
   it("caches results when refreshInterval is enabled", async () => {
@@ -252,7 +251,6 @@ describe("bedrock discovery", () => {
     expect(usProfile).toMatchObject({
       name: "US Anthropic Claude Sonnet 4.6",
       input: ["text", "image"],
-      contextWindow: 32000,
       maxTokens: 4096,
     });
     expect(euProfile).toMatchObject({ input: ["text", "image"] });
@@ -356,7 +354,6 @@ describe("bedrock discovery", () => {
     expect(profile).toMatchObject({
       id: "us.my-prod-profile",
       input: ["text", "image"],
-      contextWindow: 32000,
       maxTokens: 4096,
     });
   });

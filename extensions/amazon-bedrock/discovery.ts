@@ -154,7 +154,7 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
 
 function toModelDefinition(
   summary: BedrockModelSummary,
-  defaults: { contextWindow: number; maxTokens: number },
+  _defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
   return {
@@ -163,8 +163,10 @@ function toModelDefinition(
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
-    contextWindow: defaults.contextWindow,
-    maxTokens: defaults.maxTokens,
+    // NOTE: contextWindow is deliberately omitted — the Bedrock API does not
+    // expose token limits. Leaving it undefined lets the runtime detect
+    // hardcoded-default usage and emit a warning (issue #64919).
+    maxTokens: _defaults.maxTokens,
   };
 }
 
@@ -282,7 +284,7 @@ function resolveInferenceProfiles(
       reasoning: baseModel?.reasoning ?? false,
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
-      contextWindow: baseModel?.contextWindow ?? defaults.contextWindow,
+      contextWindow: baseModel?.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
   }

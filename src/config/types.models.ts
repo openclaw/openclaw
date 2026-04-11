@@ -60,7 +60,12 @@ export type ModelDefinitionConfig = {
     cacheRead: number;
     cacheWrite: number;
   };
-  contextWindow: number;
+  /**
+   * The model's context window from the provider's API. May be undefined if the
+   * provider doesn't expose token limits (e.g. AWS Bedrock), in which case the
+   * runtime resolves it to a hardcoded default and sets source="default".
+   */
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs
