@@ -249,7 +249,7 @@ describe("handleCompactCommand", () => {
           groupChannel: "#wrapper",
           space: "wrapper-space",
           spawnedBy: "agent:wrapper",
-          skillsSnapshot: { prompt: "wrapper" },
+          skillsSnapshot: { prompt: "wrapper", skills: [] },
           contextTokens: 111,
         },
         sessionStore: {
@@ -260,7 +260,7 @@ describe("handleCompactCommand", () => {
             groupChannel: "#target",
             space: "target-space",
             spawnedBy: "agent:target-parent",
-            skillsSnapshot: { prompt: "target" },
+            skillsSnapshot: { prompt: "target", skills: [] },
             contextTokens: 222,
           },
         },
@@ -275,7 +275,7 @@ describe("handleCompactCommand", () => {
         groupChannel: "#target",
         groupSpace: "target-space",
         spawnedBy: "agent:target-parent",
-        skillsSnapshot: { prompt: "target" },
+        skillsSnapshot: { prompt: "target", skills: [] },
       }),
     );
   });
