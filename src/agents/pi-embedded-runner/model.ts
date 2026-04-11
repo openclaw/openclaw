@@ -255,7 +255,9 @@ function findInlineModelMatch(params: {
 }) {
   const inlineModels = buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && entry.id === params.modelId,
+    (entry) =>
+      entry.provider === params.provider &&
+      matchesConfiguredModelId(params.provider, entry.id, params.modelId),
   );
   if (exact) {
     return exact;
@@ -263,11 +265,38 @@ function findInlineModelMatch(params: {
   const normalizedProvider = normalizeProviderId(params.provider);
   return inlineModels.find(
     (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      matchesConfiguredModelId(params.provider, entry.id, params.modelId),
   );
 }
 
 export { buildModelAliasLines };
+
+function matchesConfiguredModelId(
+  provider: string,
+  candidateId: string | undefined,
+  requestedModelId: string | undefined,
+) {
+  if (typeof candidateId !== "string" || typeof requestedModelId !== "string") {
+    return false;
+  }
+  const candidate = candidateId.trim();
+  const requested = requestedModelId.trim();
+  if (!candidate || !requested) {
+    return false;
+  }
+  if (candidate === requested) {
+    return true;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  const prefixes = [provider, normalizedProvider].filter(
+    (value, index, values): value is string =>
+      typeof value === "string" && value.trim().length > 0 && values.indexOf(value) === index,
+  );
+  return prefixes.some(
+    (prefix) => candidate === `${prefix}/${requested}` || requested === `${prefix}/${candidate}`,
+  );
+}
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -300,7 +329,9 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel = providerConfig.models?.find((candidate) =>
+    matchesConfiguredModelId(params.provider, candidate.id, modelId),
+  );
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -524,7 +555,9 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel = providerConfig?.models?.find((candidate) =>
+    matchesConfiguredModelId(provider, candidate.id, modelId),
+  );
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });

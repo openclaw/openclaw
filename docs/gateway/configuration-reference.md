@@ -2138,6 +2138,8 @@ Notes:
 
 OpenClaw uses the built-in model catalog. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
 
+When resolving configured models for routed/custom providers, OpenClaw honors both bare requested model ids like `gpt-5.4` and provider-prefixed configured ids like `rr/gpt-5.4`. This keeps configured model overrides applied even when runtime lookups use the bare id form. Provider-specific compat hints such as `models.providers.<id>.models[].compat.supportsUsageInStreaming` still need to be configured explicitly when required by the upstream endpoint behavior.
+
 ```json5
 {
   models: {
