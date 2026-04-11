@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
@@ -110,8 +111,8 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 }
 
 function createManager(options?: {
-  channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
+  resolveChannelRuntime?: () => ChannelRuntimeSurface;
   loadConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
 }) {
@@ -224,8 +225,8 @@ describe("server-channels auto restart", () => {
     const channelRuntime = {
       ...createRuntimeChannel(),
       marker: "channel-runtime",
-    } as PluginRuntime["channel"] & { marker: string };
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    } as ChannelRuntimeSurface & { marker: string };
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: ChannelRuntimeSurface }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
@@ -287,9 +288,9 @@ describe("server-channels auto restart", () => {
     const channelRuntime = {
       ...createRuntimeChannel(),
       marker: "lazy-channel-runtime",
-    } as PluginRuntime["channel"] & { marker: string };
+    } as ChannelRuntimeSurface & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: ChannelRuntimeSurface }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });
@@ -336,7 +337,7 @@ describe("server-channels auto restart", () => {
       },
     };
     const startAccount = vi.fn(
-      async ({ channelRuntime }: { channelRuntime?: PluginRuntime["channel"] }) => {
+      async ({ channelRuntime }: { channelRuntime?: ChannelRuntimeSurface }) => {
         channelRuntime?.runtimeContexts.register({
           channelId: "discord",
           accountId: DEFAULT_ACCOUNT_ID,

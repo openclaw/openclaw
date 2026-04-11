@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
  */
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEvent } from "../proxy-capture/runtime.js";
 import { buildOpenAIWebSocketWarmUpPayload } from "./openai-ws-request.js";
