@@ -1085,7 +1085,17 @@ data "terraform_remote_state" "vpc" {{
   }
 """
     else:
-        egress_block = "  # No egress rules — fully locked down\n"
+        egress_block = """
+  # Locked down: no outbound traffic allowed.
+  # An explicit empty-destination egress rule revokes the AWS default allow-all.
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = []
+    description = "Deny all outbound (locked down)"
+  }
+"""
 
     main_tf = f"""terraform {{
   required_providers {{
@@ -3399,6 +3409,47 @@ resource "aws_route_table" "public" {{
 {priv_subnet_blocks}
 {nat_blocks}
 {nat_route_blocks}
+resource "aws_flow_log" "this" {{
+  vpc_id               = aws_vpc.this.id
+  traffic_type         = "ALL"
+  log_destination_type = "cloud-watch-logs"
+  log_destination      = aws_cloudwatch_log_group.flow_log.arn
+  iam_role_arn         = aws_iam_role.flow_log.arn
+  tags                 = merge(local.tags, {{ Name = "{name}-flow-log" }})
+}}
+
+resource "aws_cloudwatch_log_group" "flow_log" {{
+  name              = "/aws/vpc/{name}/flow-logs"
+  retention_in_days = 14
+  tags              = local.tags
+}}
+
+resource "aws_iam_role" "flow_log" {{
+  name = "{name}-flow-log-role"
+  assume_role_policy = jsonencode({{
+    Version = "2012-10-17"
+    Statement = [{{
+      Effect    = "Allow"
+      Principal = {{ Service = "vpc-flow-logs.amazonaws.com" }}
+      Action    = "sts:AssumeRole"
+    }}]
+  }})
+  tags = local.tags
+}}
+
+resource "aws_iam_role_policy" "flow_log" {{
+  name = "{name}-flow-log-policy"
+  role = aws_iam_role.flow_log.id
+  policy = jsonencode({{
+    Version = "2012-10-17"
+    Statement = [{{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
+      Resource = "*"
+    }}]
+  }})
+}}
+
 output "vpc_id"          {{ value = aws_vpc.this.id }}
 output "public_subnets"  {{ value = [{pub_subnet_ids}] }}
 output "private_subnets" {{ value = [{priv_subnet_ids}] }}
