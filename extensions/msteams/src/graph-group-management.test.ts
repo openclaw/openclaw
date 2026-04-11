@@ -194,6 +194,39 @@ describe("removeParticipantMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/members/membership-5",
     });
   });
+
+  it("follows member pagination before concluding the user is missing", async () => {
+    mockState.fetchGraphJson
+      .mockResolvedValueOnce({
+        value: [{ id: "membership-1", userId: "user-aad-id-1" }],
+        "@odata.nextLink":
+          "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/members?$skip=2",
+      })
+      .mockResolvedValueOnce({
+        value: [{ id: "membership-9", userId: "user-aad-id-9" }],
+      });
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    const result = await removeParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      userId: "user-aad-id-9",
+    });
+
+    expect(result).toEqual({ removed: { userId: "user-aad-id-9", chatId: CHAT_ID } });
+    expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(1, {
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+    });
+    expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(2, {
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members?$skip=2`,
+    });
+    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-9`,
+    });
+  });
 });
 
 describe("renameGroupMSTeams", () => {

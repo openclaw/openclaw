@@ -67,6 +67,11 @@ type GraphConversationMember = {
   userId?: string;
 };
 
+type GraphConversationMemberResponse = {
+  value?: GraphConversationMember[];
+  "@odata.nextLink"?: string;
+};
+
 /**
  * Remove a user from a chat or channel via Graph API.
  * Lists members first to resolve the membership ID, then deletes.
@@ -78,13 +83,29 @@ export async function removeParticipantMSTeams(
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
 
-  // List members to find the membership ID for the target user
-  const membersRes = await fetchGraphJson<{ value?: GraphConversationMember[] }>({
-    token,
-    path: `${conv.basePath}/members`,
-  });
-
-  const member = (membersRes.value ?? []).find((m) => m.userId === params.userId);
+  // List members to find the membership ID for the target user. Graph can
+  // paginate large chats/channels, so walk `@odata.nextLink` before concluding
+  // the user is missing.
+  const MAX_PAGES = 10;
+  let nextPath: string | undefined = `${conv.basePath}/members`;
+  let page = 0;
+  let member: GraphConversationMember | undefined;
+  while (nextPath && page < MAX_PAGES && !member) {
+    const membersRes: GraphConversationMemberResponse =
+      await fetchGraphJson<GraphConversationMemberResponse>({
+        token,
+        path: nextPath,
+      });
+    member = (membersRes.value ?? []).find(
+      (candidate: GraphConversationMember) => candidate.userId === params.userId,
+    );
+    if (member) {
+      break;
+    }
+    const nextLink: string | undefined = membersRes["@odata.nextLink"];
+    nextPath = nextLink ? nextLink.replace("https://graph.microsoft.com/v1.0", "") : undefined;
+    page++;
+  }
   if (!member?.id) {
     throw new Error(`User ${params.userId} is not a member of this conversation`);
   }
