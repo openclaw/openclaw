@@ -27,8 +27,7 @@ import {
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -42,6 +41,7 @@ import {
   updateSessionStore,
 } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";

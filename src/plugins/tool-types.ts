@@ -2,7 +2,7 @@ import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {

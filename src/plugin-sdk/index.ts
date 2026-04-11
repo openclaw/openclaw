@@ -7,24 +7,22 @@ export type {
   ChannelAgentTool,
   ChannelAgentToolFactory,
   ChannelCapabilities,
-  ChannelGatewayContext,
   ChannelId,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
+export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+export type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
+export type { ChannelSetupInput } from "../channels/plugins/types.public.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "../channels/plugins/types.adapters.js";
-export type {
-  ChannelConfigSchema,
-  ChannelConfigUiHint,
-  ChannelPlugin,
-} from "../channels/plugins/types.plugin.js";
-export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
+export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
   ConfiguredBindingConversation,
   ConfiguredBindingResolution,

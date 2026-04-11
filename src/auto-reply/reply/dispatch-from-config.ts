@@ -6,9 +6,9 @@ import {
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import {

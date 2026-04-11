@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cancelTaskById, listTasksForFlowId } from "../../tasks/runtime-internal.js";
 import {
   mapTaskFlowDetail,
@@ -20,9 +20,9 @@ import {
   listTasksForRelatedSessionKeyForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "../../tasks/task-owner-access.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { OpenClawPluginToolContext } from "../tool-types.js";
-import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.js";
+import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
 import type {
   TaskFlowDetail,
   TaskFlowView,

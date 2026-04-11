@@ -7,7 +7,7 @@ import {
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -39,6 +39,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import {
   clearMemoryEmbeddingProviders,
@@ -81,14 +82,7 @@ import {
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginBundleFormat,
-  PluginFormat,
-  PluginLogger,
-} from "./types.js";
+import type { OpenClawPluginDefinition, OpenClawPluginModule, PluginLogger } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 

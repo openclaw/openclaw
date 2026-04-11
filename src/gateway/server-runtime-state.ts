@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {

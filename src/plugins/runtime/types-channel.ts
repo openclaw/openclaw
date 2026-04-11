@@ -9,6 +9,10 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type ReadSessionUpdatedAt = import("../../config/sessions/runtime-types.js").ReadSessionUpdatedAt;
+type RecordSessionMetaFromInbound =
+  import("../../config/sessions/runtime-types.js").RecordSessionMetaFromInbound;
+type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
 
 type ReadChannelAllowFromStoreForAccount = (params: {
   channel: Parameters<ReadChannelAllowFromStore>[0];
@@ -80,7 +84,7 @@ export type PluginRuntimeChannel = {
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
     dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
-    withReplyDispatcher: typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
+    withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
     /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -105,11 +109,11 @@ export type PluginRuntimeChannel = {
     get: typeof import("../../infra/channel-activity.js").getChannelActivity;
   };
   session: {
-    resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
-    readSessionUpdatedAt: typeof import("../../config/sessions.js").readSessionUpdatedAt;
-    recordSessionMetaFromInbound: typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
+    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+    readSessionUpdatedAt: ReadSessionUpdatedAt;
+    recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     recordInboundSession: typeof import("../../channels/session.js").recordInboundSession;
-    updateLastRoute: typeof import("../../config/sessions.js").updateLastRoute;
+    updateLastRoute: UpdateLastRoute;
   };
   mentions: {
     buildMentionRegexes: typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;

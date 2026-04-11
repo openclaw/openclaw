@@ -4,8 +4,8 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,

@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getBundledChannelPlugin } from "./bundled.js";

@@ -11,3 +11,6 @@ function loadFacadeModule(): FacadeModule {
 
 export const registerQaLabCli: FacadeModule["registerQaLabCli"] = ((...args) =>
   loadFacadeModule().registerQaLabCli(...args)) as FacadeModule["registerQaLabCli"];
+
+export const isQaLabCliAvailable: FacadeModule["isQaLabCliAvailable"] = (() =>
+  loadFacadeModule().isQaLabCliAvailable()) as FacadeModule["isQaLabCliAvailable"];

@@ -3,6 +3,12 @@ import type { LogLevel } from "../../logging/levels.js";
 
 export type { HeartbeatRunResult };
 
+type RuntimeWriteConfigOptions = {
+  envSnapshotForRestore?: Record<string, string | undefined>;
+  expectedConfigPath?: string;
+  unsetPaths?: string[][];
+};
+
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -23,8 +29,11 @@ export type RunHeartbeatOnceOptions = {
 export type PluginRuntimeCore = {
   version: string;
   config: {
-    loadConfig: typeof import("../../config/config.js").loadConfig;
-    writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
+    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
+    writeConfigFile: (
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
+      options?: RuntimeWriteConfigOptions,
+    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -45,10 +54,10 @@ export type PluginRuntimeCore = {
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
-      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
-      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
-      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
+      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {
@@ -137,26 +146,26 @@ export type PluginRuntimeCore = {
     runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
     flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

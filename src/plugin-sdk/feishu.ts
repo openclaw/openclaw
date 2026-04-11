@@ -31,7 +31,7 @@ export type {
   ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,

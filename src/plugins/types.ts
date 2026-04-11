@@ -15,13 +15,14 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
-import type { PromptMode } from "../agents/system-prompt.js";
+import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -97,6 +98,12 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -124,6 +131,12 @@ import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-prov
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
+export type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
 export type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolContext,
@@ -166,15 +179,6 @@ export type PluginLogger = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
-};
-
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
 };
 
 export type { PluginKind } from "./plugin-kind.types.js";
@@ -2160,17 +2164,6 @@ export type OpenClawPluginApi = {
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
-};
-
-export type PluginFormat = "openclaw" | "bundle";
-
-export type PluginBundleFormat = "codex" | "claude" | "cursor";
-
-export type PluginDiagnostic = {
-  level: "warn" | "error";
-  message: string;
-  pluginId?: string;
-  source?: string;
 };
 
 // ============================================================================

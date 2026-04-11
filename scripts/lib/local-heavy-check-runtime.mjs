@@ -245,7 +245,9 @@ function readLocalCheckMode(env) {
   if (raw === "full" || raw === "fast") {
     return "full";
   }
-  return "auto";
+  // Keep local heavy checks conservative by default. Developers can still opt
+  // into full-speed runs explicitly with OPENCLAW_LOCAL_CHECK_MODE=full.
+  return "throttled";
 }
 
 function resolveHostResources(hostResources) {
