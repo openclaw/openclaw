@@ -352,6 +352,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Outbound media/local files: align outbound media access with the configured fs policy so host-local files and inbound-media paths keep sending when `workspaceOnly` is off, while strict workspace-only agents remain sandboxed.
+- Security/session kill HTTP scopes: require `operator.admin` for `/sessions/:sessionKey/kill` HTTP endpoint so non-admin callers cannot terminate arbitrary sessions. Thanks @AntAISecurityLab and @vincentkoc.
 - Security/sandbox media dispatch: close the `mediaUrl`/`fileUrl` alias bypass so outbound tool and message actions cannot escape media-root restrictions. (#54034)
 - Gateway/restart sentinel: wake the interrupted agent session via heartbeat after restart instead of only sending a best-effort restart note, retry outbound delivery once on transient failure, and preserve explicit thread/topic routing through the wake path so replies land in the correct Telegram topic or Slack thread. (#53940) Thanks @VACInc.
 - Docker/setup: avoid the pre-start `openclaw-cli` shared-network namespace loop by routing setup-time onboard/config writes through `openclaw-gateway`, so fresh Docker installs stop failing before the gateway comes up. (#53385) Thanks @amsminn.
