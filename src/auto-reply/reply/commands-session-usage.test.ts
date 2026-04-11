@@ -137,6 +137,31 @@ describe("handleUsageCommand", () => {
       }),
     );
   });
+
+  it("prefers the target session entry from sessionStore for /usage cost", async () => {
+    const params = buildUsageParams();
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      sessionFile: "/tmp/wrapper-session.jsonl",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        sessionFile: "/tmp/target-session.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+
+    await handleUsageCommand(params, true);
+
+    expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "target-session",
+        sessionFile: "/tmp/target-session.jsonl",
+      }),
+    );
+  });
 });
 
 describe("handleFastCommand", () => {
