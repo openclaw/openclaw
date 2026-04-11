@@ -6,6 +6,7 @@ import {
 } from "../dispatch.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
+import type { GetReplyFromConfig } from "./get-reply.types.js";
 import type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
@@ -16,7 +17,7 @@ export async function dispatchReplyWithBufferedBlockDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("../reply.js").getReplyFromConfig;
+  replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithBufferedDispatcher({
     ctx: params.ctx,
@@ -32,7 +33,7 @@ export async function dispatchReplyWithDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("../reply.js").getReplyFromConfig;
+  replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithDispatcher({
     ctx: params.ctx,

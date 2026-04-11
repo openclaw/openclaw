@@ -1,5 +1,5 @@
+import type { InteractiveReplyButton } from "../interactive/payload.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalActionDescriptor } from "./exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -9,7 +9,12 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
-export type ApprovalActionView = ExecApprovalActionDescriptor;
+export type ApprovalActionView = {
+  decision: ExecApprovalDecision;
+  label: string;
+  style: NonNullable<InteractiveReplyButton["style"]>;
+  command: string;
+};
 
 export type ApprovalMetadataView = {
   label: string;
