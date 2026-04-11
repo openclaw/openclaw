@@ -6,6 +6,7 @@ import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
@@ -38,10 +39,14 @@ export function createGatewayHooksRequestHandler(params: {
     // Honor the configured sessionKey/agentId from hook mappings so
     // wake-mode hooks can target non-default agents. Falls back to the
     // main session key when neither is provided (#64556).
+    // Normalize the agent ID to match the convention used by
+    // buildMainSessionKey / normalizeHookDispatchSessionKey — without
+    // this, mixed-case agent IDs produce keys that don't match any
+    // real session, silently routing the event nowhere.
     const sessionKey =
       value.sessionKey ??
       (value.agentId
-        ? `agent:${value.agentId}:main`
+        ? `agent:${normalizeAgentId(value.agentId)}:main`
         : resolveMainSessionKeyFromConfig());
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
