@@ -59,6 +59,8 @@ export type CliBackendConfig = {
   output?: "json" | "text" | "jsonl";
   /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
+  /** JSONL event dialect for CLIs with provider-specific stream formats. */
+  jsonlDialect?: "claude-stream-json";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
@@ -440,7 +442,7 @@ export type AgentLlmConfig = {
    * Idle timeout for LLM streaming responses in seconds.
    * If no token is received within this time, the request is aborted.
    * Set to 0 to disable (never timeout).
-   * Default: 60 seconds.
+   * If unset, OpenClaw uses the default LLM idle timeout.
    */
   idleTimeoutSeconds?: number;
 };

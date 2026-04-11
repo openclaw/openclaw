@@ -1,4 +1,4 @@
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import type { TaskNotifyPolicy } from "./task-registry.types.js";
 
 export type JsonValue =

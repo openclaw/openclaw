@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -241,13 +241,15 @@ export async function applyInlineDirectiveOverrides(params: {
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       const { buildStatusReply } = await loadCommandsStatus();
+      const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
         command,
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionKey,
-        parentSessionKey: ctx.ParentSessionKey,
+        parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
         sessionScope,
+        storePath,
         provider,
         model,
         contextTokens,

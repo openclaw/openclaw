@@ -1,4 +1,5 @@
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import {
@@ -6,22 +7,13 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type ModelInputType = "text" | "image" | "document";
-
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  alias?: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: ModelInputType[];
-};
+export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 
 type DiscoveredModel = {
   id: string;
@@ -32,7 +24,7 @@ type DiscoveredModel = {
   input?: ModelInputType[];
 };
 
-type PiSdkModule = typeof import("./pi-model-discovery.js");
+type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
 type PiRegistryInstance =
   | Array<DiscoveredModel>
   | {

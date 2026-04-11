@@ -7,7 +7,7 @@ import {
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
 import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";

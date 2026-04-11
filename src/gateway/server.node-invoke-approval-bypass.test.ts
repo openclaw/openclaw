@@ -389,7 +389,10 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      for (let i = 0; i < 100 && !lastInvokeParams; i += 1) {
+      for (let i = 0; i < 100; i += 1) {
+        if (lastInvokeParams) {
+          break;
+        }
         await sleep(50);
       }
       expect(lastInvokeParams).toBeTruthy();

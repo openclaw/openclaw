@@ -759,7 +759,7 @@ export async function runEmbeddedPiAgent(
               incompleteTurnText,
             });
           if (resolveReplayInvalidForAttempt(null)) {
-            accumulatedReplayState = { ...accumulatedReplayState, replayInvalid: true };
+            accumulatedReplayState.replayInvalid = true;
           }
           accumulatedReplayState = observeReplayMetadata(
             accumulatedReplayState,

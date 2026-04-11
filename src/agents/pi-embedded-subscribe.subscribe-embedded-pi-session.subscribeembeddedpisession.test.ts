@@ -589,4 +589,36 @@ describe("subscribeEmbeddedPiSession", () => {
       }),
     );
   });
+
+  it("preserves deterministic side-effect liveness across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "cron",
+      toolCallId: "cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
+  });
 });

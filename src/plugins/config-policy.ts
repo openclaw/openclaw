@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemorySlotDecisionShared,
   resolveEnableStateShared,
@@ -12,7 +12,8 @@ import {
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
-import type { PluginKind, PluginOrigin } from "./types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 

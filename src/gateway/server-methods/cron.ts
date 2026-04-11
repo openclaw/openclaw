@@ -252,11 +252,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
     } catch (error) {
       if (isInvalidCronSessionTargetIdError(error)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
-        );
+        respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
         return;
       }
       throw error;

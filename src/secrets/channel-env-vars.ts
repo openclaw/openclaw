@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 type ChannelEnvVarLookupParams = {

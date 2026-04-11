@@ -16,11 +16,11 @@ import { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtim
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   createInternalHookEvent,
@@ -48,7 +48,7 @@ import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
 async function prewarmConfiguredPrimaryModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
@@ -88,7 +88,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 }
 
 export async function startGatewaySidecars(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -239,12 +239,11 @@ export async function startGatewaySidecars(params: {
 
 export async function startGatewayPostAttachRuntime(params: {
   minimalTestGateway: boolean;
-  cfgAtStart: ReturnType<typeof loadConfig>;
+  cfgAtStart: OpenClawConfig;
   bindHost: string;
   bindHosts: string[];
   port: number;
   tlsEnabled: boolean;
-  pluginCount: number;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -261,7 +260,7 @@ export async function startGatewayPostAttachRuntime(params: {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-  gatewayPluginConfigAtStart: ReturnType<typeof loadConfig>;
+  gatewayPluginConfigAtStart: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -280,7 +279,9 @@ export async function startGatewayPostAttachRuntime(params: {
     bindHosts: params.bindHosts,
     port: params.port,
     tlsEnabled: params.tlsEnabled,
-    pluginCount: params.pluginCount,
+    loadedPluginIds: params.pluginRegistry.plugins
+      .filter((plugin) => plugin.status === "loaded")
+      .map((plugin) => plugin.id),
     log: params.log,
     isNixMode: params.isNixMode,
     startupStartedAt: params.startupStartedAt,

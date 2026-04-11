@@ -1577,6 +1577,13 @@ export const MSTeamsConfigSchema = z
     feedbackEnabled: z.boolean().optional(),
     feedbackReflection: z.boolean().optional(),
     feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
+    delegatedAuth: z
+      .object({
+        enabled: z.boolean().optional(),
+        scopes: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     sso: z
       .object({
         enabled: z.boolean().optional(),

@@ -1398,17 +1398,24 @@ describe("createTelegramBot", () => {
       },
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+    const mediaFetch = vi.fn(
       async () =>
         new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
           status: 200,
           headers: { "content-type": "image/png" },
         }),
     );
+    const ssrfMock = mockPinnedHostnameResolution();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const replyDelivered = waitForReplyCalls(1);
-      createTelegramBot({ token: "tok" });
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+        },
+      });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       await handler({
@@ -1465,9 +1472,10 @@ describe("createTelegramBot", () => {
 
       expect(getFileSpy).toHaveBeenCalledTimes(1);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
     } finally {
       setTimeoutSpy.mockRestore();
-      fetchSpy.mockRestore();
+      ssrfMock.mockRestore();
     }
   });
 

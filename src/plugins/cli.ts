@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
