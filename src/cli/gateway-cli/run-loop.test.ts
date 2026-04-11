@@ -485,7 +485,10 @@ describe("runGatewayLoop", () => {
     try {
       await withIsolatedSignals(async ({ captureSignal }) => {
         const closeFirst = vi.fn(async () => {});
-        const lateStartClose = vi.fn(async () => {});
+        // Simulate a close() that rejects — must not become an unhandled rejection
+        const lateStartClose = vi.fn(async () => {
+          throw new Error("close failed");
+        });
         const { runtime, exited } = createRuntimeWithExitSignal();
 
         // Signal so we know exactly when the second start() is invoked
@@ -533,6 +536,7 @@ describe("runGatewayLoop", () => {
         startControl.resolve?.();
         await vi.advanceTimersByTimeAsync(0);
 
+        // close() was called on the orphan server and its rejection was swallowed
         expect(lateStartClose).toHaveBeenCalledWith({
           reason: "startup timed out",
           restartExpectedMs: null,

@@ -290,8 +290,12 @@ export async function runGatewayLoop(params: {
         } catch (err) {
           // If the timeout fired while start() was still in-flight, close any
           // server it eventually produces so it cannot hold the port untracked.
+          // Swallow close() rejections — this is best-effort cleanup on an
+          // abandoned startup; a throwing close must not become an unhandled
+          // rejection that terminates the process (Node 22+).
           void startPromise.then(
-            (s) => void s.close({ reason: "startup timed out", restartExpectedMs: null }),
+            (s) =>
+              s.close({ reason: "startup timed out", restartExpectedMs: null }).catch(() => {}),
             () => {},
           );
           throw err;
