@@ -10,6 +10,7 @@ import {
   createSlackThreadBindingManager,
   setSlackThreadBindingIdleTimeoutBySessionKey,
   setSlackThreadBindingMaxAgeBySessionKey,
+  unbindSlackThreadBindingsBySessionKey,
 } from "./thread-bindings.js";
 
 describe("slack thread bindings", () => {
@@ -304,6 +305,59 @@ describe("slack thread bindings", () => {
 
     expect(
       reloaded.getByThread({ channelId: "C3333333", threadTs: "1710000000.000600" }),
+    ).toBeUndefined();
+  });
+
+  it("only removes matching-kind bindings when targetKind is passed to unbindBySessionKey", async () => {
+    const manager = createSlackThreadBindingManager({
+      accountId: "mixed-kind",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "shared:mixed-kind:session",
+      targetKind: "subagent",
+      conversation: {
+        channel: "slack",
+        accountId: "mixed-kind",
+        conversationId: "1710000000.000800",
+        parentConversationId: "C5555555",
+      },
+      placement: "current",
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: "shared:mixed-kind:session",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "mixed-kind",
+        conversationId: "1710000000.000801",
+        parentConversationId: "C5555555",
+      },
+      placement: "current",
+    });
+
+    const removed = unbindSlackThreadBindingsBySessionKey({
+      accountId: "mixed-kind",
+      targetSessionKey: "shared:mixed-kind:session",
+      targetKind: "subagent",
+      reason: "test-kind-scoped-unbind",
+    });
+
+    expect(removed).toHaveLength(1);
+    expect(removed[0]?.targetKind).toBe("subagent");
+    expect(removed[0]?.threadTs).toBe("1710000000.000800");
+
+    const remaining = manager.listBySessionKey("shared:mixed-kind:session");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.targetKind).toBe("acp");
+    expect(remaining[0]?.threadTs).toBe("1710000000.000801");
+    expect(
+      manager.getByThread({ channelId: "C5555555", threadTs: "1710000000.000801" }),
+    ).toBeDefined();
+    expect(
+      manager.getByThread({ channelId: "C5555555", threadTs: "1710000000.000800" }),
     ).toBeUndefined();
   });
 

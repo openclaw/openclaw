@@ -68,6 +68,7 @@ export type SlackThreadBindingManager = {
   }) => SlackThreadBindingRecord | null;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
+    targetKind?: SlackBindingTargetKind;
     reason?: string;
   }) => SlackThreadBindingRecord[];
   stop: () => void;
@@ -563,9 +564,13 @@ export function createSlackThreadBindingManager(
       if (!targetSessionKey) {
         return [];
       }
+      const targetKindFilter = unbindParams.targetKind;
       const removed: SlackThreadBindingRecord[] = [];
       for (const entry of listBindingsForAccount(accountId)) {
         if (entry.targetSessionKey !== targetSessionKey) {
+          continue;
+        }
+        if (targetKindFilter && entry.targetKind !== targetKindFilter) {
           continue;
         }
         const key = resolveBindingKey({
@@ -884,14 +889,11 @@ export function unbindSlackThreadBindingsBySessionKey(params: {
   if (!manager) {
     return [];
   }
-  const removed = manager.unbindBySessionKey({
+  return manager.unbindBySessionKey({
     targetSessionKey: params.targetSessionKey,
+    targetKind: params.targetKind,
     reason: params.reason,
   });
-  if (!params.targetKind) {
-    return removed;
-  }
-  return removed.filter((entry) => entry.targetKind === params.targetKind);
 }
 
 function updateSlackBindingsBySessionKey(params: {
