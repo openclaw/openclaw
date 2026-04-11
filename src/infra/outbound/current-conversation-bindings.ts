@@ -114,7 +114,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (!normalized) {
     return false;
   }
-  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
+  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } | null }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some(
       (alias) => normalizeOptionalLowercaseString(alias) === normalized,
@@ -122,7 +122,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   // Read the already-installed runtime channel registry from shared state only.
   // Importing plugins/runtime here creates a module cycle through plugin-sdk
   // surfaces during bundled channel discovery.
-  const plugin = getActivePluginChannelRegistryFromState()?.channels.find((entry) =>
+  const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
   if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {

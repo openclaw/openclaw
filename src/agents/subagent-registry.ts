@@ -1,5 +1,6 @@
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
 import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
@@ -8,9 +9,9 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as subagentAnnounceModule from "./subagent-announce.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -124,7 +125,7 @@ function loadSubagentRegistryRuntime() {
 }
 
 async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }) {
@@ -137,7 +138,7 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
   runtime.ensureRuntimePluginsLoaded(params);
 }
 
-async function resolveSubagentRegistryContextEngine(cfg: ReturnType<typeof loadConfig>) {
+async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
   const runtime = await loadSubagentRegistryRuntime();
   const ensureContextEnginesInitialized =
     subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
@@ -457,10 +458,7 @@ function restoreSubagentRunsOnce() {
   }
 }
 
-function resolveSubagentWaitTimeoutMs(
-  cfg: ReturnType<typeof loadConfig>,
-  runTimeoutSeconds?: number,
-) {
+function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number) {
   return subagentRegistryDeps.resolveAgentTimeoutMs({
     cfg,
     overrideSeconds: runTimeoutSeconds ?? 0,
@@ -636,7 +634,7 @@ const subagentRunManager = createSubagentRunManager({
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
   loadConfig: () => subagentRegistryDeps.loadConfig(),
   ensureRuntimePluginsLoaded: (args: {
-    config: ReturnType<typeof loadConfig>;
+    config: OpenClawConfig;
     workspaceDir?: string;
     allowGatewaySubagentBinding?: boolean;
   }) => ensureSubagentRegistryPluginRuntimeLoaded(args),

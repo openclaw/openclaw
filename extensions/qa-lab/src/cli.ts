@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
 import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
@@ -123,6 +124,10 @@ async function runQaDockerUp(opts: {
 async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaMockOpenAiCommand(opts);
+}
+
+export function isQaLabCliAvailable(): boolean {
+  return hasQaScenarioPack();
 }
 
 export function registerQaLabCli(program: Command) {

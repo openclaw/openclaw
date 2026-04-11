@@ -1,6 +1,6 @@
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {

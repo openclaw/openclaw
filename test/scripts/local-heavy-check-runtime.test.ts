@@ -76,14 +76,15 @@ describe("local-heavy-check-runtime", () => {
   });
 
   it("keeps explicit tsgo declaration flags intact", () => {
-    const longFlag = applyLocalTsgoPolicy(["--declaration"], makeEnv(), ROOMY_HOST);
-    const shortFlag = applyLocalTsgoPolicy(["-d"], makeEnv(), ROOMY_HOST);
+    const env = makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" });
+    const longFlag = applyLocalTsgoPolicy(["--declaration"], env, ROOMY_HOST);
+    const shortFlag = applyLocalTsgoPolicy(["-d"], env, ROOMY_HOST);
 
     expect(longFlag.args).toEqual(["--declaration"]);
     expect(shortFlag.args).toEqual(["-d"]);
   });
 
-  it("keeps local tsgo at full speed on roomy hosts in auto mode", () => {
+  it("defaults local tsgo to throttled mode on roomy hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
     expect(args).toEqual([
@@ -92,15 +93,19 @@ describe("local-heavy-check-runtime", () => {
       "--incremental",
       "--tsBuildInfoFile",
       ".artifacts/tsgo-cache/root.tsbuildinfo",
+      "--singleThreaded",
+      "--checkers",
+      "1",
     ]);
-    expect(env.GOGC).toBeUndefined();
-    expect(env.GOMEMLIMIT).toBeUndefined();
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
   it("uses the configured local tsgo build info file", () => {
     const { args } = applyLocalTsgoPolicy(
       [],
       makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
         OPENCLAW_TSGO_BUILD_INFO_FILE: ".artifacts/custom/tsgo.tsbuildinfo",
       }),
       ROOMY_HOST,
@@ -116,7 +121,11 @@ describe("local-heavy-check-runtime", () => {
   });
 
   it("avoids incremental cache reuse for ad hoc tsgo runs", () => {
-    const { args } = applyLocalTsgoPolicy(["--extendedDiagnostics"], makeEnv(), ROOMY_HOST);
+    const { args } = applyLocalTsgoPolicy(
+      ["--extendedDiagnostics"],
+      makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
+      ROOMY_HOST,
+    );
 
     expect(args).toEqual(["--extendedDiagnostics", "--declaration", "false"]);
   });
@@ -144,6 +153,26 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
+  it("allows forcing full-speed tsgo runs on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+    ]);
+    expect(env.GOGC).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {
     const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
 
@@ -157,8 +186,27 @@ describe("local-heavy-check-runtime", () => {
     ]);
   });
 
-  it("keeps local oxlint parallel on roomy hosts in auto mode", () => {
+  it("defaults local oxlint to one thread on roomy hosts", () => {
     const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+      "--threads=1",
+    ]);
+  });
+
+  it("allows forcing full-speed oxlint runs on roomy hosts", () => {
+    const { args } = applyLocalOxlintPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
 
     expect(args).toEqual([
       "--type-aware",
