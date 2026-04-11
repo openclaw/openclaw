@@ -473,6 +473,227 @@ You are on OpenShell v0.0.26+. Replace `*.com` style rules with concrete
 subdomain wildcards or explicit hostname lists. See the warning above
 under [Network policy](#network-policy).
 
+## Resilience after host reboot
+
+After a host power cycle or Docker daemon restart, K3s brings the sandbox
+pods back to `Ready` on its own — but the gateway process inside each
+sandbox does **not** auto-start on OpenShell v0.0.25. Native boot hooks
+are tracked in [NVIDIA/OpenShell#775](https://github.com/NVIDIA/OpenShell/pull/775)
+and land in a later release; until you are on a version that includes
+them, the fleet needs a host-side recovery path.
+
+### Failure modes you will actually see
+
+- **Sandbox pods `Ready`, gateways silent.** `openshell sandbox list` shows
+  every pod healthy, but `curl` against the forwarded port returns nothing
+  because the gateway inside never started.
+- **`openshell forward list` state desync.** The local state tracker can
+  show a stale `dead` entry for a sandbox whose pod has since been
+  respawned, or drop the entry entirely while the underlying tunnel is
+  gone. Treat `forward list` output as a hint, not ground truth, across a
+  reboot. (Worth filing upstream as a separate issue — the tracker should
+  reconcile against the live pod set on startup.)
+- **Orphan SSH tunnels holding the forward port.** An SSH tunnel from
+  before the power cycle can still be bound to the local forward port
+  long after the pod it served is gone. A fresh `openshell forward start`
+  then fails silently because the port is already in use. The symptom is
+  "forward start returns 0 but nothing is listening" — the giveaway is
+  that `ss -tln` still shows the port bound to a PID that no longer
+  belongs to openshell.
+
+### Manual recovery
+
+The diagnostic flow is always the same: verify the pod, verify the
+forward, verify the gateway process, fix whichever layer is broken.
+
+```bash
+# 1. Is the sandbox pod itself up?
+openshell sandbox list
+
+# 2. What does openshell think about the forward?
+openshell forward list
+
+# 3. Is anything else holding the forward port?
+ss -tln | grep <port>
+
+# 4. If ss shows an orphan SSH tunnel, kill it before restarting the forward
+kill <pid>
+
+# 5. Is the gateway process actually running inside the sandbox?
+openshell sandbox exec --name <sandbox> -- sh -lc 'pgrep -af openclaw-gateway'
+
+# 6. If the gateway is missing, launch it via the sandbox's start script
+openshell sandbox exec --name <sandbox> -- sh -lc \
+  'nohup bash /sandbox/<your-start-script.sh> > /tmp/start.log 2>&1 &'
+
+# 7. Reset the forward cleanly (stop first in case of a stale entry)
+openshell forward stop <port> <sandbox> || true
+openshell forward start <port> <sandbox> --background
+
+# 8. Verify end to end
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:<port>/health
+```
+
+A successful recovery prints `200` on the final curl. Anything else means
+one of the earlier steps was skipped or the gateway crashed again — check
+the start script log at `/tmp/start.log`.
+
+### Automated recovery with a host-side watchdog
+
+Driving that flow by hand after every reboot is not a plan. A small
+systemd **user** timer that runs a health-and-heal script every 60s keeps
+the fleet self-healing until native boot hooks land.
+
+The pattern has three pieces: the script, a oneshot service, and a timer
+that triggers the service.
+
+#### The watchdog script
+
+Place at `${HOME}/.local/bin/openshell-fleet-watchdog.sh` and make it
+executable (`chmod +x`).
+
+```bash
+#!/bin/bash
+# openshell-fleet-watchdog.sh — health-check + self-heal the sandbox fleet.
+#
+# Why this exists: on OpenShell v0.0.25, sandbox pods come back Ready after
+# a host power cycle but the gateway process inside does NOT auto-start.
+# NVIDIA/OpenShell#775 adds native sandbox boot hooks in a later release;
+# retire this watchdog once you are on a version that includes it.
+#
+# Each loop iteration:
+#   1. Fast path: curl the forwarded /health. If 200, done — no logs.
+#   2. Slow path: check the gateway process inside the sandbox; launch via
+#      the sandbox's start script if missing.
+#   3. Stop + restart the port forward (the state tracker desyncs across
+#      power cycles, leaving stale dead entries).
+#   4. Verify /health through the forward. Log only on recovery events.
+
+set -u
+export PATH="${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+LOG_FILE="${HOME}/.local/state/openshell-fleet-watchdog.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Fill this in for your fleet. Format: "<sandbox>:<port>:<launcher-name.sh>"
+# The launcher is the path under /sandbox that exports env vars and execs
+# the gateway (see "The launcher pattern" above).
+FLEET=(
+  "agent-a:8080:start-gateway.sh"
+  "agent-b:8081:start-gateway.sh"
+)
+
+log() {
+  echo "[$(date -uIs)] watchdog: $*" >> "$LOG_FILE"
+}
+
+check_sandbox() {
+  local name="$1"
+  local port="$2"
+  local launcher="$3"
+
+  # Fast path — happy case is silent.
+  if curl -sf -o /dev/null -m 3 "http://127.0.0.1:${port}/health"; then
+    return 0
+  fi
+
+  log "${name} /health failed on :${port}, starting recovery"
+
+  if ! openshell sandbox exec --name "$name" -- sh -lc 'pgrep -f openclaw-gateway > /dev/null' 2>/dev/null; then
+    log "${name} gateway process missing, launching ${launcher}"
+    openshell sandbox exec --name "$name" -- sh -lc \
+      "nohup bash /sandbox/${launcher} > /tmp/watchdog-start.log 2>&1 &" \
+      >/dev/null 2>&1
+    sleep 5
+  else
+    log "${name} gateway process alive, forward layer likely stale"
+  fi
+
+  openshell forward stop "$port" "$name" >/dev/null 2>&1 || true
+  sleep 1
+  if ! openshell forward start "$port" "$name" --background >/dev/null 2>&1; then
+    log "${name} forward start failed"
+    return 1
+  fi
+  sleep 3
+
+  if curl -sf -o /dev/null -m 3 "http://127.0.0.1:${port}/health"; then
+    log "${name} recovered"
+    return 0
+  else
+    log "${name} RECOVERY FAILED (gateway not responding on :${port} after restart)"
+    return 1
+  fi
+}
+
+rc=0
+for entry in "${FLEET[@]}"; do
+  IFS=: read -r name port launcher <<< "$entry"
+  check_sandbox "$name" "$port" "$launcher" || rc=1
+done
+exit $rc
+```
+
+A couple of design choices worth calling out:
+
+- The happy path is **silent**. Logging on every successful check fills
+  the log with noise that hides the one line you actually care about.
+- Recovery is **layered**: the cheapest fix (kick the forward) runs even
+  when the gateway process is alive, because the `forward list` desync is
+  the more common failure.
+- The log lives under `${HOME}/.local/state/` so it survives reboots but
+  does not pollute `/tmp`.
+
+#### The systemd user units
+
+Save as `${HOME}/.config/systemd/user/openshell-fleet-watchdog.service`:
+
+```ini
+[Unit]
+Description=OpenShell fleet watchdog (health-check and self-heal sandboxes)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/openshell-fleet-watchdog.sh
+Nice=10
+```
+
+And as `${HOME}/.config/systemd/user/openshell-fleet-watchdog.timer`:
+
+```ini
+[Unit]
+Description=Run the OpenShell fleet watchdog every 60 seconds
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=openshell-fleet-watchdog.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now openshell-fleet-watchdog.timer
+systemctl --user list-timers openshell-fleet-watchdog.timer
+```
+
+If you want the timer to run even when you are not logged in, enable
+lingering for the user with `loginctl enable-linger <user>`.
+
+### Upgrade path
+
+This host-side watchdog is a v0.0.25-era substitute for native sandbox
+boot hooks. [NVIDIA/OpenShell#775](https://github.com/NVIDIA/OpenShell/pull/775)
+adds sandbox boot hooks in a future release; once you are on a version
+that includes it, you can replace this watchdog with an in-sandbox boot
+hook that launches the gateway's start script directly on pod start, and
+retire the host-side timer entirely.
+
 ## Advanced: swapping the OpenShell supervisor binary
 
 When you are testing a custom OpenShell supervisor (for example to
