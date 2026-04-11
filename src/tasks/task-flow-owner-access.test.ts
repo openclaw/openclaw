@@ -9,6 +9,7 @@ import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flo
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
 beforeEach(() => {
+  resetTaskFlowRegistryForTests({ persist: false });
   configureTaskFlowRegistryRuntime({
     store: {
       loadSnapshot: () => ({ flows: new Map() }),
@@ -17,7 +18,6 @@ beforeEach(() => {
       deleteFlow: () => {},
     },
   });
-  resetTaskFlowRegistryForTests({ persist: false });
 });
 
 afterEach(() => {
