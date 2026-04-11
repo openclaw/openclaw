@@ -67,11 +67,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       };
     }
 
+    const doctorSummaryTimeoutMs =
+      typeof timeoutMs === "number" ? Math.max(1000, Math.min(timeoutMs, 60_000)) : undefined;
     const doctorSummary =
       result.status === "error"
         ? await runDoctorNonInteractiveSummary({
             cwd: result.root,
             entry: result.root ? `${result.root}/openclaw.mjs` : undefined,
+            timeoutMs: doctorSummaryTimeoutMs,
           })
         : null;
 

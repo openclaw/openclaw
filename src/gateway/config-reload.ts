@@ -7,9 +7,6 @@ import type {
   GatewayReloadMode,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { runDoctorNonInteractiveSummary } from "../infra/doctor-summary.js";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { formatDoctorNonInteractiveHint, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
 
@@ -98,7 +95,6 @@ export function startGatewayConfigReloader(opts: {
   let running = false;
   let stopped = false;
   let restartQueued = false;
-  let restartFailureDiagnosticsInFlight = false;
   let missingConfigRetries = 0;
   let pendingInProcessConfig: OpenClawConfig | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
@@ -130,41 +126,6 @@ export function startGatewayConfigReloader(opts: {
         // reloader alive and allow a future change to retry restart scheduling.
         restartQueued = false;
         opts.log.error(`config restart failed: ${String(err)}`);
-        if (restartFailureDiagnosticsInFlight) {
-          return;
-        }
-        restartFailureDiagnosticsInFlight = true;
-        try {
-          const root =
-            (await resolveOpenClawPackageRoot({
-              moduleUrl: import.meta.url,
-              argv1: process.argv[1],
-              cwd: process.cwd(),
-            })) ?? process.cwd();
-          const doctorSummary = await runDoctorNonInteractiveSummary({
-            cwd: root,
-            entry: `${root}/openclaw.mjs`,
-          });
-          if (stopped) {
-            return;
-          }
-          await writeRestartSentinel({
-            kind: "config-patch",
-            status: "error",
-            ts: Date.now(),
-            message: String(err),
-            doctorHint: formatDoctorNonInteractiveHint(),
-            doctorSummary,
-            stats: {
-              mode: "config.reload",
-              reason: String(err),
-            },
-          });
-        } catch {
-          // best effort only
-        } finally {
-          restartFailureDiagnosticsInFlight = false;
-        }
       }
     })();
   };

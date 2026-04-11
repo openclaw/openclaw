@@ -53,8 +53,10 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
+const runDoctorNonInteractiveSummaryMock = vi.fn(async () => "doctor summary");
+
 vi.mock("../../infra/doctor-summary.js", () => ({
-  runDoctorNonInteractiveSummary: vi.fn(async () => "doctor summary"),
+  runDoctorNonInteractiveSummary: runDoctorNonInteractiveSummaryMock,
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -96,6 +98,8 @@ beforeEach(() => {
   });
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  runDoctorNonInteractiveSummaryMock.mockClear();
+  runDoctorNonInteractiveSummaryMock.mockResolvedValue("doctor summary");
 });
 
 async function invokeUpdateRun(
@@ -200,5 +204,26 @@ describe("update.run restart scheduling", () => {
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
     expect(capturedPayload?.doctorSummary).toBe("doctor summary");
+  });
+
+  it("caps doctor summary timeout to the normalized request timeout", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      reason: "build-failed",
+      steps: [],
+      durationMs: 100,
+      root: "/tmp/openclaw",
+    });
+
+    await invokeUpdateRun({ timeoutMs: 1 });
+
+    expect(runDoctorNonInteractiveSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/openclaw",
+        entry: "/tmp/openclaw/openclaw.mjs",
+        timeoutMs: 1000,
+      }),
+    );
   });
 });
