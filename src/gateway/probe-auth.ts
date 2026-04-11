@@ -64,7 +64,7 @@ export function resolveGatewayProbeAuthSafe(params: {
     // Defensive: some secret ref resolutions intentionally degrade to "no auth"
     // for best-effort commands. In that case, still surface a warning so status
     // output doesn't misleadingly treat auth-less probes as generic timeouts.
-    const mode = params.cfg.gateway?.auth?.mode;
+    const mode = params.mode === "local" ? params.cfg.gateway?.auth?.mode : undefined;
     if (mode === "token") {
       const tokenCfg = (params.cfg.gateway?.auth as { token?: unknown } | undefined)?.token;
       if (!auth.token && tokenCfg && typeof tokenCfg === "object") {
