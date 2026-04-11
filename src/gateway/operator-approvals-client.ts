@@ -1,7 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+import {
+  resolveGatewayClientBootstrap,
+  resolveGatewayUrlOverrideSource,
+} from "./client-bootstrap.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+
+function trimToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
@@ -18,10 +27,32 @@ export async function createOperatorApprovalsGatewayClient(
     env: process.env,
   });
 
+  const gatewayUrlOverrideSource = resolveGatewayUrlOverrideSource(bootstrap.urlSource);
+  const isRemoteMode = params.config.gateway?.mode === "remote";
+  const remoteUrl = isRemoteMode ? trimToUndefined(params.config.gateway?.remote?.url) : undefined;
+  const useLocalTls =
+    params.config.gateway?.tls?.enabled === true &&
+    !gatewayUrlOverrideSource &&
+    !remoteUrl &&
+    bootstrap.url.startsWith("wss://");
+  const tlsRuntime = useLocalTls
+    ? await loadGatewayTlsRuntime(params.config.gateway?.tls)
+    : undefined;
+  const remoteTlsFingerprint =
+    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
+    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
+    // accidentally pinning against caller-supplied target URLs.
+    isRemoteMode && gatewayUrlOverrideSource !== "cli"
+      ? trimToUndefined(params.config.gateway?.remote?.tlsFingerprint)
+      : undefined;
+  const tlsFingerprint =
+    remoteTlsFingerprint || (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
+
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    tlsFingerprint,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,

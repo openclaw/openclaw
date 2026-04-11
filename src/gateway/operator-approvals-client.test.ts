@@ -51,8 +51,18 @@ class MockGatewayClient {
 vi.mock("./client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: vi.fn(async () => ({
     url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
     auth: { token: "secret", password: undefined },
   })),
+  resolveGatewayUrlOverrideSource: (urlSource: string) => {
+    if (urlSource === "cli --url") {
+      return "cli";
+    }
+    if (urlSource === "env OPENCLAW_GATEWAY_URL") {
+      return "env";
+    }
+    return undefined;
+  },
 }));
 
 vi.mock("./client.js", () => ({
