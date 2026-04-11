@@ -843,6 +843,9 @@ importers:
       '@microsoft/teams.apps':
         specifier: 2.0.7
         version: 2.0.7
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       express:
         specifier: ^5.2.1
         version: 5.2.1

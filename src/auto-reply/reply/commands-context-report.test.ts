@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -128,16 +129,19 @@ describe("buildContextReply", () => {
       contextTokens: 8_192,
       totalTokens: 111,
     });
-    params.sessionEntry = {
+    const sessionEntry = {
       ...params.sessionEntry,
+      sessionId: params.sessionEntry?.sessionId ?? "session-main",
+      updatedAt: params.sessionEntry?.updatedAt ?? 1,
       totalTokens: 111,
       totalTokensFresh: true,
       inputTokens: 100,
       outputTokens: 11,
-    };
+    } satisfies SessionEntry;
+    params.sessionEntry = sessionEntry;
     params.sessionStore = {
       [params.sessionKey]: {
-        ...params.sessionEntry,
+        ...sessionEntry,
         totalTokens: 900,
         totalTokensFresh: true,
         inputTokens: 700,
