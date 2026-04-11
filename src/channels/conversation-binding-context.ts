@@ -197,12 +197,19 @@ export function resolveConversationBindingContext(
     }),
   });
   if (focusedBinding?.conversationId) {
+    const focusedConversationId = normalizeOptionalString(focusedBinding.conversationId);
+    if (!focusedConversationId) {
+      return null;
+    }
+    const focusedParentConversationId = normalizeOptionalString(
+      focusedBinding.parentConversationId,
+    );
     return {
       channel,
       accountId,
-      conversationId: focusedBinding.conversationId,
-      ...(focusedBinding.parentConversationId
-        ? { parentConversationId: focusedBinding.parentConversationId }
+      conversationId: focusedConversationId,
+      ...(focusedParentConversationId
+        ? { parentConversationId: focusedParentConversationId }
         : {}),
       ...(threadId ? { threadId } : {}),
     };
