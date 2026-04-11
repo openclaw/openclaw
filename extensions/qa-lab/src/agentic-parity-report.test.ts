@@ -377,27 +377,26 @@ Follow-up:
   });
 
   it("renders a readable markdown parity report", () => {
+    // Cover the full 10-scenario parity pack on both sides so the pass
+    // verdict is not disrupted by required-scenario coverage failures
+    // added by the second-wave expansion.
+    const parityPassScenarios = [
+      { name: "Approval turn tool followthrough", status: "pass" as const },
+      { name: "Compaction retry after mutating tool", status: "pass" as const },
+      { name: "Model switch with tool continuity", status: "pass" as const },
+      { name: "Source and docs discovery report", status: "pass" as const },
+      { name: "Image understanding from attachment", status: "pass" as const },
+      { name: "Subagent handoff", status: "pass" as const },
+      { name: "Subagent fanout synthesis", status: "pass" as const },
+      { name: "Memory recall after context switch", status: "pass" as const },
+      { name: "Thread memory isolation", status: "pass" as const },
+      { name: "Config restart capability flip", status: "pass" as const },
+    ];
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
-      candidateSummary: {
-        scenarios: [
-          { name: "Approval turn tool followthrough", status: "pass" },
-          { name: "Compaction retry after mutating tool", status: "pass" },
-          { name: "Model switch with tool continuity", status: "pass" },
-          { name: "Source and docs discovery report", status: "pass" },
-          { name: "Image understanding from attachment", status: "pass" },
-        ],
-      },
-      baselineSummary: {
-        scenarios: [
-          { name: "Approval turn tool followthrough", status: "pass" },
-          { name: "Compaction retry after mutating tool", status: "pass" },
-          { name: "Model switch with tool continuity", status: "pass" },
-          { name: "Source and docs discovery report", status: "pass" },
-          { name: "Image understanding from attachment", status: "pass" },
-        ],
-      },
+      candidateSummary: { scenarios: parityPassScenarios },
+      baselineSummary: { scenarios: parityPassScenarios },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
 
