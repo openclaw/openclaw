@@ -67,17 +67,17 @@ describe("zai web search tool execution", () => {
   });
 
   it("returns missing_zai_api_key error when no credential is configured", async () => {
-    withEnv({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, async () => {
-      const provider = createZaiWebSearchProvider();
-      const tool = provider.createTool({ config: {} });
-      expect(tool).toBeTruthy();
-      if (!tool) {
-        throw new Error("expected tool");
-      }
+    vi.stubEnv("ZAI_API_KEY", "");
+    vi.stubEnv("Z_AI_API_KEY", "");
+    const provider = createZaiWebSearchProvider();
+    const tool = provider.createTool({ config: {} });
+    expect(tool).toBeTruthy();
+    if (!tool) {
+      throw new Error("expected tool");
+    }
 
-      await expect(tool.execute({ query: "OpenClaw AI" })).resolves.toMatchObject({
-        error: "missing_zai_api_key",
-      });
+    await expect(tool.execute({ query: "OpenClaw AI" })).resolves.toMatchObject({
+      error: "missing_zai_api_key",
     });
   });
 
