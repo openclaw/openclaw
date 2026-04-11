@@ -24,12 +24,11 @@ const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 // U+FFFD replacement characters and C0/C1 control characters that imsg injects when
-// extracting text from NSAttributedString (attributedBody column). Uses RegExp constructor
-// to keep Unicode escapes out of a regex literal (avoids no-control-regex). See: #61312, #61821
-const IMSG_GARBAGE_CHARS_RE = new RegExp(
-  "[\\ufffd\\ufffe\\uffff\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f]+",
-  "g",
-);
+// extracting text from NSAttributedString (attributedBody column). The pattern intentionally
+// matches control characters to strip garbage from echo cache keys. See: #61312, #61821
+// eslint-disable-next-line no-control-regex
+const IMSG_GARBAGE_CHARS_RE =
+  /[\ufffd\ufffe\uffff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
