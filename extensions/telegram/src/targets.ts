@@ -20,6 +20,10 @@ export function stripTelegramInternalPrefixes(to: string): string {
       if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
         return trimmed.replace(/^group:/i, "").trim();
       }
+      // Strip `slash:` prefix used by D0 TG proxy for callback command routing.
+      if (/^slash:/i.test(trimmed)) {
+        return trimmed.replace(/^slash:/i, "").trim();
+      }
       return trimmed;
     })();
     if (next === trimmed) {
