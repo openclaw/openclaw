@@ -924,13 +924,20 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      const mappedThinkingLevel = mapThinkingLevel(params.thinkLevel);
+      if (mappedThinkingLevel !== "off" && !params.model.reasoning) {
+        throw new Error(
+          `Embedded run resolved thinking level "${mappedThinkingLevel}" for non-reasoning model ${params.provider}/${params.modelId}; refusing to create session because pi-coding-agent would clamp it to "off".`,
+        );
+      }
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
         model: params.model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        thinkingLevel: mappedThinkingLevel,
         tools: builtInTools,
         customTools: allCustomTools,
         sessionManager,

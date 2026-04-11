@@ -99,6 +99,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         thinkLevel: "minimal",
+        model: expect.objectContaining({
+          reasoning: true,
+        }),
       }),
     );
   });

@@ -420,6 +420,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
         provider: "anthropic",
         contextWindow: 200000,
         api: "messages",
+        reasoning: true,
       },
       error: null,
       authStorage: {

@@ -42,6 +42,7 @@ type SessionManagerMocks = {
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: UnknownMock;
+  mapThinkingLevelMock: Mock<(level?: string) => string>;
   sessionManagerOpenMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
@@ -65,6 +66,7 @@ type AttemptSpawnWorkspaceHoisted = {
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
+  const mapThinkingLevelMock = vi.fn<(level?: string) => string>((level) => level ?? "off");
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
   const installToolResultContextGuardMock = vi.fn(() => () => {});
@@ -123,6 +125,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   return {
     spawnSubagentDirectMock,
     createAgentSessionMock,
+    mapThinkingLevelMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
     subscribeEmbeddedPiSessionMock,
@@ -514,7 +517,7 @@ vi.mock("../tool-split.js", () => ({
 
 vi.mock("../utils.js", () => ({
   describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  mapThinkingLevel: () => undefined,
+  mapThinkingLevel: (level?: string) => hoisted.mapThinkingLevelMock(level),
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
@@ -620,6 +623,7 @@ export function resetEmbeddedAttemptHarness(
     });
   }
   hoisted.createAgentSessionMock.mockReset();
+  hoisted.mapThinkingLevelMock.mockReset().mockImplementation((level?: string) => level ?? "off");
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.subscribeEmbeddedPiSessionMock
