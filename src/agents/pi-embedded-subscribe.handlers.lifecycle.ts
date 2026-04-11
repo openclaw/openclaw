@@ -43,6 +43,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+  const hadDeterministicSideEffect =
+    ctx.state.hadDeterministicSideEffect === true ||
+    (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
     lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
@@ -51,7 +56,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
   const derivedWorkingTerminalState = isError
     ? "blocked"
-    : replayInvalid && !hasAssistantVisibleText
+    : replayInvalid && !hasAssistantVisibleText && !hadDeterministicSideEffect
       ? "abandoned"
       : ctx.state.livenessState;
   const livenessState =

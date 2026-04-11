@@ -5,8 +5,8 @@ import {
 } from "../agents/plugin-text-transforms.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";

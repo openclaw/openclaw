@@ -297,8 +297,9 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && sessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
     const shouldSkip = cutoff
       ? shouldSkipMessageByAbortCutoff({
@@ -316,7 +317,7 @@ export async function handleInlineActions(params: {
       await (
         await import("./abort-cutoff.runtime.js")
       ).clearAbortCutoffInSessionRuntime({
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
         storePath,
@@ -350,9 +351,9 @@ export async function handleInlineActions(params: {
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
       storePath,
       provider,
@@ -389,7 +390,7 @@ export async function handleInlineActions(params: {
         allowed: elevatedAllowed,
         failures: elevatedFailures,
       },
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,

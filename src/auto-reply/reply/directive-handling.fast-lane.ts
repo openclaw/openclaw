@@ -57,7 +57,9 @@ export async function applyInlineDirectivesFastLane(
   } = await resolveCurrentDirectiveLevels({
     sessionEntry,
     agentCfg,
-    resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    resolveDefaultThinkingLevel: directives.hasThinkDirective
+      ? () => modelState.resolveDefaultThinkingLevel()
+      : async () => undefined,
   });
 
   const directiveAck = await handleDirectiveOnly({

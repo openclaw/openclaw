@@ -392,8 +392,13 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
         sessionKey: params.sessionKey,
         config: params.cfg,
       })
-    : params.agentId;
-  const modelsAgentDir = modelsAgentId ? resolveAgentDir(params.cfg, modelsAgentId) : undefined;
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const modelsAgentDir =
+    modelsAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, modelsAgentId);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
@@ -402,7 +407,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
     agentId: modelsAgentId,
     agentDir: modelsAgentDir,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: targetSessionEntry,
   });
   if (!reply) {
     return null;

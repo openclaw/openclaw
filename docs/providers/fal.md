@@ -69,6 +69,8 @@ The bundled `fal` video-generation provider defaults to
 
 - Modes: text-to-video and single-image reference flows
 - Runtime: queue-backed submit/status/result flow for long-running jobs
+- HeyGen video-agent model ref:
+  - `fal/fal-ai/heygen/v2/video-agent`
 - Seedance 2.0 model refs:
   - `fal/bytedance/seedance-2.0/fast/text-to-video`
   - `fal/bytedance/seedance-2.0/fast/image-to-video`
@@ -83,6 +85,20 @@ To use Seedance 2.0 as the default video model:
     defaults: {
       videoGenerationModel: {
         primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+      },
+    },
+  },
+}
+```
+
+To use HeyGen video-agent as the default video model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "fal/fal-ai/heygen/v2/video-agent",
       },
     },
   },

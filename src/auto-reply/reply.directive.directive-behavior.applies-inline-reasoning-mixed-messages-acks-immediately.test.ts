@@ -1,5 +1,5 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
@@ -9,8 +9,7 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-
-let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+import { getReplyFromConfig } from "./reply.js";
 
 async function runThinkDirectiveAndGetText(home: string): Promise<string | undefined> {
   const res = await getReplyFromConfig(
@@ -26,10 +25,6 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
-
-  beforeAll(async () => {
-    ({ getReplyFromConfig } = await import("./reply.js"));
-  });
 
   it("handles standalone verbose directives and persistence", async () => {
     await withTempHome(async (home) => {

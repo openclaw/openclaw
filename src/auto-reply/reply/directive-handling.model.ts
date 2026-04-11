@@ -238,7 +238,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       currentModel: `${params.provider}/${params.model}`,
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
     });
     return reply ?? { text: "No models available." };
   }
@@ -358,4 +358,14 @@ export async function maybeHandleModelDirectiveInfo(params: {
     }
   }
   return { text: lines.join("\n") };
+}
+
+function isCompleteSessionEntry(
+  entry: Pick<SessionEntry, "modelProvider" | "model"> | undefined,
+): entry is SessionEntry {
+  return Boolean(
+    entry &&
+    typeof (entry as Partial<SessionEntry>).sessionId === "string" &&
+    typeof (entry as Partial<SessionEntry>).updatedAt === "number",
+  );
 }

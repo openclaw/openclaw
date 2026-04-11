@@ -55,7 +55,7 @@ vi.mock("./commands-system-prompt.js", () => ({
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return {
+  const mockedFs = {
     ...actual,
     existsSync: hoisted.existsSyncMock,
     mkdirSync: hoisted.mkdirSyncMock,
@@ -66,6 +66,10 @@ vi.mock("node:fs", async () => {
       }
       return "";
     }),
+  };
+  return {
+    ...mockedFs,
+    default: mockedFs,
   };
 });
 

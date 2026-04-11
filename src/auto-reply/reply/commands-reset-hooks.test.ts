@@ -255,4 +255,36 @@ describe("handleCommands reset hooks", () => {
       }),
     );
   });
+
+  it("prefers the target session entry when emitting reset hooks", async () => {
+    const params = buildResetParams(
+      "/reset",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    );
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+    } as HandleCommandsParams["sessionEntry"];
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+
+    await maybeHandleResetCommand(params);
+
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "target-session",
+          }),
+        }),
+      }),
+    );
+  });
 });

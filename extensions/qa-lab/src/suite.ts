@@ -86,11 +86,13 @@ export type QaSuiteRunParams = {
   concurrency?: number;
 };
 
-async function startQaLabServerRuntime(
-  params?: QaLabServerStartParams,
-): Promise<QaLabServerHandle> {
-  const { startQaLabServer } = await import("./lab-server.js");
-  return await startQaLabServer(params);
+function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
+  if (startLab) {
+    return startLab;
+  }
+  throw new Error(
+    "QA suite requires startLab when no lab handle is provided; use the runtime launcher or pass startLab explicitly.",
+  );
 }
 
 const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -1402,7 +1404,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
     const ownsLab = !params?.lab;
-    const startLab = params?.startLab ?? startQaLabServerRuntime;
+    const startLab = requireQaSuiteStartLab(params?.startLab);
     const lab =
       params?.lab ??
       (await startLab({
@@ -1452,6 +1454,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
               concurrency: 1,
+              startLab,
             });
             const scenarioResult: QaSuiteScenarioResult =
               result.scenarios[0] ??
@@ -1547,10 +1550,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   }
 
   const ownsLab = !params?.lab;
-  const startLab = params?.startLab ?? startQaLabServerRuntime;
+  const startLab = params?.startLab;
   const lab =
     params?.lab ??
-    (await startLab({
+    (await requireQaSuiteStartLab(startLab)({
       repoRoot,
       host: "127.0.0.1",
       port: 0,

@@ -227,4 +227,34 @@ describe("handleBtwCommand", () => {
       reply: { text: "resolved fallback", btw: { question: "what changed?" } },
     });
   });
+
+  it("prefers the target session entry for side-question context", async () => {
+    const params = buildParams("/btw what changed?");
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      "agent:worker-1:whatsapp:direct:12345": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "target context", btw: { question: "what changed?" } },
+    });
+  });
 });

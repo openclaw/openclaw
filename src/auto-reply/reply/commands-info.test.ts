@@ -221,6 +221,41 @@ describe("info command handlers", () => {
     );
   });
 
+  it("prefers the target session entry when routing /status", async () => {
+    const params = buildInfoParams(
+      "/status",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    );
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      parentSessionKey: "wrapper-parent",
+    } as HandleCommandsParams["sessionEntry"];
+    params.sessionStore = {
+      "agent:main:whatsapp:direct:12345": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        parentSessionKey: "target-parent",
+      },
+    };
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+          parentSessionKey: "target-parent",
+        }),
+        parentSessionKey: "target-parent",
+      }),
+    );
+  });
+
   it("uses the canonical target session agent when listing /commands", async () => {
     const { handleCommandsListCommand } = await import("./commands-info.js");
     const params = buildInfoParams("/commands", {

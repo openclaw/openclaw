@@ -22,6 +22,7 @@ import type {
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_QUEUE_BASE_URL = "https://queue.fal.run";
 const DEFAULT_FAL_VIDEO_MODEL = "fal-ai/minimax/video-01-live";
+const HEYGEN_VIDEO_AGENT_MODEL = "fal-ai/heygen/v2/video-agent";
 const SEEDANCE_2_VIDEO_MODELS = [
   "bytedance/seedance-2.0/fast/text-to-video",
   "bytedance/seedance-2.0/fast/image-to-video",
@@ -126,6 +127,10 @@ function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
 }
 
+function isFalHeyGenVideoAgentModel(model: string): boolean {
+  return normalizeLowercaseStringOrEmpty(model) === HEYGEN_VIDEO_AGENT_MODEL;
+}
+
 function resolveFalResolution(resolution: VideoGenerationRequest["resolution"], model: string) {
   if (!resolution) {
     return undefined;
@@ -168,7 +173,7 @@ function buildFalVideoRequestBody(params: {
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  if (isFalMiniMaxLiveModel(params.model)) {
+  if (isFalMiniMaxLiveModel(params.model) || isFalHeyGenVideoAgentModel(params.model)) {
     return requestBody;
   }
   const aspectRatio = normalizeOptionalString(params.req.aspectRatio);
@@ -285,6 +290,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
     defaultModel: DEFAULT_FAL_VIDEO_MODEL,
     models: [
       DEFAULT_FAL_VIDEO_MODEL,
+      HEYGEN_VIDEO_AGENT_MODEL,
       ...SEEDANCE_2_VIDEO_MODELS,
       "fal-ai/kling-video/v2.1/master/text-to-video",
       "fal-ai/wan/v2.2-a14b/text-to-video",

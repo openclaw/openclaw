@@ -14,7 +14,7 @@ import type {
   SessionBindingCapabilities,
   SessionBindingRecord,
   SessionBindingUnbindInput,
-} from "./session-binding-service.js";
+} from "./session-binding.types.js";
 
 type PersistedCurrentConversationBindingsFile = {
   version: 1;
