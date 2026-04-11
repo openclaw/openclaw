@@ -194,18 +194,27 @@ describe("mistral speech provider", () => {
     ).toBe(false);
   });
 
-  it("treats no cfg-level Mistral metadata as TTS-ready for auth-store-only credentials", () => {
-    // When cfg has no Mistral profiles and no Mistral auth.order entry,
-    // resolveApiKeyForProvider falls through to the auth store. isConfigured
-    // must return true so the provider is not skipped for users whose only
-    // credentials live in auth-profiles.json.
+  it("does not treat absent cfg-level Mistral metadata as TTS-ready", () => {
+    // No explicit auth signal means isConfigured returns false. The "none" case
+    // is not treated as a positive signal — credentials may exist in the auth
+    // store but that is resolved at synthesis time, not here.
     expect(
       provider.isConfigured({
         cfg: {} as never,
         providerConfig: {},
         timeoutMs: 5000,
       }),
-    ).toBe(true);
+    ).toBe(false);
+
+    // Same when cfg is undefined — callers that omit cfg (e.g. getTtsProvider)
+    // must not see Mistral as auto-selectable without a real auth signal.
+    expect(
+      provider.isConfigured({
+        cfg: undefined as never,
+        providerConfig: {},
+        timeoutMs: 5000,
+      }),
+    ).toBe(false);
   });
 
   it("reuses the Mistral model provider baseUrl when no TTS override is configured", () => {

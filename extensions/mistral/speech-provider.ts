@@ -58,9 +58,9 @@ function findMistralModelProviderConfig(cfg?: OpenClawConfig): Record<string, un
  *   credentials will be tried regardless of what auth.profiles contains.
  * - "configured": auth.order has a non-empty Mistral entry, or auth.profiles
  *   contains at least one Mistral profile.
- * - "none": no cfg-level Mistral metadata at all. resolveApiKeyForProvider will
- *   fall through to the auth store (auth-profiles.json), so the provider should
- *   be considered potentially configured.
+ * - "none": no cfg-level Mistral metadata at all (including when cfg is undefined).
+ *   Not treated as a positive signal for isConfigured; credentials may still
+ *   exist in the auth store but that is resolved at synthesis time.
  */
 function resolveMistralCfgAuthKind(cfg?: OpenClawConfig): "empty-order" | "configured" | "none" {
   const order = asObject(cfg?.auth?.order);
@@ -396,7 +396,7 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
         Boolean(config.apiKey) ||
         Boolean(trimToUndefined(process.env.MISTRAL_API_KEY)) ||
         hasConfiguredSecret(findMistralModelProviderConfig(cfg)?.apiKey) ||
-        resolveMistralCfgAuthKind(cfg) !== "empty-order"
+        resolveMistralCfgAuthKind(cfg) === "configured"
       );
     },
     synthesizeTelephony: async (req) => {
