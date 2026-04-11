@@ -54,10 +54,10 @@ export type PluginRuntimeCore = {
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
-      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
-      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
-      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
+      saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {

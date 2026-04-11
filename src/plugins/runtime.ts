@@ -6,6 +6,10 @@ import {
   type RegistrySurfaceState,
 } from "./runtime-state.js";
 
+function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
+  return registry as PluginRegistry | null;
+}
+
 const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
     [PLUGIN_REGISTRY_STATE]?: RegistryState;
@@ -85,7 +89,7 @@ export function setActivePluginRegistry(
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
-  return state.activeRegistry;
+  return asPluginRegistry(state.activeRegistry);
 }
 
 export function getActivePluginRegistryWorkspaceDir(): string | undefined {
@@ -114,7 +118,7 @@ export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) 
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
-  return state.httpRoute.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.httpRoute.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginHttpRouteRegistryVersion(): number {
@@ -163,7 +167,7 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
  *  When pinned, this returns the startup registry regardless of subsequent
  *  `setActivePluginRegistry` calls. */
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return state.channel.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.channel.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginChannelRegistryVersion(): number {
