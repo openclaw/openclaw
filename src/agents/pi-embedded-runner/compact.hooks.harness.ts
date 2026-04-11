@@ -273,10 +273,10 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
-    AuthStorage: class AuthStorage {},
-    ModelRegistry: class ModelRegistry {},
+    AuthStorage: function AuthStorage() {},
+    ModelRegistry: function ModelRegistry() {},
     createAgentSession: createAgentSessionMock,
-    DefaultResourceLoader: class DefaultResourceLoader {},
+    DefaultResourceLoader: function DefaultResourceLoader() {},
     SessionManager: {
       open: vi.fn(() => ({})),
     },

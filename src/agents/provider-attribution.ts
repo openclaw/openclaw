@@ -1,4 +1,5 @@
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
@@ -481,11 +482,21 @@ export function applyProviderAttributionHeadersToModel<
   if (!attributionHeaders || Object.keys(attributionHeaders).length === 0) {
     return model;
   }
+  const protectedAttributionKeys = new Set(
+    Object.keys(attributionHeaders).map((key) => normalizeLowercaseStringOrEmpty(key)),
+  );
+  const unprotectedModelHeaders = model.headers
+    ? Object.fromEntries(
+        Object.entries(model.headers).filter(
+          ([key]) => !protectedAttributionKeys.has(normalizeLowercaseStringOrEmpty(key)),
+        ),
+      )
+    : undefined;
   return {
     ...model,
     headers: {
+      ...unprotectedModelHeaders,
       ...attributionHeaders,
-      ...model.headers,
     },
   };
 }
