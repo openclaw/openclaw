@@ -7,7 +7,7 @@ import {
 } from "../../bindings/records.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
@@ -42,8 +42,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  normalizeTtsAutoMode,
+  resolveConfiguredTtsMode,
+  shouldAttemptTtsPayload,
+} from "../../tts/tts-config.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import {
@@ -94,6 +98,9 @@ function loadTtsRuntime() {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (!shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto })) {
+    return params.payload;
+  }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   return maybeApplyTtsToPayload(params);
 }
@@ -283,7 +290,7 @@ export async function dispatchReplyFromConfig(params: {
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
   const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
+    ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -310,7 +317,22 @@ export async function dispatchReplyFromConfig(params: {
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
-  const routeReplyRuntime = await loadRouteReplyRuntime();
+  const normalizedOriginatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
+  const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
+  const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
+  const isInternalWebchatTurn =
+    normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
+    ctx.ExplicitDeliverRoute !== true;
+  const hasRouteReplyCandidate = Boolean(
+    !suppressAcpChildUserDelivery &&
+    !isInternalWebchatTurn &&
+    normalizedOriginatingChannel &&
+    ctx.OriginatingTo &&
+    normalizedOriginatingChannel !== normalizedCurrentSurface,
+  );
+  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
     resolveReplyRoutingDecision({
       provider: ctx.Provider,
@@ -319,7 +341,7 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel: ctx.OriginatingChannel,
       originatingTo: ctx.OriginatingTo,
       suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-      isRoutableChannel: routeReplyRuntime.isRoutableChannel,
+      isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
     });
   const originatingTo = ctx.OriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
@@ -343,7 +365,7 @@ export async function dispatchReplyFromConfig(params: {
     if (abortSignal?.aborted) {
       return;
     }
-    const result = await routeReplyRuntime.routeReply({
+    const result = await routeReplyRuntime!.routeReply({
       payload,
       channel: originatingChannel,
       to: originatingTo,
@@ -370,7 +392,7 @@ export async function dispatchReplyFromConfig(params: {
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
     if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-      const result = await routeReplyRuntime.routeReply({
+      const result = await routeReplyRuntime!.routeReply({
         payload,
         channel: originatingChannel,
         to: originatingTo,
@@ -1025,7 +1047,7 @@ export async function dispatchReplyFromConfig(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReplyRuntime.routeReply({
+            const result = await routeReplyRuntime!.routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,
               to: originatingTo,
