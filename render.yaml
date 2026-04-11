@@ -17,6 +17,8 @@ services:
         value: /tmp/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
+      - key: OPENCLAW_GATEWAY_CONTROL_UI_DANGEROUSLY_ALLOW_HOST_HEADER_ORIGIN_FALLBACK
+        value: "true"
       # ADD ANY OTHER MISSING KEYS HERE:
       # - key: DATABASE_URL
       #   value: your_db_url_here
