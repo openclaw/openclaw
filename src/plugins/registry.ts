@@ -63,6 +63,7 @@ import type {
   PluginReloadRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginTextTransformsRegistration,
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -136,6 +137,7 @@ export type {
   PluginReloadRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginTextTransformsRegistration,
   PluginToolRegistration,
   PluginSpeechProviderRegistration,
   PluginRealtimeTranscriptionProviderRegistration,
@@ -612,6 +614,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       rootDir: record.rootDir,
     });
     record.cliBackendIds.push(id);
+  };
+
+  const registerTextTransforms = (
+    record: PluginRecord,
+    transforms: PluginTextTransformsRegistration["transforms"],
+  ) => {
+    if (
+      (!transforms.input || transforms.input.length === 0) &&
+      (!transforms.output || transforms.output.length === 0)
+    ) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "text transform registration has no input or output replacements",
+      });
+      return;
+    }
+    registry.textTransforms.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      transforms,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
   };
 
   const registerUniqueProviderLike = <
@@ -1151,6 +1178,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
+              registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
               registerSecurityAuditCollector: (collector) =>
@@ -1394,6 +1422,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerProvider,
     registerAgentHarness,
     registerCliBackend,
+    registerTextTransforms,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,

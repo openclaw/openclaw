@@ -122,4 +122,33 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
     expect(result.text).not.toContain("~645 tok");
   });
+
+  it("prefers the target session entry from sessionStore for cached context stats", async () => {
+    const params = makeParams("/context detail", false, {
+      contextTokens: 8_192,
+      totalTokens: 111,
+    });
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      totalTokens: 111,
+      totalTokensFresh: true,
+      inputTokens: 100,
+      outputTokens: 11,
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        ...params.sessionEntry,
+        totalTokens: 900,
+        totalTokensFresh: true,
+        inputTokens: 700,
+        outputTokens: 200,
+      },
+    };
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Actual context usage (cached): 900 tok");
+    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+  });
 });

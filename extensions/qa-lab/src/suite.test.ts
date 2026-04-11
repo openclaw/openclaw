@@ -188,13 +188,12 @@ describe("qa suite failure reply handling", () => {
       () =>
         state
           .getSnapshot()
-          .messages.filter(
+          .messages.findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("ALPHA-7"),
-          )
-          .at(-1),
+          ),
       5_000,
       10,
     );
@@ -236,13 +235,12 @@ describe("qa suite failure reply handling", () => {
         state
           .getSnapshot()
           .messages.slice(3)
-          .filter(
+          .findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("mission"),
-          )
-          .at(-1),
+          ),
       150,
       10,
     );

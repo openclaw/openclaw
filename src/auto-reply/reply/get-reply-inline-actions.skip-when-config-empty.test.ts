@@ -216,8 +216,47 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
+    expect(buildStatusReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: undefined,
+      }),
+    );
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalled();
+  });
+
+  it("preserves storePath when routing inline status through the shared status builder", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/status",
+      CommandBody: "/status",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: stripInlineStatus("/status").cleaned,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/status",
+          commandBodyNormalized: "/status",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          storePath: "/tmp/inline-status-store.json",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: undefined });
+    expect(buildStatusReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/inline-status-store.json",
+      }),
+    );
+    expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
   it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {

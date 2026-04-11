@@ -265,13 +265,14 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionAgentId = params.sessionKey
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
       : params.agentId;
     const sessionSummary = await loadSessionCostSummary({
-      sessionId: params.sessionEntry?.sessionId,
-      sessionEntry: params.sessionEntry,
-      sessionFile: params.sessionEntry?.sessionFile,
+      sessionId: targetSessionEntry?.sessionId,
+      sessionEntry: targetSessionEntry,
+      sessionFile: targetSessionEntry?.sessionFile,
       config: params.cfg,
       agentId: sessionAgentId,
     });

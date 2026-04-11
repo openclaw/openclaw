@@ -281,6 +281,24 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
   });
 
+  it("uses the active agent context for legacy /model list replies", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model list"),
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
+          list: [{ id: "support", model: "localai/ultra-chat" }],
+        },
+      } as unknown as OpenClawConfig,
+      activeAgentId: "support",
+      agentDir: TEST_AGENT_DIR,
+    });
+
+    expect(reply?.text).toContain("Providers:");
+    expect(reply?.text).toContain("localai");
+  });
+
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;

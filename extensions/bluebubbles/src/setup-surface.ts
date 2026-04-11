@@ -83,7 +83,9 @@ function validateBlueBubblesServerUrlInput(value: unknown): string | undefined {
   }
   try {
     const normalized = normalizeBlueBubblesServerUrl(trimmed);
-    new URL(normalized);
+    if (!URL.canParse(normalized)) {
+      return "Invalid URL format";
+    }
     return undefined;
   } catch {
     return "Invalid URL format";

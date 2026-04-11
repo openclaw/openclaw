@@ -37,7 +37,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
     : params.agentId;
   const agentDir =
-    params.agentDir ?? (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined);
+    (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
 
   if (!agentDir) {
     return {

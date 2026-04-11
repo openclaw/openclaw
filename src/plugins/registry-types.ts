@@ -33,6 +33,7 @@ import type {
   PluginKind,
   PluginLogger,
   PluginOrigin,
+  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -101,6 +102,14 @@ export type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
   backend: CliBackendPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginTextTransformsRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  transforms: PluginTextTransformRegistration;
   source: string;
   rootDir?: string;
 };
@@ -259,6 +268,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
+  textTransforms: PluginTextTransformsRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
