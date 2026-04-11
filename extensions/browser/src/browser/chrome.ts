@@ -336,6 +336,12 @@ export async function launchOpenClawChrome(
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
+        // On Linux (including WSL2), non-headless Chrome requires a DISPLAY.
+        // Fall back to :0 when the environment doesn't set one, which is the
+        // standard default for most X11/Xwayland setups.
+        ...(process.platform === "linux" && !resolved.headless && !process.env.DISPLAY
+          ? { DISPLAY: ":0" }
+          : {}),
       },
     }) as unknown as ChildProcessWithoutNullStreams;
   };
