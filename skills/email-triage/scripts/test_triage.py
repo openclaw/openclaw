@@ -122,6 +122,44 @@ class TestState(TestCase):
         self.assertEqual(state["cursor"]["last_ingested_id"], 0)
         self.assertEqual(state["pending_attention"], [])
 
+    def test_get_state_pending_filters_non_dict_entries(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump(
+                {
+                    "cursor": {"last_ingested_id": 0},
+                    "pending_attention": [
+                        {"id": 1, "status": "pending"},
+                        1,
+                        "not a dict",
+                        None,
+                        [1, 2],
+                        {"id": 2, "status": "pending"},
+                    ],
+                },
+                f,
+            )
+        state = triage.get_state()
+        self.assertEqual([i["id"] for i in state["pending_attention"]], [1, 2])
+
+    def test_get_state_pending_filters_dict_without_id(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump(
+                {
+                    "cursor": {"last_ingested_id": 0},
+                    "pending_attention": [
+                        {},
+                        {"subject": "no id"},
+                        {"id": 5, "subject": "ok"},
+                    ],
+                },
+                f,
+            )
+        state = triage.get_state()
+        self.assertEqual(len(state["pending_attention"]), 1)
+        self.assertEqual(state["pending_attention"][0]["id"], 5)
+
     def test_save_state_bare_filename(self):
         """save_state should work when STATE_PATH has no directory component."""
         bare_path = os.path.join(self.tmpdir, "state.json")

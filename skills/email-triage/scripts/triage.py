@@ -60,6 +60,8 @@ def get_state():
         pending = data.get("pending_attention")
         if not isinstance(pending, list):
             pending = []
+        else:
+            pending = [item for item in pending if isinstance(item, dict) and "id" in item]
         return {"cursor": cursor, "pending_attention": pending}
     return _make_default_state()
 
