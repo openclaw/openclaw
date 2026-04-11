@@ -15,7 +15,7 @@ assets:
 # You.com Tools
 
 You.com provides three complementary tools for web search and research.
-All tools require `YDC_API_KEY`.
+`web_search` works without an API key (free tier, rate-limited). `web_research` and `web_contents` require `YDC_API_KEY`.
 
 JSON schemas for all API parameters and responses are in the [assets](assets/) directory.
 
