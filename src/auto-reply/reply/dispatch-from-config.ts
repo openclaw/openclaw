@@ -357,15 +357,15 @@ export async function dispatchReplyFromConfig(params: {
     abortSignal?: AbortSignal,
     mirror?: boolean,
   ): Promise<void> => {
-    // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
-    // but they're guaranteed non-null when this function is called.
-    if (!originatingChannel || !originatingTo) {
+    // Keep the runtime guard explicit because this helper is called from nested
+    // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
+    if (!routeReplyRuntime || !originatingChannel || !originatingTo) {
       return;
     }
     if (abortSignal?.aborted) {
       return;
     }
-    const result = await routeReplyRuntime!.routeReply({
+    const result = await routeReplyRuntime.routeReply({
       payload,
       channel: originatingChannel,
       to: originatingTo,
@@ -391,8 +391,8 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-      const result = await routeReplyRuntime!.routeReply({
+    if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
+      const result = await routeReplyRuntime.routeReply({
         payload,
         channel: originatingChannel,
         to: originatingTo,
@@ -551,8 +551,8 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime!.routeReply({
+      if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
+        const result = await routeReplyRuntime.routeReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
@@ -612,8 +612,8 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime!.routeReply({
+      if (shouldRouteToOriginating && routeReplyRuntime && originatingChannel && originatingTo) {
+        const result = await routeReplyRuntime.routeReply({
           payload: ttsPayload,
           channel: originatingChannel,
           to: originatingTo,
@@ -1046,8 +1046,13 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReplyRuntime!.routeReply({
+          if (
+            shouldRouteToOriginating &&
+            routeReplyRuntime &&
+            originatingChannel &&
+            originatingTo
+          ) {
+            const result = await routeReplyRuntime.routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,
               to: originatingTo,
