@@ -7,6 +7,17 @@ let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
 let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
 let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
 
+// Keep this list in sync with the channels referenced by the test cases below
+// so normalizeAnyChannelId(...) (which is now called transitively from
+// resolveMessagingTarget -> normalizeTargetForProvider) can resolve them.
+const TEST_REGISTERED_CHANNEL_PLUGIN_ENTRIES = [
+  { plugin: { id: "discord", meta: { aliases: [], markdownCapable: true } } },
+  { plugin: { id: "imessage", meta: { aliases: [], markdownCapable: false } } },
+  { plugin: { id: "mattermost", meta: { aliases: [], markdownCapable: true } } },
+  { plugin: { id: "slack", meta: { aliases: [], markdownCapable: true } } },
+  { plugin: { id: "telegram", meta: { aliases: [], markdownCapable: true } } },
+];
+
 const mocks = vi.hoisted(() => ({
   listPeers: vi.fn(),
   listPeersLive: vi.fn(),
@@ -14,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getActivePluginChannelRegistry: vi.fn(),
+  getActivePluginRegistry: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
@@ -23,6 +36,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistry: () => mocks.getActivePluginChannelRegistry(),
+  getActivePluginRegistry: () => mocks.getActivePluginRegistry(),
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
 }));
 
@@ -38,7 +53,15 @@ beforeEach(() => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
+  mocks.getActivePluginChannelRegistry.mockReset();
+  mocks.getActivePluginRegistry.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
+  mocks.getActivePluginChannelRegistry.mockReturnValue({
+    channels: TEST_REGISTERED_CHANNEL_PLUGIN_ENTRIES,
+  });
+  mocks.getActivePluginRegistry.mockReturnValue({
+    channels: TEST_REGISTERED_CHANNEL_PLUGIN_ENTRIES,
+  });
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   resetDirectoryCache();
 });
