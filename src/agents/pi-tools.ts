@@ -1,4 +1,11 @@
-import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import {
+  codingTools,
+  createReadTool,
+  findTool,
+  grepTool,
+  lsTool,
+  readTool,
+} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
@@ -492,6 +499,11 @@ export function createOpenClawCodingTools(options?: {
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
+    // File discovery tools: find (glob), grep, ls — needed so the agent loop can
+    // dispatch Claude Code's Glob/Grep/LS tool calls via the transport alias map.
+    findTool as unknown as AnyAgentTool,
+    grepTool as unknown as AnyAgentTool,
+    lsTool as unknown as AnyAgentTool,
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
