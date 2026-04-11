@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export type DispatchFromConfigResult = {
