@@ -191,6 +191,8 @@ type SaveSessionStoreOptions = {
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
   /** Optional overrides used by maintenance commands. */
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
 function updateSessionStoreWriteCaches(params: {
@@ -280,7 +282,9 @@ async function saveSessionStoreUnlocked(
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
-    const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const maintenance = opts?.maintenanceConfig
+      ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
+      : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 

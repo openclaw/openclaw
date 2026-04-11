@@ -128,6 +128,8 @@ vi.mock("../agents/auth-profiles/session-override.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => undefined,
+  initializeGlobalHookRunner: vi.fn(),
+  resetGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({

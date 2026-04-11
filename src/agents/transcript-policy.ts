@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
 import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";

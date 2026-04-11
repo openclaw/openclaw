@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: () => undefined,
+}));
 
 describe("resolveAgentScopedOutboundMediaAccess", () => {
   it("preserves caller-provided workspaceDir from mediaAccess", () => {
