@@ -154,11 +154,11 @@ function notifySubscriberKey(subscriber: {
   accountId?: string;
   messageThreadId?: string | number;
 }): string {
-  return [
+  return JSON.stringify([
     subscriber.to,
     subscriber.accountId ?? "",
     normalizeNotifyThreadKey(subscriber.messageThreadId),
-  ].join("|");
+  ]);
 }
 
 function normalizeNotifyThreadKey(messageThreadId?: string | number): string {

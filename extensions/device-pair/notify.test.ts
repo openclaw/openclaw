@@ -85,4 +85,70 @@ describe("device-pair notify persistence", () => {
     ) as { subscribers: unknown[] };
     expect(persisted.subscribers).toEqual([]);
   });
+
+  it("does not remove a different persisted subscriber when notify fields contain pipes", async () => {
+    await fs.writeFile(
+      path.join(stateDir, "device-pair-notify.json"),
+      JSON.stringify(
+        {
+          subscribers: [
+            {
+              to: "chat|123",
+              accountId: "acct",
+              mode: "persistent",
+              addedAtMs: 1,
+            },
+            {
+              to: "chat",
+              accountId: "123|acct",
+              mode: "persistent",
+              addedAtMs: 2,
+            },
+          ],
+          notifiedRequestIds: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const api = createTestPluginApi({
+      runtime: {
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+      } as never,
+    });
+
+    await handleNotifyCommand({
+      api,
+      ctx: {
+        channel: "telegram",
+        senderId: "chat",
+        accountId: "123|acct",
+      },
+      action: "off",
+    });
+
+    const status = await handleNotifyCommand({
+      api,
+      ctx: {
+        channel: "telegram",
+        senderId: "chat",
+        accountId: "123|acct",
+      },
+      action: "status",
+    });
+    expect(status.text).toContain("Pair request notifications: disabled for this chat.");
+
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
+    ) as { subscribers: Array<{ to: string; accountId?: string }> };
+    expect(persisted.subscribers).toHaveLength(1);
+    expect(persisted.subscribers[0]).toMatchObject({
+      to: "chat|123",
+      accountId: "acct",
+    });
+  });
 });
