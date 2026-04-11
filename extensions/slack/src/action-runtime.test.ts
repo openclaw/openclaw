@@ -52,6 +52,9 @@ describe("handleSlackAction", () => {
   function expectLastSlackSend(content: string, threadTs?: string) {
     expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", content, {
       mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs,
       blocks: undefined,
     });
@@ -190,6 +193,9 @@ describe("handleSlackAction", () => {
     );
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
       mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs: "1234567890.123456",
       blocks: undefined,
     });
@@ -291,6 +297,9 @@ describe("handleSlackAction", () => {
     );
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
       mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs: undefined,
       blocks: expectedBlocks,
     });
@@ -346,6 +355,9 @@ describe("handleSlackAction", () => {
 
     expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
       mediaUrl: "/tmp/report.png",
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs: "111.222",
       uploadFileName: "report-final.png",
       uploadTitle: "Report Final",
@@ -495,6 +507,9 @@ describe("handleSlackAction", () => {
     );
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Other channel", {
       mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs: undefined,
       blocks: undefined,
     });
@@ -530,6 +545,9 @@ describe("handleSlackAction", () => {
     );
     expect(sendSlackMessage).toHaveBeenCalledWith("C123", "Bare target", {
       mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyBroadcast: false,
       threadTs: "1111111111.111111",
       blocks: undefined,
     });
