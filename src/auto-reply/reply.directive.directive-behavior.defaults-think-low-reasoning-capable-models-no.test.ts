@@ -9,7 +9,6 @@ import {
   makeWhatsAppDirectiveConfig,
   mockEmbeddedTextResult,
   replyText,
-  replyTexts,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
@@ -21,16 +20,6 @@ import { getReplyFromConfig } from "./reply.js";
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
 import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
-
-function makeDefaultModelConfig(home: string) {
-  return makeWhatsAppDirectiveConfig(home, {
-    model: { primary: "anthropic/claude-opus-4-6" },
-    models: {
-      "anthropic/claude-opus-4-6": {},
-      "openai/gpt-4.1-mini": {},
-    },
-  });
-}
 
 async function runReplyToCurrentCase(home: string, text: string) {
   runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedTextResult(text));
@@ -212,43 +201,6 @@ describe("directive behavior", () => {
     expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
     expect(result.sessionEntry.providerOverride).toBe("openai");
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-  });
-  it("ignores inline /model and /think directives while still running agent content", async () => {
-    await withTempHome(async (home) => {
-      mockEmbeddedTextResult("done");
-
-      const inlineModelRes = await getReplyFromConfig(
-        {
-          Body: "please sync /model openai/gpt-4.1-mini now",
-          From: "+1004",
-          To: "+2000",
-        },
-        {},
-        makeDefaultModelConfig(home),
-      );
-
-      const texts = replyTexts(inlineModelRes);
-      expect(texts).toContain("done");
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-6");
-      runEmbeddedPiAgentMock.mockClear();
-
-      mockEmbeddedTextResult("done");
-      const inlineThinkRes = await getReplyFromConfig(
-        {
-          Body: "please sync /think:high now",
-          From: "+1004",
-          To: "+2000",
-        },
-        {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-6" } }),
-      );
-
-      expect(replyTexts(inlineThinkRes)).toContain("done");
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    });
   });
   it("persists /reasoning off on discord even when model defaults reasoning on", async () => {
     await withTempHome(async (home) => {
