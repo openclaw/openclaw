@@ -31,7 +31,7 @@ import {
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
-  normalizeAnthropicProviderConfig,
+  normalizeAnthropicProviderConfigForPluginHook,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
@@ -466,7 +466,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
         },
       }),
     ],
-    normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
+    normalizeConfig: (ctx) => normalizeAnthropicProviderConfigForPluginHook(ctx),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>

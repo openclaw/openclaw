@@ -159,6 +159,24 @@ export function normalizeAnthropicProviderConfig<T extends { api?: string; model
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
 }
 
+const ANTHROPIC_CONFIG_PROVIDER_ID = "anthropic";
+
+/**
+ * Body for the Anthropic plugin `normalizeConfig` hook during models.json normalization.
+ * Must only run for Anthropic-owned provider keys so relay API defaults are not applied to
+ * unrelated providers (for example `openai-codex` with custom models and no explicit `api`).
+ */
+export function normalizeAnthropicProviderConfigForPluginHook<
+  T extends { api?: string; models?: unknown[] },
+>(ctx: { provider: string; providerConfig: T }): T | undefined {
+  const id = normalizeProviderId(ctx.provider);
+  if (id !== ANTHROPIC_CONFIG_PROVIDER_ID && id !== CLAUDE_CLI_BACKEND_ID) {
+    return undefined;
+  }
+  const next = normalizeAnthropicProviderConfig(ctx.providerConfig);
+  return next === ctx.providerConfig ? undefined : next;
+}
+
 export function applyAnthropicConfigDefaults(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
