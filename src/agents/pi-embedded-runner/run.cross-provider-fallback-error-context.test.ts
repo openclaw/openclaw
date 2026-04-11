@@ -28,7 +28,6 @@ function isCurrentAttemptAssistant(
     "errorMessage" in value
   );
 }
-
 describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());

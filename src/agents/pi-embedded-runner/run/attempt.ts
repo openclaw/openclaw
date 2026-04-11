@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
