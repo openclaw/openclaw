@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, hasProxyEnvConfiguredMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  hasProxyEnvConfiguredMock: vi.fn(() => false),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", async () => {
@@ -14,6 +15,16 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
+vi.mock("../infra/net/proxy-env.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/proxy-env.js")>(
+    "../infra/net/proxy-env.js",
+  );
+  return {
+    ...actual,
+    hasProxyEnvConfigured: hasProxyEnvConfiguredMock,
+  };
+});
+
 import {
   fetchWithTimeoutGuarded,
   postJsonRequest,
@@ -21,6 +32,10 @@ import {
   readErrorResponse,
   resolveProviderHttpRequestConfig,
 } from "./shared.js";
+
+beforeEach(() => {
+  hasProxyEnvConfiguredMock.mockReturnValue(false);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -265,6 +280,84 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pinDns: false,
+      }),
+    );
+  });
+
+  it("does not set a guarded fetch mode when no HTTP proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(false);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await fetchWithTimeoutGuarded("https://example.com", {}, undefined, fetch);
+
+    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty("mode");
+  });
+
+  it("auto-selects trusted env proxy mode when HTTP proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.minimax.io",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.minimax.io/v1/image_generation",
+      headers: new Headers({ authorization: "Bearer test" }),
+      body: { model: "image-01", prompt: "a red cube" },
+      fetchFn: fetch,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "trusted_env_proxy",
+      }),
+    );
+  });
+
+  it("respects an explicit mode from the caller when HTTP proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com",
+      release: async () => {},
+    });
+
+    await fetchWithTimeoutGuarded("https://api.example.com", {}, undefined, fetch, {
+      mode: "strict",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "strict",
+      }),
+    );
+  });
+
+  it("auto-upgrades transcription requests to trusted env proxy when proxy env is configured", async () => {
+    hasProxyEnvConfiguredMock.mockReturnValue(true);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.openai.com",
+      release: async () => {},
+    });
+
+    await postTranscriptionRequest({
+      url: "https://api.openai.com/v1/audio/transcriptions",
+      headers: new Headers({ authorization: "Bearer test" }),
+      body: "audio-bytes",
+      fetchFn: fetch,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "trusted_env_proxy",
       }),
     );
   });

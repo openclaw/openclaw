@@ -9,8 +9,9 @@ import {
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
-import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
@@ -96,8 +97,30 @@ export async function fetchWithTimeoutGuarded(
     pinDns?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
     auditContext?: string;
+    mode?: GuardedFetchMode;
   },
 ): Promise<GuardedFetchResult> {
+  // Provider HTTP helpers (image/music/video generation, transcription, etc.)
+  // call this function from every provider that talks to a remote API. When
+  // the host has HTTP_PROXY/HTTPS_PROXY configured, the lower-level strict
+  // mode would force Node-level `dns.lookup()` on the target hostname before
+  // dialing the proxy — which fails with EAI_AGAIN in proxy-only environments
+  // (containers, restricted sandboxes, corporate networks with DNS-over-proxy,
+  // Clash TUN fake-IP, etc.). Auto-upgrade to trusted env proxy mode in that
+  // case so the request goes through the configured proxy agent instead of
+  // doing a local DNS pre-resolution.
+  //
+  // This does not weaken SSRF protection: when an HTTP CONNECT proxy sits in
+  // the egress path, the proxy itself performs hostname resolution and can
+  // rewrite traffic to any destination, so client-side DNS pinning does not
+  // meaningfully constrain the target IP. Callers that explicitly need strict
+  // pinned-DNS can still opt in by passing `mode: GUARDED_FETCH_MODE.STRICT`
+  // here or by using `fetchWithSsrFGuard` directly.
+  //
+  // See openclaw#52162 for the reported failure mode on memory embeddings,
+  // which shares this code path with image/music/video/audio generation.
+  const resolvedMode =
+    options?.mode ?? (hasProxyEnvConfigured() ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY : undefined);
   return await fetchWithSsrFGuard({
     url,
     fetchImpl: fetchFn,
@@ -108,6 +131,7 @@ export async function fetchWithTimeoutGuarded(
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
     auditContext: sanitizeAuditContext(options?.auditContext),
+    ...(resolvedMode ? { mode: resolvedMode } : {}),
   });
 }
 
