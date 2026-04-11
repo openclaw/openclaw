@@ -81,14 +81,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
   const runtime = await import("./commands-compact.runtime.js");
-  const sessionId = params.sessionEntry.sessionId;
+  const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);
     await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
@@ -114,17 +115,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
-    groupId: params.sessionEntry.groupId,
-    groupChannel: params.sessionEntry.groupChannel,
-    groupSpace: params.sessionEntry.space,
-    spawnedBy: params.sessionEntry.spawnedBy,
+    groupId: targetSessionEntry.groupId,
+    groupChannel: targetSessionEntry.groupChannel,
+    groupSpace: targetSessionEntry.space,
+    spawnedBy: targetSessionEntry.spawnedBy,
     senderId: params.command.senderId,
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
-      params.sessionEntry,
+      targetSessionEntry,
       runtime.resolveSessionFilePathOptions({
         agentId: sessionAgentId,
         storePath: params.storePath,
@@ -133,7 +134,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     workspaceDir: params.workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,
-    skillsSnapshot: params.sessionEntry.skillsSnapshot,
+    skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
@@ -172,10 +173,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
   const totalTokens =
-    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(params.sessionEntry);
+    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+    params.contextTokens ?? targetSessionEntry.contextTokens ?? null,
   );
   const reason = formatCompactionReason(result.reason);
   const line = reason
