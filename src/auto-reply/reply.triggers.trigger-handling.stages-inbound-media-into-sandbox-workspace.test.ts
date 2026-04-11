@@ -149,13 +149,13 @@ describe("stageSandboxMedia", () => {
           workspaceDir,
         });
 
-        const stagedPath = `media/inbound/${basename(mediaPath)}`;
-        expect(ctx.MediaPath).toBe(stagedPath);
-        expect(sessionCtx.MediaPath).toBe(stagedPath);
-        expect(ctx.MediaUrl).toBe(stagedPath);
-        expect(sessionCtx.MediaUrl).toBe(stagedPath);
+        expect(ctx.MediaPath).toMatch(/^media\/inbound\/photo-[a-f0-9]{8}\.jpg$/);
+        expect(sessionCtx.MediaPath).toBe(ctx.MediaPath);
+        expect(ctx.MediaUrl).toBe(ctx.MediaPath);
+        expect(sessionCtx.MediaUrl).toBe(ctx.MediaPath);
+        const stagedFileName = path.basename(ctx.MediaPath ?? "");
         await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
+          fs.stat(join(sandboxDir, "media", "inbound", stagedFileName)),
         ).resolves.toBeTruthy();
       }
 
@@ -197,6 +197,66 @@ describe("stageSandboxMedia", () => {
         expect(childProcessMocks.spawn).not.toHaveBeenCalled();
         expect(ctx.MediaPath).toBe("/etc/passwd");
       }
+    });
+  });
+
+  it("uses unique staged filenames across turns for repeated inbound basenames", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      await loadStageSandboxMediaInTempHome();
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+
+      const mediaPath = await writeInboundMedia(home, "image.png", "FIRST");
+      const first = createSandboxMediaContexts(mediaPath);
+      await stageSandboxMedia({
+        ctx: first.ctx,
+        sessionCtx: first.sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      await fs.writeFile(mediaPath, "SECOND");
+      const second = createSandboxMediaContexts(mediaPath);
+      await stageSandboxMedia({
+        ctx: second.ctx,
+        sessionCtx: second.sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(first.ctx.MediaPath).toMatch(/^media\/inbound\/image-[a-f0-9]{8}\.png$/);
+      expect(second.ctx.MediaPath).toMatch(/^media\/inbound\/image-[a-f0-9]{8}\.png$/);
+      expect(second.ctx.MediaPath).not.toBe(first.ctx.MediaPath);
+
+      const firstStaged = join(sandboxDir, first.ctx.MediaPath ?? "");
+      const secondStaged = join(sandboxDir, second.ctx.MediaPath ?? "");
+      await expect(fs.readFile(firstStaged, "utf8")).resolves.toBe("FIRST");
+      await expect(fs.readFile(secondStaged, "utf8")).resolves.toBe("SECOND");
+    });
+  });
+
+  it("truncates long staged filenames to filesystem-safe length", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      await loadStageSandboxMediaInTempHome();
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+
+      const longName = `${"a".repeat(240)}.png`;
+      const mediaPath = await writeInboundMedia(home, longName, "LONG");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedName = path.basename(ctx.MediaPath ?? "");
+      expect(Buffer.byteLength(stagedName, "utf8")).toBeLessThanOrEqual(255);
+      expect(stagedName).toMatch(/\.png$/);
+      expect(stagedName).toMatch(/-[a-f0-9]{8}\.png$/);
     });
   });
 
