@@ -43,20 +43,41 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // Check for custom shell via OPENCLAW_SHELL or SHELL env var on Windows
     const customShell = process.env.OPENCLAW_SHELL?.trim() || process.env.SHELL?.trim();
     if (customShell) {
-      // Determine args based on shell type
-      const shellName = path.basename(customShell).toLowerCase();
-      if (shellName.includes("bash") || shellName === "sh.exe" || shellName === "sh") {
-        return { shell: customShell, args: ["-c"] };
+      // Normalize POSIX-style paths (e.g., /usr/bin/bash from Git Bash)
+      // These are not valid Windows paths and would cause ENOENT errors.
+      let normalizedShell = customShell;
+      if (customShell.startsWith("/") && !customShell.startsWith("//")) {
+        // POSIX path detected; skip it and fall back to PowerShell
+        // Users should set a Windows-style path like C:\Program Files\Git\bin\bash.exe
+        normalizedShell = "";
       }
-      if (shellName.includes("zsh")) {
-        return { shell: customShell, args: ["-c"] };
-      }
-      if (shellName.includes("nu")) {
-        return { shell: customShell, args: ["-c"] };
-      }
-      // For other custom shells, use -c flag (common for Unix-like shells)
-      if (shellName.endsWith(".exe") || !shellName.includes(".")) {
-        return { shell: customShell, args: ["-c"] };
+
+      if (normalizedShell) {
+        const shellName = path.basename(normalizedShell).toLowerCase();
+
+        // PowerShell needs special args even when explicitly configured
+        if (shellName.includes("powershell") || shellName === "pwsh.exe" || shellName === "pwsh") {
+          return { shell: normalizedShell, args: ["-NoProfile", "-NonInteractive", "-Command"] };
+        }
+
+        // cmd.exe needs /c not -c
+        if (shellName === "cmd.exe" || shellName === "cmd") {
+          return { shell: normalizedShell, args: ["/c"] };
+        }
+
+        // Unix-like shells (bash, zsh, nushell, etc.)
+        if (
+          shellName.includes("bash") ||
+          shellName === "sh.exe" ||
+          shellName === "sh" ||
+          shellName.includes("zsh") ||
+          shellName.includes("nu")
+        ) {
+          return { shell: normalizedShell, args: ["-c"] };
+        }
+
+        // Default: use -c for any other shell (catch-all)
+        return { shell: normalizedShell, args: ["-c"] };
       }
     }
 
