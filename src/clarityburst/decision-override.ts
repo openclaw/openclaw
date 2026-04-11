@@ -158,6 +158,35 @@ function stampRequestId(outcome: OverrideOutcome, requestId: string | undefined)
   return outcome;
 }
 
+/**
+ * Validate that the router-returned contract ID is in the allowed list.
+ * Returns an ABSTAIN_CLARIFY outcome with ROUTER_MISMATCH reason if not allowed,
+ * otherwise returns null.
+ */
+function validateContractInAllowedList(
+  routeResult: RouteResult,
+  allowedContractIds: string[],
+  stageId: string,
+  requestId: string | undefined
+): OverrideOutcome | null {
+  const returnedId = routeResult.data?.top1?.contract_id;
+  if (!returnedId) {
+    // No contract ID returned - this should be handled by caller
+    return null;
+  }
+  if (!allowedContractIds.includes(returnedId)) {
+    return stampRequestId({
+      outcome: "ABSTAIN_CLARIFY",
+      reason: "ROUTER_MISMATCH",
+      stageId,
+      contractId: null,
+      instructions: `Router returned contract ${returnedId} not in allowed list [${allowedContractIds.join(', ')}]`,
+      nonRetryable: true,
+    } as OverrideOutcome, requestId);
+  }
+  return null;
+}
+
 /** Context for the dispatch decision */
 export interface DispatchContext {
   stageId?: string;
@@ -180,7 +209,7 @@ export interface AbstainConfirmOutcome {
 /** Outcome when clarification is needed due to router uncertainty or incomplete pack policy */
 export interface AbstainClarifyOutcome {
   outcome: "ABSTAIN_CLARIFY";
-  reason: "LOW_DOMINANCE_OR_CONFIDENCE" | "PACK_POLICY_INCOMPLETE" | "router_outage" | "capability_denied" | "ROUTER_UNAVAILABLE" | "EXCEEDS_FILE_SIZE_LIMIT";
+  reason: "LOW_DOMINANCE_OR_CONFIDENCE" | "PACK_POLICY_INCOMPLETE" | "router_outage" | "capability_denied" | "ROUTER_UNAVAILABLE" | "EXCEEDS_FILE_SIZE_LIMIT" | "ROUTER_MISMATCH";
   contractId: string | null;
   /** Stage identifier for routing failures */
   stageId?: string;
@@ -396,6 +425,12 @@ export function applyToolDispatchOverrides(
     }, requestId);
   }
 
+  // Validate router-returned contract ID is in allowed list
+  const caps: RuntimeCapabilities = createFullCapabilities();
+  const allowedContractIds = deriveAllowedContracts(TOOL_DISPATCH_STAGE_ID, pack, caps);
+  const mismatch = validateContractInAllowedList(routeResult, allowedContractIds, TOOL_DISPATCH_STAGE_ID, requestId);
+  if (mismatch) return mismatch;
+
   // ===== CRON PREFLIGHT GATE CHECK =====
   // Before any tool dispatch, check if in cron mode.
   // If cron mode: require locked task + capability check (fail-closed)
@@ -563,6 +598,12 @@ export function applyShellExecOverrides(
     }, requestId);
   }
 
+  // Validate router-returned contract ID is in allowed list
+  const caps: RuntimeCapabilities = createFullCapabilities();
+  const allowedContractIds = deriveAllowedContracts(SHELL_EXEC_STAGE_ID, pack, caps);
+  const mismatch = validateContractInAllowedList(routeResult, allowedContractIds, SHELL_EXEC_STAGE_ID, requestId);
+  if (mismatch) return mismatch;
+
   // Check for router uncertainty before confirmation gating
   // Enforce ABSTAIN_CLARIFY on low confidence/dominance
   const thresholds = pack.thresholds;
@@ -714,6 +755,14 @@ function applyFileSystemOverridesImpl(
       outcome: "PROCEED",
       contractId: null,
     };
+  }
+
+  // Validate contract ID is in allowed list (router mismatch check)
+  const caps: RuntimeCapabilities = createFullCapabilities();
+  const allowedContractIds = deriveAllowedContracts(FILE_SYSTEM_OPS_STAGE_ID, pack, caps);
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, FILE_SYSTEM_OPS_STAGE_ID, requestId);
+  if (mismatchValidation) {
+    return mismatchValidation;
   }
 
   // Strictly pack-driven uncertainty gating for FILE_SYSTEM_OPS
@@ -955,6 +1004,8 @@ function applyNetworkOverridesImpl(
   routeResult: RouteResult,
   context: NetworkIOContext
 ): OverrideOutcome {
+  const requestId = extractRequestId(routeResult);
+  
   // Stage integrity guard: reject if invoked with wrong stageId
   if (context.stageId !== undefined && context.stageId !== NETWORK_IO_STAGE_ID) {
     return {
@@ -980,6 +1031,14 @@ function applyNetworkOverridesImpl(
   const top1 = routeResult.data?.top1;
   const top2 = routeResult.data?.top2;
   const contractId = top1?.contract_id ?? null;
+
+  // Validate contract ID is in allowed list (router mismatch check)
+  const caps: RuntimeCapabilities = createFullCapabilities();
+  const allowedContractIds = deriveAllowedContracts(NETWORK_IO_STAGE_ID, pack, caps);
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, NETWORK_IO_STAGE_ID, requestId);
+  if (mismatchValidation) {
+    return mismatchValidation;
+  }
 
   // Build a Set of contract IDs from pack
   const packContractIds = new Set(pack.contracts.map(c => c.contract_id));
@@ -1254,6 +1313,8 @@ function applyMemoryModifyOverridesImpl(
   routeResult: RouteResult,
   context: MemoryModifyContext
 ): OverrideOutcome {
+  const requestId = extractRequestId(routeResult);
+  
   // Fail-closed: if router result is not ok, throw error
   if (!routeResult.ok) {
     throw new ClarityBurstAbstainError({
@@ -1262,6 +1323,34 @@ function applyMemoryModifyOverridesImpl(
       reason: "router_outage",
       contractId: null,
       instructions: "The clarity router is currently unavailable. Please try again shortly.",
+      nonRetryable: true
+    });
+  }
+
+  // Validate contract ID is in allowed list (router mismatch check)
+  const caps: RuntimeCapabilities = createFullCapabilities();
+  const allowedContractIds = deriveAllowedContracts(MEMORY_MODIFY_STAGE_ID, pack, caps);
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, MEMORY_MODIFY_STAGE_ID, requestId);
+  if (mismatchValidation) {
+    // For throwing functions, throw ClarityBurstAbstainError instead of returning
+    if (mismatchValidation.outcome === "ABSTAIN_CLARIFY") {
+      const clarifyOutcome = mismatchValidation as AbstainClarifyOutcome;
+      throw new ClarityBurstAbstainError({
+        stageId: MEMORY_MODIFY_STAGE_ID,
+        outcome: clarifyOutcome.outcome,
+        reason: clarifyOutcome.reason,
+        contractId: clarifyOutcome.contractId,
+        instructions: clarifyOutcome.instructions,
+        nonRetryable: true
+      });
+    }
+    // Should not happen for router mismatch, but handle gracefully
+    throw new ClarityBurstAbstainError({
+      stageId: MEMORY_MODIFY_STAGE_ID,
+      outcome: mismatchValidation.outcome,
+      reason: "ROUTER_MISMATCH",
+      contractId: mismatchValidation.contractId,
+      instructions: "Router contract ID mismatch",
       nonRetryable: true
     });
   }
@@ -1440,6 +1529,34 @@ async function applySubagentSpawnOverridesImpl(
       reason: "router_outage",
       contractId: null,
       instructions: "The clarity router is currently unavailable. Please try again shortly.",
+      nonRetryable: true
+    });
+  }
+
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, SUBAGENT_SPAWN_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    // For throwing functions, throw ClarityBurstAbstainError instead of returning
+    if (mismatchValidation.outcome === "ABSTAIN_CLARIFY") {
+      const clarifyOutcome = mismatchValidation as AbstainClarifyOutcome;
+      context.runMetrics && incOutcome(context.runMetrics, clarifyOutcome.outcome);
+      throw new ClarityBurstAbstainError({
+        stageId: SUBAGENT_SPAWN_STAGE_ID,
+        outcome: clarifyOutcome.outcome,
+        reason: clarifyOutcome.reason,
+        contractId: clarifyOutcome.contractId,
+        instructions: clarifyOutcome.instructions,
+        nonRetryable: true
+      });
+    }
+    // Should not happen for router mismatch, but handle gracefully
+    context.runMetrics && incOutcome(context.runMetrics, mismatchValidation.outcome);
+    throw new ClarityBurstAbstainError({
+      stageId: SUBAGENT_SPAWN_STAGE_ID,
+      outcome: mismatchValidation.outcome,
+      reason: "ROUTER_MISMATCH",
+      contractId: mismatchValidation.contractId,
+      instructions: "Router contract ID mismatch",
       nonRetryable: true
     });
   }
@@ -1692,6 +1809,13 @@ async function applyNodeInvokeOverridesImpl(
     return stampRequestId(outcome, routerRequestId);
   }
 
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, NODE_INVOKE_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    context.runMetrics && incOutcome(context.runMetrics, mismatchValidation.outcome);
+    return stampRequestId(mismatchValidation, routerRequestId);
+  }
+
   // Extract contract ID and scores from router result
   const top1 = routeResult.data?.top1;
   const top2 = routeResult.data?.top2;
@@ -1900,6 +2024,13 @@ async function applyBrowserAutomateOverridesImpl(
     return stampRequestId(outcome, routerRequestId);
   }
 
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, BROWSER_AUTOMATE_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    context.runMetrics && incOutcome(context.runMetrics, mismatchValidation.outcome);
+    return stampRequestId(mismatchValidation, routerRequestId);
+  }
+
   // Extract contract ID and scores from router result
   const top1 = routeResult.data?.top1;
   const top2 = routeResult.data?.top2;
@@ -2103,6 +2234,13 @@ async function applyCronScheduleOverridesImpl(
      };
      context.runMetrics && incOutcome(context.runMetrics, outcome.outcome);
      return stampRequestId(outcome, routerRequestId);
+   }
+
+   // Validate contract ID is in allowed list (router mismatch check)
+   const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, CRON_SCHEDULE_STAGE_ID, routerRequestId);
+   if (mismatchValidation) {
+     context.runMetrics && incOutcome(context.runMetrics, mismatchValidation.outcome);
+     return stampRequestId(mismatchValidation, routerRequestId);
    }
 
    // Extract contract ID and scores from router result
@@ -2310,6 +2448,13 @@ async function applyMessageEmitOverridesImpl(
     return stampRequestId(outcome, routerRequestId);
   }
 
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, MESSAGE_EMIT_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    context.runMetrics && incOutcome(context.runMetrics, mismatchValidation.outcome);
+    return stampRequestId(mismatchValidation, routerRequestId);
+  }
+
   // Extract contract ID and scores from router result
   const top1 = routeResult.data?.top1;
   const top2 = routeResult.data?.top2;
@@ -2512,6 +2657,12 @@ async function applyMediaGenerateOverridesImpl(
     }, routerRequestId);
   }
 
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, MEDIA_GENERATE_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    return stampRequestId(mismatchValidation, routerRequestId);
+  }
+
   // Extract contract ID and scores from router result
   const top1 = routeResult.data?.top1;
   const top2 = routeResult.data?.top2;
@@ -2710,6 +2861,12 @@ async function applyCanvasUiOverridesImpl(
       contractId: null,
       instructions: "The router is unavailable and canvas UI operations cannot proceed. Retry when the router service is restored.",
     }, routerRequestId);
+  }
+
+  // Validate contract ID is in allowed list (router mismatch check)
+  const mismatchValidation = validateContractInAllowedList(routeResult, allowedContractIds, CANVAS_UI_STAGE_ID, routerRequestId);
+  if (mismatchValidation) {
+    return stampRequestId(mismatchValidation, routerRequestId);
   }
 
   // Extract contract ID and scores from router result
