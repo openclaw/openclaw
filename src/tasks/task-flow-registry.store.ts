@@ -1,3 +1,11 @@
+import { isNodeSqliteAvailable } from "../infra/node-sqlite.js";
+import {
+  closeTaskFlowRegistryJsonStore,
+  deleteTaskFlowRegistryRecordFromJson,
+  loadTaskFlowRegistryStateFromJson,
+  saveTaskFlowRegistryStateToJson,
+  upsertTaskFlowRegistryRecordToJson,
+} from "./task-flow-registry.store.json.js";
 import {
   closeTaskFlowRegistrySqliteStore,
   deleteTaskFlowRegistryRecordFromSqlite,
@@ -9,6 +17,9 @@ import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.t
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 export type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
+
+// Use JSON fallback when node:sqlite is unavailable (e.g., Homebrew Node.js builds)
+const useJsonStore = !isNodeSqliteAvailable();
 
 export type TaskFlowRegistryStore = {
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
@@ -39,13 +50,21 @@ export type TaskFlowRegistryObservers = {
   onEvent?: (event: TaskFlowRegistryObserverEvent) => void;
 };
 
-const defaultFlowRegistryStore: TaskFlowRegistryStore = {
-  loadSnapshot: loadTaskFlowRegistryStateFromSqlite,
-  saveSnapshot: saveTaskFlowRegistryStateToSqlite,
-  upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
-  deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,
-  close: closeTaskFlowRegistrySqliteStore,
-};
+const defaultFlowRegistryStore: TaskFlowRegistryStore = useJsonStore
+  ? {
+      loadSnapshot: loadTaskFlowRegistryStateFromJson,
+      saveSnapshot: saveTaskFlowRegistryStateToJson,
+      upsertFlow: upsertTaskFlowRegistryRecordToJson,
+      deleteFlow: deleteTaskFlowRegistryRecordFromJson,
+      close: closeTaskFlowRegistryJsonStore,
+    }
+  : {
+      loadSnapshot: loadTaskFlowRegistryStateFromSqlite,
+      saveSnapshot: saveTaskFlowRegistryStateToSqlite,
+      upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
+      deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,
+      close: closeTaskFlowRegistrySqliteStore,
+    };
 
 let configuredFlowRegistryStore: TaskFlowRegistryStore = defaultFlowRegistryStore;
 let configuredFlowRegistryObservers: TaskFlowRegistryObservers | null = null;

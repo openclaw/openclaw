@@ -28,3 +28,7 @@ export function resolveTaskRegistryDir(env: NodeJS.ProcessEnv = process.env): st
 export function resolveTaskRegistrySqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveTaskRegistryDir(env), "runs.sqlite");
 }
+
+export function resolveTaskRegistryJsonPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveTaskRegistryDir(env), "runs.json");
+}

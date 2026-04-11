@@ -1,3 +1,15 @@
+import { isNodeSqliteAvailable } from "../infra/node-sqlite.js";
+import {
+  closeTaskRegistryJsonStore,
+  deleteTaskAndDeliveryStateFromJson,
+  deleteTaskDeliveryStateFromJson,
+  deleteTaskRegistryRecordFromJson,
+  loadTaskRegistryStateFromJson,
+  saveTaskRegistryStateToJson,
+  upsertTaskWithDeliveryStateToJson,
+  upsertTaskDeliveryStateToJson,
+  upsertTaskRegistryRecordToJson,
+} from "./task-registry.store.json.js";
 import {
   closeTaskRegistrySqliteStore,
   deleteTaskAndDeliveryStateFromSqlite,
@@ -13,6 +25,9 @@ import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
+
+// Use JSON fallback when node:sqlite is unavailable (e.g., Homebrew Node.js builds)
+const useJsonStore = !isNodeSqliteAvailable();
 
 export type TaskRegistryStore = {
   loadSnapshot: () => TaskRegistryStoreSnapshot;
@@ -50,17 +65,29 @@ export type TaskRegistryObservers = {
   onEvent?: (event: TaskRegistryObserverEvent) => void;
 };
 
-const defaultTaskRegistryStore: TaskRegistryStore = {
-  loadSnapshot: loadTaskRegistryStateFromSqlite,
-  saveSnapshot: saveTaskRegistryStateToSqlite,
-  upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
-  upsertTask: upsertTaskRegistryRecordToSqlite,
-  deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
-  deleteTask: deleteTaskRegistryRecordFromSqlite,
-  upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
-  deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
-  close: closeTaskRegistrySqliteStore,
-};
+const defaultTaskRegistryStore: TaskRegistryStore = useJsonStore
+  ? {
+      loadSnapshot: loadTaskRegistryStateFromJson,
+      saveSnapshot: saveTaskRegistryStateToJson,
+      upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToJson,
+      upsertTask: upsertTaskRegistryRecordToJson,
+      deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromJson,
+      deleteTask: deleteTaskRegistryRecordFromJson,
+      upsertDeliveryState: upsertTaskDeliveryStateToJson,
+      deleteDeliveryState: deleteTaskDeliveryStateFromJson,
+      close: closeTaskRegistryJsonStore,
+    }
+  : {
+      loadSnapshot: loadTaskRegistryStateFromSqlite,
+      saveSnapshot: saveTaskRegistryStateToSqlite,
+      upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
+      upsertTask: upsertTaskRegistryRecordToSqlite,
+      deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
+      deleteTask: deleteTaskRegistryRecordFromSqlite,
+      upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
+      deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
+      close: closeTaskRegistrySqliteStore,
+    };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
 let configuredTaskRegistryObservers: TaskRegistryObservers | null = null;
