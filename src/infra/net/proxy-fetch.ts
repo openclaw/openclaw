@@ -8,7 +8,12 @@ type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
 
-/** Returns true when the given URL uses a SOCKS4 or SOCKS5 scheme. */
+/**
+ * Returns true when the given URL uses a SOCKS4 or SOCKS5 scheme.
+ * Note: the bare `socks:` scheme has no formal specification; we treat it as
+ * SOCKS5 here for compatibility with common tooling (e.g. SSH, curl) that may
+ * emit this scheme. If the upstream server is SOCKS4-only, use `socks4:` explicitly.
+ */
 function isSocksProxyUrl(url: string): boolean {
   try {
     const scheme = new URL(url).protocol;
@@ -28,7 +33,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const resolveAgent = (): ProxyAgent | Socks5ProxyAgent => {
     if (!agent) {
       agent = isSocksProxyUrl(proxyUrl)
-        ? new Socks5ProxyAgent(proxyUrl)
+        ? new Socks5ProxyAgent({ uri: proxyUrl })
         : new ProxyAgent(proxyUrl);
     }
     return agent;
