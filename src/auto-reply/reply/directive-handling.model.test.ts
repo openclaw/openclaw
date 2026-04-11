@@ -32,6 +32,7 @@ import {
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import {
@@ -119,6 +120,7 @@ beforeEach(() => {
   ]);
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
+  vi.mocked(enqueueSystemEvent).mockClear();
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
 });
@@ -150,6 +152,21 @@ function createGptAliasIndex(): ModelAliasIndex {
   return {
     byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
     byKey: new Map([["openai/gpt-4o", ["gpt"]]]),
+  };
+}
+
+function createOpusAliasIndex(): ModelAliasIndex {
+  return {
+    byAlias: new Map([
+      [
+        "opus",
+        {
+          alias: "Opus",
+          ref: { provider: "anthropic", model: "claude-opus-4-6" },
+        },
+      ],
+    ]),
+    byKey: new Map([["anthropic/claude-opus-4-6", ["Opus"]]]),
   };
 }
 
@@ -685,6 +702,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("persists auth profile overrides for alias model directives", async () => {
+    setAuthProfiles({
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+    });
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model Opus@anthropic:work"),
+        aliasIndex: createOpusAliasIndex(),
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o",
+        initialModelLabel: "openai/gpt-4o",
+        sessionEntry,
+        sessionStore,
+        formatModelSwitchEvent: (label, alias) =>
+          alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to Opus (anthropic/claude-opus-4-6).");
+    expect(result?.text).toContain("Auth profile set to anthropic:work.");
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
+      key: sessionKey,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextAuthProfileId: "anthropic:work",
+      nextAuthProfileIdSource: "user",
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Model switched to Opus (anthropic/claude-opus-4-6).",
+      {
+        sessionKey,
+        contextKey: "model:anthropic/claude-opus-4-6",
+      },
+    );
+  });
+
   it("shows no model message when no /model directive", async () => {
     const directives = parseInlineDirectives("hello world");
     const sessionEntry = createSessionEntry();
@@ -797,6 +863,44 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
     expect(offReply?.text).toContain("Elevated mode disabled");
     expect(sessionEntry.elevatedLevel).toBe("off");
+  });
+
+  it("queues system events for elevated and reasoning mode directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/elevated on"),
+        elevatedAllowed: true,
+        elevatedEnabled: true,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Elevated ASK - exec runs on host; approvals may still apply.",
+      {
+        sessionKey,
+        contextKey: "mode:elevated",
+      },
+    );
+
+    vi.mocked(enqueueSystemEvent).mockClear();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/reasoning stream"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("Reasoning STREAM - emit live <think>.", {
+      sessionKey,
+      contextKey: "mode:reasoning",
+    });
   });
 
   it("blocks internal operator.write exec persistence in directive-only handling", async () => {
