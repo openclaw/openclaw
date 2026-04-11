@@ -26,15 +26,28 @@ export function getFeishuSequentialKey(params: {
     return `${baseKey}:btw`;
   }
 
-  // Per-topic lanes only apply when the group is explicitly configured
-  // for topic-scoped sessions. Normal (group / group_sender) chats
-  // deliberately stay on a single chat-wide lane even when an incoming
-  // quote reply carries `root_id`, because those groups share one session
-  // store and must preserve per-chat FIFO — see the
-  // "replies to triggering message in normal group even when root_id is
-  // present (#32980)" assertion in bot.test.ts and the topicScope gate
-  // in resolveFeishuGroupSession.
-  if (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender") {
+  // Per-topic lanes only apply to group chats that are explicitly
+  // configured for topic-scoped sessions.
+  //
+  // 1. `chat_type !== "group"` (DMs: `p2p` / `private`) deliberately stay
+  //    on a single chat-wide lane even when `groupSessionScope` is
+  //    globally set to `group_topic` / `group_topic_sender` via a wildcard
+  //    entry, because Feishu DMs can carry `root_id` for quote replies
+  //    and must preserve per-chat FIFO — see the
+  //    "propagates parent/root message ids into inbound context for
+  //    reply reconstruction" DM fixture in bot.test.ts.
+  //
+  // 2. Normal (`group` / `group_sender`) groups also stay on a single
+  //    chat-wide lane even when a quote reply carries `root_id`, because
+  //    those groups share one session store and must preserve per-chat
+  //    FIFO — see the "replies to triggering message in normal group
+  //    even when root_id is present (#32980)" assertion in bot.test.ts
+  //    and the `topicScope` gate in resolveFeishuGroupSession.
+  const isGroupChat = event.message.chat_type === "group";
+  if (
+    isGroupChat &&
+    (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
+  ) {
     const topicLaneId = resolveFeishuTopicLaneId(event);
     if (topicLaneId) {
       return `${baseKey}:topic:${topicLaneId}`;

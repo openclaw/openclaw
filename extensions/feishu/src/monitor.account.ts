@@ -3,7 +3,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import { resolveFeishuGroupSessionScope } from "./bot-content.js";
+import { resolveFeishuGroupSessionScope, type GroupSessionScope } from "./bot-content.js";
 import {
   handleFeishuMessage,
   parseFeishuMessageEvent,
@@ -408,16 +408,25 @@ function registerEventHandlers(
   };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     // Resolve the effective group session scope so the sequential-queue
-    // key stays aligned with the session-store partitioning. Without this,
-    // normal (scope="group") groups would accidentally get per-topic queue
-    // lanes for quote replies that carry `root_id`, breaking the per-chat
-    // FIFO guarantee — see the #32980 regression test in bot.test.ts.
-    const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
+    // key stays aligned with the session-store partitioning. Scope lookup
+    // is gated on `chat_type === "group"` to mirror the `isGroup` gate in
+    // bot.ts:resolveFeishuGroupSession — DMs must never read
+    // `groupSessionScope` (global, wildcard, or otherwise), because DM
+    // quote replies legitimately carry `root_id` and must preserve per-chat
+    // FIFO (see the "propagates parent/root message ids" DM fixture in
+    // bot.test.ts). Without this gate, a globally-configured
+    // `group_topic` / `group_topic_sender` scope would split DM replies
+    // onto per-topic lanes and break DM ordering.
+    const isGroupChat = event.message.chat_type === "group";
     const chatId = event.message.chat_id?.trim();
-    const groupConfig = chatId
-      ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId })
-      : undefined;
-    const groupSessionScope = resolveFeishuGroupSessionScope({ groupConfig, feishuCfg });
+    let groupSessionScope: GroupSessionScope | undefined;
+    if (isGroupChat) {
+      const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
+      const groupConfig = chatId
+        ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId })
+        : undefined;
+      groupSessionScope = resolveFeishuGroupSessionScope({ groupConfig, feishuCfg });
+    }
     const sequentialKey = getFeishuSequentialKey({
       accountId,
       event,

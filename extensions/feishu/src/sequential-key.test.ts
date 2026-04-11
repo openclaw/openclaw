@@ -7,6 +7,7 @@ function createTextEvent(params: {
   text: string;
   messageId?: string;
   chatId?: string;
+  chatType?: FeishuMessageEvent["message"]["chat_type"];
   rootId?: string;
   threadId?: string;
 }): FeishuMessageEvent {
@@ -21,7 +22,7 @@ function createTextEvent(params: {
     message: {
       message_id: params.messageId ?? "om_message_1",
       chat_id: params.chatId ?? "oc_dm_chat",
-      chat_type: "p2p",
+      chat_type: params.chatType ?? "p2p",
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
       ...(params.rootId !== undefined ? { root_id: params.rootId } : {}),
@@ -37,12 +38,22 @@ describe("getFeishuSequentialKey", () => {
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control", undefined],
     [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw", undefined],
     [
-      createTextEvent({ text: "hello", chatId: "oc_topic_chat", rootId: "om_root_1" }),
+      createTextEvent({
+        text: "hello",
+        chatId: "oc_topic_chat",
+        chatType: "group",
+        rootId: "om_root_1",
+      }),
       "feishu:default:oc_topic_chat:topic:om_root_1",
       "group_topic",
     ],
     [
-      createTextEvent({ text: "hello", chatId: "oc_topic_chat", threadId: "omt_thread_1" }),
+      createTextEvent({
+        text: "hello",
+        chatId: "oc_topic_chat",
+        chatType: "group",
+        threadId: "omt_thread_1",
+      }),
       "feishu:default:oc_topic_chat:topic:omt_thread_1",
       "group_topic",
     ],
@@ -50,6 +61,7 @@ describe("getFeishuSequentialKey", () => {
       createTextEvent({
         text: "hello",
         chatId: "oc_topic_chat",
+        chatType: "group",
         rootId: "om_root_a",
         threadId: "omt_thread_b",
       }),
@@ -60,6 +72,7 @@ describe("getFeishuSequentialKey", () => {
       createTextEvent({
         text: "hello",
         chatId: "oc_topic_chat",
+        chatType: "group",
         rootId: "   ",
         threadId: "omt_thread_b",
       }),
@@ -67,7 +80,7 @@ describe("getFeishuSequentialKey", () => {
       "group_topic",
     ],
     [
-      createTextEvent({ text: "hello", chatId: "oc_regular_group" }),
+      createTextEvent({ text: "hello", chatId: "oc_regular_group", chatType: "group" }),
       "feishu:default:oc_regular_group",
       "group",
     ],
@@ -115,6 +128,7 @@ describe("getFeishuSequentialKey", () => {
     const event = createTextEvent({
       text: "/stop",
       chatId: "oc_topic_chat",
+      chatType: "group",
       rootId: "om_topic_root_1",
     });
 
@@ -131,6 +145,7 @@ describe("getFeishuSequentialKey", () => {
     const event = createTextEvent({
       text: "/btw what changed?",
       chatId: "oc_topic_chat",
+      chatType: "group",
       rootId: "om_topic_root_2",
     });
 
@@ -147,12 +162,14 @@ describe("getFeishuSequentialKey", () => {
     const first = createTextEvent({
       text: "hello from topic 1",
       chatId: "oc_topic_chat",
+      chatType: "group",
       rootId: "om_topic_root_1",
       messageId: "om_message_topic_1",
     });
     const second = createTextEvent({
       text: "hello from topic 2",
       chatId: "oc_topic_chat",
+      chatType: "group",
       rootId: "om_topic_root_2",
       messageId: "om_message_topic_2",
     });
@@ -184,6 +201,7 @@ describe("getFeishuSequentialKey", () => {
     const quoteReplyInGroup = createTextEvent({
       text: "hello in normal group",
       chatId: "oc_normal_group",
+      chatType: "group",
       rootId: "om_quoted_message",
     });
 
@@ -212,5 +230,55 @@ describe("getFeishuSequentialKey", () => {
         event: quoteReplyInGroup,
       }),
     ).toBe("feishu:default:oc_normal_group");
+  });
+
+  it("keeps DM quote replies on the chat-wide lane even when a topic scope leaks in", () => {
+    // Regression guard for the DM case flagged by Codex on PR #64920:
+    // Feishu DMs can carry `root_id` for quote replies (see the
+    // "propagates parent/root message ids into inbound context for reply
+    // reconstruction" fixture in bot.test.ts around line 721, which uses
+    // `chat_type: "p2p"` + `root_id` + `parent_id`). If a global or
+    // wildcard `groupSessionScope: "group_topic"` / `"group_topic_sender"`
+    // leaks into the DM path, the queue key must still stay chat-wide and
+    // preserve per-chat FIFO ordering.
+    const dmQuoteReply = createTextEvent({
+      text: "reply text",
+      chatId: "oc_dm_chat",
+      chatType: "p2p",
+      rootId: "om_root_001",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: dmQuoteReply,
+        groupSessionScope: "group_topic",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: dmQuoteReply,
+        groupSessionScope: "group_topic_sender",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+
+    // Also cover the `private` DM sub-type — same defense applies.
+    const privateDmQuoteReply = createTextEvent({
+      text: "reply text",
+      chatId: "oc_private_dm",
+      chatType: "private",
+      rootId: "om_root_002",
+      threadId: "omt_thread_x",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: privateDmQuoteReply,
+        groupSessionScope: "group_topic_sender",
+      }),
+    ).toBe("feishu:default:oc_private_dm");
   });
 });
