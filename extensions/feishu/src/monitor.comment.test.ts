@@ -288,19 +288,22 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
     expect(turn?.fileType).toBe("docx");
     expect(turn?.fileToken).toBe(TEST_DOC_TOKEN);
+    expect(turn?.prompt).toContain('The user added a comment in "Comment event handling request".');
     expect(turn?.prompt).toContain(
-      'The user added a comment in "Comment event handling request": Also send it to the agent after receiving the comment event',
+      'Current user comment text: "Also send it to the agent after receiving the comment event"',
     );
-    expect(turn?.prompt).toContain(
-      "This is a Feishu document comment-thread event, not a Feishu IM conversation.",
-    );
-    expect(turn?.prompt).toContain("Prefer plain text suitable for a comment thread.");
-    expect(turn?.prompt).toContain("Do not include internal reasoning");
-    expect(turn?.prompt).toContain("Do not narrate your plan or execution process");
-    expect(turn?.prompt).toContain("reply only with the user-facing result itself");
+    expect(turn?.prompt).toContain("Current comment card timeline (primary context");
+    expect(turn?.prompt).toContain("This is a Feishu document comment thread.");
+    expect(turn?.prompt).toContain("It is not a Feishu IM chat.");
+    expect(turn?.prompt).toContain("Use plain text only.");
+    expect(turn?.prompt).toContain("Do not show reasoning.");
+    expect(turn?.prompt).toContain("Do not describe your plan.");
+    expect(turn?.prompt).toContain("Output only the final user-facing reply.");
     expect(turn?.prompt).toContain("comment_id: 7623358762119646411");
     expect(turn?.prompt).toContain("reply_id: 7623358762136374451");
-    expect(turn?.prompt).toContain("The system will automatically reply with your final answer");
+    expect(turn?.prompt).toContain(
+      "Your final text reply will be posted to the current comment thread automatically.",
+    );
   });
 
   it("parses bot mentions plus current and referenced document links from comment content", async () => {
@@ -760,11 +763,10 @@ describe("resolveDriveCommentEventTurn", () => {
       createClient: () => client as never,
     });
 
+    expect(turn?.prompt).toContain('The user added a reply in "Comment event handling request".');
+    expect(turn?.prompt).toContain('Current user comment text: "Please follow up on this comment"');
     expect(turn?.prompt).toContain(
-      'The user added a reply in "Comment event handling request": Please follow up on this comment',
-    );
-    expect(turn?.prompt).toContain(
-      "Original comment: Also send it to the agent after receiving the comment event",
+      'Original comment text: "Also send it to the agent after receiving the comment event"',
     );
     expect(turn?.prompt).toContain(`file_token: ${TEST_DOC_TOKEN}`);
     expect(turn?.prompt).toContain("Event type: add_reply");
