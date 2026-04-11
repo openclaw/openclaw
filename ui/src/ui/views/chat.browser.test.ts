@@ -68,6 +68,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    onRenameSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
@@ -124,5 +125,15 @@ describe("chat context notice", () => {
     expect(icon.getAttribute("width")).toBe("16");
     expect(icon.getAttribute("height")).toBe("16");
     expect(icon.querySelector("path")).not.toBeNull();
+  });
+
+  it("does not render session actions in the composer toolbar", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(renderChat(createProps({})), container);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
   });
 });

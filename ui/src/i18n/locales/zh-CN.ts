@@ -63,6 +63,8 @@ export const zh_CN: TranslationMap = {
     relink: "重新关联",
     waitForScan: "等待扫描",
     logout: "退出登录",
+    newChat: "新聊天",
+    renameChat: "重命名聊天",
   },
   channels: {
     health: {

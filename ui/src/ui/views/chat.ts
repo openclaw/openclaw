@@ -99,6 +99,7 @@ export type ChatProps = {
   onQueueRemove: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
+  onRenameSession?: () => void;
   onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
@@ -1624,18 +1625,6 @@ export function renderChat(props: ChatProps) {
 
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
-            ${canAbort
-              ? nothing
-              : html`
-                  <button
-                    class="btn btn--ghost"
-                    @click=${props.onNewSession}
-                    title="New session"
-                    aria-label="New session"
-                  >
-                    ${icons.plus}
-                  </button>
-                `}
             <button
               class="btn btn--ghost"
               @click=${() => exportMarkdown(props)}

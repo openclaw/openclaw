@@ -93,6 +93,8 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  createControlUiSession,
+  createDefaultControlUiSessionLabel,
   deleteSessionsAndRefresh,
   loadSessions,
   patchSession,
@@ -498,6 +500,8 @@ export function renderApp(state: AppViewState) {
     null;
   const resolvedAgentId = resolveSelectedAgentId();
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const currentSessionRow =
+    state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey) ?? null;
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
   );
@@ -819,6 +823,48 @@ export function renderApp(state: AppViewState) {
     resetToolsEffectiveState(state);
   };
 
+  const handleCreateChatSession = async () => {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    const now = new Date();
+    const nextLabel = createDefaultControlUiSessionLabel(now);
+    state.lastError = null;
+    const result = await createControlUiSession(state, {
+      agentId: activeSessionAgentId,
+      label: nextLabel,
+      now,
+    });
+    if (!result?.key) {
+      state.lastError = state.sessionsError ?? "Failed to create chat";
+      return;
+    }
+    switchChatSession(state, result.key);
+    if (state.tab !== "chat") {
+      state.setTab("chat" as import("./navigation.ts").Tab);
+    }
+    state.navDrawerOpen = false;
+  };
+  const handleRenameChatSession = async () => {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    const currentLabel = currentSessionRow?.label?.trim() || "";
+    const promptValue = window.prompt(t("common.renameChat"), currentLabel);
+    if (promptValue === null) {
+      return;
+    }
+    const nextLabel = promptValue.trim();
+    if (!nextLabel || nextLabel === currentLabel) {
+      return;
+    }
+    state.lastError = null;
+    const result = await patchSession(state, state.sessionKey, { label: nextLabel });
+    if (!result) {
+      state.lastError = state.sessionsError ?? "Failed to rename chat";
+    }
+  };
+
   return html`
     ${renderCommandPalette({
       open: state.paletteOpen,
@@ -928,6 +974,21 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>
             <div class="sidebar-shell__body">
+              <div class="sidebar-chat-actions">
+                <button
+                  type="button"
+                  class="nav-item nav-item--action sidebar-chat-action"
+                  title=${t("common.newChat")}
+                  aria-label=${t("common.newChat")}
+                  ?disabled=${!state.client || !state.connected}
+                  @click=${() => void handleCreateChatSession()}
+                >
+                  <span class="nav-item__icon" aria-hidden="true">${icons.edit}</span>
+                  ${!navCollapsed
+                    ? html`<span class="nav-item__text">${t("common.newChat")}</span>`
+                    : nothing}
+                </button>
+              </div>
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
@@ -1039,7 +1100,9 @@ export function renderApp(state: AppViewState) {
           : html`<section class="content-header">
               <div>
                 ${isChat
-                  ? renderChatSessionSelect(state)
+                  ? renderChatSessionSelect(state, {
+                      onRenameSession: () => void handleRenameChatSession(),
+                    })
                   : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
@@ -1875,7 +1938,8 @@ export function renderApp(state: AppViewState) {
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onNewSession: () => void handleCreateChatSession(),
+              onRenameSession: undefined,
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

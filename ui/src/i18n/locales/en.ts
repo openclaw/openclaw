@@ -62,6 +62,8 @@ export const en: TranslationMap = {
     relink: "Relink",
     waitForScan: "Wait for scan",
     logout: "Logout",
+    newChat: "New chat",
+    renameChat: "Rename chat",
   },
   channels: {
     health: {

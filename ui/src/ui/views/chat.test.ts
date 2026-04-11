@@ -190,6 +190,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onQueueRemove: () => undefined,
     onDismissSideResult: () => undefined,
     onNewSession: () => undefined,
+    onRenameSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
@@ -725,7 +726,8 @@ describe("chat view", () => {
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("New session");
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
   });
 
   it("keeps the stop button visible for abortable non-streaming runs", () => {
@@ -747,25 +749,19 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
-  it("shows a new session button when aborting is unavailable", () => {
+  it("keeps session actions out of the composer toolbar", () => {
     const container = document.createElement("div");
-    const onNewSession = vi.fn();
     render(
       renderChat(
         createProps({
           canAbort: false,
-          onNewSession,
         }),
       ),
       container,
     );
 
-    const newSessionButton = container.querySelector<HTMLButtonElement>(
-      'button[title="New session"]',
-    );
-    expect(newSessionButton).not.toBeUndefined();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
     expect(container.textContent).not.toContain("Stop");
   });
 
@@ -924,6 +920,86 @@ describe("chat view", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
     vi.unstubAllGlobals();
+  });
+
+  it("shows the default thinking level in the chat header picker", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (off)");
+  });
+
+  it("patches the current session thinking level from the chat header picker", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+
+    thinkingSelect!.value = "off";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: "off",
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBe("off");
+  });
+
+  it("clears the session thinking override back to the default thinking level", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+      thinkingLevel: "high",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("high");
+
+    thinkingSelect!.value = "";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: null,
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBeUndefined();
+  });
+
+  it("renders a rename action in the chat header session row", () => {
+    const { state } = createChatHeaderState();
+    const onRenameSession = vi.fn();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, { onRenameSession }), container);
+
+    const renameButton = container.querySelector<HTMLButtonElement>('button[title="Rename chat"]');
+    expect(renameButton).not.toBeNull();
+    expect(renameButton?.disabled).toBe(false);
+
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onRenameSession).toHaveBeenCalledTimes(1);
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {

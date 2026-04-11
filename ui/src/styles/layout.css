@@ -571,6 +571,11 @@
     transform var(--duration-fast) ease;
 }
 
+button.nav-item {
+  width: 100%;
+  font: inherit;
+}
+
 .nav-item__icon {
   width: 16px;
   height: 16px;
@@ -611,6 +616,18 @@
   opacity: 1;
 }
 
+.nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+  transform: none;
+}
+
+.nav-item:disabled:hover {
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
@@ -625,6 +642,48 @@
 .nav-item--active .nav-item__icon {
   opacity: 1;
   color: var(--accent);
+}
+
+.nav-item--action {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 82%, var(--bg-elevated) 18%);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+
+.nav-item--action .nav-item__icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.nav-item--action:hover {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-elevated) 8%);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  transform: translateY(-1px);
+}
+
+.nav-item--action:disabled,
+.nav-item--action:disabled:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-subtle) 58%, var(--bg-elevated) 42%);
+  border-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: none;
+}
+
+.nav-item--action:disabled .nav-item__icon,
+.nav-item--action:disabled:hover .nav-item__icon {
+  color: var(--accent);
+}
+
+.sidebar-chat-actions {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.sidebar-chat-action {
+  width: 100%;
 }
 
 .sidebar--collapsed .sidebar-shell {
