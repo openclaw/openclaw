@@ -1037,5 +1037,227 @@ describe("trusted-proxy auth", () => {
       expect(res.ok).toBe(false);
       expect(res.reason).toBe("trusted_proxy_no_proxies_configured");
     });
+
+    // --- Password fallback for trusted-proxy mode ---
+    // When the trusted-proxy path fails (loopback source, untrusted source, etc.),
+    // a configured password should authenticate local clients (subagents, browser
+    // extensions) that cannot go through the reverse proxy.
+    it("accepts password auth when trusted-proxy path fails from loopback", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: { host: "localhost" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("password");
+    });
+
+    it("accepts password auth when trusted-proxy path fails from untrusted source", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "192.168.1.100" },
+          headers: { host: "gateway.local" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("password");
+    });
+
+    it("rejects wrong password even when trusted-proxy path fails", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "wrong-password" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: { host: "localhost" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("password_mismatch");
+    });
+
+    it("rate-limits password attempts when limiter is locked out", async () => {
+      const limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+      });
+      const ip = "192.168.1.100"; // non-loopback to avoid exemption
+
+      // Exhaust the rate limit with one failure
+      limiter.recordFailure(ip, "shared-secret");
+
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        rateLimiter: limiter,
+        req: {
+          socket: { remoteAddress: ip },
+          headers: { host: "gateway.local" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("rate_limited");
+      if (res.ok === false) {
+        expect(res.rateLimited).toBe(true);
+      }
+    });
+
+    it("does not fall back to password for proxy-source failures (missing header)", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" }, // trusted proxy IP
+          headers: {
+            host: "gateway.local",
+            // x-hermes-user is present, but missing required header
+            "x-hermes-user": "jet",
+          },
+        } as never,
+      });
+
+      // Must NOT fall back to password — request came from a trusted proxy
+      // but failed identity policy. Password fallback would bypass proxy controls.
+      expect(res.ok).toBe(false);
+      if (res.ok === false) {
+        expect(res.reason).toMatch(/^trusted_proxy_missing_header_/);
+      }
+    });
+
+    it("does not fall back to password for proxy-source failures (user not allowed)", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: { ...trustedProxyConfig, allowUsers: ["admin"] },
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" }, // trusted proxy IP
+          headers: {
+            host: "gateway.local",
+            "x-forwarded-user": "not-admin", // user not in allowUsers
+            "x-forwarded-proto": "https", // satisfy requiredHeaders
+          },
+        } as never,
+      });
+
+      // Must NOT fall back to password — proxy identity rejected the user
+      expect(res.ok).toBe(false);
+      if (res.ok === false) {
+        expect(res.reason).toBe("trusted_proxy_user_not_allowed");
+      }
+    });
+
+    it("rejects when no password is provided by client", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: { host: "localhost" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      // 127.0.0.1 is not in trustedProxies, so it fails at "untrusted source" check
+      // before the loopback check is reached.
+      expect(res.reason).toBe("trusted_proxy_untrusted_source");
+    });
+
+    it("rejects when no password is configured on gateway", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: { password: "some-password" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: { host: "localhost" },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      // 127.0.0.1 is not in trustedProxies, so it fails at "untrusted source" check.
+      // No password configured, so password fallback is not attempted.
+      expect(res.reason).toBe("trusted_proxy_untrusted_source");
+    });
+
+    it("still prefers trusted-proxy user identity over password", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+          password: "auto-generated-browser-secret",
+        },
+        connectAuth: { password: "auto-generated-browser-secret" },
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.local",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("trusted-proxy");
+      expect(res.user).toBe("nick@example.com");
+    });
   });
 });

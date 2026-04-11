@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - fix(qqbot): enforce media storage boundary for all outbound local file paths [AI]. (#63271) Thanks @pgondhi987.
 - iMessage/self-chat: distinguish normal DM outbound rows from true self-chat using `destination_caller_id` plus chat participants, while preserving multi-handle self-chat aliases so outbound DM replies stop looping back as inbound messages. (#61619) Thanks @neeravmakwana.
 - fix(browser): auto-generate browser control auth token for none/trusted-proxy modes [AI]. (#63280) Thanks @pgondhi987.
+- fix(gateway): allow password fallback for trusted-proxy mode so local clients (subagents, browser extensions, CLI) can authenticate when the reverse-proxy path is unavailable. Closes #17761, #26007, #43300.
 - fix(exec): replace TOCTOU check-then-read with atomic pinned-fd open in script preflight [AI]. (#62333) Thanks @pgondhi987.
 - WhatsApp/auto-reply: keep inbound reply, media, and composing sends on the current socket across reconnects, wait through reconnect gaps, and retry timeout-only send failures without dropping the active socket ref. (#62892) Thanks @mcaxtr.
 - Config/plugins: let config writes keep disabled plugin entries without forcing required plugin config schemas or crashing raw plugin validation, so slot switches and similar plugin-state updates persist cleanly. (#63296) Thanks @fuller-stack-dev.

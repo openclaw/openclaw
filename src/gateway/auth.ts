@@ -551,6 +551,38 @@ async function authorizeGatewayConnectCore(
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+
+    // Trusted-proxy path failed. Allow a configured password to authenticate
+    // local/loopback clients (subagents, browser extensions) that cannot go
+    // through the reverse proxy — but ONLY for non-proxy-source failures
+    // (untrusted source, loopback, no request). A request that arrived from
+    // a trusted proxy IP but failed identity policy (missing header, user
+    // not allowed, etc.) must NOT fall back to password — that would bypass
+    // the proxy-header access controls.
+    const isNonProxyFailure =
+      result.reason === "trusted_proxy_untrusted_source" ||
+      result.reason === "trusted_proxy_loopback_source" ||
+      result.reason === "trusted_proxy_no_request";
+    if (isNonProxyFailure && auth.password && connectAuth?.password) {
+      if (limiter) {
+        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+        if (!rlCheck.allowed) {
+          return {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: rlCheck.retryAfterMs,
+          };
+        }
+      }
+      if (safeEqualSecret(connectAuth.password, auth.password)) {
+        limiter?.reset(ip, rateLimitScope);
+        return { ok: true, method: "password" };
+      }
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "password_mismatch" };
+    }
+
     return { ok: false, reason: result.reason };
   }
 

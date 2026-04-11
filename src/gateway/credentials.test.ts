@@ -283,12 +283,14 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("ignores unresolved local password ref when local auth mode is trusted-proxy", () => {
-    const resolved = resolveLocalModeWithUnresolvedPassword("trusted-proxy");
-    expect(resolved).toEqual({
-      token: undefined,
-      password: undefined,
-    });
+  it("throws on unresolved local password ref when local auth mode is trusted-proxy", () => {
+    // In trusted-proxy mode, password is now allowed as a fallback for local
+    // clients (subagents, browser extensions) that cannot go through the reverse
+    // proxy. So an unresolved password ref should throw rather than silently
+    // returning undefined.
+    expect(() => resolveLocalModeWithUnresolvedPassword("trusted-proxy")).toThrow(
+      /gateway.auth.password is configured as a secret reference but is unavailable/,
+    );
   });
 
   it("keeps local credentials ahead of remote fallback in local mode", () => {
