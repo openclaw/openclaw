@@ -204,12 +204,14 @@ Use this lane in CI and in reproducible local smoke runs:
 pnpm openclaw qa suite \
   --provider-mode mock-openai \
   --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4-alt \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/gpt54
 
 pnpm openclaw qa suite \
   --provider-mode mock-openai \
   --model anthropic/claude-opus-4-6 \
+  --alt-model anthropic/claude-sonnet-4-6 \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/opus46
 
@@ -221,6 +223,9 @@ pnpm openclaw qa parity-report \
 ```
 
 This is what the parity-gate workflow should run. It keeps the job fenced away from real provider credentials and proves the harness structure is sound.
+The explicit `--alt-model` values matter: they keep `model-switch-tool-continuity`
+inside the intended provider lane instead of silently falling back to the CLI
+default alternate model.
 
 ### Live-frontier proof run
 
@@ -230,12 +235,14 @@ Use this lane only when you want the release-evidence comparison against real fr
 pnpm openclaw qa suite \
   --provider-mode live-frontier \
   --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4-mini \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/gpt54-live
 
 pnpm openclaw qa suite \
   --provider-mode live-frontier \
   --model anthropic/claude-opus-4-6 \
+  --alt-model anthropic/claude-sonnet-4-6 \
   --parity-pack agentic \
   --output-dir .artifacts/qa-e2e/opus46-live
 
