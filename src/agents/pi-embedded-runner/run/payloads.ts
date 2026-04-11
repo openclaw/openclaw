@@ -18,7 +18,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.types.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
