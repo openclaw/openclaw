@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveStateDir } from "../paths.js";
 import { saveJsonFile } from "../../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { SessionEntry } from "./types.js";
@@ -32,10 +31,6 @@ export type ObservableSessionStateSnapshot = {
   sessions: ObservableSessionStateEntry[];
 };
 
-export function resolveObservableSessionStatePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "session-state.json");
-}
-
 function resolveAgentIdFromStorePath(storePath: string): string {
   const normalized = path.normalize(path.resolve(storePath));
   const parts = normalized.split(path.sep).filter(Boolean);
@@ -44,6 +39,10 @@ function resolveAgentIdFromStorePath(storePath: string): string {
     return normalizeAgentId(parts[sessionsIndex - 1] ?? DEFAULT_AGENT_ID);
   }
   return DEFAULT_AGENT_ID;
+}
+
+export function resolveObservableSessionStatePathForStore(storePath: string): string {
+  return path.join(path.dirname(path.resolve(storePath)), "session-state.json");
 }
 
 function toObservableSessionStateEntry(params: {
@@ -76,7 +75,6 @@ function toObservableSessionStateEntry(params: {
 export function saveObservableSessionState(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
-  env?: NodeJS.ProcessEnv;
 }) {
   const agentId = resolveAgentIdFromStorePath(params.storePath);
   const sessions = Object.entries(params.store)
@@ -91,5 +89,5 @@ export function saveObservableSessionState(params: {
     sessions,
   };
 
-  saveJsonFile(resolveObservableSessionStatePath(params.env), snapshot);
+  saveJsonFile(resolveObservableSessionStatePathForStore(params.storePath), snapshot);
 }

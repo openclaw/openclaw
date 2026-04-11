@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { saveSessionStore, updateSessionStore } from "./store.js";
-import { resolveObservableSessionStatePath } from "./observable-state.js";
+import { resolveObservableSessionStatePathForStore } from "./observable-state.js";
 import type { SessionEntry } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -28,7 +28,7 @@ describe("sessions observable state", () => {
     }
   });
 
-  it("writes session-state.json when saving the session store", async () => {
+  it("writes per-agent session-state.json when saving the session store", async () => {
     await withStateDirEnv("openclaw-session-state-", async ({ stateDir }) => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const storePath = resolveDefaultSessionStorePath();
@@ -41,7 +41,7 @@ describe("sessions observable state", () => {
         }),
       });
 
-      const observablePath = resolveObservableSessionStatePath();
+      const observablePath = resolveObservableSessionStatePathForStore(storePath);
       expect(existsSync(observablePath)).toBe(true);
 
       const snapshot = JSON.parse(readFileSync(observablePath, "utf8")) as {
@@ -61,7 +61,7 @@ describe("sessions observable state", () => {
     });
   });
 
-  it("updates session-state.json when the session store changes", async () => {
+  it("updates the per-agent session-state.json when the session store changes", async () => {
     await withStateDirEnv("openclaw-session-state-update-", async ({ stateDir }) => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const storePath = resolveDefaultSessionStorePath();
@@ -84,7 +84,9 @@ describe("sessions observable state", () => {
         });
       });
 
-      const snapshot = JSON.parse(readFileSync(resolveObservableSessionStatePath(), "utf8")) as {
+      const snapshot = JSON.parse(
+        readFileSync(resolveObservableSessionStatePathForStore(storePath), "utf8"),
+      ) as {
         sessions: Array<{ sessionKey: string; status?: string; runtimeMs?: number; updatedAt: number }>;
       };
 
@@ -94,6 +96,42 @@ describe("sessions observable state", () => {
         runtimeMs: 1234,
         updatedAt: 300,
       });
+    });
+  });
+
+  it("keeps separate snapshots for different agents", async () => {
+    await withStateDirEnv("openclaw-session-state-multi-agent-", async ({ stateDir }) => {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const mainStorePath = resolveDefaultSessionStorePath("main");
+      const opsStorePath = resolveDefaultSessionStorePath("ops");
+
+      await saveSessionStore(mainStorePath, {
+        "agent:main:main": createSessionEntry({
+          sessionId: "sess-main",
+          updatedAt: 100,
+          displayName: "Main session",
+        }),
+      });
+
+      await saveSessionStore(opsStorePath, {
+        "agent:ops:main": createSessionEntry({
+          sessionId: "sess-ops",
+          updatedAt: 200,
+          displayName: "Ops session",
+        }),
+      });
+
+      const mainSnapshot = JSON.parse(
+        readFileSync(resolveObservableSessionStatePathForStore(mainStorePath), "utf8"),
+      ) as { agentId: string; sessions: Array<{ sessionKey: string }> };
+      const opsSnapshot = JSON.parse(
+        readFileSync(resolveObservableSessionStatePathForStore(opsStorePath), "utf8"),
+      ) as { agentId: string; sessions: Array<{ sessionKey: string }> };
+
+      expect(mainSnapshot.agentId).toBe("main");
+      expect(mainSnapshot.sessions).toMatchObject([{ sessionKey: "agent:main:main" }]);
+      expect(opsSnapshot.agentId).toBe("ops");
+      expect(opsSnapshot.sessions).toMatchObject([{ sessionKey: "agent:ops:main" }]);
     });
   });
 });
