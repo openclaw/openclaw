@@ -266,7 +266,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
     if (isSocks) {
       try {
         return {
-          dispatcher: new Socks5ProxyAgent({ uri: proxyUrl }),
+          dispatcher: new Socks5ProxyAgent(proxyUrl),
           mode: "explicit-proxy",
           effectivePolicy: policy,
         };
