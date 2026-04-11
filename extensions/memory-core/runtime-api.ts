@@ -8,6 +8,10 @@ export {
 } from "./src/memory/provider-adapters.js";
 export { createEmbeddingProvider } from "./src/memory/embeddings.js";
 export {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "openclaw/plugin-sdk/memory-core";
+export {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,
   resolveMemoryVectorState,

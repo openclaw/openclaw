@@ -8,7 +8,7 @@ import {
   registerInternalHook,
   triggerInternalHook,
 } from "../../../src/hooks/internal-hooks.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../src/plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayRequestScope } from "../runtime-api.js";
 import {
   __testing,
   reconcileShortTermDreamingCronJob,

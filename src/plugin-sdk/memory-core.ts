@@ -50,6 +50,10 @@ export {
   withProgressTotals,
 } from "./memory-core-host-runtime-cli.js";
 export {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+export {
   appendMemoryHostEvent,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
