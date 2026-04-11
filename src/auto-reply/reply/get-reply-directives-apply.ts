@@ -248,6 +248,7 @@ export async function applyInlineDirectiveOverrides(params: {
         sessionKey,
         parentSessionKey: ctx.ParentSessionKey,
         sessionScope,
+        storePath,
         provider,
         model,
         contextTokens,

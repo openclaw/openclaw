@@ -354,6 +354,7 @@ export async function handleInlineActions(params: {
       sessionKey,
       parentSessionKey: ctx.ParentSessionKey,
       sessionScope,
+      storePath,
       provider,
       model,
       contextTokens,
