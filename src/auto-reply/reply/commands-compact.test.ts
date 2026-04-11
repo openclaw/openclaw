@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -12,6 +13,7 @@ vi.mock("../../agents/agent-scope.js", async () => {
   return {
     ...actual,
     resolveSessionAgentId: resolveSessionAgentIdMock,
+    resolveAgentDir: vi.fn(actual.resolveAgentDir),
   };
 });
 
@@ -29,9 +31,8 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, resolveSessionFilePathOptions } = await import(
-  "./commands-compact.runtime.js"
-);
+const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
+  await import("./commands-compact.runtime.js");
 
 function buildCompactParams(
   commandBodyNormalized: string,
@@ -193,5 +194,132 @@ describe("handleCompactCommand", () => {
       agentId: "target",
       storePath: undefined,
     });
+  });
+
+  it("uses the canonical session agent directory for compaction runtime inputs", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("target");
+    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/target-agent",
+      }),
+    );
+    expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "target");
+  });
+
+  it("prefers the target session entry for compaction runtime metadata", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+          spawnedBy: "agent:wrapper",
+          skillsSnapshot: { prompt: "wrapper", skills: [] },
+          contextTokens: 111,
+        },
+        sessionStore: {
+          "agent:target:whatsapp:direct:12345": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
+            spawnedBy: "agent:target-parent",
+            skillsSnapshot: { prompt: "target", skills: [] },
+            contextTokens: 222,
+          },
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "target-session",
+        groupId: "target-group",
+        groupChannel: "#target",
+        groupSpace: "target-space",
+        spawnedBy: "agent:target-parent",
+        skillsSnapshot: { prompt: "target", skills: [] },
+      }),
+    );
+  });
+
+  it("prefers the target session entry when incrementing compaction count", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 999,
+        tokensAfter: 321,
+      },
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+        },
+        sessionStore: {
+          "agent:target:whatsapp:direct:12345": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+          },
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(incrementCompactionCount)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+        }),
+        tokensAfter: 321,
+      }),
+    );
   });
 });

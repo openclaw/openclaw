@@ -719,6 +719,37 @@ describe("loadOpenClawPlugins", () => {
     expect(bundled?.status).toBe("disabled");
   });
 
+  it("registers standalone text transforms", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "text-shim",
+      filename: "text-shim.cjs",
+      body: `module.exports = {
+        id: "text-shim",
+        register(api) {
+          api.registerTextTransforms({
+            input: [{ from: /red basket/g, to: "blue basket" }],
+            output: [{ from: /blue basket/g, to: "red basket" }],
+          });
+        },
+      };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["text-shim"] },
+    });
+
+    expect(registry.textTransforms).toHaveLength(1);
+    expect(registry.textTransforms[0]).toMatchObject({
+      pluginId: "text-shim",
+      transforms: {
+        input: expect.any(Array),
+        output: expect.any(Array),
+      },
+    });
+  });
+
   it.each([
     {
       name: "loads bundled telegram plugin when enabled",
@@ -835,7 +866,7 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
-  it("keeps auto-enabled bundled channels behind restrictive allowlists", () => {
+  it("materializes auto-enabled bundled channels into restrictive allowlists", () => {
     setupBundledTelegramPlugin();
     const rawConfig = {
       channels: {
@@ -861,8 +892,15 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-    expect(telegram?.status).toBe("disabled");
-    expect(telegram?.error).toBe("not in allowlist");
+    expect(autoEnabled.config.plugins?.allow).toEqual(["browser", "telegram"]);
+    expect(telegram?.status).toBe("loaded");
+    expect(telegram?.error).toBeUndefined();
+    expect(telegram).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured",
+    });
   });
 
   it("preserves all auto-enable reasons in activation metadata", () => {

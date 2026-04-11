@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
-import type { ChannelPlugin } from "./plugins/types.js";
+import type { ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "./registry.js";
 
 export type ConversationBindingContext = {
@@ -208,9 +208,7 @@ export function resolveConversationBindingContext(
       channel,
       accountId,
       conversationId: focusedConversationId,
-      ...(focusedParentConversationId
-        ? { parentConversationId: focusedParentConversationId }
-        : {}),
+      ...(focusedParentConversationId ? { parentConversationId: focusedParentConversationId } : {}),
       ...(threadId ? { threadId } : {}),
     };
   }

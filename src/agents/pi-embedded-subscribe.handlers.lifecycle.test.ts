@@ -259,6 +259,26 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("keeps accumulated deterministic side effects from being marked abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.hadDeterministicSideEffect = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("flushes orphaned tool media as a media-only block reply", async () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
@@ -272,6 +292,26 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("emits orphaned tool media before the lifecycle end event", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    await handleAgentEnd(ctx);
+
+    const blockReplyOrder =
+      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
+
+    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
   });
 
   it("resolves compaction wait before awaiting an async block reply flush", async () => {

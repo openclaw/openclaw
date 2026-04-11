@@ -4,6 +4,7 @@ import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedPiRunMock = vi.hoisted(() => vi.fn());
+const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const replyRunAbortMock = vi.hoisted(() => vi.fn());
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
@@ -18,7 +19,7 @@ vi.mock("../../globals.js", () => ({
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: vi.fn(() => ({})),
+  createInternalHookEvent: createInternalHookEventMock,
   triggerInternalHook: vi.fn(async () => undefined),
 }));
 
@@ -111,6 +112,14 @@ describe("handleStopCommand target fallback", () => {
     expect(stopSubagentsForRequesterMock).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSessionKey: "agent:target:telegram:direct:123",
+      }),
+    );
+    expect(createInternalHookEventMock).toHaveBeenCalledWith(
+      "command",
+      "stop",
+      "agent:target:telegram:direct:123",
+      expect.objectContaining({
+        sessionEntry: undefined,
       }),
     );
   });

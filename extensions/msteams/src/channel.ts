@@ -387,11 +387,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: normalizeOptionalString(context.To),
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const nativeChannelId = context.NativeChannelId?.trim();
+        const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        return {
+          currentChannelId: normalizeOptionalString(context.To),
+          currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
     outbound: {
       deliveryMode: "direct",

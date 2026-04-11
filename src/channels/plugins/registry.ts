@@ -5,7 +5,8 @@ import {
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();

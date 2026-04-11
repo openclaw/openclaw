@@ -12,8 +12,8 @@ import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";

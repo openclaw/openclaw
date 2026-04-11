@@ -68,6 +68,7 @@ export type EmbeddedPiSubscribeState = {
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
+  hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];

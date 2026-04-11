@@ -27,7 +27,7 @@ vi.mock("../runtime-api.js", async () => {
 });
 
 vi.mock("google-auth-library", () => ({
-  GoogleAuth: class {},
+  GoogleAuth: function GoogleAuth() {},
   OAuth2Client: class {
     verifyIdToken = mocks.verifyIdToken;
   },

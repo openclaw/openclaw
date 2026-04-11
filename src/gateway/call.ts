@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadConfig,
-  resolveConfigPath,
-  resolveGatewayPort,
-  resolveStateDir,
-} from "../config/config.js";
-import { loadConfig as loadConfigFromIo } from "../config/io.js";
+import { loadConfig } from "../config/io.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -99,9 +93,9 @@ const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
   loadConfig,
   loadOrCreateDeviceIdentity,
-  resolveGatewayPort,
-  resolveConfigPath,
-  resolveStateDir,
+  resolveGatewayPort: resolveGatewayPortFromPaths,
+  resolveConfigPath: resolveConfigPathFromPaths,
+  resolveStateDir: resolveStateDirFromPaths,
   loadGatewayTlsRuntime,
 };
 const gatewayCallDeps = {
@@ -127,7 +121,7 @@ function loadGatewayConfig(): OpenClawConfig {
       ? gatewayCallDeps.loadConfig
       : typeof defaultGatewayCallDeps.loadConfig === "function"
         ? defaultGatewayCallDeps.loadConfig
-        : loadConfigFromIo;
+        : loadConfig;
   return loadConfigFn();
 }
 
