@@ -553,6 +553,14 @@ async function runExecResolver(params: {
   });
 }
 
+function extractSingleExecPlainValue(stdout: string): string {
+  const lines = stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return lines.at(-1) ?? "";
+}
+
 function parseExecValues(params: {
   providerName: string;
   ids: string[];
@@ -573,7 +581,7 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      return { [params.ids[0]]: extractSingleExecPlainValue(params.stdout) };
     }
   } else {
     try {

@@ -237,6 +237,22 @@ describe("secret ref resolver", () => {
     expect(value).toBe("plain-secret");
   });
 
+  itPosix("uses the last non-empty stdout line for non-JSON single-value exec output", async () => {
+    const root = await createCaseDir("exec-plain-multiline");
+    const scriptPath = path.join(root, "resolver-plain-multiline.sh");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/bin/sh",
+        "printf 'plugin init log\\n\\nfull\\n'",
+      ].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveExecSecret(scriptPath, { jsonOnly: false });
+    expect(value).toBe("full");
+  });
+
   itPosix(
     "tolerates stdin write errors when exec provider exits before consuming a large request",
     async () => {
