@@ -1,4 +1,5 @@
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { logVerbose } from "../../globals.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -488,7 +489,27 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      // Guard against orphaned pendingToolTasks that never settle.
+      // When pi-agent-core silently drops parallel tool dispatches, the
+      // corresponding onToolResult callbacks never fire, leaving dangling
+      // promises in pendingToolTasks. Without a timeout, the reply pipeline
+      // blocks indefinitely and the session appears permanently stuck.
+      // See: https://github.com/openclaw/openclaw/issues/53889
+      const PENDING_TOOL_DRAIN_TIMEOUT_MS = 30_000;
+      const timeout = new Promise<"timeout">((resolve) => {
+        const handle = setTimeout(() => resolve("timeout"), PENDING_TOOL_DRAIN_TIMEOUT_MS);
+        if (typeof handle === "object" && "unref" in handle) {
+          handle.unref();
+        }
+      });
+      const drain = Promise.allSettled(pendingToolTasks).then(() => "settled" as const);
+      const outcome = await Promise.race([drain, timeout]);
+      if (outcome === "timeout") {
+        logVerbose(
+          `[agent-runner] ${pendingToolTasks.size} pending tool task(s) did not settle within ${PENDING_TOOL_DRAIN_TIMEOUT_MS}ms; ` +
+            `proceeding to avoid session deadlock (parallel tool dispatch may have dropped results)`,
+        );
+      }
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
