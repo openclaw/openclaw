@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
@@ -8,7 +9,6 @@ import {
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
@@ -110,8 +110,8 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 }
 
 function createManager(options?: {
-  channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
+  resolveChannelRuntime?: () => ChannelRuntimeSurface;
   loadConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
 }) {
@@ -224,8 +224,8 @@ describe("server-channels auto restart", () => {
     const channelRuntime = {
       ...createRuntimeChannel(),
       marker: "channel-runtime",
-    } as PluginRuntime["channel"] & { marker: string };
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    } as ChannelRuntimeSurface & { marker: string };
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: ChannelRuntimeSurface }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
@@ -287,9 +287,9 @@ describe("server-channels auto restart", () => {
     const channelRuntime = {
       ...createRuntimeChannel(),
       marker: "lazy-channel-runtime",
-    } as PluginRuntime["channel"] & { marker: string };
+    } as ChannelRuntimeSurface & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: ChannelRuntimeSurface }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });
@@ -311,7 +311,7 @@ describe("server-channels auto restart", () => {
   it("fails fast when channelRuntime is not a full plugin runtime surface", async () => {
     installTestRegistry(createTestPlugin({ startAccount: vi.fn(async () => {}) }));
     const manager = createManager({
-      channelRuntime: { marker: "partial-runtime" } as unknown as PluginRuntime["channel"],
+      channelRuntime: { marker: "partial-runtime" } as unknown as ChannelRuntimeSurface,
     });
 
     await expect(manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).rejects.toThrow(
@@ -324,7 +324,7 @@ describe("server-channels auto restart", () => {
 
   it("keeps auto-restart running when scoped runtime cleanup throws", async () => {
     const baseChannelRuntime = createRuntimeChannel();
-    const channelRuntime: PluginRuntime["channel"] = {
+    const channelRuntime: ChannelRuntimeSurface = {
       ...baseChannelRuntime,
       runtimeContexts: {
         ...baseChannelRuntime.runtimeContexts,
@@ -336,7 +336,7 @@ describe("server-channels auto restart", () => {
       },
     };
     const startAccount = vi.fn(
-      async ({ channelRuntime }: { channelRuntime?: PluginRuntime["channel"] }) => {
+      async ({ channelRuntime }: { channelRuntime?: ChannelRuntimeSurface }) => {
         channelRuntime?.runtimeContexts.register({
           channelId: "discord",
           accountId: DEFAULT_ACCOUNT_ID,

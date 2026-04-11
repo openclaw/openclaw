@@ -3,6 +3,8 @@ import type {
   ChannelRuntimeSurface,
 } from "../channels/plugins/channel-runtime-surface.types.js";
 
+export type { ChannelRuntimeContextKey };
+
 const NOOP_DISPOSE = () => {};
 
 function resolveScopedRuntimeContextRegistry(params: {
