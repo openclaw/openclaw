@@ -6,6 +6,8 @@ function createTextEvent(params: {
   text: string;
   messageId?: string;
   chatId?: string;
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   return {
     sender: {
@@ -21,6 +23,8 @@ function createTextEvent(params: {
       chat_type: "p2p",
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
+      ...(params.rootId !== undefined ? { root_id: params.rootId } : {}),
+      ...(params.threadId !== undefined ? { thread_id: params.threadId } : {}),
     },
   } as FeishuMessageEvent;
 }
@@ -31,6 +35,36 @@ describe("getFeishuSequentialKey", () => {
     [createTextEvent({ text: "/status" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control"],
     [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw"],
+    [
+      createTextEvent({ text: "hello", chatId: "oc_topic_chat", rootId: "om_root_1" }),
+      "feishu:default:oc_topic_chat:topic:om_root_1",
+    ],
+    [
+      createTextEvent({ text: "hello", chatId: "oc_topic_chat", threadId: "omt_thread_1" }),
+      "feishu:default:oc_topic_chat:topic:omt_thread_1",
+    ],
+    [
+      createTextEvent({
+        text: "hello",
+        chatId: "oc_topic_chat",
+        rootId: "om_root_a",
+        threadId: "omt_thread_b",
+      }),
+      "feishu:default:oc_topic_chat:topic:om_root_a",
+    ],
+    [
+      createTextEvent({
+        text: "hello",
+        chatId: "oc_topic_chat",
+        rootId: "   ",
+        threadId: "omt_thread_b",
+      }),
+      "feishu:default:oc_topic_chat:topic:omt_thread_b",
+    ],
+    [
+      createTextEvent({ text: "hello", chatId: "oc_regular_group" }),
+      "feishu:default:oc_regular_group",
+    ],
   ])("resolves sequential key %#", (event, expected) => {
     expect(
       getFeishuSequentialKey({
@@ -68,5 +102,63 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  it("keeps /stop on a chat-wide control lane even inside a topic group", () => {
+    const event = createTextEvent({
+      text: "/stop",
+      chatId: "oc_topic_chat",
+      rootId: "om_topic_root_1",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_topic_chat:control");
+  });
+
+  it("keeps /btw on a chat-wide out-of-band lane even inside a topic group", () => {
+    const event = createTextEvent({
+      text: "/btw what changed?",
+      chatId: "oc_topic_chat",
+      rootId: "om_topic_root_2",
+    });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_topic_chat:btw");
+  });
+
+  it("runs different topics on independent lanes within the same chat", () => {
+    const first = createTextEvent({
+      text: "hello from topic 1",
+      chatId: "oc_topic_chat",
+      rootId: "om_topic_root_1",
+      messageId: "om_message_topic_1",
+    });
+    const second = createTextEvent({
+      text: "hello from topic 2",
+      chatId: "oc_topic_chat",
+      rootId: "om_topic_root_2",
+      messageId: "om_message_topic_2",
+    });
+
+    const firstKey = getFeishuSequentialKey({
+      accountId: "default",
+      event: first,
+    });
+    const secondKey = getFeishuSequentialKey({
+      accountId: "default",
+      event: second,
+    });
+
+    expect(firstKey).toBe("feishu:default:oc_topic_chat:topic:om_topic_root_1");
+    expect(secondKey).toBe("feishu:default:oc_topic_chat:topic:om_topic_root_2");
+    expect(firstKey).not.toBe(secondKey);
   });
 });

@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/sessions: keep topic-scoped session initialization on the canonical topic transcript path when inbound turns omit `MessageThreadId`, so one topic session no longer alternates between bare and topic-qualified transcript files. (#64869) thanks @jalehman.
 - Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.
 - MiniMax/OAuth: write `api: "anthropic-messages"` and `authHeader: true` into the `minimax-portal` config patch during `openclaw configure`, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.
+- Feishu: route topic-group messages through per-thread sequential lanes so different topics in the same chat run concurrently instead of queuing behind each other. Chat-wide `/stop` and `/btw` escape lanes are preserved so abort and out-of-band commands still bypass a busy topic. Thanks @hepengcheng
 
 ## 2026.4.11-beta.1
 
