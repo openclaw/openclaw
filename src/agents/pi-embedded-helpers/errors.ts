@@ -1039,6 +1039,17 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+function stripStandaloneModelAttributionFooter(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  return text.replace(
+    /(?:^|\r?\n\r?\n)[ \t]*[\u2014-][ \t]*([a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)+)[ \t]*$/i,
+    "",
+  );
+}
+
 function isLikelyHttpErrorText(raw: string): boolean {
   if (isCloudflareOrHtmlErrorPage(raw)) {
     return true;
@@ -1333,7 +1344,8 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutFooter = stripStandaloneModelAttributionFooter(stripped);
+  const withoutLeadingEmptyLines = withoutFooter.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 

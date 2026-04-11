@@ -20,6 +20,7 @@ import {
   downgradeOpenAIReasoningBlocks,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  sanitizeUserFacingText,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
@@ -297,6 +298,74 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
+function sanitizeAssistantReplayText(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      out.push(message);
+      continue;
+    }
+
+    const assistant = message;
+    const errorContext = assistant.stopReason === "error";
+
+    if (typeof assistant.content === "string") {
+      const sanitized = sanitizeUserFacingText(assistant.content, { errorContext });
+      if (sanitized !== assistant.content) {
+        touched = true;
+        out.push({
+          ...(assistant as unknown as Record<string, unknown>),
+          content: sanitized,
+        } as AgentMessage);
+      } else {
+        out.push(message);
+      }
+      continue;
+    }
+
+    if (!Array.isArray(assistant.content)) {
+      out.push(message);
+      continue;
+    }
+
+    let changed = false;
+    const nextContent = assistant.content.flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [block];
+      }
+      const record = block as { type?: unknown; text?: unknown };
+      if (record.type !== "text" || typeof record.text !== "string") {
+        return [block];
+      }
+
+      const sanitized = sanitizeUserFacingText(record.text, { errorContext });
+      if (sanitized === record.text) {
+        return [block];
+      }
+
+      changed = true;
+      if (!sanitized.trim()) {
+        return [];
+      }
+      return [{ ...block, text: sanitized }];
+    });
+
+    if (!changed) {
+      out.push(message);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...(assistant as unknown as Record<string, unknown>),
+      content: nextContent.length > 0 ? nextContent : [{ type: "text", text: "" }],
+    } as AgentMessage);
+  }
+
+  return touched ? out : messages;
+}
+
 function createProviderReplaySessionState(
   sessionManager: SessionManager,
 ): ProviderReplaySessionState {
@@ -428,6 +497,7 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
+  const sanitizedAssistantReplay = sanitizeAssistantReplayText(sanitizedCompactionUsage);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
@@ -445,9 +515,9 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
+        downgradeOpenAIReasoningBlocks(sanitizedAssistantReplay),
       )
-    : sanitizedCompactionUsage;
+    : sanitizedAssistantReplay;
   const provider = params.provider?.trim();
   const providerSanitized =
     provider && provider.length > 0

@@ -304,6 +304,16 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe(input);
   });
 
+  it("strips a trailing provider/model attribution footer line", () => {
+    const input = "6:22 PM PDT on Friday, April 10, 2026\n\n— anthropic/claude-sonnet-4-6";
+
+    expect(sanitizeUserFacingText(input)).toBe("6:22 PM PDT on Friday, April 10, 2026");
+  });
+
+  it("strips a footer-only provider/model attribution line", () => {
+    expect(sanitizeUserFacingText("— anthropic/claude-sonnet-4-6")).toBe("");
+  });
+
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
