@@ -4,10 +4,11 @@ import {
   computeQaAgenticParityMetrics,
   QaParityLabelMismatchError,
   renderQaAgenticParityMarkdownReport,
+  type QaParityReportScenario,
   type QaParitySuiteSummary,
 } from "./agentic-parity-report.js";
 
-const FULL_PARITY_PASS_SCENARIOS = [
+const FULL_PARITY_PASS_SCENARIOS: QaParityReportScenario[] = [
   { name: "Approval turn tool followthrough", status: "pass" as const },
   { name: "Compaction retry after mutating tool", status: "pass" as const },
   { name: "Model switch with tool continuity", status: "pass" as const },
@@ -22,7 +23,7 @@ const FULL_PARITY_PASS_SCENARIOS = [
 
 function withScenarioOverride(
   name: string,
-  override: Partial<(typeof FULL_PARITY_PASS_SCENARIOS)[number]>,
+  override: Partial<QaParityReportScenario>,
 ) {
   return FULL_PARITY_PASS_SCENARIOS.map((scenario) =>
     scenario.name === name ? { ...scenario, ...override } : scenario,
@@ -416,6 +417,22 @@ Follow-up:
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
   });
 
+  it("does not flag structured status lines that end in `done`", () => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: "Compaction retry after mutating tool",
+          status: "pass",
+          details: `Confirmed, replay unsafe after write.
+compactionCount=0
+status=done`,
+        },
+      ],
+    };
+
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
+  });
+
   it("does not flag positive-tone passes when the scenario shows real tool-call evidence", () => {
     // A legitimate tool-mediated pass that happens to include
     // "successfully" in its prose must not be flagged. The
@@ -520,11 +537,19 @@ Follow-up:
       baselineLabel: "anthropic/claude-opus-4-6",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+        run: {
+          primaryProvider: "openai",
+          primaryModel: "openai/gpt-5.4",
+          primaryModelName: "gpt-5.4",
+        },
       },
       baselineSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        run: {
+          primaryProvider: "anthropic",
+          primaryModel: "anthropic/claude-opus-4-6",
+          primaryModelName: "claude-opus-4-6",
+        },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
@@ -550,11 +575,19 @@ Follow-up:
       baselineLabel: "Opus 4.6 baseline",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+        run: {
+          primaryProvider: "openai",
+          primaryModel: "openai/gpt-5.4",
+          primaryModelName: "gpt-5.4",
+        },
       },
       baselineSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        run: {
+          primaryProvider: "anthropic",
+          primaryModel: "anthropic/claude-opus-4-6",
+          primaryModelName: "claude-opus-4-6",
+        },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
@@ -568,11 +601,19 @@ Follow-up:
       baselineLabel: "Opus 4.6 / baseline",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+        run: {
+          primaryProvider: "openai",
+          primaryModel: "openai/gpt-5.4",
+          primaryModelName: "gpt-5.4",
+        },
       },
       baselineSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        run: {
+          primaryProvider: "anthropic",
+          primaryModel: "anthropic/claude-opus-4-6",
+          primaryModelName: "claude-opus-4-6",
+        },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
@@ -587,16 +628,24 @@ Follow-up:
         baselineLabel: "anthropic/claude-opus-4-6",
         candidateSummary: {
           scenarios: FULL_PARITY_PASS_SCENARIOS,
-          run: { primaryProvider: "openai", primaryModel: "gpt-5.4-alt" },
+          run: {
+            primaryProvider: "openai",
+            primaryModel: "openai/gpt-5.4-alt",
+            primaryModelName: "gpt-5.4-alt",
+          },
         },
         baselineSummary: {
           scenarios: FULL_PARITY_PASS_SCENARIOS,
-          run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+          run: {
+            primaryProvider: "anthropic",
+            primaryModel: "anthropic/claude-opus-4-6",
+            primaryModelName: "claude-opus-4-6",
+          },
         },
         comparedAt: "2026-04-11T00:00:00.000Z",
       }),
     ).toThrow(
-      /candidate summary run\.primaryProvider=openai and run\.primaryModel=gpt-5\.4-alt do not match --candidate-label=openai\/gpt-5\.4/,
+      /candidate summary run\.primaryProvider=openai and run\.primaryModel=openai\/gpt-5\.4-alt do not match --candidate-label=openai\/gpt-5\.4/,
     );
   });
 
@@ -606,11 +655,19 @@ Follow-up:
       baselineLabel: "anthropic:claude-opus-4-6",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "openai", primaryModel: "gpt-5.4" },
+        run: {
+          primaryProvider: "openai",
+          primaryModel: "openai/gpt-5.4",
+          primaryModelName: "gpt-5.4",
+        },
       },
       baselineSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
-        run: { primaryProvider: "anthropic", primaryModel: "claude-opus-4-6" },
+        run: {
+          primaryProvider: "anthropic",
+          primaryModel: "anthropic/claude-opus-4-6",
+          primaryModelName: "claude-opus-4-6",
+        },
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
