@@ -16,6 +16,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import type { PairingChannel } from "./pairing-store.types.js";
+export type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
