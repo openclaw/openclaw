@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown by routing QA command registration through a narrow facade. (#64648) Thanks @obviyus.
 - QA/packaging: ship the bundled QA scenario pack in npm releases and keep `openclaw completion --write-state` working even if QA setup is broken, so missing QA content only degrades QA instead of breaking broader CLI startup-adjacent flows. Thanks @vincentkoc.
 - Codex/QA: keep Codex app-server coordination chatter out of visible replies, add a live QA leak scenario, and classify leaked harness meta text as a QA failure instead of a successful reply. Thanks @vincentkoc.
+- ACP/agents: suppress commentary-phase child assistant relay text in ACP parent stream updates, so spawned child runs stop leaking internal progress chatter into the parent session. Thanks @vincentkoc.
 - Control UI/webchat: persist agent-run TTS audio replies into webchat history before finalization so tool-generated audio reaches webchat clients again. (#63514) thanks @bittoby
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
