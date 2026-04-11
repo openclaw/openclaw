@@ -777,7 +777,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = `${String(block.thinkingSignature ?? "")}${delta.signature}`;
+              block.thinkingSignature = `${block.thinkingSignature ?? ""}${delta.signature}`;
             }
             continue;
           }

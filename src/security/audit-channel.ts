@@ -338,7 +338,7 @@ export async function collectChannelSecurityFindings(params: {
           account,
         });
         for (const message of warnings ?? []) {
-          const trimmed = String(message).trim();
+          const trimmed = message.trim();
           if (!trimmed) {
             continue;
           }

@@ -43,7 +43,7 @@ export async function sendTranscriptEcho(params: {
   if (!isDeliverableMessageChannel(normalizedChannel)) {
     if (shouldLogVerbose()) {
       logVerbose(
-        `media: echo-transcript skipped (channel "${String(normalizedChannel)}" is not deliverable)`,
+        `media: echo-transcript skipped (channel "${normalizedChannel}" is not deliverable)`,
       );
     }
     return;
