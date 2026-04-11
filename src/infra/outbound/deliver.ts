@@ -39,6 +39,7 @@ import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";

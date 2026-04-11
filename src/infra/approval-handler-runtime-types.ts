@@ -11,6 +11,8 @@ import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channe
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
+export type { ChannelApprovalKind } from "./approval-types.js";
+
 export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 

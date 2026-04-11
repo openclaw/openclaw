@@ -669,7 +669,6 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest;
   }) => boolean;
 };
-export type { ChannelApprovalKind } from "../../infra/approval-types.js";
 
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }

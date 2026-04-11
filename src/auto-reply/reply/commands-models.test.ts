@@ -18,7 +18,7 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
+  loadModelCatalog: (params: unknown) => modelCatalogMocks.loadModelCatalog(params),
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
@@ -268,7 +268,7 @@ describe("handleModelsCommand", () => {
         providerOverride: "target-provider",
         modelOverride: "target-model",
       },
-    } as HandleCommandsParams["sessionStore"];
+    };
 
     const result = await handleModelsCommand(params, true);
 
