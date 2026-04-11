@@ -68,7 +68,7 @@ const RELATED_BLOCK_PATTERN = new RegExp(
 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "page";
