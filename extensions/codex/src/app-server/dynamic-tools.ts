@@ -16,6 +16,11 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/** pi-agent tools may expose optional `prepareArguments`; not declared on `AnyAgentTool`. */
+type AnyAgentToolWithPrepare = AnyAgentTool & {
+  prepareArguments?: (args: Record<string, unknown>) => unknown;
+};
+
 export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   handleToolCall: (params: CodexDynamicToolCallParams) => Promise<CodexDynamicToolCallResponse>;
@@ -52,7 +57,7 @@ export function createCodexDynamicToolBridge(params: {
     })),
     telemetry,
     handleToolCall: async (call) => {
-      const tool = toolMap.get(call.tool);
+      const tool = toolMap.get(call.tool) as AnyAgentToolWithPrepare | undefined;
       if (!tool) {
         return {
           contentItems: [{ type: "inputText", text: `Unknown OpenClaw tool: ${call.tool}` }],
@@ -61,7 +66,14 @@ export function createCodexDynamicToolBridge(params: {
       }
       const args = jsonObjectToRecord(call.arguments);
       try {
-        const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        let preparedArgs = args;
+        const prepare = tool.prepareArguments;
+        if (prepare != null) {
+          if (typeof prepare !== "function") {
+            throw new TypeError(`Tool ${tool.name} prepareArguments must be a function`);
+          }
+          preparedArgs = prepare.call(tool, args) as Record<string, unknown>;
+        }
         const result = await tool.execute(call.callId, preparedArgs, params.signal);
         collectToolTelemetry({
           toolName: tool.name,

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -13,6 +14,7 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   resolveAckExecutionFastPathInstruction,
+  resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -258,6 +260,75 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       explanation: "I'll inspect the code. Then I'll patch the issue. Finally I'll run tests.",
       steps: ["I'll inspect the code.", "Then I'll patch the issue.", "Finally I'll run tests."],
     });
+  });
+
+  it("surfaces incomplete-turn guidance when stop/end_turn yields zero payloads after side effects", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      didSendViaMessagingTool: false,
+      lastAssistant: {
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("verify before retrying");
+  });
+
+  it("does not surface incomplete-turn error for message(send) with only silent token after normal stop", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      didSendViaMessagingTool: true,
+      lastAssistant: {
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
+  it("still surfaces incomplete-turn when messaging ran but assistant text is empty", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      didSendViaMessagingTool: true,
+      lastAssistant: {
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("verify before retrying");
   });
 
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {

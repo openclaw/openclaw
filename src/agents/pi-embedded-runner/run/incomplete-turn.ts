@@ -1,3 +1,4 @@
+import { isSilentReplyPayloadText } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -11,9 +12,11 @@ type ReplayMetadataAttempt = Pick<
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
+  | "assistantTexts"
   | "clientToolCall"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -45,6 +48,29 @@ export function isIncompleteTerminalAssistantTurn(params: {
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
   return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+}
+
+function isEmptyVisiblePayloadAfterNormalStop(stopReason: unknown): boolean {
+  return stopReason === "stop" || stopReason === "end_turn";
+}
+
+/**
+ * `message(action=send)` plus an assistant reply of only SILENT_REPLY_TOKEN yields zero
+ * outbound payloads after stripping, but is an intentional success — not an incomplete turn.
+ * Empty assistant text with messaging is ambiguous (e.g. another destination), so do not suppress.
+ */
+function isMessagingSilentReplyOnlySuccess(attempt: {
+  assistantTexts: string[];
+  didSendViaMessagingTool: boolean;
+}): boolean {
+  if (!attempt.didSendViaMessagingTool) {
+    return false;
+  }
+  const segments = attempt.assistantTexts.map((t) => t.trim()).filter(Boolean);
+  if (segments.length === 0) {
+    return false;
+  }
+  return segments.every((t) => isSilentReplyPayloadText(t));
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -144,7 +170,19 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  if (!incompleteTerminalAssistant && stopReason !== "error") {
+  const emptyAfterNormalCompletion =
+    isEmptyVisiblePayloadAfterNormalStop(stopReason) && !incompleteTerminalAssistant;
+  if (!incompleteTerminalAssistant && stopReason !== "error" && !emptyAfterNormalCompletion) {
+    return null;
+  }
+
+  if (
+    emptyAfterNormalCompletion &&
+    isMessagingSilentReplyOnlySuccess({
+      assistantTexts: params.attempt.assistantTexts,
+      didSendViaMessagingTool: params.attempt.didSendViaMessagingTool,
+    })
+  ) {
     return null;
   }
 

@@ -175,4 +175,33 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTargets: [],
     });
   });
+
+  it("rejects non-function prepareArguments", async () => {
+    const base = createTool({
+      name: "broken",
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: {},
+      })),
+    });
+    const tool = { ...base, prepareArguments: "not-a-function" } as AnyAgentTool;
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "broken",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.contentItems[0]).toMatchObject({
+      type: "inputText",
+      text: expect.stringContaining("prepareArguments"),
+    });
+  });
 });
