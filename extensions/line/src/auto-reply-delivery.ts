@@ -1,6 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { parseReplyDirectives } from "../../../src/auto-reply/reply/reply-directives.js";
+import { parseReplyDirectives } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { FlexContainer } from "./flex-templates.js";

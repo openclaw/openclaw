@@ -93,14 +93,18 @@ export function createBlockReplyDeliveryHandler(params: {
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+    const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+    const hasStickerDirectiveCandidate =
+      Boolean(payload.sticker) || /sticker:/i.test(payload.text ?? "");
+    if (skip && !hasMedia && !payload.audioAsVoice && !hasStickerDirectiveCandidate) {
       return;
     }
+    const textForTagging = skip && hasStickerDirectiveCandidate ? payload.text : text;
 
     const taggedPayload = applyReplyTagsToPayload(
       {
         ...payload,
-        text,
+        text: textForTagging,
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
         replyToId:
           payload.replyToId ??
