@@ -121,7 +121,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
 
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
-  const storePath = resolveDefaultSessionStorePath(targetAgentId);
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[params.sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {

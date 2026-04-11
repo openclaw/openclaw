@@ -140,4 +140,28 @@ describe("buildExportSessionReply", () => {
       storePath: "/tmp/target-store/sessions.json",
     });
   });
+
+  it("prefers the active command storePath over the default target-agent store", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    });
+
+    await buildExportSessionReply({
+      ...makeParams(),
+      storePath: "/tmp/custom-store/sessions.json",
+    });
+
+    expect(hoisted.resolveDefaultSessionStorePathMock).not.toHaveBeenCalled();
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json", {
+      skipCache: true,
+    });
+    expect(hoisted.resolveSessionFilePathOptionsMock).toHaveBeenCalledWith({
+      agentId: "target",
+      storePath: "/tmp/custom-store/sessions.json",
+    });
+  });
 });
