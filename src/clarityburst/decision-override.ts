@@ -1261,7 +1261,8 @@ function applyMemoryModifyOverridesImpl(
       outcome: "ABSTAIN_CLARIFY",
       reason: "router_outage",
       contractId: null,
-      instructions: "The clarity router is currently unavailable. Please try again shortly."
+      instructions: "The clarity router is currently unavailable. Please try again shortly.",
+      nonRetryable: true
     });
   }
 
@@ -1438,7 +1439,8 @@ async function applySubagentSpawnOverridesImpl(
       outcome: "ABSTAIN_CLARIFY",
       reason: "router_outage",
       contractId: null,
-      instructions: "The clarity router is currently unavailable. Please try again shortly."
+      instructions: "The clarity router is currently unavailable. Please try again shortly.",
+      nonRetryable: true
     });
   }
 

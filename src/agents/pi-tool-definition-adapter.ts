@@ -5,6 +5,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import type { ClarityBurstAbstainError } from "../clarityburst/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -282,4 +283,36 @@ export function toClientToolDefinitions(
       },
     } satisfies ToolDefinition;
   });
+}
+
+/**
+ * Payload returned when a ClarityBurst abstain outcome is converted to a blocked response.
+ * Used by the fail-closed abstain-to-blocked-response conversion path.
+ */
+export type BlockedResponsePayload = {
+  nonRetryable: boolean;
+  stageId: string;
+  outcome: "ABSTAIN_CONFIRM" | "ABSTAIN_CLARIFY";
+  reason: string;
+  contractId: string | null;
+  instructions?: string;
+};
+
+/**
+ * Converts a ClarityBurstAbstainError into a BlockedResponsePayload.
+ * Respects the nonRetryable value from the error, defaulting to false for backwards compatibility.
+ * the caller may re-attempt after providing the required token or clarification.
+ */
+export function convertAbstainToBlockedResponse(
+  error: ClarityBurstAbstainError,
+  instructions?: string,
+): BlockedResponsePayload {
+  return {
+    nonRetryable: error.nonRetryable ?? false,
+    stageId: error.stageId,
+    outcome: error.outcome,
+    reason: error.reason,
+    contractId: error.contractId,
+    instructions: instructions ?? error.instructions,
+  };
 }

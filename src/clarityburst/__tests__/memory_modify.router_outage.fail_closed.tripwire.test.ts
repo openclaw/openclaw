@@ -130,6 +130,7 @@ function executeMemoryModifyWithGating(
       reason: "router_outage",
       contractId: null,
       instructions: "The router is unavailable and memory modifications cannot proceed. Retry when the router service is restored.",
+      nonRetryable: true,
     });
     return convertAbstainToBlockedResponse(error);
   }
