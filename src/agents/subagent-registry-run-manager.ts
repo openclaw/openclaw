@@ -277,8 +277,7 @@ export function createSubagentRunManager(params: {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
-    const controllerSessionKey =
-      registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
     }

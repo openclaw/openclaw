@@ -161,11 +161,11 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
     "@mariozechner/pi-coding-agent",
   );
-  class AuthStorage {}
+  function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
   }
-  class ModelRegistry {}
+  function ModelRegistry() {}
 
   return {
     ...actual,
