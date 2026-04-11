@@ -12,6 +12,7 @@ import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./type
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
+  runId?: string;
   action: "finished";
   status?: CronRunStatus;
   error?: string;

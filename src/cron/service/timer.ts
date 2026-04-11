@@ -30,6 +30,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { appendRunningCronRunRecord, finalizeCronRunRecord } from "./run-records.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -55,6 +56,7 @@ const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
+    runId: string;
     taskRunId?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -65,6 +67,7 @@ type TimedCronRunOutcome = CronRunOutcome &
 type StartupCatchupCandidate = {
   jobId: string;
   job: CronJob;
+  runId: string;
 };
 
 type StartupCatchupPlan = {
@@ -130,6 +133,10 @@ export function normalizeCronRunErrorText(err: unknown): string {
 
 function createCronTaskRunId(jobId: string, startedAt: number): string {
   return `cron:${jobId}:${startedAt}`;
+}
+
+function resolveScheduledRunAtMs(job: CronJob, startedAt: number): number {
+  return hasScheduledNextRunAtMs(job.state.nextRunAtMs) ? job.state.nextRunAtMs : startedAt;
 }
 
 function tryCreateCronTaskRun(params: {
@@ -584,8 +591,24 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  finalizeCronRunRecord({
+    store,
+    runId: result.runId,
+    status: result.status,
+    endedAtMs: result.endedAt,
+    error: result.error,
+    summary: result.summary,
+    delivered: result.delivered,
+    deliveryStatus: job.state.lastDeliveryStatus,
+    deliveryError: job.state.lastDeliveryError,
+    sessionId: result.sessionId,
+    sessionKey: result.sessionKey,
+    model: result.model,
+    provider: result.provider,
+    usage: result.usage,
+  });
 
-  emitJobFinished(state, job, result, result.startedAt);
+  emitJobFinished(state, job, result, result.startedAt, result.runId);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
@@ -694,27 +717,40 @@ export async function onTimer(state: CronServiceState) {
       }
 
       const now = state.deps.nowMs();
-      for (const job of due) {
+      const preparedDue = due.map((job) => {
         job.state.runningAtMs = now;
         job.state.lastError = undefined;
-      }
+        return {
+          id: job.id,
+          job,
+          runId: appendRunningCronRunRecord({
+            store: state.store!,
+            jobId: job.id,
+            trigger: "due",
+            scheduledAtMs: resolveScheduledRunAtMs(job, now),
+            startedAtMs: now,
+          }).runId,
+        };
+      });
       await persist(state);
-
-      return due.map((j) => ({
-        id: j.id,
-        job: j,
-      }));
+      return preparedDue;
     });
 
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
+      runId: string;
     }): Promise<TimedCronRunOutcome> => {
-      const { id, job } = params;
+      const { id, job, runId } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       markCronJobActive(job.id);
-      emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+      emit(state, {
+        jobId: job.id,
+        runId,
+        action: "started",
+        runAtMs: startedAt,
+      });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
@@ -722,6 +758,7 @@ export async function onTimer(state: CronServiceState) {
         const result = await executeJobCoreWithTimeout(state, job);
         return {
           jobId: id,
+          runId,
           taskRunId,
           ...result,
           startedAt,
@@ -735,6 +772,7 @@ export async function onTimer(state: CronServiceState) {
         );
         return {
           jobId: id,
+          runId,
           taskRunId,
           status: "error",
           error: errorText,
@@ -986,14 +1024,25 @@ async function planStartupCatchup(
         "cron: running missed jobs after restart",
       );
     }
-    for (const job of startupCandidates) {
+    const preparedCandidates = startupCandidates.map((job) => {
       job.state.runningAtMs = now;
       job.state.lastError = undefined;
-    }
+      return {
+        jobId: job.id,
+        job,
+        runId: appendRunningCronRunRecord({
+          store: state.store!,
+          jobId: job.id,
+          trigger: "startup-catchup",
+          scheduledAtMs: resolveScheduledRunAtMs(job, now),
+          startedAtMs: now,
+        }).runId,
+      };
+    });
     await persist(state);
 
     return {
-      candidates: startupCandidates.map((job) => ({ jobId: job.id, job })),
+      candidates: preparedCandidates,
       deferredJobIds: deferred.map((job) => job.id),
     };
   });
@@ -1020,11 +1069,17 @@ async function runStartupCatchupCandidate(
     job: candidate.job,
     startedAt,
   });
-  emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+  emit(state, {
+    jobId: candidate.job.id,
+    runId: candidate.runId,
+    action: "started",
+    runAtMs: startedAt,
+  });
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
       jobId: candidate.jobId,
+      runId: candidate.runId,
       taskRunId,
       status: result.status,
       error: result.error,
@@ -1041,6 +1096,7 @@ async function runStartupCatchupCandidate(
   } catch (err) {
     return {
       jobId: candidate.jobId,
+      runId: candidate.runId,
       taskRunId,
       status: "error",
       error: normalizeCronRunErrorText(err),
@@ -1293,7 +1349,19 @@ export async function executeJob(
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
   markCronJobActive(job.id);
-  emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+  const runRecord = appendRunningCronRunRecord({
+    store: state.store!,
+    jobId: job.id,
+    trigger: "due",
+    scheduledAtMs: resolveScheduledRunAtMs(job, startedAt),
+    startedAtMs: startedAt,
+  });
+  emit(state, {
+    jobId: job.id,
+    runId: runRecord.runId,
+    action: "started",
+    runAtMs: startedAt,
+  });
 
   let coreResult: {
     status: CronRunStatus;
@@ -1314,8 +1382,24 @@ export async function executeJob(
     startedAt,
     endedAt,
   });
+  finalizeCronRunRecord({
+    store: state.store!,
+    runId: runRecord.runId,
+    status: coreResult.status,
+    endedAtMs: endedAt,
+    error: coreResult.error,
+    summary: coreResult.summary,
+    delivered: coreResult.delivered,
+    deliveryStatus: job.state.lastDeliveryStatus,
+    deliveryError: job.state.lastDeliveryError,
+    sessionId: coreResult.sessionId,
+    sessionKey: coreResult.sessionKey,
+    model: coreResult.model,
+    provider: coreResult.provider,
+    usage: coreResult.usage,
+  });
 
-  emitJobFinished(state, job, coreResult, startedAt);
+  emitJobFinished(state, job, coreResult, startedAt, runRecord.runId);
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
@@ -1333,9 +1417,11 @@ function emitJobFinished(
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
+  runId?: string,
 ) {
   emit(state, {
     jobId: job.id,
+    runId,
     action: "finished",
     status: result.status,
     error: result.error,

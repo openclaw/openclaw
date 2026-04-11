@@ -12,6 +12,7 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
   return {
     version: 1,
+    runs: [],
     jobs: [
       {
         id: jobId,
@@ -47,7 +48,7 @@ describe("cron store", () => {
   it("returns empty store when file does not exist", async () => {
     const store = await makeStorePath();
     const loaded = await loadCronStore(store.storePath);
-    expect(loaded).toEqual({ version: 1, jobs: [] });
+    expect(loaded).toEqual({ version: 1, jobs: [], runs: [] });
   });
 
   it("throws when store contains invalid JSON", async () => {
@@ -172,7 +173,7 @@ describe("cron store", () => {
 });
 
 describe("saveCronStore", () => {
-  const dummyStore: CronStoreFile = { version: 1, jobs: [] };
+  const dummyStore: CronStoreFile = { version: 1, jobs: [], runs: [] };
 
   beforeEach(() => {
     vi.useRealTimers();

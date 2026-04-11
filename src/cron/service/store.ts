@@ -53,6 +53,7 @@ export async function ensureLoaded(
   state.store = {
     version: 1,
     jobs,
+    runs: loaded.runs ?? [],
   };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;

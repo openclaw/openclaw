@@ -6,7 +6,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronRunRecord } from "../types.js";
 import {
   applyJobPatch,
   assertSupportedJobSpec,
@@ -21,6 +21,11 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import {
+  appendRunningCronRunRecord,
+  failRunningCronRunsForJob,
+  finalizeCronRunRecord,
+} from "./run-records.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -63,6 +68,7 @@ function mergeManualRunSnapshotAfterReload(params: {
     enabled: boolean;
     updatedAtMs: number;
     state: CronJob["state"];
+    runRecord?: CronRunRecord;
   } | null;
   removed: boolean;
 }) {
@@ -83,6 +89,17 @@ function mergeManualRunSnapshotAfterReload(params: {
   reloaded.enabled = params.snapshot.enabled;
   reloaded.updatedAtMs = params.snapshot.updatedAtMs;
   reloaded.state = params.snapshot.state;
+  if (params.snapshot.runRecord) {
+    params.state.store.runs ??= [];
+    const existingIndex = params.state.store.runs.findIndex(
+      (run) => run.runId === params.snapshot?.runRecord?.runId,
+    );
+    if (existingIndex >= 0) {
+      params.state.store.runs[existingIndex] = params.snapshot.runRecord;
+    } else {
+      params.state.store.runs.push(params.snapshot.runRecord);
+    }
+  }
 }
 
 async function ensureLoadedForRead(state: CronServiceState) {
@@ -116,6 +133,12 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
+        failRunningCronRunsForJob({
+          store: state.store!,
+          jobId: job.id,
+          endedAtMs: state.deps.nowMs(),
+          error: "gateway restarted before cron run completed",
+        });
         clearedAnyRunningMarker = true;
         // One-shot jobs are not retried after interruption; recurring jobs
         // (cron/every) are eligible for startup catch-up so they don't
@@ -372,6 +395,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
+      runId: string;
       taskRunId?: string;
       startedAt: number;
       executionJob: CronJob;
@@ -590,8 +614,20 @@ async function prepareManualRun(
     job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
+    const runRecord = appendRunningCronRunRecord({
+      store: state.store!,
+      jobId: job.id,
+      trigger: "manual",
+      scheduledAtMs: job.state.nextRunAtMs,
+      startedAtMs: preflight.now,
+    });
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    emit(state, {
+      jobId: job.id,
+      runId: runRecord.runId,
+      action: "started",
+      runAtMs: preflight.now,
+    });
     const taskRunId = tryCreateManualTaskRun({
       state,
       job,
@@ -602,6 +638,7 @@ async function prepareManualRun(
       ok: true,
       ran: true,
       jobId: job.id,
+      runId: runRecord.runId,
       taskRunId,
       startedAt: preflight.now,
       executionJob,
@@ -617,6 +654,7 @@ async function finishPreparedManualRun(
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
+  const runId = prepared.runId;
   const taskRunId = prepared.taskRunId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -651,9 +689,26 @@ async function finishPreparedManualRun(
       },
       { preserveSchedule: mode === "force" },
     );
+    finalizeCronRunRecord({
+      store: state.store!,
+      runId,
+      status: coreResult.status,
+      endedAtMs: endedAt,
+      error: coreResult.error,
+      summary: coreResult.summary,
+      delivered: coreResult.delivered,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      deliveryError: job.state.lastDeliveryError,
+      sessionId: coreResult.sessionId,
+      sessionKey: coreResult.sessionKey,
+      model: coreResult.model,
+      provider: coreResult.provider,
+      usage: coreResult.usage,
+    });
 
     emit(state, {
       jobId: job.id,
+      runId,
       action: "finished",
       status: coreResult.status,
       error: coreResult.error,
@@ -685,6 +740,7 @@ async function finishPreparedManualRun(
           enabled: job.enabled,
           updatedAtMs: job.updatedAtMs,
           state: structuredClone(job.state),
+          runRecord: structuredClone(state.store?.runs?.find((run) => run.runId === runId)),
         };
     const postRunRemoved = shouldDelete;
     // Isolated Telegram send can persist target writeback directly to disk.

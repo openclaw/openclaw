@@ -23,6 +23,7 @@ function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
       const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
       return rest;
     }),
+    runs: store.runs ?? [],
   };
 }
 
@@ -34,12 +35,14 @@ function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
     }
     const version = (parsed as { version?: unknown }).version;
     const jobs = (parsed as { jobs?: unknown }).jobs;
+    const runs = (parsed as { runs?: unknown }).runs;
     if (version !== 1 || !Array.isArray(jobs)) {
       return null;
     }
     return {
       version: 1,
       jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+      runs: Array.isArray(runs) ? (runs.filter(Boolean) as CronStoreFile["runs"]) : [],
     };
   } catch {
     return null;
@@ -90,16 +93,18 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         ? (parsed as Record<string, unknown>)
         : {};
     const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const runs = Array.isArray(parsedRecord.runs) ? (parsedRecord.runs as never[]) : [];
     const store = {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
+      runs: runs.filter(Boolean) as never as CronStoreFile["runs"],
     };
     serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
     return store;
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
-      return { version: 1, jobs: [] };
+      return { version: 1, jobs: [], runs: [] };
     }
     throw err;
   }

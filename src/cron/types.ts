@@ -45,6 +45,8 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronRunRecordStatus = "running" | CronRunStatus;
+export type CronRunTrigger = "due" | "manual" | "startup-catchup";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -69,6 +71,23 @@ export type CronRunOutcome = {
   sessionId?: string;
   sessionKey?: string;
 };
+
+export type CronRunRecord = {
+  runId: string;
+  jobId: string;
+  trigger: CronRunTrigger;
+  scheduledAtMs?: number;
+  startedAtMs: number;
+  endedAtMs?: number;
+  status: CronRunRecordStatus;
+  error?: string;
+  summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+} & CronRunTelemetry;
 
 export type CronFailureAlert = {
   after?: number;
@@ -151,6 +170,7 @@ export type CronJob = CronJobBase<
 export type CronStoreFile = {
   version: 1;
   jobs: CronJob[];
+  runs?: CronRunRecord[];
 };
 
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
