@@ -52,6 +52,17 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
 
+  it("keeps private QA bundles out of required npm pack artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
+      false,
+    );
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
+      false,
+    );
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const offenders: string[] = [];
