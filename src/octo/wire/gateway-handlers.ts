@@ -43,6 +43,7 @@ import type { AdapterType } from "../adapters/base.ts";
 import { CliExecAdapter } from "../adapters/cli-exec.ts";
 import { createAdapter } from "../adapters/factory.ts";
 import { applyArmTransition, type ArmState } from "../head/arm-fsm.ts";
+import type { ArtifactService } from "../head/artifacts.ts";
 import type { EventLogService } from "../head/event-log.ts";
 import {
   applyGripTransition,
@@ -55,6 +56,7 @@ import {
   InvalidTransitionError,
   type MissionState,
 } from "../head/mission-fsm.ts";
+import { captureArmOutput } from "../head/output-capture.ts";
 import { PolicyService, type PolicyDecision } from "../head/policy.ts";
 import { ConflictError } from "../head/registry.ts";
 import type {
@@ -216,6 +218,8 @@ export interface OctoGatewayHandlerDeps {
   agentId?: string;
   /** Maximum concurrent arms for this node (used in node.capabilities). */
   maxArms?: number;
+  /** ArtifactService for persisting arm output. */
+  artifactService?: ArtifactService;
 }
 
 /**
@@ -230,6 +234,7 @@ export class OctoGatewayHandlers {
   private readonly policyService: PolicyService | undefined;
   private readonly leaseService: LeaseService | undefined;
   private readonly sessionReconciler: SessionReconciler | undefined;
+  private readonly artifactService: ArtifactService | undefined;
   private readonly nodeId: string;
   private readonly agentId: string;
   private readonly maxArms: number;
@@ -244,6 +249,7 @@ export class OctoGatewayHandlers {
     this.policyService = deps.policyService;
     this.leaseService = deps.leaseService;
     this.sessionReconciler = deps.sessionReconciler;
+    this.artifactService = deps.artifactService;
     this.nodeId = deps.nodeId;
     this.agentId = deps.agentId ?? "default";
     this.maxArms = deps.maxArms ?? 8;
@@ -583,6 +589,31 @@ export class OctoGatewayHandlers {
             actor: `node-agent:${this.nodeId}`,
             payload: { exit_code: exitCode, adapter_type: "cli_exec" },
           });
+
+          // Capture cli_exec output as artifacts for traceability.
+          if (this.artifactService) {
+            try {
+              // Read buffered output from the adapter's stream.
+              const outputChunks: string[] = [];
+              const errorChunks: string[] = [];
+              for await (const evt of adapter.stream(adapterRef)) {
+                if (evt.kind === "output" && evt.data?.text) {
+                  outputChunks.push(evt.data.text as string);
+                } else if (evt.kind === "error" && evt.data?.text) {
+                  errorChunks.push(evt.data.text as string);
+                }
+              }
+              await captureArmOutput(this.artifactService, {
+                arm_id,
+                mission_id: spec.mission_id,
+                grip_id: spec.labels?.grip,
+                stdout: outputChunks.join("\n"),
+                stderr: errorChunks.join("\n"),
+              });
+            } catch {
+              // Best-effort — don't block completion on capture failure.
+            }
+          }
 
           // Grip + mission cascade.
           if (targetState === "completed") {

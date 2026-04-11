@@ -52,6 +52,7 @@ async function withHandlers<T>(
   const { OctoGatewayHandlers } = await import("../wire/gateway-handlers.js");
   const { TmuxManager } = await import("../node-agent/tmux-manager.js");
   const { LeaseService } = await import("../head/leases.js");
+  const { ArtifactService } = await import("../head/artifacts.js");
   const { PolicyService } = await import("../head/policy.js");
   const { OctoLogger, consoleLoggerProvider } = await import("../head/logging.js");
   const { DEFAULT_OCTO_CONFIG } = await import("../config/schema.js");
@@ -71,6 +72,7 @@ async function withHandlers<T>(
     const leaseService = new LeaseService(db, eventLog, DEFAULT_OCTO_CONFIG.lease);
     const policyLogger = new OctoLogger("octo:policy:cli", consoleLoggerProvider);
     const policyService = new PolicyService(DEFAULT_OCTO_CONFIG.policy, new Map(), policyLogger);
+    const artifactService = new ArtifactService(db, eventLog);
     const handlers = new OctoGatewayHandlers({
       registry,
       eventLog,
@@ -78,6 +80,7 @@ async function withHandlers<T>(
       nodeId: os.hostname(),
       leaseService,
       policyService: policyService as never,
+      artifactService,
     });
     return await fn({ db, registry, eventLog, handlers });
   } finally {
@@ -289,6 +292,25 @@ export function registerOctoCli(program: Command) {
       const code = await withRegistry(({ registry, eventLog }) =>
         runArmShow(registry, eventLog, armId, { json: opts.json }),
       );
+      process.exit(code);
+    });
+
+  arm
+    .command("logs <arm_id>")
+    .description("Show captured output logs for an arm")
+    .option("--type <type>", "Filter by artifact type (stdout-slice, stderr-slice, log)")
+    .option("--json", "Output as JSON")
+    .action(async (armId, opts) => {
+      const { runArmLogs } = await import("./arm-logs.js");
+      const { ArtifactService: ArtSvc } = await import("../head/artifacts.js");
+      const code = await withRegistry(({ db, registry, eventLog }) => {
+        const artSvc = new ArtSvc(db, eventLog);
+        return runArmLogs(registry, artSvc, {
+          arm_id: armId,
+          type: opts.type,
+          json: opts.json,
+        });
+      });
       process.exit(code);
     });
 
