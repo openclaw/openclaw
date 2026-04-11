@@ -17,6 +17,7 @@ import {
   isTerminalTaskStatus,
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
+  shouldSilentWakeAcpChildSession,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -1018,8 +1019,28 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
-    return current ? cloneTaskRecord(current) : null;
+  if (!current) {
+    return null;
+  }
+  // ACP child-session runs get a silent parent wake instead of a user-visible
+  // banner. This check runs BEFORE the notifyPolicy gate so that orchestration
+  // continuation works even if notifyPolicy is set to "silent" on these tasks.
+  // Uses "session_queued" because delivery was handled via session-layer
+  // infrastructure (heartbeat wake), not via a user-facing channel.
+  if (
+    shouldSilentWakeAcpChildSession(current) &&
+    isTerminalTaskStatus(current.status) &&
+    current.deliveryStatus === "pending"
+  ) {
+    const owner = resolveTaskDeliveryOwner(current);
+    const ownerKey = owner.sessionKey?.trim();
+    if (ownerKey) {
+      requestHeartbeatNow({ reason: "background-task", sessionKey: ownerKey });
+    }
+    return updateTask(taskId, { deliveryStatus: "session_queued", lastEventAt: Date.now() });
+  }
+  if (!shouldAutoDeliverTaskTerminalUpdate(current)) {
+    return cloneTaskRecord(current);
   }
   if (tasksWithPendingDelivery.has(taskId)) {
     return cloneTaskRecord(current);

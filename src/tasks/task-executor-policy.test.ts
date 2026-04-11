@@ -6,6 +6,7 @@ import {
   isTerminalTaskStatus,
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
+  shouldSilentWakeAcpChildSession,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
@@ -182,6 +183,76 @@ describe("task-executor-policy", () => {
         }),
         preferredTaskId: undefined,
       }),
+    ).toBe(false);
+  });
+
+  it("identifies ACP child-session tasks for silent parent wake", () => {
+    // Successful, non-blocked ACP child session -> silent wake
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child-1",
+          status: "succeeded",
+        }),
+      ),
+    ).toBe(true);
+
+    // Blocked tasks must still surface visibly
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child-1",
+          status: "succeeded",
+          terminalOutcome: "blocked",
+        }),
+      ),
+    ).toBe(false);
+
+    // Failed tasks must still surface visibly
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child-1",
+          status: "failed",
+        }),
+      ),
+    ).toBe(false);
+
+    // Timed-out tasks must still surface visibly
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child-1",
+          status: "timed_out",
+        }),
+      ),
+    ).toBe(false);
+
+    // No childSessionKey -> not a child-session task
+    expect(
+      shouldSilentWakeAcpChildSession(createTask({ runtime: "acp", status: "succeeded" })),
+    ).toBe(false);
+
+    // Non-ACP runtime -> not applicable
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          status: "succeeded",
+        }),
+      ),
+    ).toBe(false);
+
+    // Empty/whitespace childSessionKey -> not applicable
+    expect(
+      shouldSilentWakeAcpChildSession(
+        createTask({ runtime: "acp", childSessionKey: "  ", status: "succeeded" }),
+      ),
     ).toBe(false);
   });
 });
