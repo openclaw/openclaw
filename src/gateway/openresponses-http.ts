@@ -469,7 +469,9 @@ export async function handleOpenResponsesHttpRequest(
   }
   // On the compat surface, shared-secret bearer auth is also treated as an
   // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
+  const senderIsOwner =
+    resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth) ||
+    ((opts.auth.mode === "token" || opts.auth.mode === "password") && Boolean(getBearerToken(req)));
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
