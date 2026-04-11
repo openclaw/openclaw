@@ -477,8 +477,9 @@ function tryResolveUiAsset(
   }
   const safePath = pathname === "/" ? "/index.html" : pathname;
   const decoded = decodeURIComponent(safePath);
-  const candidate = path.normalize(path.join(distDir, decoded));
-  if (!candidate.startsWith(distDir)) {
+  const candidate = path.resolve(distDir, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
+  const relative = path.relative(distDir, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return null;
   }
   if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {

@@ -385,6 +385,38 @@ describe("qa-lab server", () => {
     expect(version2.version).not.toBe(version1.version);
   });
 
+  it("does not serve sibling files outside the UI dist root", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-boundary-"));
+    cleanups.push(async () => {
+      await rm(rootDir, { recursive: true, force: true });
+    });
+    const uiDistDir = path.join(rootDir, "dist");
+    const siblingDir = path.join(rootDir, "dist-other");
+    await mkdir(uiDistDir, { recursive: true });
+    await mkdir(siblingDir, { recursive: true });
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><body>bundle-root</body></html>",
+      "utf8",
+    );
+    await writeFile(path.join(siblingDir, "secret.txt"), "sibling-secret", "utf8");
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      uiDistDir,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const response = await fetchWithRetry(`${lab.baseUrl}/../dist-other/secret.txt`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("bundle-root");
+    expect(body).not.toContain("sibling-secret");
+  });
+
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
     cleanups.push(async () => {
