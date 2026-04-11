@@ -262,7 +262,14 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   if (policy.mode === "explicit-proxy") {
     const proxyUrl = policy.proxyUrl;
     // SOCKS5/SOCKS4 proxies require Socks5ProxyAgent; HTTP/HTTPS proxies use ProxyAgent.
-    const isSocks = /^socks5?h?:|^socks4a?:|^socks:/.test(proxyUrl);
+    // Use URL.protocol for reliable scheme detection rather than regex.
+    let isSocks = false;
+    try {
+      const scheme = new URL(proxyUrl).protocol;
+      isSocks = scheme === "socks5:" || scheme === "socks5h:" || scheme === "socks4:" || scheme === "socks4a:" || scheme === "socks:";
+    } catch {
+      // malformed URL — fall through to ProxyAgent which will also fail gracefully
+    }
     if (isSocks) {
       try {
         return {
