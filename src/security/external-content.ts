@@ -87,6 +87,7 @@ export type ExternalContentSource =
   | "webhook"
   | "api"
   | "browser"
+  | "channel"
   | "channel_metadata"
   | "web_search"
   | "web_fetch"
@@ -101,6 +102,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   webhook: "Webhook",
   api: "API",
   browser: "Browser",
+  channel: "Channel message",
   channel_metadata: "Channel metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",

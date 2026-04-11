@@ -36,6 +36,7 @@ import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import { isExternalChannelProvider, wrapChannelMessageBody } from "./inbound-text.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
@@ -263,7 +264,15 @@ export async function runPreparedReply(
       elevatedLevel: resolvedElevatedLevel,
     }),
   ].filter(Boolean);
-  const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const rawBaseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  // Apply external content protection to channel message bodies so they receive
+  // the same boundary-marker + security-notice treatment as hooks/gmail/webhooks.
+  const channelProvider =
+    normalizeOptionalString(ctx.OriginatingChannel) ?? normalizeOptionalString(ctx.Provider);
+  const baseBody =
+    channelProvider && isExternalChannelProvider(channelProvider)
+      ? wrapChannelMessageBody(rawBaseBody, channelProvider)
+      : rawBaseBody;
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
