@@ -47,7 +47,7 @@ type AvailabilityDeps = {
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
 
@@ -167,7 +167,7 @@ export function createProfileAvailability({
     );
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
+  const ensureBrowserAvailable = async (options?: { headless?: boolean }): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -210,7 +210,11 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchOpenClawChrome(current.resolved, profile);
+      const launchConfig =
+        typeof options?.headless === "boolean"
+          ? { ...current.resolved, headless: options.headless }
+          : current.resolved;
+      const launched = await launchOpenClawChrome(launchConfig, profile);
       attachRunning(launched);
       try {
         await waitForCdpReadyAfterLaunch();

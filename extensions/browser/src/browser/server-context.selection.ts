@@ -15,7 +15,7 @@ type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
   getSsrFPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };

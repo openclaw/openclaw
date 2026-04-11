@@ -197,7 +197,7 @@ export function registerBrowserManageCommands(
           return;
         }
         const name = status.profile ?? "openclaw";
-        const headlessLabel = status.headless ? " (headless)" : "";
+        const headlessLabel = status.headless || opts.headless ? " (headless)" : "";
         defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
       });
     });

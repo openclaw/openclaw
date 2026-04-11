@@ -6,7 +6,11 @@ const mocks = vi.hoisted(() => {
   const runtimeLog = vi.fn();
   const runtimeError = vi.fn();
   const runtimeExit = vi.fn();
+  let statusHeadless = true;
   return {
+    setStatusHeadless: (value: boolean) => {
+      statusHeadless = value;
+    },
     callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
       req.path === "/"
         ? {
@@ -18,7 +22,7 @@ const mocks = vi.hoisted(() => {
             chosenBrowser: "chrome",
             userDataDir: "/tmp/openclaw",
             color: "#FF4500",
-            headless: true,
+            headless: statusHeadless,
             attachOnly: false,
           }
         : { ok: true },
@@ -60,6 +64,7 @@ describe("browser start --headless", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     mocks.runtimeLog.mockClear();
+    mocks.setStatusHeadless(true);
   });
 
   it("passes headless=true query param when --headless flag is provided", async () => {
@@ -93,5 +98,14 @@ describe("browser start --headless", () => {
     expect(mocks.runtimeLog).toHaveBeenCalled();
     const logOutput = mocks.runtimeLog.mock.calls.map((c) => c[0]).join("\n");
     expect(logOutput).toContain("(headless)");
+  });
+
+  it("does not log headless indicator when browser is not headless", async () => {
+    mocks.setStatusHeadless(false);
+    const program = createProgram();
+    await program.parseAsync(["browser", "start"], { from: "user" });
+
+    const logOutput = mocks.runtimeLog.mock.calls.map((c) => c[0]).join("\n");
+    expect(logOutput).not.toContain("(headless)");
   });
 });
