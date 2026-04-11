@@ -114,11 +114,12 @@ function resolveStructuredAllowedToolName(
   // without failing the entire turn.
 
   const exactMatches: string[] = [];
+  const prefixMatches: string[] = [];
 
   for (const allowedName of allowedToolNames) {
     const noUnderscore = allowedName.replace(/_/g, "");
 
-    const variants = [
+    const allVariants = [
       allowedName,
       noUnderscore,
       `.${allowedName}`,
@@ -128,45 +129,48 @@ function resolveStructuredAllowedToolName(
     if (allowedName.length > 2) {
       const tail1 = allowedName.substring(1);
       const tail2 = noUnderscore.substring(1);
-      if (tail1.length >= 3) variants.push(tail1);
-      if (tail2.length >= 3 && tail2 !== tail1) variants.push(tail2);
+      if (tail1.length >= 3) allVariants.push(tail1);
+      if (tail2.length >= 3 && tail2 !== tail1) allVariants.push(tail2);
     }
 
-    for (const variant of variants) {
+    for (const variant of allVariants) {
+      // 1. Exact match
       if (rawName === variant) {
         exactMatches.push(allowedName);
-        break; // Matching one is enough
+        break;
       }
-    }
-  }
 
-  // Fail-closed: If there are multiple exact matches (e.g., `search` matching both `msearch` and `dsearch`),
-  // we consider it ambiguous and do NOT resolve, preventing wrong-tool execution.
-  if (exactMatches.length === 1) {
-    return exactMatches[0];
-  }
+      // 2. Prefix match (only using safe variants to avoid dropped-char ambiguity)
+      const safePrefixVariants = [
+        allowedName,
+        noUnderscore,
+        `.${allowedName}`,
+        `.${noUnderscore}`,
+      ];
 
-  // If no unambiguous exact match is found, try prefix matching with hex suffixes
-  for (const allowedName of allowedToolNames) {
-    const noUnderscore = allowedName.replace(/_/g, "");
-
-    const safePrefixVariants = [
-      allowedName,
-      noUnderscore,
-      `.${allowedName}`,
-      `.${noUnderscore}`,
-    ];
-
-    for (const variant of safePrefixVariants) {
-      if (rawName.length > variant.length && rawName.startsWith(variant)) {
-        const suffix = rawName.substring(variant.length);
-        if (/^(?=.*\d)[a-f0-9]{8,}$/.test(suffix)) {
-          return allowedName;
+      if (safePrefixVariants.includes(variant)) {
+        if (rawName.length > variant.length && rawName.startsWith(variant)) {
+          const suffix = rawName.substring(variant.length);
+          if (/^(?=.*\d)[a-f0-9]{8,}$/.test(suffix)) {
+            prefixMatches.push(allowedName);
+            break;
+          }
         }
       }
     }
   }
-  
+
+  // Fail-closed for exact matches: must match exactly ONE allowed tool
+  if (exactMatches.length === 1) {
+    return exactMatches[0];
+  }
+
+  // Fail-closed for prefix matches: must match exactly ONE allowed tool
+  if (exactMatches.length === 0 && prefixMatches.length === 1) {
+    return prefixMatches[0];
+  }
+
+  // In all ambiguous or unmatched cases, return undefined to fail closed.  
   return null;
 }
 
