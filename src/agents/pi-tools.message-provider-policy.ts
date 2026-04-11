@@ -34,11 +34,11 @@ export function filterToolNamesByMessageProvider(
     const allowedSet = new Set(allowedTools);
     return toolNames.filter((toolName) => allowedSet.has(toolName));
   }
-  // Use provider-specific deny list if present, otherwise fall back to default deny list.
-  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider] ?? DEFAULT_DENIED_TOOLS;
-  if (deniedTools.length === 0) {
-    return [...toolNames];
-  }
+  // Merge provider-specific deny list (if any) with the default deny list.
+  const providerDenied = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
+  const deniedTools = providerDenied
+    ? [...DEFAULT_DENIED_TOOLS, ...providerDenied]
+    : [...DEFAULT_DENIED_TOOLS];
   const deniedSet = new Set(deniedTools);
   return toolNames.filter((toolName) => !deniedSet.has(toolName));
 }

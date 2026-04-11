@@ -35,8 +35,10 @@ describe("createOpenClawCodingTools message provider policy", () => {
     (messageProvider) => {
       const names = new Set(filterToolNamesByMessageProvider(ALL_TOOL_NAMES, messageProvider));
       expect(names.has("tts")).toBe(false);
-      // voice has its own deny list, so dangerous tools are NOT denied by default
-      expect(names.has("exec")).toBe(true);
+      // voice merges its own deny list with the default deny list
+      for (const tool of DANGEROUS_TOOLS) {
+        expect(names.has(tool), `${tool} should be denied for voice`).toBe(false);
+      }
     },
   );
 
