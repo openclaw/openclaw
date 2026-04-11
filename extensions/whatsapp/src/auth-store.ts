@@ -16,7 +16,30 @@ export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
-export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
+// Historic export: resolve only when coerced to string so `OPENCLAW_STATE_DIR` and
+// profile env apply before the first read (mirrors `LazyWebChannelAuthDir` in `src/channel-web.ts`).
+class LazyWhatsAppWebAuthDir {
+  #value: string | null = null;
+
+  #read(): string {
+    this.#value ??= resolveDefaultWebAuthDir();
+    return this.#value;
+  }
+
+  toString(): string {
+    return this.#read();
+  }
+
+  valueOf(): string {
+    return this.#read();
+  }
+
+  [Symbol.toPrimitive](): string {
+    return this.#read();
+  }
+}
+
+export const WA_WEB_AUTH_DIR = new LazyWhatsAppWebAuthDir() as unknown as string;
 
 export function readCredsJsonRaw(filePath: string): string | null {
   try {
