@@ -130,12 +130,15 @@ describe("subagents spawn action", () => {
   });
 
   it("spawns a subagent and formats the success reply", async () => {
-    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    spawnSubagentDirectMock.mockResolvedValue(
+      acceptedResult({ resolvedModel: "openai-codex/gpt-5.4" }),
+    );
     const result = await handleSubagentsSpawnAction(buildContext());
     expect(result).toEqual({
       shouldContinue: false,
       reply: {
-        text: "Spawned subagent beta (session agent:beta:subagent:test-uuid, run run-spaw).",
+        text:
+          "Delegated task started for beta using openai-codex/gpt-5.4.\nDelegated Task Prompt: do the thing\nSession agent:beta:subagent:test-uuid, run run-spaw.",
       },
     });
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(

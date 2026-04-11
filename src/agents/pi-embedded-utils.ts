@@ -8,7 +8,9 @@ import {
 } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
+import { loadConfig } from "../config/config.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export {
@@ -334,7 +336,56 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
+function inferSessionsSpawnMeta(args: unknown): string | undefined {
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const task = typeof record.task === "string" ? record.task.trim() : "";
+  const agentId = typeof record.agentId === "string" ? record.agentId.trim() : "";
+  const thinking = typeof record.thinking === "string" ? record.thinking.trim() : "";
+  const timeout =
+    typeof record.runTimeoutSeconds === "number" && Number.isFinite(record.runTimeoutSeconds)
+      ? Math.max(0, Math.floor(record.runTimeoutSeconds))
+      : undefined;
+  const cleanup = typeof record.cleanup === "string" ? record.cleanup.trim() : "";
+
+  const parts: string[] = [];
+  if (task) {
+    parts.push(`prompt ${task}`);
+  }
+  if (agentId) {
+    parts.push(`agent ${agentId}`);
+    try {
+      const resolvedModel = resolveSubagentSpawnModelSelection({
+        cfg: loadConfig(),
+        agentId,
+        modelOverride: record.model,
+      });
+      if (resolvedModel) {
+        parts.push(`model ${resolvedModel}`);
+      }
+    } catch {
+      if (typeof record.model === "string" && record.model.trim()) {
+        parts.push(`model ${record.model.trim()}`);
+      }
+    }
+  } else if (typeof record.model === "string" && record.model.trim()) {
+    parts.push(`model ${record.model.trim()}`);
+  }
+  if (thinking) {
+    parts.push(`thinking ${thinking}`);
+  }
+  if (timeout && timeout > 0) {
+    parts.push(`timeout ${timeout}`);
+  }
+  if (cleanup) {
+    parts.push(`cleanup ${cleanup}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
 export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
+  if (toolName === "sessions_spawn") {
+    return inferSessionsSpawnMeta(args);
+  }
   const display = resolveToolDisplay({ name: toolName, args });
   return formatToolDetail(display);
 }

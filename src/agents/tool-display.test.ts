@@ -259,6 +259,19 @@ describe("tool display details", () => {
     expect(detail).toMatch(/^print text/);
   });
 
+  it("uses delegated-task title for sessions_spawn", () => {
+    const display = resolveToolDisplay({
+      name: "sessions_spawn",
+      args: {
+        task: "review this patch",
+        agentId: "main",
+      },
+    });
+
+    expect(display.title).toBe("Delegated task started");
+    expect(display.label).toBe("Delegated task started");
+  });
+
   it("recognizes heredoc/inline script exec details", () => {
     const pyDetail = formatToolDetail(
       resolveToolDisplay({

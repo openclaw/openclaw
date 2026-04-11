@@ -435,7 +435,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
     sessions_spawn: {
       emoji: "🧑‍🔧",
-      title: "Sub-agent",
+      title: "Delegated task started",
       detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
     },
     subagents: {

@@ -1,9 +1,22 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-5.4" },
+        subagents: { model: "openai/gpt-5.4-mini" },
+      },
+    },
+  }),
+}));
+
 import {
   extractAssistantText,
   extractAssistantVisibleText,
   formatReasoningMessage,
+  inferToolMetaFromArgs,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
@@ -30,6 +43,17 @@ function makeAssistantMessage(
     ...message,
   };
 }
+
+describe("inferToolMetaFromArgs", () => {
+  it("includes the resolved subagent model in sessions_spawn summaries", () => {
+    expect(
+      inferToolMetaFromArgs("sessions_spawn", {
+        task: "review this patch",
+        agentId: "main",
+      }),
+    ).toBe("prompt review this patch · agent main · model openai/gpt-5.4-mini");
+  });
+});
 
 describe("extractAssistantText", () => {
   it("strips tool-only Minimax invocation XML from text", () => {

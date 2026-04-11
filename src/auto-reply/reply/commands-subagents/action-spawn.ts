@@ -1,4 +1,4 @@
-import { spawnSubagentDirect } from "../../../agents/subagent-spawn.js";
+import { spawnSubagentDirect, splitModelRef } from "../../../agents/subagent-spawn.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { type SubagentsCommandContext, stopWithText } from "./shared.js";
@@ -58,8 +58,15 @@ export async function handleSubagentsSpawnAction(
     },
   );
   if (result.status === "accepted") {
+    const prompt = task;
+    const { provider, model: resolvedModelName } = splitModelRef(result.resolvedModel);
+    const modelDetail = resolvedModelName
+      ? provider
+        ? ` using ${provider}/${resolvedModelName}`
+        : ` using ${resolvedModelName}`
+      : "";
     return stopWithText(
-      `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).`,
+      `Delegated task started for ${agentId}${modelDetail}.\nDelegated Task Prompt: ${prompt}\nSession ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}.`,
     );
   }
   return stopWithText(`Spawn failed: ${result.error ?? result.status}`);
