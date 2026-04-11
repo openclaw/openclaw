@@ -3227,6 +3227,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
+              agentsFile: {
+                type: "string",
+                title: "Main AGENTS File",
+                description:
+                  "Default AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the workspace root when you want the main agent to inject a different Markdown file than AGENTS.md.",
+              },
+              agentsFilesByModel: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "string",
+                },
+                title: "Main AGENTS Files by Model",
+                description:
+                  'Default model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs. Matching is exact after runtime model selection so you can swap in tuned prompts per model without changing the base AGENTS.md.',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -4454,7 +4472,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     title: "Post-Compaction Context Sections",
                     description:
-                      'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
+                      'Effective AGENTS-source H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
                   },
                   model: {
                     type: "string",
@@ -4949,6 +4967,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         additionalProperties: false,
                       },
                     ],
+                  },
+                  agentsFile: {
+                    type: "string",
+                    title: "Subagent AGENTS File",
+                    description:
+                      "Default AGENTS source for spawned sub-agent runs. Use this to replace AGENTS.md with a narrower workspace file so sub-agents do not inherit the full main-agent instruction set.",
+                  },
+                  agentsFilesByModel: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "string",
+                    },
+                    title: "Subagent AGENTS Files by Model",
+                    description:
+                      'Default model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent instruction tuning or isolation.',
                   },
                   thinking: {
                     type: "string",
@@ -5572,6 +5608,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       additionalProperties: false,
                     },
                   ],
+                },
+                agentsFile: {
+                  type: "string",
+                  title: "Agent Main AGENTS File",
+                  description:
+                    "Optional per-agent AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the agent workspace when this agent needs a different base instruction file than AGENTS.md.",
+                },
+                agentsFilesByModel: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    type: "string",
+                  },
+                  title: "Agent Main AGENTS Files by Model",
+                  description:
+                    'Optional per-agent model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs (for example "openai/gpt-5.4"). Matching is exact after runtime model resolution.',
                 },
                 thinkingDefault: {
                   type: "string",
@@ -6211,6 +6265,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           additionalProperties: false,
                         },
                       ],
+                    },
+                    agentsFile: {
+                      type: "string",
+                      title: "Agent Subagent AGENTS File",
+                      description:
+                        "Optional per-agent AGENTS source for spawned sub-agent runs. Use this to give sub-agents a narrower instruction file than the parent/orchestrator receives.",
+                    },
+                    agentsFilesByModel: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                      title: "Agent Subagent AGENTS Files by Model",
+                      description:
+                        'Optional per-agent model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent prompt shaping or security boundaries.',
                     },
                     thinking: {
                       type: "string",
@@ -24485,6 +24557,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
       tags: ["advanced"],
     },
+    "agents.defaults.agentsFile": {
+      label: "Main AGENTS File",
+      help: "Default AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the workspace root when you want the main agent to inject a different Markdown file than AGENTS.md.",
+      tags: ["storage"],
+    },
+    "agents.defaults.agentsFilesByModel": {
+      label: "Main AGENTS Files by Model",
+      help: 'Default model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs. Matching is exact after runtime model selection so you can swap in tuned prompts per model without changing the base AGENTS.md.',
+      tags: ["storage"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24534,6 +24616,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Startup Context Max Total Chars",
       help: "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
       tags: ["performance"],
+    },
+    "agents.defaults.subagents.agentsFile": {
+      label: "Subagent AGENTS File",
+      help: "Default AGENTS source for spawned sub-agent runs. Use this to replace AGENTS.md with a narrower workspace file so sub-agents do not inherit the full main-agent instruction set.",
+      tags: ["storage"],
+    },
+    "agents.defaults.subagents.agentsFilesByModel": {
+      label: "Subagent AGENTS Files by Model",
+      help: 'Default model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent instruction tuning or isolation.',
+      tags: ["storage"],
     },
     "agents.defaults.envelopeTimezone": {
       label: "Envelope Timezone",
@@ -25484,7 +25576,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.postCompactionSections": {
       label: "Post-Compaction Context Sections",
-      help: 'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
+      help: 'Effective AGENTS-source H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
       tags: ["advanced"],
     },
     "agents.defaults.compaction.timeoutSeconds": {
@@ -26652,6 +26744,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       tags: ["advanced"],
     },
+    "agents.list[].agentsFile": {
+      label: "Agent Main AGENTS File",
+      help: "Optional per-agent AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the agent workspace when this agent needs a different base instruction file than AGENTS.md.",
+      tags: ["storage"],
+    },
+    "agents.list[].agentsFilesByModel": {
+      label: "Agent Main AGENTS Files by Model",
+      help: 'Optional per-agent model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs (for example "openai/gpt-5.4"). Matching is exact after runtime model resolution.',
+      tags: ["storage"],
+    },
     "agents.list[].identity.avatar": {
       label: "Agent Avatar",
       help: "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
@@ -26667,6 +26769,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Heartbeat Timeout (Seconds)",
       help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
       tags: ["performance", "automation"],
+    },
+    "agents.list[].subagents.agentsFile": {
+      label: "Agent Subagent AGENTS File",
+      help: "Optional per-agent AGENTS source for spawned sub-agent runs. Use this to give sub-agents a narrower instruction file than the parent/orchestrator receives.",
+      tags: ["storage"],
+    },
+    "agents.list[].subagents.agentsFilesByModel": {
+      label: "Agent Subagent AGENTS Files by Model",
+      help: 'Optional per-agent model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent prompt shaping or security boundaries.',
+      tags: ["storage"],
     },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
