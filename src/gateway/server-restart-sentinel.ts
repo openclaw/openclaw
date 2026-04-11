@@ -1,4 +1,3 @@
-import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
@@ -20,8 +19,15 @@ import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/deliv
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
-const OUTBOUND_RETRY_DELAY_MS = 750;
-const OUTBOUND_MAX_ATTEMPTS = 2;
+const OUTBOUND_RETRY_DELAY_MS = 1_000;
+const OUTBOUND_MAX_ATTEMPTS = 45;
+
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+}): context is { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
+}
 
 function enqueueRestartSentinelWake(
   message: string,
@@ -139,26 +145,29 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
-  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
-
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
 
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+  if (
+    !hasRoutableDeliveryContext(sessionDeliveryContext) &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey
+  ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+    sessionDeliveryContext = mergeDeliveryContext(
+      sessionDeliveryContext,
+      deliveryContextFromSession(baseEntry),
+    );
   }
 
-  const origin = mergeDeliveryContext(
-    sentinelContext,
-    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
-  );
+  const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
+
+  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
 
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
@@ -180,7 +189,6 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   const threadId =
     payload.threadId ??
-    parsedTarget?.threadId ?? // From resolveAnnounceTargetFromKey (extracts :topic:N)
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 

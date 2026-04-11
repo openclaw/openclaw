@@ -252,6 +252,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           message,
         },
         sessionKey: params.ctx.SessionKey,
+        requesterAccountId: params.ctx.AccountId,
       });
       state.routedCounts.tool += 1;
       return true;
@@ -316,6 +317,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: resolvedAccountId,
+        requesterSenderId: params.ctx.SenderId,
+        requesterSenderName: params.ctx.SenderName,
+        requesterSenderUsername: params.ctx.SenderUsername,
+        requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });

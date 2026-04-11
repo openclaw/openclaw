@@ -4,7 +4,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
-import { runQaSuite, type QaSuiteResult } from "./suite.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
@@ -27,9 +28,10 @@ const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLev
   });
 const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
+const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
   Object.freeze({
-    "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
+    "openai/gpt-5.4": { thinkingDefault: "xhigh" },
     "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
   });
 
@@ -81,6 +83,7 @@ export type QaCharacterEvalJudgeResult = {
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;
   blindModels: boolean;
+  timeoutMs: number;
   durationMs: number;
   rankings: QaCharacterEvalJudgment[];
   error?: string;
@@ -449,6 +452,7 @@ function renderCharacterEvalReport(params: {
   for (const judgment of params.judgments) {
     lines.push(`### ${judgment.model}`, "");
     lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
+    lines.push(`- Timeout: ${formatDuration(judgment.timeoutMs)}`, "");
     if (judgment.rankings.length > 0) {
       for (const ranking of judgment.rankings) {
         lines.push(
@@ -515,7 +519,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuite;
+  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
   const candidateConcurrency = normalizeConcurrency(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
@@ -616,7 +620,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     params.judgeConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
   );
-  const judgeTimeoutMs = params.judgeTimeoutMs ?? 180_000;
+  const judgeTimeoutMs = params.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
   logCharacterEvalProgress(
     params.progress,
     `judges start judges=${judgeModels.length} judgeConcurrency=${judgeConcurrency} timeout=${formatDuration(judgeTimeoutMs)} labels=${params.judgeBlindModels === true ? "blind" : "visible"}`,
@@ -667,6 +671,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         thinkingDefault: judgeOptions.thinkingDefault,
         fastMode: judgeOptions.fastMode,
         blindModels: params.judgeBlindModels === true,
+        timeoutMs: judgeTimeoutMs,
         durationMs: Date.now() - judgeStartedAt,
         rankings,
         ...(judgeError ? { error: judgeError } : {}),

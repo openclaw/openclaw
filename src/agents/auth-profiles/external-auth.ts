@@ -3,6 +3,18 @@ import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
+type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
+
+let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
+
+export const __testing = {
+  resetResolveExternalAuthProfilesForTest(): void {
+    resolveExternalAuthProfilesForRuntime = undefined;
+  },
+  setResolveExternalAuthProfilesForTest(resolver: ResolveExternalAuthProfiles): void {
+    resolveExternalAuthProfilesForRuntime = resolver;
+  },
+};
 
 function normalizeExternalAuthProfile(
   profile: ProviderExternalAuthProfile,
@@ -22,7 +34,9 @@ function resolveExternalAuthProfileMap(params: {
   env?: NodeJS.ProcessEnv;
 }): ExternalAuthProfileMap {
   const env = params.env ?? process.env;
-  const profiles = resolveExternalAuthProfilesWithPlugins({
+  const resolveProfiles =
+    resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
+  const profiles = resolveProfiles({
     env,
     context: {
       config: undefined,

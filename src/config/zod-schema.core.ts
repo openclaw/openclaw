@@ -280,17 +280,25 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
-  })
+  .object(ConfiguredProviderRequestFields)
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const ModelDefinitionSchema = z
   .object({
@@ -521,6 +529,7 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+    jsonlDialect: z.literal("claude-stream-json").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),

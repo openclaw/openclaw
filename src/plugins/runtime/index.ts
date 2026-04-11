@@ -7,6 +7,7 @@ import {
   generateMusic as generateRuntimeMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
+import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -119,7 +120,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
 
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   const unavailable = () => {
-    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+    throw new RequestScopedSubagentRuntimeError();
   };
   return {
     run: unavailable,

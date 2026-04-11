@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -149,9 +150,7 @@ function createOutputStamp() {
 }
 
 function createVmSuffix() {
-  const timePart = Date.now().toString(36);
-  const randomPart = Math.random().toString(36).slice(2, 8);
-  return `${timePart}-${randomPart}`;
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
 function sleep(ms: number) {
@@ -335,6 +334,7 @@ export function createQaMultipassPlan(params: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -366,6 +366,7 @@ export function createQaMultipassPlan(params: {
       ...(params.primaryModel ? ["--model", params.primaryModel] : []),
       ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
       ...(params.fastMode ? ["--fast"] : []),
+      ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
     ],
     scenarioIds,
   );
@@ -633,6 +634,7 @@ export async function runQaMultipass(params: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;

@@ -1519,4 +1519,37 @@ describe("logs.tail", () => {
 
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
+
+  it("redacts sensitive CLI tokens from returned lines", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+
+    await fsPromises.writeFile(
+      file,
+      "starting gog gmail watch serve --token push-token-bbbbbbbbbbbbbbbbbbbb --hook-token hook-token-aaaaaaaaaaaaaaaaaaaa\n",
+    );
+
+    setLoggerOverride({ file });
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: {},
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file,
+        lines: ["starting gog gmail watch serve --token push-t…bbbb --hook-token hook-t…aaaa"],
+      }),
+      undefined,
+    );
+
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
 });

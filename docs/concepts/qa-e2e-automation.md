@@ -52,6 +52,47 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
+For a transport-real Matrix smoke lane, run:
+
+```bash
+pnpm openclaw qa matrix
+```
+
+That lane provisions a disposable Tuwunel homeserver in Docker, registers
+temporary driver, SUT, and observer users, creates one private room, then runs
+the real Matrix plugin inside a QA gateway child. The live transport lane keeps
+the child config scoped to the transport under test, so Matrix runs without
+`qa-channel` in the child config.
+
+For a transport-real Telegram smoke lane, run:
+
+```bash
+pnpm openclaw qa telegram
+```
+
+That lane targets one real private Telegram group instead of provisioning a
+disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
+`OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
+`OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`, plus two distinct bots in the same
+private group. The SUT bot must have a Telegram username, and bot-to-bot
+observation works best when both bots have Bot-to-Bot Communication Mode
+enabled in `@BotFather`.
+
+Live transport lanes now share one smaller contract instead of each inventing
+their own scenario list shape:
+
+`qa-channel` remains the broad synthetic product-behavior suite and is not part
+of the live transport coverage matrix.
+
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+
+This keeps `qa-channel` as the broad product-behavior suite while Matrix,
+Telegram, and future live transports share one explicit transport-contract
+checklist.
+
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
 ```bash
@@ -62,6 +103,10 @@ This boots a fresh Multipass guest, installs dependencies, builds OpenClaw
 inside the guest, runs `qa suite`, then copies the normal QA report and
 summary back into `.artifacts/qa-e2e/...` on the host.
 It reuses the same scenario-selection behavior as `qa suite` on the host.
+Host and Multipass suite runs execute multiple selected scenarios in parallel
+with isolated gateway workers by default, up to 64 workers or the selected
+scenario count. Use `--concurrency <count>` to tune the worker count, or
+`--concurrency 1` for serial execution.
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest

@@ -73,6 +73,8 @@
 - Extension test boundary:
   - Keep extension-owned onboarding/config/provider coverage under the owning bundled plugin package when feasible.
   - If core tests need bundled plugin behavior, consume it through public `src/plugin-sdk/<id>.ts` facades or the plugin's `api.ts`, not private extension modules.
+  - Shared helpers under `test/helpers/**` are part of that same boundary. Do not hardcode repo-relative `extensions/**` imports there, and do not keep plugin-local deep mocks in shared helpers just because multiple tests use them.
+  - When core tests or shared helpers need bundled plugin public surfaces, use `src/test-utils/bundled-plugin-public-surface.ts` for `api.ts`, `runtime-api.ts`, `contract-api.ts`, `test-api.ts`, plugin entrypoint `index.js`, and resolved module ids for dynamic import or mocking.
   - If a core test is asserting extension-specific behavior instead of a generic contract, move it to the owning extension package.
 
 ## Docs Linking (Mintlify)
@@ -149,6 +151,7 @@
 - Config schema drift uses `pnpm config:docs:gen` / `pnpm config:docs:check`.
 - Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
 - If you change config schema/help or the public Plugin SDK surface, run the matching gen command and commit the updated `.sha256` hash file. Keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
+- When `pnpm tsgo` fails, triage by coherent surface instead of by raw error count: rerun the gate, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun `pnpm tsgo` before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
 - Verification modes for work on `main`:
   - Default mode: `main` is relatively stable. Count pre-commit hook coverage when it already verified the current tree, avoid rerunning the exact same checks just for ceremony, and prefer keeping CI/main green before landing.
@@ -296,7 +299,7 @@
 
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
-- Carbon: prefer latest published beta over stable when possible; do not switch to stable casually.
+- Carbon version edits are owner-only: do not change `@buape/carbon` version pins unless you are Shadow (@thewilloftheshadow) as verified by gh.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
 - **Multi-agent safety:** do **not** create/apply/drop `git stash` entries unless explicitly requested (this includes `git pull --rebase --autostash`). Assume other agents may be working; keep unrelated WIP untouched and avoid cross-cutting state changes.

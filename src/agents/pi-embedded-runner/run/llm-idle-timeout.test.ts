@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
@@ -55,11 +55,26 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
   });
 
+  it("uses an explicit run timeout override when llm.idleTimeoutSeconds is not set", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(900_000);
+  });
+
+  it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
+  });
+
   it("prefers llm.idleTimeoutSeconds over agents.defaults.timeoutSeconds", () => {
     const cfg = {
       agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 120 } } },
     } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(120_000);
+  });
+
+  it("prefers llm.idleTimeoutSeconds over an explicit run timeout override", () => {
+    const cfg = {
+      agents: { defaults: { llm: { idleTimeoutSeconds: 120 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, runTimeoutMs: 900_000 })).toBe(120_000);
   });
 
   it("keeps idleTimeoutSeconds=0 disabled even when timeoutSeconds is set", () => {
@@ -88,6 +103,10 @@ describe("resolveLlmIdleTimeoutMs", () => {
 });
 
 describe("streamWithIdleTimeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   // Helper to create a mock async iterable
   function createMockAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
     return {
@@ -130,6 +149,7 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("throws on idle timeout", async () => {
+    vi.useFakeTimers();
     // Create a stream that never yields
     const slowStream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
@@ -152,7 +172,9 @@ describe("streamWithIdleTimeout", () => {
     const stream = wrapped(model, context, options) as AsyncIterable<unknown>;
     const iterator = stream[Symbol.asyncIterator]();
 
-    await expect(iterator.next()).rejects.toThrow(/LLM idle timeout/);
+    const next = expect(iterator.next()).rejects.toThrow(/LLM idle timeout/);
+    await vi.advanceTimersByTimeAsync(50);
+    await next;
   });
 
   it("resets timer on each chunk", async () => {
@@ -177,6 +199,7 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("handles stream with delays between chunks", async () => {
+    vi.useFakeTimers();
     // Create a stream with small delays
     const delayedStream: AsyncIterable<{ text: string }> = {
       [Symbol.asyncIterator]() {
@@ -203,14 +226,22 @@ describe("streamWithIdleTimeout", () => {
     const stream = wrapped(model, context, options) as AsyncIterable<{ text: string }>;
     const results: { text: string }[] = [];
 
-    for await (const chunk of stream) {
-      results.push(chunk);
+    const collect = (async () => {
+      for await (const chunk of stream) {
+        results.push(chunk);
+      }
+    })();
+
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(10);
     }
+    await collect;
 
     expect(results).toHaveLength(3);
   });
 
   it("calls timeout hook on idle timeout", async () => {
+    vi.useFakeTimers();
     // Create a stream that never yields
     const slowStream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
@@ -234,18 +265,16 @@ describe("streamWithIdleTimeout", () => {
     const stream = wrapped(model, context, options) as AsyncIterable<unknown>;
     const iterator = stream[Symbol.asyncIterator]();
 
-    try {
-      await iterator.next();
-      // Should not reach here
-      expect.fail("Expected timeout error");
-    } catch (error) {
-      // Verify the error message is preserved
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toMatch(/LLM idle timeout/);
-      expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-      const [timeoutError] = onIdleTimeout.mock.calls[0] ?? [];
-      expect(timeoutError).toBeInstanceOf(Error);
-      expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
-    }
+    const next = iterator.next().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(50);
+    const error = await next;
+
+    // Verify the error message is preserved
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/LLM idle timeout/);
+    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+    const [timeoutError] = onIdleTimeout.mock.calls[0] ?? [];
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
   });
 });
