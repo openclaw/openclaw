@@ -37,4 +37,18 @@ describe("classifyCompactionReason", () => {
       ),
     ).toBe("guard_blocked");
   });
+
+  it("preserves unknown error messages with sanitized spaces", () => {
+    expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe(
+      "unknown:No_API_provider_registered_for_api:_ollama",
+    );
+    expect(classifyCompactionReason("Some error with   multiple   spaces")).toBe(
+      "unknown:Some_error_with_multiple_spaces",
+    );
+  });
+
+  it("returns 'unknown' for empty/undefined reason", () => {
+    expect(classifyCompactionReason(undefined)).toBe("unknown");
+    expect(classifyCompactionReason("")).toBe("unknown");
+  });
 });

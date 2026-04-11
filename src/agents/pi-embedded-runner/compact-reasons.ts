@@ -58,5 +58,7 @@ export function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   // Preserve original error message for unknown errors instead of masking it
-  return `unknown:${reason}`;
+  // Replace spaces with underscores to maintain logfmt compatibility
+  const sanitized = reason?.replace(/\s+/g, "_") ?? "unspecified";
+  return `unknown:${sanitized}`;
 }
