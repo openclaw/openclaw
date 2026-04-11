@@ -195,6 +195,9 @@ function estimateSafeThinkingChars(block: unknown): number {
     type?: unknown;
     thinking?: unknown;
     thinkingSignature?: unknown;
+    signature?: unknown;
+    thought_signature?: unknown;
+    thoughtSignature?: unknown;
     data?: unknown;
   };
 
@@ -202,8 +205,23 @@ function estimateSafeThinkingChars(block: unknown): number {
   if (typeof record.thinking === "string") {
     chars += record.thinking.length;
   }
-  if (typeof record.thinkingSignature === "string") {
-    chars += record.thinkingSignature.length;
+  const signatureCandidates = [
+    record.thinkingSignature,
+    record.signature,
+    record.thought_signature,
+    record.thoughtSignature,
+  ];
+  const signature = signatureCandidates.reduce<string | undefined>((longest, candidate) => {
+    if (typeof candidate !== "string") {
+      return longest;
+    }
+    if (!longest || candidate.length > longest.length) {
+      return candidate;
+    }
+    return longest;
+  }, undefined);
+  if (signature) {
+    chars += signature.length;
   }
   if (record.type === "redacted_thinking" && typeof record.data === "string") {
     chars += record.data.length;

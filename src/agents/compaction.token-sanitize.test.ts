@@ -79,7 +79,7 @@ describe("compaction token accounting sanitization", () => {
     );
   });
 
-  it("counts reasoning signatures and redacted thinking payloads when fallback estimation is used", () => {
+  it("counts reasoning signature aliases and redacted thinking payloads when fallback estimation is used", () => {
     piCodingAgentMocks.estimateTokens.mockImplementation(() => {
       throw new TypeError("boom");
     });
@@ -91,6 +91,14 @@ describe("compaction token accounting sanitization", () => {
           type: "thinking",
           thinking: "draft reasoning",
           thinkingSignature: "sig_payload",
+        },
+        {
+          type: "thinking",
+          signature: "legacy_signature_payload",
+        },
+        {
+          type: "thinking",
+          thought_signature: "snake_case_signature_payload",
         },
         {
           type: "redacted_thinking",
@@ -105,6 +113,8 @@ describe("compaction token accounting sanitization", () => {
       Math.ceil(
         ("draft reasoning".length +
           "sig_payload".length +
+          "legacy_signature_payload".length +
+          "snake_case_signature_payload".length +
           "redacted_reasoning_blob".length +
           "sig_redacted".length) /
           4,
