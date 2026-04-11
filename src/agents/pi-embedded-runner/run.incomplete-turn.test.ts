@@ -103,6 +103,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
+  });
 
   it("treats stop thinking-only turns as incomplete", () => {
     const text = resolveIncompleteTurnPayloadText({

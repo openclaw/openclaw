@@ -1369,6 +1369,7 @@
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
+    "acpx": "0.5.3",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",

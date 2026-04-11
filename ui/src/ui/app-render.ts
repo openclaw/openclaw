@@ -989,6 +989,47 @@ export function renderApp(state: AppViewState) {
                     : nothing}
                 </button>
               </div>
+              ${!navCollapsed && state.sessionsResult?.sessions?.length
+                ? html`
+                    <div class="sidebar-recent-sessions">
+                      ${[...state.sessionsResult.sessions]
+                        .filter((s) => {
+                          const display = s.label ?? s.displayName ?? s.key;
+                          if (display === "heartbeat" || s.key === "heartbeat") {
+                            return false;
+                          }
+                          if (s.key.includes(":cron:") || display.startsWith("Cron:")) {
+                            return false;
+                          }
+                          if (s.key.includes(":subagent:") && !s.label) {
+                            return false;
+                          }
+                          return s.kind === "direct" || s.kind === "group" || s.kind === "unknown";
+                        })
+                        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+                        .slice(0, 12)
+                        .map(
+                          (session) => html`
+                            <button
+                              type="button"
+                              class="sidebar-recent-session ${session.key === state.sessionKey
+                                ? "sidebar-recent-session--active"
+                                : ""}"
+                              title=${session.label ?? session.displayName ?? session.key}
+                              @click=${() => {
+                                switchChatSession(state, session.key);
+                                state.setTab("chat" as import("./navigation.ts").Tab);
+                              }}
+                            >
+                              <span class="sidebar-recent-session__label"
+                                >${session.label ?? session.displayName ?? session.key}</span
+                              >
+                            </button>
+                          `,
+                        )}
+                    </div>
+                  `
+                : nothing}
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
