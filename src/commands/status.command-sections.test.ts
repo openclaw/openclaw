@@ -3,6 +3,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusMemoryValue,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -135,6 +136,38 @@ describe("status.command-sections", () => {
       { Item: "Matrix", Status: "ok(LINKED)", Detail: "linked" },
       { Item: "Signal", Status: "warn(UNLINKED)", Detail: "not linked" },
     ]);
+  });
+
+  it("reports enabled memory as not checked when the fast path skips collection", () => {
+    expect(
+      buildStatusMemoryValue({
+        memory: null,
+        memoryCollection: "skipped",
+        memoryPlugin: { enabled: true, slot: "memory-lancedb" },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+        resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
+      }),
+    ).toBe("muted(enabled (plugin memory-lancedb) · not checked)");
+  });
+
+  it("keeps enabled memory as unavailable when collection was attempted", () => {
+    expect(
+      buildStatusMemoryValue({
+        memory: null,
+        memoryCollection: "checked",
+        memoryPlugin: { enabled: true, slot: "memory-lancedb" },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+        resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
+      }),
+    ).toBe("muted(enabled (plugin memory-lancedb) · unavailable)");
   });
 
   it("builds footer lines from update and reachability state", () => {

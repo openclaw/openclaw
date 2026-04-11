@@ -59,7 +59,7 @@ export async function scanStatusJsonFast(
   },
   runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
-  return await scanStatusJsonWithPolicy(opts, runtime, {
+  const result = await scanStatusJsonWithPolicy(opts, runtime, {
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     resolveHasConfiguredChannels: (cfg) =>
@@ -76,4 +76,8 @@ export async function scanStatusJsonFast(
           })
         : null,
   });
+  return {
+    ...result,
+    memoryCollection: opts.all ? "checked" : "skipped",
+  };
 }

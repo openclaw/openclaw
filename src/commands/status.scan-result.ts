@@ -38,6 +38,7 @@ export type StatusScanResult = {
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
   summary: Awaited<ReturnType<typeof getStatusSummaryFn>>;
   memory: MemoryStatusSnapshot | null;
+  memoryCollection: "checked" | "skipped";
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
 };
@@ -67,6 +68,7 @@ export function buildStatusScanResult(params: {
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
   summary: Awaited<ReturnType<typeof getStatusSummaryFn>>;
   memory: MemoryStatusSnapshot | null;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
 }): StatusScanResult {
@@ -92,6 +94,7 @@ export function buildStatusScanResult(params: {
     channels: params.channels,
     summary: params.summary,
     memory: params.memory,
+    memoryCollection: params.memoryCollection ?? "checked",
     memoryPlugin: params.memoryPlugin,
     pluginCompatibility: params.pluginCompatibility,
   };

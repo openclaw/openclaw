@@ -117,6 +117,7 @@ export function buildStatusLastHeartbeatValue(params: {
 
 export function buildStatusMemoryValue(params: {
   memory: MemoryLike;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: MemoryPluginLike;
   ok: (value: string) => string;
   warn: (value: string) => string;
@@ -140,7 +141,9 @@ export function buildStatusMemoryValue(params: {
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(
+      `enabled (${slot}) · ${params.memoryCollection === "skipped" ? "not checked" : "unavailable"}`,
+    );
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";

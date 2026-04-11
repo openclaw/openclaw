@@ -58,6 +58,7 @@ export async function buildStatusCommandReportData(params: {
     message: string;
   }>;
   memory: MemoryStatusSnapshot | null;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
   pairingRecovery: { requestId: string | null } | null;
@@ -105,6 +106,7 @@ export async function buildStatusCommandReportData(params: {
     lastHeartbeat: params.lastHeartbeat,
     agentStatus: params.agentStatus,
     memory: params.memory,
+    memoryCollection: params.memoryCollection,
     memoryPlugin: params.memoryPlugin,
     pluginCompatibility: params.pluginCompatibility,
     ok: params.ok,

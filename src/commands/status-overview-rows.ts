@@ -43,6 +43,7 @@ export function buildStatusCommandOverviewRows(params: {
     agents: AgentLocalStatus[];
   };
   memory: MemoryStatusSnapshot | null;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
   ok: (value: string) => string;
@@ -92,6 +93,7 @@ export function buildStatusCommandOverviewRows(params: {
   });
   const memoryValue = buildStatusMemoryValue({
     memory: params.memory,
+    memoryCollection: params.memoryCollection,
     memoryPlugin: params.memoryPlugin,
     ok: params.ok,
     warn: params.warn,
