@@ -228,9 +228,23 @@ describe("telegram live qa runtime", () => {
   it("includes mention gating in the Telegram live scenario catalog", () => {
     expect(
       __testing
-        .findScenario(["telegram-help-command", "telegram-mention-gating"])
+        .findScenario([
+          "telegram-help-command",
+          "telegram-commands-command",
+          "telegram-tools-compact-command",
+          "telegram-whoami-command",
+          "telegram-context-command",
+          "telegram-mention-gating",
+        ])
         .map((scenario) => scenario.id),
-    ).toEqual(["telegram-help-command", "telegram-mention-gating"]);
+    ).toEqual([
+      "telegram-help-command",
+      "telegram-commands-command",
+      "telegram-tools-compact-command",
+      "telegram-whoami-command",
+      "telegram-context-command",
+      "telegram-mention-gating",
+    ]);
   });
 
   it("tracks Telegram live coverage against the shared transport contract", () => {
@@ -290,6 +304,45 @@ describe("telegram live qa runtime", () => {
         matchText: "TELEGRAM_QA_NOMENTION_TOKEN",
       }),
     ).toBe(false);
+  });
+
+  it("validates expected Telegram reply markers", () => {
+    expect(() =>
+      __testing.assertTelegramScenarioReply({
+        expectedTextIncludes: ["🧭 Identity", "Channel: telegram"],
+        message: {
+          updateId: 1,
+          messageId: 10,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "🧭 Identity\nChannel: telegram\nUser id: 42",
+          replyToMessageId: 55,
+          timestamp: 1_700_000_001_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      __testing.assertTelegramScenarioReply({
+        expectedTextIncludes: ["Use /tools verbose for descriptions."],
+        message: {
+          updateId: 2,
+          messageId: 11,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "exec\nbash",
+          replyToMessageId: 55,
+          timestamp: 1_700_000_002_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toThrow("reply message 11 missing expected text: Use /tools verbose for descriptions.");
   });
 
   it("adds an abort deadline to Telegram API requests", async () => {
