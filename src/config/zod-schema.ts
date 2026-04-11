@@ -678,6 +678,7 @@ export const OpenClawSchema = z
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
+            title: z.string().optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),

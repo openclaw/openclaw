@@ -42,6 +42,9 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     });
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
+    if (parsed.title) {
+      document.title = parsed.title;
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
