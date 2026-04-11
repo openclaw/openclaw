@@ -4,6 +4,7 @@ import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -749,25 +750,35 @@ export async function sendMessageTelegram(
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
     const fallbackText = opts.plainText ?? rawText;
+    const textChunkLimit = Math.min(
+      4096,
+      resolveTextChunkLimit(cfg, "telegram", account.accountId, { fallbackLimit: 4000 }),
+    );
     let htmlChunks: string[];
     try {
-      htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
+      htmlChunks = splitTelegramHtmlChunks(rawText, textChunkLimit);
     } catch (error) {
       logVerbose(
         `telegram ${context} failed HTML chunk planning, retrying as plain text: ${formatErrorMessage(
           error,
         )}`,
       );
-      return splitTelegramPlainTextChunks(fallbackText, 4000).map((plainText) => ({ plainText }));
+      return splitTelegramPlainTextChunks(fallbackText, textChunkLimit).map((plainText) => ({
+        plainText,
+      }));
     }
-    const fixedPlainTextChunks = splitTelegramPlainTextChunks(fallbackText, 4000);
+    const fixedPlainTextChunks = splitTelegramPlainTextChunks(fallbackText, textChunkLimit);
     if (fixedPlainTextChunks.length > htmlChunks.length) {
       logVerbose(
         `telegram ${context} plain-text fallback needs more chunks than HTML; sending plain text`,
       );
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
-    const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
+    const plainTextChunks = splitTelegramPlainTextFallback(
+      fallbackText,
+      htmlChunks.length,
+      textChunkLimit,
+    );
     return htmlChunks.map((htmlText, index) => ({
       htmlText,
       plainText: plainTextChunks[index] ?? htmlText,

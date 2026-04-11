@@ -1655,6 +1655,8 @@ describe("sendMessageTelegram", () => {
     const chatId = "123";
     const htmlText = `<b>${"A".repeat(5000)}</b>`;
 
+    loadConfig.mockReturnValue({ channels: { telegram: {} } });
+
     const sendMessage = vi
       .fn()
       .mockResolvedValueOnce({ message_id: 90, chat: { id: chatId } })
@@ -1680,6 +1682,25 @@ describe("sendMessageTelegram", () => {
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
+  });
+
+  it("uses configured telegram textChunkLimit for html chunk planning", async () => {
+    const chatId = "123";
+    const htmlText = `<b>${"A".repeat(4050)}</b>`;
+
+    loadConfig.mockReturnValue({ channels: { telegram: { textChunkLimit: 4096 } } });
+
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 90, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    await sendMessageTelegram(chatId, htmlText, {
+      token: "tok",
+      api,
+      textMode: "html",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(String(sendMessage.mock.calls[0]?.[1] ?? "").length).toBeLessThanOrEqual(4096);
   });
 
   it("preserves caller plain-text fallback across chunked html parse retries", async () => {
