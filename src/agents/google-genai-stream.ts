@@ -57,24 +57,38 @@ export function createGoogleGenAiStreamFnForModel(
         const contents = context.messages
           .map((msg: unknown) => {
             const m = msg as {
-              content: string | Array<{ type: string; text?: string }>;
+              content: string | Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
               role: string;
             };
-            let text = "";
+
+            let parts: any[] = [];
+
             if (typeof m.content === "string") {
-              text = m.content;
+              parts.push({ text: sanitizeTransportPayloadText(m.content) });
             } else if (Array.isArray(m.content)) {
-              text = m.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text || "")
-                .join("\n");
+              parts = m.content
+                .map((part) => {
+                  if (part.type === "text" && part.text) {
+                    return { text: sanitizeTransportPayloadText(part.text) };
+                  } else if (part.type === "image" && part.data && part.mimeType) {
+                    return {
+                      inlineData: {
+                        mimeType: part.mimeType,
+                        data: part.data,
+                      },
+                    };
+                  }
+                  return null;
+                })
+                .filter((p): p is nonNullable<typeof p> => p !== null);
             }
+
             return {
               role: m.role === "user" ? "user" : "model",
-              parts: [{ text: sanitizeTransportPayloadText(text) }],
+              parts: parts,
             };
           })
-          .filter((c: { parts: Array<{ text: string }> }) => c.parts[0].text.length > 0);
+          .filter((c: { parts: any[] }) => c.parts.length > 0);
 
         const responseStream = await ai.models.generateContentStream({
           model: model.id,
