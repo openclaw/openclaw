@@ -275,6 +275,19 @@ async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
   await finished;
 }
 
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 function getWebhookCall(index: number) {
   const [args] = fetchWithSsrFGuardMock.mock.calls[index] as unknown as [
     {
@@ -886,6 +899,61 @@ describe("gateway server cron", () => {
       expect(entries[0]?.status).toBe("ok");
       expect(entries[0]?.summary).toBe("cron command ok");
     } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("waits for timed out command children to terminate before finishing", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-command-timeout-",
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const pidFile = path.join(os.tmpdir(), `openclaw-cron-command-timeout-${Date.now()}.pid`);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        ...buildCommandJob({
+          args: [
+            "-e",
+            `const fs=require("node:fs"); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`,
+          ],
+          timeoutSeconds: 1,
+        }),
+      });
+      expect(addRes.ok).toBe(true);
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const finishedRun = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+        8_000,
+      );
+      await runCronJobForce(ws, jobId);
+
+      const finishedPayload = await finishedRun;
+      expect(finishedPayload).toMatchObject({
+        jobId,
+        action: "finished",
+        status: "error",
+        error: "cron: job execution timed out",
+      });
+
+      const pid = Number((await fs.readFile(pidFile, "utf-8")).trim());
+      expect(Number.isFinite(pid)).toBe(true);
+      expect(isPidAlive(pid)).toBe(false);
+    } finally {
+      try {
+        const pid = Number((await fs.readFile(pidFile, "utf-8")).trim());
+        if (Number.isFinite(pid) && isPidAlive(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      } catch {
+        // ignore cleanup failures for already-dead children or missing pid files
+      }
+      await fs.rm(pidFile, { force: true });
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   });

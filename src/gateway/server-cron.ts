@@ -88,6 +88,7 @@ function resolveCronWebhookTarget(params: {
 }
 
 const CRON_COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
+const CRON_COMMAND_TERMINATION_GRACE_MS = 250;
 
 function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
@@ -188,6 +189,7 @@ async function runCronCommandJob(params: {
     let stderrBytes = 0;
     let settled = false;
     let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
 
     const appendLimited = (current: string, chunk: Buffer, used: number) => {
       if (used >= CRON_COMMAND_OUTPUT_LIMIT_BYTES) {
@@ -211,14 +213,30 @@ async function runCronCommandJob(params: {
       }
       settled = true;
       clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       params.abortSignal?.removeEventListener("abort", onAbort);
       resolve(result);
+    };
+
+    const terminateChild = () => {
+      child.kill("SIGTERM");
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      killTimer = setTimeout(() => {
+        if (!settled && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, CRON_COMMAND_TERMINATION_GRACE_MS);
+      killTimer.unref?.();
     };
 
     let aborted = false;
     const onAbort = () => {
       aborted = true;
-      child.kill("SIGTERM");
+      terminateChild();
     };
 
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -285,7 +303,7 @@ async function runCronCommandJob(params: {
       timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
-            child.kill("SIGTERM");
+            terminateChild();
           }, timeoutMs)
         : undefined;
     timeout?.unref?.();

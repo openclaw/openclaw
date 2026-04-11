@@ -37,6 +37,7 @@ import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-polic
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+const COMMAND_ABORT_SETTLE_GRACE_MS = 500;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -82,13 +83,36 @@ export async function executeJobCoreWithTimeout(
   }
 
   const runAbortController = new AbortController();
+  const executionPromise = executeJobCore(state, job, runAbortController.signal);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
-      new Promise<never>((_, reject) => {
+      executionPromise,
+      new Promise<Awaited<ReturnType<typeof executeJobCore>>>((resolve, reject) => {
         timeoutId = setTimeout(() => {
           runAbortController.abort(timeoutErrorMessage());
+          if (job.payload.kind === "command") {
+            void Promise.race([
+              executionPromise,
+              new Promise<symbol>((graceResolve) => {
+                const graceTimer = setTimeout(() => {
+                  graceResolve(Symbol.for("cron-command-timeout-grace-expired"));
+                }, COMMAND_ABORT_SETTLE_GRACE_MS);
+                graceTimer.unref?.();
+              }),
+            ])
+              .then((result) => {
+                if (typeof result === "symbol") {
+                  reject(new Error(timeoutErrorMessage()));
+                  return;
+                }
+                resolve(result);
+              })
+              .catch((err) => {
+                reject(err instanceof Error ? err : new Error(timeoutErrorMessage()));
+              });
+            return;
+          }
           reject(new Error(timeoutErrorMessage()));
         }, jobTimeoutMs);
         timeoutId.unref?.();
