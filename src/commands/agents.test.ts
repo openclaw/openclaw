@@ -208,7 +208,7 @@ describe("agents helpers", () => {
         agentId: "main",
         match: {
           channel: "discord",
-          peer: { kind: "user", id: "a|b" },
+          peer: { kind: "direct", id: "a|b" },
           accountId: "default",
         },
       },
@@ -216,7 +216,7 @@ describe("agents helpers", () => {
         agentId: "main",
         match: {
           channel: "discord",
-          peer: { kind: "user", id: "a" },
+          peer: { kind: "direct", id: "a" },
           guildId: "b",
           accountId: "|default",
         },

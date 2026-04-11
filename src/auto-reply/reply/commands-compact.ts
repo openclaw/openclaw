@@ -100,8 +100,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
-    agentId: sessionAgentId,
     isGroup: params.isGroup,
+    ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
   });
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,

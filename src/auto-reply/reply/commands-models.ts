@@ -1,4 +1,8 @@
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveSessionAgentId,
+  resolveSessionAgentIds,
+} from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
@@ -389,7 +393,10 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
         sessionKey: params.sessionKey,
         config: params.cfg,
       })
-    : params.agentId;
+    : resolveSessionAgentIds({
+        config: params.cfg,
+        agentId: params.agentId,
+      }).sessionAgentId;
   const modelsAgentDir = resolveAgentDir(params.cfg, modelsAgentId);
 
   const reply = await resolveModelsCommandReply({
