@@ -302,7 +302,8 @@ describe("slackPlugin actions", () => {
         filePath: "/tmp/workspace/render.wav",
       },
       toolContext: {
-        agentId: "agent.test",
+        currentChannelId: "C123",
+        currentChannelProvider: "slack",
       },
       mediaLocalRoots: ["/tmp/workspace"],
       mediaReadFile,
@@ -316,7 +317,8 @@ describe("slackPlugin actions", () => {
       }),
       {},
       expect.objectContaining({
-        agentId: "agent.test",
+        currentChannelId: "C123",
+        currentChannelProvider: "slack",
         mediaLocalRoots: ["/tmp/workspace"],
         mediaReadFile,
       }),
