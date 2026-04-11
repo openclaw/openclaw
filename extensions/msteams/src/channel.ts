@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
@@ -344,6 +345,12 @@ function describeMSTeamsMessageTool({
       ? {
           properties: {
             card: createMessageToolCardSchema(),
+            pinnedMessageId: Type.Optional(
+              Type.String({
+                description:
+                  "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
+              }),
+            ),
           },
         }
       : null,
