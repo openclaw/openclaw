@@ -43,6 +43,8 @@ export type HookAction =
       kind: "wake";
       text: string;
       mode: "now" | "next-heartbeat";
+      agentId?: string;
+      sessionKey?: string;
     }
   | {
       kind: "agent";
@@ -249,6 +251,8 @@ function buildActionFromMapping(
         kind: "wake",
         text,
         mode: mapping.wakeMode ?? "now",
+        agentId: mapping.agentId,
+        sessionKey: renderOptional(mapping.sessionKey, ctx),
       },
     };
   }
@@ -286,7 +290,13 @@ function mergeAction(
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
     const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
-    return validateAction({ kind: "wake", text, mode });
+    const agentId =
+      typeof override.agentId === "string" ? override.agentId : (baseWake?.agentId ?? undefined);
+    const sessionKey =
+      typeof override.sessionKey === "string"
+        ? override.sessionKey
+        : (baseWake?.sessionKey ?? undefined);
+    return validateAction({ kind: "wake", text, mode, agentId, sessionKey });
   }
   const baseAgent = base.kind === "agent" ? base : undefined;
   const message =

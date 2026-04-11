@@ -29,8 +29,20 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    agentId?: string;
+    sessionKey?: string;
+  }) => {
+    // Honor the configured sessionKey/agentId from hook mappings so
+    // wake-mode hooks can target non-default agents. Falls back to the
+    // main session key when neither is provided (#64556).
+    const sessionKey =
+      value.sessionKey ??
+      (value.agentId
+        ? `agent:${value.agentId}:main`
+        : resolveMainSessionKeyFromConfig());
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
