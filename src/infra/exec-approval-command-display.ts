@@ -10,7 +10,7 @@ function formatCodePointEscape(char: string): string {
 
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
   const escaped = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
-  return redactSensitiveText(escaped);
+  return redactSensitiveText(escaped, { mode: "tools" });
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {
