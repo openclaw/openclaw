@@ -86,6 +86,45 @@ describe("message action threading helpers", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves currentSessionKey for outbound mirroring when present", async () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "qqbot",
+      target: "qqbot:c2c:3939A3986EAE03D9FC2E266CAF10F997",
+      message: "hi",
+    };
+    resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: "agent:technical_architect:qqbot:group:c2c:3939a3986eae03d9fc2e266caf10f997",
+      baseSessionKey: "agent:technical_architect:qqbot:group:c2c:3939a3986eae03d9fc2e266caf10f997",
+      peer: { id: "c2c:3939a3986eae03d9fc2e266caf10f997", kind: "group" },
+      chatType: "group",
+      from: "qqbot:group:c2c:3939A3986EAE03D9FC2E266CAF10F997",
+      to: "channel:c2c:3939A3986EAE03D9FC2E266CAF10F997",
+    });
+
+    const result = await prepareOutboundMirrorRoute({
+      cfg: {} as OpenClawConfig,
+      channel: "qqbot",
+      to: "qqbot:c2c:3939A3986EAE03D9FC2E266CAF10F997",
+      actionParams,
+      agentId: "technical_architect",
+      currentSessionKey: "agent:technical_architect:main",
+      resolveOutboundSessionRoute,
+      ensureOutboundSessionEntry,
+    });
+
+    expect(result.outboundRoute?.sessionKey).toBe("agent:technical_architect:main");
+    expect(result.outboundRoute?.baseSessionKey).toBe("agent:technical_architect:main");
+    expect(actionParams.__sessionKey).toBe("agent:technical_architect:main");
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:technical_architect:main",
+          baseSessionKey: "agent:technical_architect:main",
+        }),
+      }),
+    );
+  });
+
   it.each([
     {
       name: "injects threadId for matching target",

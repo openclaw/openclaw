@@ -42,6 +42,37 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+const MIN_AGENT_TO_AGENT_TIMEOUT_SECONDS = 45;
+
+function resolveSessionsSendTimeoutSeconds(
+  params: Record<string, unknown>,
+  options?: {
+    requesterSessionKey?: string;
+    targetSessionKey?: string;
+  },
+): number {
+  const requestedTimeoutSeconds =
+    typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+      ? Math.max(0, Math.floor(params.timeoutSeconds))
+      : 30;
+
+  if (requestedTimeoutSeconds === 0) {
+    return 0;
+  }
+
+  const requesterAgentId = options?.requesterSessionKey
+    ? resolveAgentIdFromSessionKey(options.requesterSessionKey)
+    : undefined;
+  const targetAgentId = options?.targetSessionKey
+    ? resolveAgentIdFromSessionKey(options.targetSessionKey)
+    : undefined;
+
+  if (requesterAgentId && targetAgentId) {
+    return Math.max(MIN_AGENT_TO_AGENT_TIMEOUT_SECONDS, requestedTimeoutSeconds);
+  }
+
+  return requestedTimeoutSeconds;
+}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -228,10 +259,10 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+      const timeoutSeconds = resolveSessionsSendTimeoutSeconds(params, {
+        requesterSessionKey: effectiveRequesterKey,
+        targetSessionKey: resolvedKey,
+      });
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -280,8 +311,6 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",
-          sourceSessionKey: opts?.agentSessionKey,
-          sourceChannel: opts?.agentChannel,
           sourceTool: "sessions_send",
         },
       };

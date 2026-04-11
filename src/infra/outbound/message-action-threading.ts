@@ -72,7 +72,7 @@ export async function prepareOutboundMirrorRoute(params: {
     toolContext: params.toolContext,
     resolveAutoThreadId: params.resolveAutoThreadId,
   });
-  const outboundRoute =
+  const resolvedRoute =
     params.agentId && !params.dryRun
       ? await params.resolveOutboundSessionRoute({
           cfg: params.cfg,
@@ -86,6 +86,14 @@ export async function prepareOutboundMirrorRoute(params: {
           threadId: resolvedThreadId,
         })
       : null;
+  const outboundRoute =
+    resolvedRoute && params.currentSessionKey
+      ? {
+          ...resolvedRoute,
+          sessionKey: params.currentSessionKey,
+          baseSessionKey: params.currentSessionKey,
+        }
+      : resolvedRoute;
   if (outboundRoute && params.agentId && !params.dryRun) {
     await params.ensureOutboundSessionEntry({
       cfg: params.cfg,

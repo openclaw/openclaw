@@ -563,6 +563,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const routeMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: sessionAgent });
+      const routeChannel =
+        deliveryFields.lastChannel ??
+        entry?.lastChannel ??
+        entry?.channel ??
+        request.channel?.trim();
+      const shouldClearInheritedRouteMeta =
+        canonicalKey === routeMainSessionKey &&
+        routeChannel === "webchat" &&
+        (entry?.chatType === "group" ||
+          entry?.origin?.chatType === "group" ||
+          entry?.channel === "qqbot" ||
+          entry?.origin?.provider === "qqbot" ||
+          Boolean(entry?.displayName?.startsWith("qqbot:")));
       const nextEntryPatch: SessionEntry = {
         sessionId,
         updatedAt: now,
@@ -584,10 +598,16 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedBy: spawnedByValue,
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
+        channel: routeChannel,
+        chatType: shouldClearInheritedRouteMeta ? undefined : entry?.chatType,
+        displayName: shouldClearInheritedRouteMeta ? undefined : entry?.displayName,
+        origin: shouldClearInheritedRouteMeta ? undefined : entry?.origin,
+        groupId: shouldClearInheritedRouteMeta ? undefined : (resolvedGroupId ?? entry?.groupId),
+        subject: shouldClearInheritedRouteMeta ? undefined : entry?.subject,
+        groupChannel: shouldClearInheritedRouteMeta
+          ? undefined
+          : (resolvedGroupChannel ?? entry?.groupChannel),
+        space: shouldClearInheritedRouteMeta ? undefined : (resolvedGroupSpace ?? entry?.space),
         cliSessionIds: entry?.cliSessionIds,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
@@ -596,8 +616,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         cfg,
         entry,
         sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
+        channel: routeChannel,
+        chatType: shouldClearInheritedRouteMeta ? undefined : entry?.chatType,
       });
       if (sendPolicy === "deny") {
         respond(

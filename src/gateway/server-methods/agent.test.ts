@@ -951,6 +951,43 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("clears stale qq routing metadata from webchat-backed main sessions", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      channel: "qqbot",
+      lastChannel: "webchat",
+      chatType: "group",
+      displayName: "qqbot:legacy-group",
+      origin: {
+        provider: "qqbot",
+        chatType: "group",
+      },
+      groupId: "legacy-group-id",
+      subject: "Legacy Group",
+      groupChannel: "qqbot",
+      space: "legacy-space",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-webchat-route-sanitization");
+
+    expect(capturedEntry).toMatchObject({
+      sessionId: "existing-session-id",
+      channel: "webchat",
+      lastChannel: "webchat",
+    });
+    expect(capturedEntry?.chatType).toBeUndefined();
+    expect(capturedEntry?.displayName).toBeUndefined();
+    expect(capturedEntry?.origin).toBeUndefined();
+    expect(capturedEntry?.groupId).toBeUndefined();
+    expect(capturedEntry?.subject).toBeUndefined();
+    expect(capturedEntry?.groupChannel).toBeUndefined();
+    expect(capturedEntry?.space).toBeUndefined();
+  });
+
   it("tracks async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
