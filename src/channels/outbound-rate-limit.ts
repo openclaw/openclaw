@@ -17,7 +17,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export interface OutboundRateLimitConfig {
+export interface OutboundRateLimiterConfig {
   /** Max outbound messages per window per recipient. @default 20 */
   maxMessages?: number;
   /** Sliding window duration in ms. @default 60_000 (1 min) */
@@ -74,7 +74,7 @@ interface Entry {
   coolUntil?: number;
 }
 
-export function createOutboundRateLimiter(config?: OutboundRateLimitConfig): OutboundRateLimiter {
+export function createOutboundRateLimiter(config?: OutboundRateLimiterConfig): OutboundRateLimiter {
   const maxMessages = config?.maxMessages ?? DEFAULT_MAX_MESSAGES;
   const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
   const cooldownMs = config?.cooldownMs ?? DEFAULT_COOLDOWN_MS;

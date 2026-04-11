@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface OutboundDedupConfig {
+export interface OutboundDedupGuardConfig {
   /** Window in ms during which identical messages are counted. @default 30_000 */
   windowMs?: number;
   /**
@@ -72,7 +72,7 @@ function fingerprint(text: string): string {
   return createHash("sha256").update(normalised).digest("hex");
 }
 
-export function createOutboundDedupGuard(config?: OutboundDedupConfig): OutboundDedupGuard {
+export function createOutboundDedupGuard(config?: OutboundDedupGuardConfig): OutboundDedupGuard {
   const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
   const maxDuplicates = config?.maxDuplicates ?? DEFAULT_MAX_DUPLICATES;
   const pruneIntervalMs = config?.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
