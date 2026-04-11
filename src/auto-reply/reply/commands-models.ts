@@ -32,10 +32,6 @@ export type ModelsProviderData = {
   /** Map from provider/model to human-readable display name (when different from model ID). */
   modelNames: Map<string, string>;
 };
-type ModelsCommandSessionEntry = Pick<
-  SessionEntry,
-  "authProfileOverride" | "modelProvider" | "model"
->;
 
 /**
  * Build provider/model data from config and catalog.
