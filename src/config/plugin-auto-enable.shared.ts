@@ -199,7 +199,7 @@ function resolvePluginIdForConfiguredWebFetchProvider(
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
   const map = new Map<string, string>();
   for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
+    for (const channelId of record.channels ?? []) {
       if (channelId && !map.has(channelId)) {
         map.set(channelId, record.id);
       }

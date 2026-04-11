@@ -28,6 +28,6 @@ export function resolveRuntimeTextTransforms(): PluginTextTransforms | undefined
   return mergePluginTextTransforms(
     ...(loadPluginRuntime()
       ?.getActivePluginRegistry()
-      ?.textTransforms.map((entry) => entry.transforms) ?? []),
+      ?.textTransforms?.map((entry) => entry.transforms) ?? []),
   );
 }

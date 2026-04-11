@@ -311,6 +311,12 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureContextEnginesInitialized: vi.fn(),
     resolveContextEngine: resolveContextEngineMock,
   }));
+  vi.doMock("../../context-engine/init.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../../context-engine/registry.js", () => ({
+    resolveContextEngine: resolveContextEngineMock,
+  }));
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),

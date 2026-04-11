@@ -36,8 +36,16 @@ const skillsLogger = createSubsystemLogger("skills");
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
+function resolveUserHomeDir(): string | undefined {
+  try {
+    return path.resolve(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
 function compactSkillPaths(skills: Skill[]): Skill[] {
-  const home = resolveHomeDir() ?? os.homedir();
+  const home = resolveUserHomeDir();
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
   return skills.map((s) => ({
@@ -435,11 +443,10 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(
-    resolveHomeDir() ?? os.homedir(),
-    ".agents",
-    "skills",
-  );
+  const osHomeDir = resolveUserHomeDir();
+  const personalAgentsSkillsDir = osHomeDir
+    ? path.resolve(osHomeDir, ".agents", "skills")
+    : path.resolve(".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
