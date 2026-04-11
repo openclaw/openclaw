@@ -88,7 +88,7 @@ describe("loginOpenAICodexOAuth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("adds required Codex OAuth scopes to Pi-provided authorize URLs", async () => {
+  it("passes through Pi-provided authorize URLs without mutation", async () => {
     const creds = {
       provider: "openai-codex" as const,
       access: "access-token",
@@ -109,14 +109,14 @@ describe("loginOpenAICodexOAuth", () => {
     const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
 
     expect(openUrl).toHaveBeenCalledWith(
-      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access+model.request+api.responses.write&state=abc",
+      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access+model.request+api.responses.write&state=abc",
+      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
   });
 
-  it("adds a scope parameter when the upstream authorize url omitted it", async () => {
+  it("preserves authorize urls that omit scope", async () => {
     const creds = {
       provider: "openai-codex" as const,
       access: "access-token",
@@ -136,12 +136,10 @@ describe("loginOpenAICodexOAuth", () => {
     const openUrl = vi.fn(async () => {});
     await runCodexOAuth({ isRemote: false, openUrl });
 
-    expect(openUrl).toHaveBeenCalledWith(
-      "https://auth.openai.com/oauth/authorize?state=abc&scope=openid+profile+email+offline_access+model.request+api.responses.write",
-    );
+    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize?state=abc");
   });
 
-  it("normalizes slash-terminated authorize paths too", async () => {
+  it("preserves slash-terminated authorize paths too", async () => {
     const creds = {
       provider: "openai-codex" as const,
       access: "access-token",
@@ -161,9 +159,7 @@ describe("loginOpenAICodexOAuth", () => {
     const openUrl = vi.fn(async () => {});
     await runCodexOAuth({ isRemote: false, openUrl });
 
-    expect(openUrl).toHaveBeenCalledWith(
-      "https://auth.openai.com/oauth/authorize/?state=abc&scope=openid+profile+email+offline_access+model.request+api.responses.write",
-    );
+    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize/?state=abc");
   });
 
   it("reports oauth errors and rethrows", async () => {
