@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   listAcpSessionEntries,
@@ -464,7 +465,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
     }
-    return Boolean(acpEntry.entry);
+    if (!acpEntry.entry) {
+      return false;
+    }
+    if (hasZombieAcpBackingSession(task, Date.now(), acpEntry)) {
+      return false;
+    }
+    return true;
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
@@ -481,6 +488,52 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   }
 
   return true;
+}
+
+const ACP_ZOMBIE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function hasZombieAcpBackingSession(
+  task: TaskRecord,
+  now: number,
+  acpEntry?: AcpSessionStoreEntry | null,
+): boolean {
+  if (task.runtime !== "acp") {
+    return false;
+  }
+  const childSessionKey = task.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return false;
+  }
+  acpEntry ??= taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey: childSessionKey,
+  });
+  if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.entry || !acpEntry.acp) {
+    return false;
+  }
+  if (acpEntry.acp.state !== "running") {
+    return false;
+  }
+  const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+  const entryUpdatedAt = acpEntry.entry.updatedAt ?? 0;
+  const lastActivityAt = acpEntry.acp.lastActivityAt ?? 0;
+  const freshestSeenAt = Math.max(referenceAt, entryUpdatedAt, lastActivityAt);
+  if (now - freshestSeenAt < ACP_ZOMBIE_STALE_MS) {
+    return false;
+  }
+  // Check if stored sessionFile exists on disk; missing metadata or
+  // dangling path (file deleted but path retained) both count as zombie.
+  const sessionFile = acpEntry.entry.sessionFile;
+  if (!sessionFile) {
+    return true;
+  }
+  try {
+    if (!fs.existsSync(sessionFile)) {
+      return true;
+    }
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
