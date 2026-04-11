@@ -1158,7 +1158,7 @@ function convertTextToolCallsToStructured(
       continue;
     }
 
-    const text = block.text as string;
+    const text = block.text;
 
     // Quick check: skip text blocks that clearly don't contain tool calls
     if (!INLINE_TOOL_CALL_QUICK_RE.test(text)) {
@@ -1278,6 +1278,59 @@ async function processOpenAICompletionsStream(
         delta: choice.delta.content,
         partial: output,
       });
+      // Inline detection: if the accumulated text now looks like it contains
+      // inline tool calls, process them immediately so the agent loop can
+      // react without waiting for the stream to end.
+      if (INLINE_TOOL_CALL_QUICK_RE.test(currentBlock.text) || /^\s*\{\s*"name"\s*:/.test(currentBlock.text.trim())) {
+        const extracted = tryExtractInlineToolCalls(currentBlock.text);
+        if (extracted && extracted.length > 0) {
+          // Remove the matched tool-call substrings so they don't appear as
+          // plain text in the output.
+          let remaining = currentBlock.text;
+          for (const tc of extracted) {
+            remaining = remaining.replace(tc.rawMatch, "");
+          }
+          remaining = remaining.trim();
+          if (remaining) {
+            // Update the current block's text to only the non-tool-call portion.
+            currentBlock.text = remaining;
+          } else {
+            // Tool-call text consumed the entire block — pop it and send a
+            // compensating empty text_delta so the block index stays in sync.
+            output.content.pop();
+            stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: "",
+              partial: output,
+            });
+          }
+          // Emit structured tool call events immediately, and upgrade
+          // stopReason so the agent loop knows to continue waiting for
+          // tool results.
+          for (const tc of extracted) {
+            const toolCallBlock = {
+              type: "toolCall" as const,
+              id: `inline_${randomUUID()}`,
+              name: tc.name,
+              arguments: tc.arguments,
+              partialArgs: "",
+            };
+            const contentIndex = output.content.length;
+            output.content.push(toolCallBlock);
+            stream.push({ type: "toolcall_start", contentIndex, partial: output });
+            stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(tc.arguments), partial: output });
+            stream.push({ type: "toolcall_end", contentIndex, toolCall: toolCallBlock, partial: output });
+          }
+          // Upgrade stopReason so the agent loop keeps going.
+          output.stopReason = "toolUse";
+          // NOTE: we keep currentBlock (it now holds the text AFTER the last
+          // extracted tool call).  The next delta will append to it.  If that
+          // next chunk completes another tool-call pattern, we'll extract it
+          // in the next iteration of this loop — so multi-call streams are
+          // handled correctly without losing any content.
+        }
+      }
       continue;
     }
     const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
