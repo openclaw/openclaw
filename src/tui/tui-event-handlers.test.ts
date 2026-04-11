@@ -304,6 +304,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
   });
 
+  it("clears streaming status when a local BTW run finishes after rendering delta text", () => {
+    const { state, chatLog, noteLocalBtwRunId, setActivityStatus, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    noteLocalBtwRunId("run-btw");
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("partial", "run-btw");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
+
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
   it("does not cross-match canonical session keys from different agents", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({
       state: {

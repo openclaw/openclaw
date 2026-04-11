@@ -138,7 +138,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || (!state.activeChatRunId && sessionRuns.size === 0)) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -254,6 +254,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
+        if (!state.activeChatRunId && sessionRuns.size === 0) {
+          setActivityStatus("idle");
+        }
         tui.requestRender();
         return;
       }
