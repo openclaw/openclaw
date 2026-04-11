@@ -273,6 +273,7 @@ export async function startGatewayPostAttachRuntime(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   unavailableGatewayMethods: Set<string>;
 }) {
+  params.unavailableGatewayMethods.delete("chat.history");
   logGatewayStartup({
     cfg: params.cfgAtStart,
     bindHost: params.bindHost,
@@ -322,7 +323,6 @@ export async function startGatewayPostAttachRuntime(params: {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     }));
-    params.unavailableGatewayMethods.delete("chat.history");
   }
 
   if (!params.minimalTestGateway) {
