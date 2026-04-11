@@ -6,6 +6,7 @@ import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   countActiveDescendantRuns,
+  isCliProvider,
   listDescendantRunsForRequester,
   LiveSessionModelSwitchError,
   logWarn,
@@ -15,6 +16,7 @@ import {
   resolveFastModeState,
   resolveNestedAgentLane,
   resolveSessionTranscriptPath,
+  runCliAgent,
   runEmbeddedPiAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -95,49 +97,80 @@ export function createCronPromptExecutor(params: {
         }
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        const result = await runEmbeddedPiAgent({
-          sessionId: params.cronSession.sessionEntry.sessionId,
-          sessionKey: params.agentSessionKey,
-          agentId: params.agentId,
-          trigger: "cron",
-          allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
-          messageChannel: params.messageChannel,
-          agentAccountId: params.resolvedDelivery.accountId,
-          sessionFile,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          config: params.cfgWithAgentDefaults,
-          skillsSnapshot: params.skillsSnapshot,
-          prompt: promptText,
-          lane: resolveNestedAgentLane(params.lane),
-          provider: providerOverride,
-          model: modelOverride,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
-          thinkLevel: params.thinkLevel,
-          fastMode: resolveFastModeState({
-            cfg: params.cfgWithAgentDefaults,
+        // Dispatch to cli-runner for CLI-provider models (e.g. claude-cli/sonnet
+        // from builder.model.fallbacks) instead of letting them fall into the
+        // embedded runner's silent alias rewrite at pi-embedded-runner/run.ts,
+        // which would turn `claude-cli/sonnet` into `anthropic/claude-sonnet-4-6`
+        // and call the generic anthropic provider — a model nobody configured.
+        let result: CronPromptRunResult;
+        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+          result = await runCliAgent({
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.agentSessionKey,
+            agentId: params.agentId,
+            sessionFile,
+            workspaceDir: params.workspaceDir,
+            config: params.cfgWithAgentDefaults,
+            prompt: promptText,
             provider: providerOverride,
             model: modelOverride,
+            thinkLevel: params.thinkLevel,
+            timeoutMs: params.timeoutMs,
+            runId: params.cronSession.sessionEntry.sessionId,
+            skillsSnapshot: params.skillsSnapshot,
+            authProfileId: params.liveSelection.authProfileId,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+            agentAccountId: params.resolvedDelivery.accountId,
+            messageChannel: params.messageChannel,
+            abortSignal: params.abortSignal,
+            trigger: "cron",
+          });
+        } else {
+          result = await runEmbeddedPiAgent({
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.agentSessionKey,
             agentId: params.agentId,
-            sessionEntry: params.cronSession.sessionEntry,
-          }).enabled,
-          verboseLevel: params.resolvedVerboseLevel,
-          timeoutMs: params.timeoutMs,
-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
-          bootstrapContextRunKind: "cron",
-          toolsAllow: params.agentPayload?.toolsAllow,
-          runId: params.cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
-          disableMessageTool: params.toolPolicy.disableMessageTool,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          abortSignal: params.abortSignal,
-          bootstrapPromptWarningSignaturesSeen,
-          bootstrapPromptWarningSignature,
-        });
+            trigger: "cron",
+            allowGatewaySubagentBinding: true,
+            senderIsOwner: true,
+            messageChannel: params.messageChannel,
+            agentAccountId: params.resolvedDelivery.accountId,
+            sessionFile,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            config: params.cfgWithAgentDefaults,
+            skillsSnapshot: params.skillsSnapshot,
+            prompt: promptText,
+            lane: resolveNestedAgentLane(params.lane),
+            provider: providerOverride,
+            model: modelOverride,
+            authProfileId: params.liveSelection.authProfileId,
+            authProfileIdSource: params.liveSelection.authProfileId
+              ? params.liveSelection.authProfileIdSource
+              : undefined,
+            thinkLevel: params.thinkLevel,
+            fastMode: resolveFastModeState({
+              cfg: params.cfgWithAgentDefaults,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: params.agentId,
+              sessionEntry: params.cronSession.sessionEntry,
+            }).enabled,
+            verboseLevel: params.resolvedVerboseLevel,
+            timeoutMs: params.timeoutMs,
+            bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+            bootstrapContextRunKind: "cron",
+            toolsAllow: params.agentPayload?.toolsAllow,
+            runId: params.cronSession.sessionEntry.sessionId,
+            requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
+            disableMessageTool: params.toolPolicy.disableMessageTool,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            abortSignal: params.abortSignal,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+          });
+        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );

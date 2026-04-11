@@ -203,6 +203,31 @@ function resolveChunkIndexByPath(
 }
 
 /**
+ * Throws an AbortError when the given signal has already fired, so the
+ * CLI runner's JS orchestration exits promptly on user /stop instead of
+ * spawning another subprocess through the retry/recovery paths.
+ *
+ * Mirrors the embedded runner's `throwIfAborted` helper: preserves an
+ * Error reason directly; otherwise constructs a new Error with
+ * name = "AbortError" so downstream code recognises the abort uniformly.
+ */
+export function checkAbortSignal(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const err =
+    reason !== undefined
+      ? new Error("CLI runner aborted", { cause: reason })
+      : new Error("CLI runner aborted");
+  err.name = "AbortError";
+  throw err;
+}
+
+/**
  * Wraps executePreparedCliRun with:
  *  - Layer 1: Session prompt file writing + loader prompt + read verification
  *  - Layer 2: Context overflow detection + /compact recovery + profile downgrade
@@ -282,6 +307,12 @@ export async function executeWithOverflowProtection(
     forceReloadSystemPromptFile: boolean,
     loaderPromptMode: "normal" | "strict" | "disabled",
   ): Promise<CliOutput> => {
+    // Single choke point for every subprocess spawn in this module (main run,
+    // loader retries, strict/disabled fallbacks, overflow-recovery /compact,
+    // profile downgrade retry). Checking abort here stops the JS orchestration
+    // from issuing a fresh spawn after the supervisor killed the previous
+    // subprocess via /stop → abortSessionExecutions → cancelSession.
+    checkAbortSignal(params.abortSignal);
     const backend = context.preparedBackend.backend;
     const currentCompactionCount =
       Math.max(0, params.sessionCompactionCount ?? 0) + compactionsThisRun;
@@ -1389,6 +1420,12 @@ export async function executeWithOverflowProtection(
           cliBackendLog.warn("cli-runner: /compact succeeded, will retry with minimal profile");
         } catch (compactErr) {
           if (compactErr instanceof FailoverError && compactErr.reason === "session_expired") {
+            throw compactErr;
+          }
+          // /stop fired during /compact — don't swallow the abort into a
+          // profile-downgrade retry; propagate so the outer catch recognises
+          // it as a user abort.
+          if (compactErr instanceof Error && compactErr.name === "AbortError") {
             throw compactErr;
           }
           cliBackendLog.warn(

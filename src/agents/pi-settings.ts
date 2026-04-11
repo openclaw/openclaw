@@ -3,6 +3,14 @@ import type { ContextEngineInfo } from "../context-engine/types.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
+/**
+ * Default ratio for triggering proactive compaction after a successful run.
+ * When the last API call's prompt tokens / context window exceeds this value,
+ * the runner compacts the session so the next turn starts with headroom.
+ * Override via `agents.defaults.compaction.proactiveTriggerRatio`.
+ */
+export const DEFAULT_PROACTIVE_COMPACTION_RATIO = 0.8;
+
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;
   getCompactionKeepRecentTokens: () => number;
@@ -39,6 +47,21 @@ export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): numbe
     return Math.floor(raw);
   }
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+}
+
+/**
+ * Resolve the proactive-compaction trigger ratio from config.
+ *
+ * Returns the configured `agents.defaults.compaction.proactiveTriggerRatio`
+ * when it is a finite number in [0, 1]; otherwise returns the default.
+ * Callers should treat a value of 0 as "disabled".
+ */
+export function resolveProactiveCompactionRatio(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.compaction?.proactiveTriggerRatio;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1) {
+    return raw;
+  }
+  return DEFAULT_PROACTIVE_COMPACTION_RATIO;
 }
 
 function toNonNegativeInt(value: unknown): number | undefined {

@@ -15,8 +15,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
+import { runCliAgent } from "../cli-runner.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
+import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
@@ -337,6 +339,38 @@ export function runAgentAttempt(params: {
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
+  // Dispatch to cli-runner for CLI-provider models so that fallbacks like
+  // cli-sonnet (= claude-cli/sonnet) go through claude -p, not through the
+  // embedded runner where they'd be silently rewritten into
+  // anthropic/claude-sonnet-4-6 via the alias index collision.
+  if (isCliProvider(params.providerOverride, params.cfg)) {
+    return runCliAgent({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      prompt: effectivePrompt,
+      provider: params.providerOverride,
+      model: params.modelOverride,
+      thinkLevel: params.resolvedThinkLevel,
+      timeoutMs: params.timeoutMs,
+      runId: params.runId,
+      extraSystemPrompt: params.opts.extraSystemPrompt,
+      skillsSnapshot: params.skillsSnapshot,
+      authProfileId,
+      bootstrapPromptWarningSignaturesSeen,
+      bootstrapPromptWarningSignature,
+      images: params.isFallbackRetry ? undefined : params.opts.images,
+      imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+      messageChannel: params.messageChannel,
+      agentAccountId: params.runContext.accountId,
+      abortSignal: params.opts.abortSignal,
+      trigger: "user",
+      streamParams: params.opts.streamParams,
+    });
+  }
   return runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

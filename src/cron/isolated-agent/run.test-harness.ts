@@ -50,6 +50,8 @@ export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
+export const runCliAgentMock = createMock();
+export const isCliProviderMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
@@ -132,6 +134,8 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveFastModeState: resolveFastModeStateMock,
   resolveNestedAgentLane: resolveNestedAgentLaneMock,
   LiveSessionModelSwitchError,
+  isCliProvider: (...args: unknown[]) => isCliProviderMock(...args),
+  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
   runWithModelFallback: runWithModelFallbackMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
@@ -274,6 +278,10 @@ function resetRunExecutionMocks(): void {
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
+  runCliAgentMock.mockReset();
+  runCliAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
+  isCliProviderMock.mockReset();
+  isCliProviderMock.mockReturnValue(false);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
   listDescendantRunsForRequesterMock.mockReset();

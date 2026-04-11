@@ -3,6 +3,8 @@ export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveNestedAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+export { runCliAgent } from "../../agents/cli-runner.js";
+export { isCliProvider } from "../../agents/model-selection.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 export {

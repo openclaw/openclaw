@@ -213,6 +213,38 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
+  it("omits BOOTSTRAP.md entirely when the file is absent (post-onboarding)", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrapEntry = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrapEntry).toBeUndefined();
+  });
+
+  it("still includes BOOTSTRAP.md as a loaded entry when present (onboarding phase)", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      content: "bootstrap-instructions",
+    });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrapEntry = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrapEntry).toBeDefined();
+    expect(bootstrapEntry?.missing).toBe(false);
+    expect(bootstrapEntry?.content).toBe("bootstrap-instructions");
+  });
+
+  it("still reports other bootstrap files as missing when absent", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+    expect(agents).toBeDefined();
+    expect(agents?.missing).toBe(true);
+  });
+
   it("treats hardlinked bootstrap aliases as missing", async () => {
     if (process.platform === "win32") {
       return;

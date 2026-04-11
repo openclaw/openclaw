@@ -353,6 +353,13 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /**
+   * Proactive compaction trigger ratio (0.0–1.0). After a successful run,
+   * if the last API call's prompt tokens / context window exceeds this
+   * fraction, compact before the next turn so it starts with headroom.
+   * Set to 0 to disable proactive compaction. Default: 0.8.
+   */
+  proactiveTriggerRatio?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
