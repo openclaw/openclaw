@@ -147,10 +147,10 @@ describe("handleBashChatCommand stop", () => {
         sandboxed: true,
         toolPolicy: {
           allow: [],
-          deny: [],
+          deny: ["bash"],
           sources: {
-            allow: { source: "default", key: "sandbox.tools.allow" },
-            deny: { source: "default", key: "sandbox.tools.deny" },
+            allow: { source: "default", key: "agents.defaults.tools.sandbox.tools.allow" },
+            deny: { source: "default", key: "agents.defaults.tools.sandbox.tools.deny" },
           },
         },
       });
