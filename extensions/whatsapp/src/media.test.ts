@@ -5,6 +5,7 @@ import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
@@ -14,7 +15,6 @@ import {
   loadWebMediaRaw,
   optimizeImageToJpeg,
 } from "./media.js";
-import { mockPinnedHostnameResolution } from "./test-helpers.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
