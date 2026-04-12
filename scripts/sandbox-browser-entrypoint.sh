@@ -166,7 +166,7 @@ if [[ "${RENDERER_PROCESS_LIMIT}" =~ ^[0-9]+$ && "${RENDERER_PROCESS_LIMIT}" -gt
 fi
 
 echo "[sandbox] Starting Chromium..."
-chromium "${CHROME_ARGS[@]}" about:blank &
+google-chrome-stable "${CHROME_ARGS[@]}" about:blank &
 CHROME_PID=$!
 echo "[sandbox] Chromium started (PID: ${CHROME_PID})"
 
