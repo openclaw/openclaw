@@ -1,0 +1,95 @@
+name: OpenClaw Release Live Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Existing release tag or commit SHA on main to validate (for example v2026.4.12 or 0123abcd)
+        required: true
+        type: string
+
+concurrency:
+  group: openclaw-release-live-validation-${{ inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+
+jobs:
+  validate_release_live_cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Validate ref input
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "Expected an existing release tag or commit SHA on main, got: ${RELEASE_REF}" >&2
+            exit 1
+          fi
+
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Resolve checked-out SHA
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate selected ref is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Validate live cache credentials
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY}" ]]; then
+            echo "Missing OPENAI_API_KEY secret for release live cache validation." >&2
+            exit 1
+          fi
+          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
+            echo "Missing ANTHROPIC_API_KEY secret for release live cache validation." >&2
+            exit 1
+          fi
+
+      - name: Verify live prompt cache floors
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_CACHE_TEST: "1"
+          OPENCLAW_LIVE_TEST: "1"
+        run: pnpm test:live:cache
+
+      - name: Summarize validated ref
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          {
+            echo "## Release live validation"
+            echo
+            echo "- Requested ref: \`${RELEASE_REF}\`"
+            echo "- Validated SHA: \`${RELEASE_SHA}\`"
+            echo "- Check: \`pnpm test:live:cache\`"
+          } >> "$GITHUB_STEP_SUMMARY"
