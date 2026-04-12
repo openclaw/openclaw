@@ -394,7 +394,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("coalesces repeated turn maintenance requests for the same session", async () => {
+  it("coalesces repeated requests into one active run plus one follow-up run for the same session", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
@@ -456,12 +456,86 @@ describe("runContextEngineMaintenance", () => {
         expect(queuedTasks).toHaveLength(1);
 
         releaseForeground();
-        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        expect(getTaskById(queuedTasks[0].taskId)).toMatchObject({
-          status: "succeeded",
-        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
+        const completedTasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(completedTasks).toHaveLength(2);
+        expect(completedTasks.every((task) => task.status === "succeeded")).toBe(true);
 
         await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("queues a follow-up maintenance run when a new turn finishes during an active deferred run", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-rerun-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-rerun";
+        let releaseFirstMaintenance!: () => void;
+        let maintenanceCalls = 0;
+        const maintain = vi.fn(async () => {
+          maintenanceCalls += 1;
+          if (maintenanceCalls === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstMaintenance = resolve;
+            });
+          }
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
+
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun.jsonl",
+          reason: "turn",
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun.jsonl",
+          reason: "turn",
+        });
+
+        releaseFirstMaintenance();
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(2);
+        expect(tasks.every((task) => task.status === "succeeded")).toBe(true);
       } finally {
         vi.useRealTimers();
       }

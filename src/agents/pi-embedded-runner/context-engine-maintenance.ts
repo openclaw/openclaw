@@ -35,7 +35,22 @@ const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after tu
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
 const TURN_MAINTENANCE_WAIT_POLL_MS = 100;
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
-const activeDeferredTurnMaintenanceRuns = new Map<string, Promise<void>>();
+type DeferredTurnMaintenanceScheduleParams = {
+  contextEngine: ContextEngine;
+  sessionId: string;
+  sessionKey: string;
+  sessionFile: string;
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
+  runtimeContext?: ContextEngineRuntimeContext;
+};
+
+type DeferredTurnMaintenanceRunState = {
+  promise: Promise<void>;
+  rerunRequested: boolean;
+  latestParams: DeferredTurnMaintenanceScheduleParams;
+};
+
+const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
 
 function normalizeSessionKey(sessionKey?: string): string | undefined {
   return normalizeOptionalString(sessionKey) || undefined;
@@ -357,19 +372,15 @@ async function runDeferredTurnMaintenanceWorker(params: {
   }
 }
 
-function scheduleDeferredTurnMaintenance(params: {
-  contextEngine: ContextEngine;
-  sessionId: string;
-  sessionKey: string;
-  sessionFile: string;
-  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
-  runtimeContext?: ContextEngineRuntimeContext;
-}): void {
+function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceScheduleParams): void {
   const sessionKey = normalizeSessionKey(params.sessionKey);
   if (!sessionKey) {
     return;
   }
-  if (activeDeferredTurnMaintenanceRuns.has(sessionKey)) {
+  const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
+  if (activeRun) {
+    activeRun.rerunRequested = true;
+    activeRun.latestParams = { ...params, sessionKey };
     return;
   }
 
@@ -414,14 +425,28 @@ function scheduleDeferredTurnMaintenance(params: {
         runId: task.runId!,
       }),
   );
+  let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
     .catch((err) => {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
     })
     .finally(() => {
+      const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
+      if (current !== state) {
+        return;
+      }
+      const rerunParams = current.rerunRequested ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
+      if (rerunParams) {
+        scheduleDeferredTurnMaintenance(rerunParams);
+      }
     });
-  activeDeferredTurnMaintenanceRuns.set(sessionKey, trackedPromise);
+  state = {
+    promise: trackedPromise,
+    rerunRequested: false,
+    latestParams: { ...params, sessionKey },
+  };
+  activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
   void trackedPromise;
 }
 
