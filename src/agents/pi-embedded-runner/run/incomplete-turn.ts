@@ -326,7 +326,12 @@ function isSingleActionThenNarrativePattern(params: {
   if (!text || text.length > 700) {
     return false;
   }
-  return PLANNING_ONLY_PROMISE_RE.test(text);
+  // Use the tighter CONTINUATION_INTENT_RE instead of PLANNING_ONLY_PROMISE_RE
+  // so "Let me know if you need anything" (a completion handoff phrase) doesn't
+  // falsely trigger the single-action pattern detection. The planning-only
+  // detector still uses the broader regex for zero-tool-call turns where the
+  // risk of false retries is lower.
+  return CONTINUATION_INTENT_RE.test(text);
 }
 
 export function resolvePlanningOnlyRetryLimit(

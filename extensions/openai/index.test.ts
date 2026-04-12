@@ -366,11 +366,10 @@ describe("openai plugin", () => {
     };
 
     expect(openaiProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
@@ -384,11 +383,10 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
     expect(
@@ -459,11 +457,10 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -488,10 +485,9 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -515,10 +511,9 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -543,11 +538,10 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -571,11 +565,10 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });

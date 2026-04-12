@@ -110,11 +110,16 @@ export function resolveOpenAISystemPromptContribution(params: {
   ) {
     return undefined;
   }
+  // tool_call_style is NOT overridden via sectionOverrides because the
+  // default section includes dynamic channel-specific approval guidance
+  // from buildExecApprovalPromptGuidance() that varies per runtime
+  // channel. Overriding it with a static string would lose that dynamic
+  // content. Instead, the tool-first reinforcement lives in stablePrefix
+  // so it's always present alongside the default tool_call_style section.
   return {
-    stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+    stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
     sectionOverrides: {
       execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
-      tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       ...(params.mode === "friendly" ? { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY } : {}),
     },
   };
