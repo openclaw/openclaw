@@ -120,6 +120,7 @@ function runVitestSpec(spec) {
     const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
       streams: [child.stdout, child.stderr],
       timeoutMs: resolveVitestNoOutputTimeoutMs(spec.env),
+      label: spec.config,
       log: (message) => {
         console.error(message);
       },
