@@ -84,3 +84,87 @@ describe("resolvePreparedReplyQueueState", () => {
     });
   });
 });
+
+it("force-detaches in interrupt mode when still busy after wait", async () => {
+  const forceDetachActiveRun = vi.fn(() => true);
+  const refreshPreparedState = vi.fn(async () => undefined);
+  const resolveBusyState = vi.fn(() => ({
+    activeSessionId: "session-active",
+    isActive: true,
+    isStreaming: false,
+  }));
+
+  const result = await resolvePreparedReplyQueueState({
+    activeRunQueueAction: "run-now",
+    activeSessionId: "session-active",
+    queueMode: "interrupt",
+    sessionKey: "session-key",
+    sessionId: "session-1",
+    abortActiveRun: vi.fn(() => true),
+    waitForActiveRunEnd: vi.fn(async () => undefined),
+    forceDetachActiveRun,
+    refreshPreparedState,
+    resolveBusyState,
+  });
+
+  expect(forceDetachActiveRun).toHaveBeenCalledWith("session-active");
+  expect(refreshPreparedState).toHaveBeenCalledTimes(2);
+  // forceDetach releases the scheduling slot; residual ReplyOperation
+  // is handled downstream by createReplyOperation({ force: true }).
+  // isActive may still be true here — that's expected and correct.
+  expect(result).toEqual({
+    kind: "continue",
+    busyState: { activeSessionId: "session-active", isActive: true, isStreaming: false },
+  });
+});
+
+it("returns shutdown reply when force-detach is not available (non-interrupt mode)", async () => {
+  const result = await resolvePreparedReplyQueueState({
+    activeRunQueueAction: "run-now",
+    activeSessionId: "session-active",
+    queueMode: "collect",
+    sessionKey: "session-key",
+    sessionId: "session-1",
+    abortActiveRun: vi.fn(),
+    waitForActiveRunEnd: vi.fn(async () => undefined),
+    refreshPreparedState: vi.fn(async () => undefined),
+    resolveBusyState: () => ({
+      activeSessionId: "session-active",
+      isActive: true,
+      isStreaming: false,
+    }),
+  });
+
+  expect(result).toEqual({
+    kind: "reply",
+    reply: {
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    },
+  });
+});
+
+it("returns shutdown reply when force-detach returns false", async () => {
+  const result = await resolvePreparedReplyQueueState({
+    activeRunQueueAction: "run-now",
+    activeSessionId: "session-active",
+    queueMode: "interrupt",
+    sessionKey: "session-key",
+    sessionId: "session-1",
+    abortActiveRun: vi.fn(() => true),
+    waitForActiveRunEnd: vi.fn(async () => undefined),
+    forceDetachActiveRun: vi.fn(() => false),
+    refreshPreparedState: vi.fn(async () => undefined),
+    resolveBusyState: () => ({
+      activeSessionId: "session-active",
+      isActive: true,
+      isStreaming: false,
+    }),
+  });
+
+  expect(result).toEqual({
+    kind: "reply",
+    reply: {
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    },
+  });
+});

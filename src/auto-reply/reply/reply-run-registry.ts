@@ -55,7 +55,7 @@ export type ReplyOperation = {
   detachBackend(handle: ReplyBackendHandle): void;
   complete(): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
-  abortByUser(): void;
+  abortByUser(opts?: { skipNotify?: boolean }): void;
   abortForRestart(): void;
 };
 
@@ -114,14 +114,6 @@ function registerWaitSessionId(sessionKey: string, sessionId: string): void {
   replyRunState.waitKeysBySessionId.set(sessionId, sessionKey);
 }
 
-function clearWaitSessionIds(sessionKey: string): void {
-  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
-    if (mappedKey === sessionKey) {
-      replyRunState.waitKeysBySessionId.delete(sessionId);
-    }
-  }
-}
-
 function notifyReplyRunEnded(sessionKey: string): void {
   const waiters = replyRunState.waitersByKey.get(sessionKey);
   if (!waiters || waiters.size === 0) {
@@ -174,18 +166,74 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
   return attachedBackendByOperation.get(operation);
 }
 
-function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
+function clearReplyRunState(params: {
+  sessionKey: string;
+  sessionId: string;
+  /** If provided, only clear if the currently registered operation is this
+   *  exact object.  This prevents a stale operation's finally block from
+   *  deleting a replacement that was registered via force-supersede — even
+   *  when both operations share the same sessionId. */
+  expectedOperation?: ReplyOperation;
+  /** When true, skip notifying waiters. Used during force-supersede so that
+   *  a replacement operation can register without briefly resolving
+   *  waitForReplyRunEndBySessionId waiters in the gap between clearing the
+   *  old operation and registering the new one. */
+  skipNotify?: boolean;
+}): void {
+  // Identity-check before deletion: if another operation has already replaced
+  // us for this sessionKey (e.g. after a force-supersede via createReplyOperation
+  // with force:true), we must NOT delete the new operation's entries.
+  //
+  // When `expectedOperation` is provided (all internal callers), we use strict
+  // object-identity comparison. When omitted, we fall back to sessionId
+  // comparison — but note this is NOT safe when the replacement shares the same
+  // sessionId (e.g. interrupt-mode retry). External callers that hit this path
+  // should be migrated to pass `expectedOperation`.
+  const currentEntry = replyRunState.activeRunsByKey.get(params.sessionKey);
+  if (currentEntry) {
+    const isReplaced = params.expectedOperation
+      ? currentEntry !== params.expectedOperation
+      : currentEntry.sessionId !== params.sessionId;
+    if (isReplaced) {
+      // Different operation is now registered — skip all map mutations.
+      // Do NOT notify waiters: the replacement is still active, so
+      // resolving waitForReplyRunEnd would incorrectly signal "idle".
+      // Do NOT delete wait-key mappings: the replacement may have
+      // inherited this sessionId via updateSessionId rotation, so
+      // deleting it would break waitForReplyRunEndBySessionId lookups
+      // for the replacement's old session ID.
+      return;
+    }
+  }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   if (replyRunState.activeSessionIdsByKey.get(params.sessionKey) === params.sessionId) {
-    replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
-  } else {
     replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   }
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
-  clearWaitSessionIds(params.sessionKey);
-  notifyReplyRunEnded(params.sessionKey);
+  // Clean up all wait-key aliases for this sessionKey. updateSessionId
+  // registers both old and new sessionIds as wait-key aliases so that
+  // waitForReplyRunEndBySessionId can resolve rotated sessionIds. When a
+  // run finishes normally (no replacement), all those aliases must be
+  // removed to prevent stale aliases from attaching to future runs that
+  // reuse the same sessionKey.
+  //
+  // Skip alias cleanup during force-supersede (skipNotify === true):
+  // the replacement operation inherits the same sessionKey and may need
+  // the existing aliases for waitForReplyRunEndBySessionId to resolve
+  // rotated sessionIds from the old run. The aliases will be cleaned up
+  // when the replacement finishes normally.
+  if (!params.skipNotify) {
+    for (const [aliasId, mappedKey] of replyRunState.waitKeysBySessionId) {
+      if (mappedKey === params.sessionKey) {
+        replyRunState.waitKeysBySessionId.delete(aliasId);
+      }
+    }
+  }
+  if (!params.skipNotify) {
+    notifyReplyRunEnded(params.sessionKey);
+  }
 }
 
 export function createReplyOperation(params: {
@@ -193,6 +241,12 @@ export function createReplyOperation(params: {
   sessionId: string;
   resetTriggered: boolean;
   upstreamAbortSignal?: AbortSignal;
+  /**
+   * When true, forcefully supersede any existing operation for this sessionKey.
+   * The existing operation is aborted and its state is cleared before the new
+   * one is created.  Used by interrupt mode after a two-phase abort detach.
+   */
+  force?: boolean;
 }): ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -203,7 +257,19 @@ export function createReplyOperation(params: {
     throw new Error("Reply operations require a sessionId");
   }
   if (replyRunState.activeRunsByKey.has(sessionKey)) {
-    throw new ReplyRunAlreadyActiveError(sessionKey);
+    if (params.force) {
+      const existing = replyRunState.activeRunsByKey.get(sessionKey)!;
+      existing.abortByUser({ skipNotify: true });
+      // For queued operations, abortByUser already cleared the registry
+      // synchronously (with skipNotify). For running operations, the
+      // clearReplyRunState call below handles the registry while the
+      // operation's finally block will later see isReplaced and skip.
+      if (replyRunState.activeRunsByKey.has(sessionKey)) {
+        clearReplyRunState({ sessionKey, sessionId: existing.sessionId, expectedOperation: existing, skipNotify: true });
+      }
+    } else {
+      throw new ReplyRunAlreadyActiveError(sessionKey);
+    }
   }
 
   const controller = new AbortController();
@@ -211,6 +277,11 @@ export function createReplyOperation(params: {
   let phase: ReplyOperationPhase = "queued";
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
+  // Back-reference: set after the operation object is created so that
+  // clearState() can pass it to clearReplyRunState for object-identity
+  // checking.  This prevents a stale operation from deleting a
+  // replacement that shares the same sessionId.
+  let selfRef: ReplyOperation | undefined;
 
   const clearState = () => {
     if (stateCleared) {
@@ -220,6 +291,7 @@ export function createReplyOperation(params: {
     clearReplyRunState({
       sessionKey,
       sessionId: currentSessionId,
+      expectedOperation: selfRef,
     });
   };
 
@@ -339,13 +411,19 @@ export function createReplyOperation(params: {
       }
       clearState();
     },
-    abortByUser() {
+    abortByUser(opts?: { skipNotify?: boolean }) {
       const phaseBeforeAbort = phase;
       abortWithReason("user_abort", createUserAbortError(), {
         abortedCode: "aborted_by_user",
       });
       if (phaseBeforeAbort === "queued") {
-        clearState();
+        clearReplyRunState({
+          sessionKey,
+          sessionId: currentSessionId,
+          expectedOperation: selfRef,
+          skipNotify: opts?.skipNotify,
+        });
+        stateCleared = true;
       }
     },
     abortForRestart() {
@@ -363,6 +441,9 @@ export function createReplyOperation(params: {
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   registerWaitSessionId(sessionKey, currentSessionId);
+
+  // Wire up the back-reference so clearState() can pass object identity.
+  selfRef = operation;
 
   return operation;
 }

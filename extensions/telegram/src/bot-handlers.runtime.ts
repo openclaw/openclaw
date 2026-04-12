@@ -101,6 +101,7 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildChatSessionCacheKey, CHAT_SESSION_CACHE_MAX } from "./sequential-key.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -119,6 +120,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps = defaultTelegramBotDeps,
+  chatSessionCache,
 }: RegisterTelegramHandlerParams) => {
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
@@ -1091,6 +1093,82 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
+
+    // Populate chat session cache and check for debouncer bypass.
+    // When an agent run is active and the queue mode needs immediate delivery
+    // (steer/interrupt), bypass the debouncer to avoid keyChains serialization.
+    if (chatSessionCache && telegramDeps.isRunActiveForSessionKey) {
+      const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const isForum = msg.chat.is_forum === true;
+      try {
+        const sessionState = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          resolvedThreadId,
+          messageThreadId: msg.message_thread_id,
+          senderId,
+        });
+        // Resolve the effective queue mode from stored session → channel → global config.
+        // NOTE: Per-message inline queue directives (e.g. /interrupt as a one-off) are resolved
+        // later in the pipeline (resolveQueueSettings). This fast path only covers sessions that
+        // are already in steer/interrupt mode. One-off inline overrides still work correctly via
+        // the normal debouncer path — they just don't get the bypass optimization.
+        //
+        // Use live config (loadConfig) rather than the outer `cfg` snapshot so that
+        // runtime queue-mode changes take effect immediately without a restart.
+        const liveCfg = telegramDeps.loadConfig();
+        const queueCfg = liveCfg.messages?.queue;
+        const channelMode = queueCfg?.byChannel
+          ? (queueCfg.byChannel as Record<string, string | undefined>)["telegram"]
+          : undefined;
+        const effectiveMode =
+          sessionState.sessionEntry?.queueMode ?? channelMode ?? queueCfg?.mode ?? "collect";
+        const needsImmediate =
+          effectiveMode === "steer" ||
+          effectiveMode === "steer-backlog" ||
+          effectiveMode === "steer+backlog" ||
+          effectiveMode === "interrupt";
+        // For groups, key by conversation only (shared session).
+        // For DMs, include senderId (bridge/business-chat can route different senders differently).
+        const cacheSenderId = isGroup ? undefined : senderId;
+        const cacheKey = buildChatSessionCacheKey(chatId, conversationThreadId, cacheSenderId);
+        chatSessionCache.set(cacheKey, {
+          sessionKey: sessionState.sessionKey,
+          needsImmediateDelivery: needsImmediate,
+        });
+        // Evict oldest entries when cache exceeds cap (FIFO via Map insertion order).
+        // NOTE: Under very high fan-out (>500 distinct chats), FIFO eviction could remove an
+        // active session's entry before its next message arrives. In that case the bypass misses
+        // for one message (repopulated on the next). Acceptable for the expected bot scale;
+        // an LRU policy would handle this better if fan-out grows significantly.
+        if (chatSessionCache.size > CHAT_SESSION_CACHE_MAX) {
+          const firstKey = chatSessionCache.keys().next().value;
+          if (firstKey !== undefined) {
+            chatSessionCache.delete(firstKey);
+          }
+        }
+
+        // Fast path: if a run is active and mode needs immediate delivery,
+        // bypass the debouncer and process immediately.
+        if (needsImmediate && telegramDeps.isRunActiveForSessionKey(sessionState.sessionKey)) {
+          const replyMedia = await resolveReplyMediaForMessage(ctx, msg);
+          await processMessage(
+            ctx,
+            allMedia,
+            storeAllowFrom,
+            { receivedAtMs: Date.now() },
+            replyMedia,
+          );
+          return;
+        }
+      } catch (err) {
+        // Session resolution failure is non-fatal — fall through to normal debouncer path.
+        // Log so misconfiguration or route failures are visible.
+        logger.debug(`chat session cache: session resolution failed for chat=${chatId}: ${String(err)}`);
+      }
+    }
+
     await inboundDebouncer.enqueue({
       ctx,
       msg,

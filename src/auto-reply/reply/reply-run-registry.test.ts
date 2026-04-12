@@ -108,3 +108,129 @@ describe("reply run registry", () => {
     expect(runningOperation.result).toBeNull();
   });
 });
+
+describe("createReplyOperation with force option", () => {
+  afterEach(() => {
+    __testing.resetReplyRunRegistry();
+  });
+
+  it("force-supersedes an existing operation for the same session key", () => {
+    const existing = createReplyOperation({
+      sessionKey: "agent:main:force-test",
+      sessionId: "session-old",
+      resetTriggered: false,
+    });
+    existing.setPhase("running");
+
+    const replacement = createReplyOperation({
+      sessionKey: "agent:main:force-test",
+      sessionId: "session-new",
+      resetTriggered: false,
+      force: true,
+    });
+
+    // Old operation should be aborted
+    expect(existing.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+
+    // New operation should be active
+    expect(replacement.phase).toBe("queued");
+    expect(replyRunRegistry.isActive("agent:main:force-test")).toBe(true);
+    expect(replacement.sessionId).toBe("session-new");
+  });
+
+  it("throws ReplyRunAlreadyActiveError without force", () => {
+    createReplyOperation({
+      sessionKey: "agent:main:no-force",
+      sessionId: "session-existing",
+      resetTriggered: false,
+    });
+
+    expect(() =>
+      createReplyOperation({
+        sessionKey: "agent:main:no-force",
+        sessionId: "session-new",
+        resetTriggered: false,
+      }),
+    ).toThrow("Reply run already active");
+  });
+
+  it("force with no existing operation works normally", () => {
+    const op = createReplyOperation({
+      sessionKey: "agent:main:force-empty",
+      sessionId: "session-1",
+      resetTriggered: false,
+      force: true,
+    });
+
+    expect(op.phase).toBe("queued");
+    expect(op.sessionId).toBe("session-1");
+  });
+
+  it("force: stale operation's clearState does not delete replacement", () => {
+    // Create the original operation and advance it to running
+    const existing = createReplyOperation({
+      sessionKey: "agent:main:force-race",
+      sessionId: "session-old",
+      resetTriggered: false,
+    });
+    existing.setPhase("running");
+
+    // Force-supersede it with a new operation
+    const replacement = createReplyOperation({
+      sessionKey: "agent:main:force-race",
+      sessionId: "session-new",
+      resetTriggered: false,
+      force: true,
+    });
+    replacement.setPhase("running");
+
+    // Now simulate the old operation's finally block running complete()
+    // (which calls clearState). This must NOT delete the replacement's entries.
+    existing.complete();
+
+    // Replacement should still be active
+    expect(replyRunRegistry.isActive("agent:main:force-race")).toBe(true);
+    expect(resolveActiveReplyRunSessionId("agent:main:force-race")).toBe(
+      "session-new",
+    );
+  });
+
+  it("force-supersede preserves rotated wait aliases for the replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      // Old operation with a rotated sessionId
+      const existing = createReplyOperation({
+        sessionKey: "agent:main:force-alias",
+        sessionId: "session-v1",
+        resetTriggered: false,
+      });
+      existing.setPhase("running");
+      existing.updateSessionId("session-v2");
+
+      // A waiter using the OLD sessionId (pre-rotation alias)
+      const aliasWaitPromise = waitForReplyRunEndBySessionId("session-v1", 5_000);
+
+      // Force-supersede
+      const replacement = createReplyOperation({
+        sessionKey: "agent:main:force-alias",
+        sessionId: "session-v3",
+        resetTriggered: false,
+        force: true,
+      });
+      replacement.setPhase("running");
+
+      // The alias waiter should NOT have resolved yet — the replacement is still running
+      let settled = false;
+      void aliasWaitPromise.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+
+      // When replacement completes, alias waiter resolves
+      replacement.complete();
+      await expect(aliasWaitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+});

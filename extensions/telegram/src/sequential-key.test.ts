@@ -1,5 +1,5 @@
 import type { Chat, Message } from "@grammyjs/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
@@ -102,5 +102,76 @@ describe("getTelegramSequentialKey", () => {
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
+  });
+});
+
+describe("getTelegramSequentialKey with isRunActiveForChat bypass", () => {
+  it("returns per-message key when run is active for the chat", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 42,
+          date: 0,
+          chat: { id: 123, type: "private" } as Chat,
+          from: { id: 999, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => true,
+      },
+    );
+    expect(key).toBe("telegram:123:msg:42");
+  });
+
+  it("returns default key when run is NOT active", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 42,
+          date: 0,
+          chat: { id: 123, type: "private" } as Chat,
+          from: { id: 999, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => false,
+      },
+    );
+    expect(key).toBe("telegram:123");
+  });
+
+  it("returns per-message key scoped to topic for forum groups", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 55,
+          date: 0,
+          chat: { id: -100999, type: "supergroup", is_forum: true } as Chat,
+          message_thread_id: 7,
+          from: { id: 888, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => true,
+      },
+    );
+    expect(key).toBe("telegram:-100999:topic:7:msg:55");
+  });
+
+  it("passes chatId, threadId, and senderId to the callback", () => {
+    const spy = vi.fn().mockReturnValue(false);
+    getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 10,
+          date: 0,
+          chat: { id: 456, type: "supergroup", is_forum: true } as Chat,
+          message_thread_id: 3,
+          from: { id: 777, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      { isRunActiveForChat: spy },
+    );
+    expect(spy).toHaveBeenCalledWith(456, 3, "777");
   });
 });

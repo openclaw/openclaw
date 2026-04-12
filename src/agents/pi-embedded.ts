@@ -11,11 +11,13 @@ export type {
 export {
   abortEmbeddedAgentRun,
   abortEmbeddedPiRun,
+  forceDetachEmbeddedRun,
   compactEmbeddedAgentSession,
   compactEmbeddedPiSession,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunStreaming,
   isEmbeddedPiRunActive,
+  isEmbeddedPiRunActiveForSessionKey,
   isEmbeddedPiRunStreaming,
   queueEmbeddedAgentMessage,
   queueEmbeddedPiMessage,

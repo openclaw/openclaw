@@ -23,8 +23,10 @@ export {
 export {
   abortEmbeddedPiRun,
   abortEmbeddedPiRun as abortEmbeddedAgentRun,
+  forceDetachEmbeddedRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunActive as isEmbeddedAgentRunActive,
+  isEmbeddedPiRunActiveForSessionKey,
   isEmbeddedPiRunStreaming,
   isEmbeddedPiRunStreaming as isEmbeddedAgentRunStreaming,
   queueEmbeddedPiMessage,

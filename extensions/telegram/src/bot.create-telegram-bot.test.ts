@@ -36,7 +36,6 @@ const {
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
   createTelegramBot: createTelegramBotBase,
-  getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
 } = await import("./bot.js");
 let createTelegramBot: (
@@ -136,7 +135,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    // The key function is now wrapped to pass isRunActiveForChat options,
+    // so we verify it's a function rather than checking reference identity.
+    expect(typeof harness.sequentializeKey).toBe("function");
   });
 
   it("preserves same-chat reply order when a debounced run is still active", async () => {

@@ -543,6 +543,8 @@ export async function runPreparedReply(
         piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false,
       waitForActiveRunEnd: (activeRunSessionId) =>
         piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
+      forceDetachActiveRun: (activeRunSessionId) =>
+        piRuntime?.forceDetachEmbeddedRun(activeRunSessionId) ?? false,
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
         authProfileId = useFastReplyRuntime

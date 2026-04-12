@@ -61,6 +61,7 @@ import {
   createReplyOperation,
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
+  waitForReplyRunEndBySessionId,
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -301,6 +302,7 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  const isInterruptMode = resolvedQueue.mode === "interrupt";
   let replyOperation: ReplyOperation;
   try {
     replyOperation =
@@ -310,15 +312,41 @@ export async function runReplyAgent(params: {
         sessionKey: replySessionKey ?? "",
         resetTriggered: resetTriggered === true,
         upstreamAbortSignal: opts?.abortSignal,
+        // In interrupt mode after two-phase abort, force-supersede any lingering
+        // ReplyOperation from the old run whose finally block hasn't cleared yet.
+        force: isInterruptMode,
       });
   } catch (error) {
     if (error instanceof ReplyRunAlreadyActiveError) {
-      typing.cleanup();
-      return {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-      };
+      // The previous run's ReplyOperation may still be clearing in its
+      // finally block after the embedded run handle was removed. Wait for
+      // the reply-op to clear (returns immediately if already idle) with a
+      // 500ms cap, then retry once.
+      await waitForReplyRunEndBySessionId(followupRun.run.sessionId, 500);
+      try {
+        replyOperation = createReplyOperation({
+          sessionId: followupRun.run.sessionId,
+          sessionKey: replySessionKey ?? "",
+          resetTriggered: resetTriggered === true,
+          upstreamAbortSignal: opts?.abortSignal,
+          // Force-supersede only in interrupt mode.  In collect/followup modes,
+          // force-superseding would abort an in-flight run that the queue policy
+          // says should be preserved — changing user-visible semantics and
+          // risking dropped assistant progress.
+          force: isInterruptMode,
+        });
+      } catch (retryError) {
+        if (retryError instanceof ReplyRunAlreadyActiveError) {
+          typing.cleanup();
+          return {
+            text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+          };
+        }
+        throw retryError;
+      }
+    } else {
+      throw error;
     }
-    throw error;
   }
   let runFollowupTurn = queuedRunFollowupTurn;
 
