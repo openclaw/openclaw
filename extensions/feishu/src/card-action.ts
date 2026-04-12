@@ -13,7 +13,7 @@ import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 export type FeishuCardActionEvent = {
   operator: {
     open_id: string;
-    user_id: string;
+    user_id?: string;  // optional - Feishu new payloads don't always send this
     union_id: string;
   };
   token: string;
@@ -22,8 +22,8 @@ export type FeishuCardActionEvent = {
     tag: string;
   };
   context: {
-    open_id: string;
-    user_id: string;
+    open_id?: string;   // optional - new Feishu payloads don't send this
+    user_id?: string;   // optional - new Feishu payloads don't send this
     chat_id: string;
   };
 };

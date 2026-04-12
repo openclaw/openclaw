@@ -259,24 +259,32 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   const actionValue = action.value;
   const contextOpenId = readString(context.open_id);
   const contextUserId = readString(context.user_id);
-  const chatId = readString(context.chat_id);
+  const chatId = readString(context.chat_id) || readString(context.open_chat_id);
+
+  // New Feishu payloads don't send operator.user_id, context.open_id, context.user_id
+  // Fall back to operator.open_id for these
+  const finalOpenId = openId || contextOpenId;
+  const finalUserId = userId || finalOpenId;
+  const finalContextOpenId = contextOpenId || finalOpenId;
+  const finalContextUserId = contextUserId || finalOpenId;
+
   if (
     !token ||
-    !openId ||
-    !userId ||
+    !finalOpenId ||
+    !finalUserId ||
     !unionId ||
     !tag ||
     !isRecord(actionValue) ||
-    !contextOpenId ||
-    !contextUserId ||
+    !finalContextOpenId ||
+    !finalContextUserId ||
     !chatId
   ) {
     return null;
   }
   return {
     operator: {
-      open_id: openId,
-      user_id: userId,
+      open_id: finalOpenId,
+      user_id: finalUserId,
       union_id: unionId,
     },
     token,
@@ -285,8 +293,8 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
       tag,
     },
     context: {
-      open_id: contextOpenId,
-      user_id: contextUserId,
+      open_id: finalContextOpenId,
+      user_id: finalContextUserId,
       chat_id: chatId,
     },
   };
