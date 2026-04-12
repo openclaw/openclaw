@@ -3766,23 +3766,30 @@ def cmd_destroy(args):
     print("\n✅ Destroy complete.")
 
 
-def cmd_state(args):
+
+
+def get_workspace_id(workspace_name):
     _require_requests()
     from urllib.parse import quote
     org = get_org()
-    ws_name = quote(args.workspace, safe="")
+    ws_name = quote(workspace_name, safe="")
     r = requests.get(
         f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
         headers=api_headers()
     )
     if r.status_code == 404:
-        print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
-        return
+        print(f"No workspace named '{workspace_name}' found in organization '{org}'.")
+        return None
     if r.status_code >= 400:
-        print(f"ERROR: Failed to look up workspace '{args.workspace}' in organization '{org}' (HTTP {r.status_code}).")
-        return
+        print(f"ERROR: Failed to look up workspace '{workspace_name}' in organization '{org}' (HTTP {r.status_code}).")
+        return None
     r.raise_for_status()
-    ws_id = r.json()["data"]["id"]
+    return r.json()["data"]["id"]
+
+def cmd_state(args):
+    ws_id = get_workspace_id(args.workspace)
+    if not ws_id:
+        return
 
     r2 = requests.get(f"{TFC_API}/workspaces/{ws_id}/current-state-version", headers=api_headers())
     if r2.status_code == 404:
@@ -3823,23 +3830,10 @@ def cmd_state(args):
 
 
 def cmd_outputs(args):
-    _require_requests()
     import time
-    from urllib.parse import quote
-    org = get_org()
-    ws_name = quote(args.workspace, safe="")
-    r = requests.get(
-        f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
-        headers=api_headers()
-    )
-    if r.status_code == 404:
-        print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
+    ws_id = get_workspace_id(args.workspace)
+    if not ws_id:
         return
-    if r.status_code >= 400:
-        print(f"ERROR: Failed to look up workspace '{args.workspace}' in organization '{org}' (HTTP {r.status_code}).")
-        return
-    r.raise_for_status()
-    ws_id = r.json()["data"]["id"]
 
     max_retries = 6
     for attempt in range(max_retries):
