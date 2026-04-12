@@ -5,11 +5,13 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,
   buildDiaryEntry,
   buildNarrativePrompt,
+  dedupeDreamDiaryEntries,
   extractNarrativeText,
   formatNarrativeDate,
   formatBackfillDiaryDate,
@@ -21,9 +23,11 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
 });
 
 describe("buildNarrativePrompt", () => {
@@ -117,6 +121,39 @@ describe("formatNarrativeDate", () => {
     expect(date).toContain("April");
     expect(date).toContain("2026");
     expect(date).toContain("3:00");
+    expect(date).toContain("UTC");
+  });
+
+  it("applies an explicit timezone", () => {
+    // 2026-04-11T21:46:55Z in America/Los_Angeles (PDT, UTC-7) → 2:46 PM
+    const date = formatNarrativeDate(
+      Date.parse("2026-04-11T21:46:55Z"),
+      "America/Los_Angeles",
+    );
+    expect(date).toContain("2:46");
+    expect(date).toContain("PM");
+    expect(date).toContain("PDT");
+  });
+
+  it("uses host local timezone when timezone is undefined (#65027)", () => {
+    // Force a non-UTC host timezone so this test is meaningful on UTC CI
+    // runners where the old `?? "UTC"` fallback would silently pass.
+    const originalTZ = process.env.TZ;
+    try {
+      process.env.TZ = "America/Los_Angeles"; // PDT = UTC-7
+      const epochMs = Date.parse("2026-04-11T21:46:55Z");
+      const result = formatNarrativeDate(epochMs);
+      // 21:46 UTC → 14:46 PDT → "2:46 PM"
+      expect(result).toContain("2:46");
+      expect(result).toContain("PM");
+      expect(result).toContain("PDT");
+    } finally {
+      if (originalTZ === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = originalTZ;
+      }
+    }
   });
 });
 
@@ -356,6 +393,145 @@ describe("appendNarrativeEntry", () => {
 
     const stat = await fs.stat(dreamsPath);
     expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "<!-- transient comment -->",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:30 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+
+    expect(result.removed).toBe(1);
+    expect(result.kept).toBe(2);
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(2);
+    expect(content).toContain("*April 11, 2026, 8:00 AM*");
+    expect(content).toContain("*April 11, 2026, 8:30 AM*");
+  });
+
+  it("serializes append and dedupe so concurrent rewrites keep the new entry", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await Promise.all([
+      dedupeDreamDiaryEntries({ workspaceDir }),
+      appendNarrativeEntry({
+        workspaceDir,
+        narrative: "A fresh signal arrived after the cleanup started.",
+        nowMs: Date.parse("2026-04-11T14:30:00Z"),
+        timezone: "UTC",
+      }),
+    ]);
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
+    expect(content).toContain("A fresh signal arrived after the cleanup started.");
+  });
+
+  it("keeps dedupe a no-op when no exact duplicates exist", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+
+    expect(result.removed).toBe(0);
+    expect(result.kept).toBe(1);
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "Only one entry exists.",
+    );
+  });
+
+  it("does not rewrite the diary file when dedupe finds nothing to remove", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+    const before = await fs.stat(dreamsPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+    const after = await fs.stat(dreamsPath);
+
+    expect(result.removed).toBe(0);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("cleans up the per-file lock entry after diary updates finish", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY);
+
+    expect(dreamsLocks.size).toBe(0);
+
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+
+    expect(dreamsLocks.size).toBe(0);
   });
 
   it("surfaces temp cleanup failure after atomic replace error", async () => {
