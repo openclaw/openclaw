@@ -3875,7 +3875,8 @@ def cmd_outputs(args):
         print("Try again in a minute: openclaw tfc_client.py outputs --workspace " + args.workspace)
         sys.exit(1)
 
-    outputs = r2.json().get("data", [])
+    payload = r2.json()
+    outputs = payload.get("data", []) if isinstance(payload, dict) else []
     if not outputs:
         print("No outputs found.")
         return
