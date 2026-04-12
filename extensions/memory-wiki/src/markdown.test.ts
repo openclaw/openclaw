@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { slugifyWikiSegment } from "./markdown.js";
+import { createWikiPageFilename, slugifyWikiSegment } from "./markdown.js";
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -29,5 +29,14 @@ describe("slugifyWikiSegment", () => {
     );
     expect(Buffer.byteLength(slug)).toBeLessThanOrEqual(240);
     expect(slugifyWikiSegment(title)).toBe(slug);
+  });
+
+  it("caps composed wiki page filenames to a safe path-component length", () => {
+    const stem = `bridge-${"漢".repeat(45)}-${"語".repeat(45)}`;
+    const fileName = createWikiPageFilename(stem);
+
+    expect(fileName.endsWith(".md")).toBe(true);
+    expect(Buffer.byteLength(fileName)).toBeLessThanOrEqual(255);
+    expect(createWikiPageFilename(stem)).toBe(fileName);
   });
 });

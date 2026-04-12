@@ -67,6 +67,7 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   "g",
 );
 const MAX_WIKI_SEGMENT_BYTES = 240;
+const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const WIKI_SEGMENT_HASH_BYTES = 12;
 
 function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
@@ -83,6 +84,18 @@ function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
   return result;
 }
 
+function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
+  if (Buffer.byteLength(raw) <= maxBytes) {
+    return raw;
+  }
+  const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  const truncated = truncateUtf8CodePointSafe(
+    raw,
+    maxBytes - Buffer.byteLength(`-${suffix}`),
+  ).replace(/-+$/g, "");
+  return `${truncated || fallback}-${suffix}`;
+}
+
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
@@ -91,15 +104,16 @@ export function slugifyWikiSegment(raw: string): string {
   if (!slug) {
     return "page";
   }
-  if (Buffer.byteLength(slug) <= MAX_WIKI_SEGMENT_BYTES) {
-    return slug;
-  }
-  const suffix = createHash("sha1").update(slug).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
-  const truncated = truncateUtf8CodePointSafe(
-    slug,
-    MAX_WIKI_SEGMENT_BYTES - Buffer.byteLength(`-${suffix}`),
-  ).replace(/-+$/g, "");
-  return `${truncated || "page"}-${suffix}`;
+  return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, "page");
+}
+
+export function createWikiPageFilename(stem: string, extension = ".md"): string {
+  const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
+  const maxStemBytes = Math.max(
+    1,
+    MAX_WIKI_FILENAME_COMPONENT_BYTES - Buffer.byteLength(normalizedExtension),
+  );
+  return `${capWikiValueWithHash(stem, maxStemBytes, "page")}${normalizedExtension}`;
 }
 
 export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
