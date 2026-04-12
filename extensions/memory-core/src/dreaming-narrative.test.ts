@@ -121,6 +121,7 @@ describe("formatNarrativeDate", () => {
     expect(date).toContain("April");
     expect(date).toContain("2026");
     expect(date).toContain("3:00");
+    expect(date).toContain("UTC");
   });
 
   it("applies an explicit timezone", () => {
@@ -131,6 +132,7 @@ describe("formatNarrativeDate", () => {
     );
     expect(date).toContain("2:46");
     expect(date).toContain("PM");
+    expect(date).toContain("PDT");
   });
 
   it("uses host local timezone when timezone is undefined (#65027)", () => {
@@ -144,6 +146,7 @@ describe("formatNarrativeDate", () => {
       // 21:46 UTC → 14:46 PDT → "2:46 PM"
       expect(result).toContain("2:46");
       expect(result).toContain("PM");
+      expect(result).toContain("PDT");
     } finally {
       if (originalTZ === undefined) {
         delete process.env.TZ;

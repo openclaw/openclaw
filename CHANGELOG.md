@@ -13,15 +13,18 @@ Docs: https://docs.openclaw.ai
 - Matrix/mentions: keep room mention gating strict while accepting visible `@displayName` Matrix URI labels, so `requireMention` works for non-OpenClaw Matrix clients again. (#64796) Thanks @hclsys.
 - Doctor: warn when on-disk agent directories still exist under `~/.openclaw/agents/<id>/agent` but the matching `agents.list[]` entries are missing from config. (#65113) Thanks @neeravmakwana.
 - Telegram: route approval button callback queries onto a separate sequentializer lane so plugin approval clicks can resolve immediately instead of deadlocking behind the blocked agent turn. (#64979) Thanks @nk3750.
+- Plugins/memory-core dreaming: keep bundled `memory-core` loaded alongside an explicit external memory slot owner only when that owner enables dreaming, while preserving `plugins.slots.memory = "none"` disable semantics. (#65411) Thanks @pradeep7127 and @vincentkoc.
 - Agents/Anthropic replay: preserve immutable signed-thinking replay safety across stored and live reruns, keep non-thinking embedded `tool_result` user blocks intact, and drop conflicting preserved tool IDs before validation so retries stop degrading into omitted tool calls. (#65126) Thanks @shakkernerd.
 - Telegram/direct sessions: keep commentary-only assistant fallback payloads out of visible direct delivery, so Codex planning chatter cannot leak into Telegram DMs when a run has no `final_answer` text. (#65112) Thanks @vincentkoc.
 - Infra/net: fix multipart FormData fields (including `model`) being silently dropped when a guarded runtime fetch body crosses a FormData implementation boundary, restoring OpenAI audio transcription requests that failed with HTTP 400. (#64349) Thanks @petr-sloup.
 - Dreaming/diary: use the host local timezone for diary timestamps when `dreaming.timezone` is unset, so `DREAMS.md` and the UI stop defaulting to UTC. (#65034) Thanks @neo1027144-creator and @vincentkoc.
+- Dreaming/diary: include the timezone abbreviation in diary timestamps so `DREAMS.md` and the UI make UTC or local host time explicit. (#65057) Thanks @Yanhu007 and @vincentkoc.
 - Plugins/memory: restore cached memory capability public artifacts on plugin-registry cache hits so memory-backed artifact surfaces stay visible after warm loads. Thanks @sercada and @vincentkoc.
 - Gateway/cron: preserve requested isolated-agent config across runtime reloads so subagent jobs and heartbeat overrides keep the right workspace and heartbeat settings when the hot-loaded snapshot is stale. Thanks @l0cka and @vincentkoc.
 - Gateway/plugins: always send a non-empty `idempotencyKey` for plugin subagent runs, so dreaming narrative jobs stop failing gateway schema validation. (#65354) Thanks @CodeForgeNet and @vincentkoc.
 - Cron/isolated sessions: persist the right transcript path for each isolated run, including fresh session rollovers, so cron runs stop appending to stale session files. Thanks @samrusani and @vincentkoc.
 - Dreaming/cron: wake managed dreaming jobs immediately instead of waiting for the next heartbeat, so scheduled dreaming runs start when the cron fires. (#65053) Thanks @l0cka and @vincentkoc.
+- QA/packaging: stop packaged QA helpers from crashing when optional scenario execution config is unavailable, so npm distributions can skip the repo-only scenario pack without breaking completion-cache and startup paths. (#65118) Thanks @EdderTalmor and @vincentkoc.
 
 ## 2026.4.11
 
@@ -39,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Windows/onboarding: open provider OAuth and sign-in URLs with `explorer.exe` instead of routing them through `cmd /c start`, so quoted provider URLs cannot break out into host command execution. (#64161) Thanks @coygeek and @vincentkoc.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 - Audio transcription: disable pinned DNS only for OpenAI-compatible multipart requests, while still validating hostnames, so OpenAI, Groq, and Mistral transcription works again without weakening other request paths. (#64766) Thanks @GodsBoy.
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
