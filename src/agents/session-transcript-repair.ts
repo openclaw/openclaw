@@ -316,6 +316,7 @@ export function repairToolCallInputs(
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
+  const claimedReplaySafeToolCallIds = new Set<string>();
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -337,7 +338,14 @@ export function repairToolCallInputs(
       // replay. Preserve the turn only if every sibling tool call is already
       // valid and requires no redaction or normalization. Otherwise drop the
       // whole assistant turn rather than mutating provider-owned content.
-      if (isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames)) {
+      const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
+      if (
+        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
+        replaySafeToolCalls.every((toolCall) => !claimedReplaySafeToolCallIds.has(toolCall.id))
+      ) {
+        for (const toolCall of replaySafeToolCalls) {
+          claimedReplaySafeToolCallIds.add(toolCall.id);
+        }
         out.push(msg);
       } else {
         droppedToolCalls += countRawToolCallBlocks(msg.content);
