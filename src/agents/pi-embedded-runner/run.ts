@@ -1636,7 +1636,12 @@ export async function runEmbeddedPiAgent(
             !attempt.clientToolCall &&
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.didSendViaMessagingTool &&
             !attempt.lastToolError &&
+            // Don't auto-retry compaction after side-effecting tool work —
+            // the retry would re-execute the turn and could duplicate
+            // mutations or message sends.
+            !attempt.replayMetadata.hadPotentialSideEffects &&
             (payloadsWithToolMedia?.length ?? 0) === 0;
           if (
             compactionOnlyStop &&
