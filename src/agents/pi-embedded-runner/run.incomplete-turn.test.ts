@@ -11,6 +11,8 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import {
   extractPlanningOnlyPlanDetails,
+  hasContinuationIntent,
+  hasCompletionLanguage,
   isLikelyExecutionAckPrompt,
   resolveAckExecutionFastPathInstruction,
   resolvePlanningOnlyRetryLimit,
@@ -299,5 +301,51 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("hasContinuationIntent", () => {
+  it("detects promise patterns like I'll, going to, let me + verb", () => {
+    expect(hasContinuationIntent(["I'll read the next file."])).toBe(true);
+    expect(hasContinuationIntent(["Going to check the test results."])).toBe(true);
+    expect(hasContinuationIntent(["Let me fix that issue."])).toBe(true);
+    expect(hasContinuationIntent(["Next, I'll verify the output."])).toBe(true);
+  });
+
+  it("does not match 'let me know' (completion handoff, not continuation)", () => {
+    expect(hasContinuationIntent(["Let me know if you need anything else."])).toBe(false);
+    expect(hasContinuationIntent(["Let me know if this works for you."])).toBe(false);
+  });
+
+  it("returns false for empty or very long text", () => {
+    expect(hasContinuationIntent([])).toBe(false);
+    expect(hasContinuationIntent([""])).toBe(false);
+    expect(hasContinuationIntent(["x".repeat(1501)])).toBe(false);
+  });
+
+  it("returns false for text without promise patterns", () => {
+    expect(hasContinuationIntent(["The file contains the expected output."])).toBe(false);
+    expect(hasContinuationIntent(["Here are the results of the analysis."])).toBe(false);
+  });
+});
+
+describe("hasCompletionLanguage", () => {
+  it("detects definitive completion signals", () => {
+    expect(hasCompletionLanguage(["Done."])).toBe(true);
+    expect(hasCompletionLanguage(["I've finished the changes."])).toBe(true);
+    expect(hasCompletionLanguage(["Task complete."])).toBe(true);
+    expect(hasCompletionLanguage(["All set — the fix is in place."])).toBe(true);
+    expect(hasCompletionLanguage(["The refactoring is completed."])).toBe(true);
+  });
+
+  it("does not match progress verbs like found, ran, updated", () => {
+    expect(hasCompletionLanguage(["I found the bug in the config."])).toBe(false);
+    expect(hasCompletionLanguage(["I ran the tests and they pass."])).toBe(false);
+    expect(hasCompletionLanguage(["Updated the dependency."])).toBe(false);
+  });
+
+  it("returns false for empty text", () => {
+    expect(hasCompletionLanguage([])).toBe(false);
+    expect(hasCompletionLanguage([""])).toBe(false);
   });
 });
