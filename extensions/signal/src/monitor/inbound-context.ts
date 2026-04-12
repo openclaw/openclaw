@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalSenderDisplay,
   isSignalSenderAllowed,
+  looksLikeUuid,
   resolveSignalSender,
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
@@ -32,9 +33,10 @@ export function resolveSignalQuoteContext(params: {
     accountId: params.accountId,
   });
   const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
+  const quoteAuthor = params.dataMessage?.quote?.author ?? null;
   const quoteSender = resolveSignalSender({
-    sourceNumber: params.dataMessage?.quote?.authorNumber ?? null,
-    sourceUuid: params.dataMessage?.quote?.authorUuid ?? params.dataMessage?.quote?.author ?? null,
+    sourceNumber: params.dataMessage?.quote?.authorNumber ?? (quoteAuthor && !looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
+    sourceUuid: params.dataMessage?.quote?.authorUuid ?? (quoteAuthor && looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
   });
   const quoteSenderAllowed =
     !params.isGroup || params.effectiveGroupAllow.length === 0
