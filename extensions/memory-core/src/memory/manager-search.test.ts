@@ -85,4 +85,27 @@ describe("searchKeyword trigram fallback", () => {
     expect(results.map((row) => row.id)).toEqual(["match"]);
     expect(results[0]?.textScore).toBeGreaterThan(0);
   });
+
+  it("applies fallback lexical boosts without exceeding bounded scores", async () => {
+    const results = await runSearch({
+      rows: [
+        {
+          id: "strong",
+          path: "memory/cursor-codex-context-bridge.md",
+          text: "Cursor Codex context bridge project memory notes.",
+        },
+        {
+          id: "weak",
+          path: "memory/bridge.md",
+          text: "Cursor Codex context bridge.",
+        },
+      ],
+      query: "cursor codex context bridge",
+    });
+    expect(results.map((row) => row.id)).toEqual(["weak", "strong"]);
+    expect(results[0]?.textScore).toBeLessThanOrEqual(1);
+    expect(results[1]?.textScore).toBeLessThanOrEqual(1);
+    expect(results[0]?.textScore).toBeGreaterThan(0);
+    expect(results[1]?.textScore).toBeGreaterThan(0);
+  });
 });
