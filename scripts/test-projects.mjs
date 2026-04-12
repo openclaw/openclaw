@@ -128,7 +128,7 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
   if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
-  const { vitestMaxWorkers } = resolveLocalFullSuiteProfile(env, hostInfo);
+  const { vitestMaxWorkers } = resolveLocalFullSuiteProfile(env);
   return specs.map((spec) => ({
     ...spec,
     env: {
