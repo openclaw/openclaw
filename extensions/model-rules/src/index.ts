@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureDefaultModelsFile } from "./defaults.js";
 import { findModelSection, parseModelRef, readModelsFile } from "./parser.js";
 
-const MIN_SECTION_LENGTH = 20;
+const PLACEHOLDER_TEXT = "[paste rules here]";
 
 interface ModelRulesConfig {
   enabled?: boolean;
@@ -61,7 +61,7 @@ export default definePluginEntry({
         }
 
         const section = findModelSection(content, modelRef);
-        if (!section || section.length < MIN_SECTION_LENGTH) {
+        if (!section || section === PLACEHOLDER_TEXT) {
           return undefined;
         }
 

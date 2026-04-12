@@ -66,7 +66,7 @@ The first example addresses specific GPT-5.4 failure modes (verbosity, describin
 4. Matching is case-insensitive.
 5. Only the matched section is injected — other models' rules never enter context.
 6. If you switch models mid-session, rules update automatically on the next message.
-7. Sections under 20 characters are treated as empty and skipped.
+7. Sections containing only `[paste rules here]` (the default placeholder) are skipped.
 
 ## Local models
 
@@ -111,7 +111,7 @@ openclaw config get agents.defaults.model
 
 The output (e.g., `openai/gpt-5.4`) must match a `## MODEL:` heading in MODELS.md. Either `## MODEL: openai/gpt-5.4` (full ref) or `## MODEL: gpt-5.4` (bare ID) will work.
 
-**Section skipped?** Sections under 20 characters are treated as placeholders and ignored. Make sure rules contain real content.
+**Section skipped?** Sections containing only the default placeholder text `[paste rules here]` are ignored. Replace the placeholder with real rules.
 
 **File not found?** The plugin looks for MODELS.md in the workspace root. If you moved it, set `modelsFile` in plugin config.
 
