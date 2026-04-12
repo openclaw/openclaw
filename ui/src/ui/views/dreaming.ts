@@ -365,6 +365,10 @@ function flattenDiaryBody(body: string): string[] {
 
 function formatPhaseSchedule(cron?: string, nextRunAtMs?: number): string {
   if (!cron) {
+    // Preserve next-run fallback for legacy/partial payloads missing the cron string.
+    if (nextRunAtMs) {
+      return new Date(nextRunAtMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
     return "—";
   }
   const description = describeCronExpression(cron);
