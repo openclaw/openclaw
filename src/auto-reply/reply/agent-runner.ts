@@ -14,6 +14,7 @@ import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -815,6 +816,31 @@ export async function runReplyAgent(params: {
     if (prefixPayloads.length > 0) {
       finalPayloads = [...prefixPayloads, ...finalPayloads];
     }
+
+    if (getGlobalHookRunner()?.hasHooks("final_reply_payloads")) {
+      const finalReplyHookResult = await getGlobalHookRunner()?.runFinalReplyPayloads(
+        {
+          payloads: finalPayloads,
+          sessionKey,
+          channelId: replyToChannel,
+          providerUsed,
+          modelUsed,
+          responseUsageMode,
+          responseUsageLine,
+        },
+        {
+          cfg,
+          runId,
+        },
+      );
+      if (finalReplyHookResult?.payloads) {
+        finalPayloads = finalReplyHookResult.payloads;
+      }
+      if (finalReplyHookResult?.responseUsageLine !== undefined) {
+        responseUsageLine = finalReplyHookResult.responseUsageLine;
+      }
+    }
+
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
