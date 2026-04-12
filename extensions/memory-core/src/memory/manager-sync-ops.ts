@@ -93,6 +93,7 @@ const log = createSubsystemLogger("memory");
 function shouldIgnoreMemoryWatchPath(
   watchPath: string,
   stats?: { isDirectory?: () => boolean },
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
 ): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized
@@ -105,7 +106,13 @@ function shouldIgnoreMemoryWatchPath(
     return false;
   }
   const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
-  return extension.length > 0 && extension !== ".md";
+  if (extension.length === 0 || extension === ".md") {
+    return false;
+  }
+  if (!multimodalSettings) {
+    return true;
+  }
+  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
@@ -390,7 +397,8 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath, stats) => shouldIgnoreMemoryWatchPath(watchPath, stats),
+      ignored: (watchPath, stats) =>
+        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,

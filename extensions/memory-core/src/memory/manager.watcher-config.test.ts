@@ -171,7 +171,7 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths] = watchMock.mock.calls[0] as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
@@ -181,5 +181,11 @@ describe("memory watcher config", () => {
         path.join(extraDir, "**", "*.[wW][aA][vV]"),
       ]),
     );
+
+    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
+    expect(ignored).toBeTypeOf("function");
+    expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"))).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"))).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "metadata.json"))).toBe(true);
   });
 });
