@@ -289,9 +289,12 @@ describe("createBotFrameworkJwtValidator", () => {
     expect(opts.issuer as string[]).toContain("https://login.microsoftonline.com/tenant-id/v2.0");
   });
 
-  it("validates a token with STS Windows issuer", async () => {
+  it("validates a SingleTenant token with tenant-scoped STS Windows issuer (#64270)", async () => {
+    // Regression for #64270: the sts.windows.net issuer was hardcoded to a
+    // single tenant UUID, so every other SingleTenant bot deployment hit 401.
+    // The tenant-aware form must accept the deployment's own tenant.
     jwtState.decodedPayload = {
-      iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+      iss: `https://sts.windows.net/${creds.tenantId}/`,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
@@ -299,9 +302,20 @@ describe("createBotFrameworkJwtValidator", () => {
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
-    expect(opts.issuer as string[]).toContain(
-      "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
-    );
+    expect(opts.issuer as string[]).toContain(`https://sts.windows.net/${creds.tenantId}/`);
+  });
+
+  it("rejects STS Windows tokens issued by a different tenant (#64270)", async () => {
+    // Guardrail against regressing back to a hardcoded tenant: the previously
+    // hardcoded UUID must NOT be accepted when the bot is configured for a
+    // different tenant. This also prevents cross-tenant token reuse.
+    jwtState.decodedPayload = {
+      iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-sts-other-tenant")).resolves.toBe(false);
+    expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
   it("rejects tokens with unknown issuer", async () => {

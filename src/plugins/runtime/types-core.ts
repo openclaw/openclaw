@@ -10,6 +10,7 @@ import type {
   TextToSpeech,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
+import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
 
@@ -153,8 +154,8 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
   tasks: {
-    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
-    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    runs: PluginRuntimeTaskRuns;
+    flows: PluginRuntimeTaskFlows;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
