@@ -523,7 +523,16 @@ describe("monitorMatrixProvider", () => {
       expect(getHealthySyncSinceMs()).toBeUndefined();
 
       hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
-      expect(getHealthySyncSinceMs()).toBe(Date.now());
+      const firstHealthySyncSinceMs = Date.now();
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      hoisted.client.emit("sync.state", "CATCHUP", "SYNCING", undefined);
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      hoisted.client.emit("sync.state", "PREPARED", "CATCHUP", undefined);
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
 
       await vi.advanceTimersByTimeAsync(5_000);
       hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("network flap"));

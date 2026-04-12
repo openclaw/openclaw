@@ -250,7 +250,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let healthySyncSinceMs: number | undefined;
   const noteSyncHealthState = (state: MatrixSyncState, at = Date.now()) => {
     if (isMatrixReadySyncState(state)) {
-      healthySyncSinceMs = at;
+      healthySyncSinceMs ??= at;
       return;
     }
     if (isMatrixDisconnectedSyncState(state)) {
