@@ -5,15 +5,15 @@ const detectBinaryMock = vi.hoisted(() => vi.fn(async () => true));
 const isWSLMock = vi.hoisted(() => vi.fn(async () => false));
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
 
 vi.mock("./detect-binary.js", () => ({
-  detectBinary: (...args: unknown[]) => detectBinaryMock(...args),
+  detectBinary: detectBinaryMock,
 }));
 
 vi.mock("./wsl.js", () => ({
-  isWSL: (...args: unknown[]) => isWSLMock(...args),
+  isWSL: isWSLMock,
 }));
 
 const { openUrl, openUrlInBackground, resolveBrowserOpenCommand } = await import("./browser-open.js");
