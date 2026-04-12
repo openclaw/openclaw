@@ -305,6 +305,14 @@ function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): bo
  * Returns true when the turn is dominated by a single tool call followed
  * by planning prose — the caller should treat this as planning-only and
  * allow a retry instead of exempting it from the detector.
+ *
+ * Note: turns where the visible text exceeds 700 characters are not matched.
+ * They fall through to the downstream text-length guard in
+ * `resolvePlanningOnlyRetryInstruction` and are treated as non-retryable,
+ * consistent with the zero-tool-call path. This is a known edge case — a
+ * verbose narration after one tool call is still technically the same
+ * pattern, but long text is less likely to be a simple "I'll do X next"
+ * promise and more likely to be substantive output.
  */
 function isSingleActionThenNarrativePattern(params: {
   toolMetas: PlanningOnlyAttempt["toolMetas"];
@@ -352,12 +360,20 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     // Exempt turns with 2+ non-plan tool calls — that's real multi-step
     // progress. But allow retry when exactly 1 non-plan tool call + planning
     // prose is detected (the "one step then ask permission" loophole).
+    // Both the toolMetas check AND the startedCount check need the
+    // single-action exception, because startedCount is incremented on
+    // every tool start (including the single non-plan call), so without
+    // the exception the startedCount guard neutralizes the fix.
     (hasNonPlanToolActivity(params.attempt.toolMetas) &&
       !isSingleActionThenNarrativePattern({
         toolMetas: params.attempt.toolMetas,
         assistantTexts: params.attempt.assistantTexts,
       })) ||
-    params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount ||
+    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
+      !isSingleActionThenNarrativePattern({
+        toolMetas: params.attempt.toolMetas,
+        assistantTexts: params.attempt.assistantTexts,
+      })) ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;

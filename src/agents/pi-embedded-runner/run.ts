@@ -1730,6 +1730,10 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             !attempt.didSendViaMessagingTool &&
             !attempt.didSendDeterministicApprovalPrompt &&
+            // Don't auto-continue after mutating side effects — the user
+            // should see the result before the next turn runs. If the next
+            // continuation fails, a user retry could duplicate the mutation.
+            !attempt.replayMetadata.hadPotentialSideEffects &&
             attempt.toolMetas.some((entry) => entry.toolName !== "update_plan") &&
             hasContinuationIntent(attempt.assistantTexts) &&
             !hasCompletionLanguage(attempt.assistantTexts)
