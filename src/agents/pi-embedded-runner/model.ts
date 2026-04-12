@@ -254,48 +254,72 @@ function findInlineModelMatch(params: {
   modelId: string;
 }) {
   const inlineModels = buildInlineProviderModels(params.providers);
-  const exact = inlineModels.find(
-    (entry) =>
-      entry.provider === params.provider &&
-      matchesConfiguredModelId(params.provider, entry.id, params.modelId),
+  const exact = findConfiguredModelMatch(
+    inlineModels.filter((entry) => entry.provider === params.provider),
+    params.provider,
+    params.modelId,
   );
   if (exact) {
     return exact;
   }
   const normalizedProvider = normalizeProviderId(params.provider);
-  return inlineModels.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      matchesConfiguredModelId(params.provider, entry.id, params.modelId),
+  return findConfiguredModelMatch(
+    inlineModels.filter((entry) => normalizeProviderId(entry.provider) === normalizedProvider),
+    params.provider,
+    params.modelId,
   );
 }
 
 export { buildModelAliasLines };
 
-function matchesConfiguredModelId(
+/**
+ * Find the best-matching configured model entry from a list, respecting match priority:
+ * 1. Exact id match always wins.
+ * 2. Configured id is provider-prefixed, runtime request is bare (e.g. rr/gpt-5.4 vs gpt-5.4).
+ *    This is the primary bug fix path.
+ * 3. Configured id is bare, runtime request is provider-prefixed (symmetric fallback).
+ *    Only used when no exact or primary match exists, so a mixed list with both
+ *    `gpt-5.4` and `rr/gpt-5.4` entries always resolves the prefixed request to
+ *    the prefixed entry, regardless of array order.
+ */
+function findConfiguredModelMatch<T extends { id?: string }>(
+  models: T[] | undefined,
   provider: string,
-  candidateId: string | undefined,
-  requestedModelId: string | undefined,
-) {
-  if (typeof candidateId !== "string" || typeof requestedModelId !== "string") {
-    return false;
+  requestedModelId: string,
+): T | undefined {
+  if (!models?.length) {
+    return undefined;
   }
-  const candidate = candidateId.trim();
   const requested = requestedModelId.trim();
-  if (!candidate || !requested) {
-    return false;
-  }
-  if (candidate === requested) {
-    return true;
+  if (!requested) {
+    return undefined;
   }
   const normalizedProvider = normalizeProviderId(provider);
   const prefixes = [provider, normalizedProvider].filter(
     (value, index, values): value is string =>
       typeof value === "string" && value.trim().length > 0 && values.indexOf(value) === index,
   );
-  return prefixes.some(
-    (prefix) => candidate === `${prefix}/${requested}` || requested === `${prefix}/${candidate}`,
-  );
+  // Pass 1: exact match or primary direction (configured prefixed, requested bare).
+  const primary = models.find((entry) => {
+    const candidate = entry.id?.trim();
+    if (!candidate) {
+      return false;
+    }
+    return (
+      candidate === requested || prefixes.some((prefix) => candidate === `${prefix}/${requested}`)
+    );
+  });
+  if (primary) {
+    return primary;
+  }
+  // Pass 2: symmetric fallback (configured bare, requested prefixed).
+  return models.find((entry) => {
+    const candidate = entry.id?.trim();
+    if (!candidate) {
+      return false;
+    }
+    return prefixes.some((prefix) => requested === `${prefix}/${candidate}`);
+  });
 }
 
 function resolveConfiguredProviderConfig(
@@ -329,9 +353,7 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) =>
-    matchesConfiguredModelId(params.provider, candidate.id, modelId),
-  );
+  const configuredModel = findConfiguredModelMatch(providerConfig.models, params.provider, modelId);
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -555,9 +577,7 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const configuredModel = providerConfig?.models?.find((candidate) =>
-    matchesConfiguredModelId(provider, candidate.id, modelId),
-  );
+  const configuredModel = findConfiguredModelMatch(providerConfig?.models, provider, modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });

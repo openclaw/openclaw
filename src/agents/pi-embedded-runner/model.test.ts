@@ -943,6 +943,52 @@ describe("resolveModel", () => {
     });
   });
 
+  it("prefers the prefixed configured entry when both bare and prefixed ids are present", () => {
+    const cfg = {
+      models: {
+        providers: {
+          rr: {
+            baseUrl: "http://localhost:8402/v1",
+            api: "openai-completions",
+            models: [
+              {
+                // Bare entry listed first — must NOT win for a prefixed request.
+                ...makeModel("gpt-5.4"),
+                provider: "rr",
+                api: "openai-completions",
+                compat: {
+                  supportsUsageInStreaming: false,
+                },
+              },
+              {
+                // Prefixed entry listed second — must win for a prefixed request.
+                ...makeModel("rr/gpt-5.4"),
+                provider: "rr",
+                api: "openai-completions",
+                compat: {
+                  supportsUsageInStreaming: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("rr", "rr/gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "rr",
+      id: "rr/gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "http://localhost:8402/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+      },
+    });
+  });
+
   it("applies configured overrides to github-copilot dynamic models", () => {
     const cfg = {
       models: {
