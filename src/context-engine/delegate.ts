@@ -1,3 +1,4 @@
+import type { CompactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.types.js";
 import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
@@ -5,18 +6,7 @@ import { importRuntimeModule } from "../shared/runtime-import.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
 type CompactRuntimeModule = {
-  compactEmbeddedPiSessionDirect: (params: Record<string, unknown>) => Promise<{
-    ok: boolean;
-    compacted: boolean;
-    reason?: string;
-    result?: {
-      summary?: string;
-      firstKeptEntryId?: string;
-      tokensBefore?: number;
-      tokensAfter?: number;
-      details?: unknown;
-    };
-  }>;
+  compactEmbeddedPiSessionDirect: CompactEmbeddedPiSessionDirect;
 };
 
 const COMPACT_RUNTIME_SPEC = ["../agents/pi-embedded-runner/compact.runtime", ".js"] as const;

@@ -61,7 +61,7 @@ type CommandsStatusRuntimeModule = {
     sessionEntry?: SessionEntry;
     sessionKey: string;
     parentSessionKey?: string;
-    sessionScope?: "per-sender" | "per-thread" | "shared";
+    sessionScope?: "global" | "per-sender" | "per-thread" | "shared";
     storePath?: string;
     statusChannel: string;
     provider: string;
