@@ -354,7 +354,10 @@ export const ModelsConfigSchema = z
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().positive().optional(),
+    // Use .min(0) not .positive() — 0 is a valid value meaning "no history".
+    // Consistent with DmConfigSchema.historyLimit and all other historyLimit
+    // fields in this file (#65305).
+    historyLimit: z.number().int().min(0).optional(),
   })
   .strict()
   .optional();
