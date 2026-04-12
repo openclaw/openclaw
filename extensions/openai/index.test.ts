@@ -419,7 +419,7 @@ describe("openai plugin", () => {
       "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet.",
+      "Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet by replying HEARTBEAT_OK.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
