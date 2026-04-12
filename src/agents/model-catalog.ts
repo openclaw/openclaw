@@ -11,6 +11,7 @@ import {
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -47,12 +48,17 @@ async function getConfiguredProviderIds(
   config: OpenClawConfig,
   agentDir: string,
 ): Promise<Set<string> | null> {
-  const explicitProviderIds = new Set(
-    Object.keys(config.models?.providers ?? {})
-      .map((provider) => normalizeProviderId(provider))
-      .filter(Boolean),
-  );
   try {
+    const resolvedProviders = await resolveProvidersForModelsJsonWithDeps({
+      cfg: config,
+      agentDir,
+      env: process.env,
+    });
+    const configuredProviderIds = new Set(
+      Object.keys(resolvedProviders)
+        .map((provider) => normalizeProviderId(provider))
+        .filter(Boolean),
+    );
     const raw = await readFile(path.join(agentDir, "models.json"), "utf8");
     const parsed = JSON.parse(raw) as { providers?: Record<string, unknown> } | null;
     if (
@@ -61,10 +67,9 @@ async function getConfiguredProviderIds(
       !parsed.providers ||
       typeof parsed.providers !== "object"
     ) {
-      return null;
+      return configuredProviderIds;
     }
 
-    const configuredProviderIds = new Set(explicitProviderIds);
     for (const provider of Object.keys(parsed.providers)) {
       const normalizedProviderId = normalizeProviderId(provider);
       if (normalizedProviderId) {

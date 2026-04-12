@@ -14,6 +14,7 @@ let augmentCatalogMock: ReturnType<typeof vi.fn>;
 const mocks = vi.hoisted(() => ({
   ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp/openclaw", wrote: false }),
   augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+  resolveProvidersForModelsJsonWithDeps: vi.fn().mockResolvedValue({}),
   readFile: vi.fn(),
 }));
 
@@ -31,6 +32,10 @@ vi.mock("./agent-paths.js", () => ({
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   augmentModelCatalogWithProviderPlugins: mocks.augmentModelCatalogWithProviderPlugins,
+}));
+
+vi.mock("./models-config.plan.js", () => ({
+  resolveProvidersForModelsJsonWithDeps: mocks.resolveProvidersForModelsJsonWithDeps,
 }));
 
 vi.mock("./model-suppression.runtime.js", () => ({
@@ -94,6 +99,8 @@ describe("loadModelCatalog", () => {
     mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/openclaw", wrote: false });
     mocks.augmentModelCatalogWithProviderPlugins.mockReset();
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+    mocks.resolveProvidersForModelsJsonWithDeps.mockReset();
+    mocks.resolveProvidersForModelsJsonWithDeps.mockResolvedValue({});
     mocks.readFile.mockReset();
     mocks.readFile.mockRejectedValue(new Error("missing models.json"));
     resetModelCatalogCacheForTest();
@@ -412,6 +419,9 @@ describe("loadModelCatalog", () => {
         },
       }),
     );
+    mocks.resolveProvidersForModelsJsonWithDeps.mockResolvedValueOnce({
+      openrouter: {},
+    });
 
     const result = await loadModelCatalog({
       config: {
@@ -454,6 +464,10 @@ describe("loadModelCatalog", () => {
         },
       }),
     );
+    mocks.resolveProvidersForModelsJsonWithDeps.mockResolvedValueOnce({
+      google: {},
+      openrouter: {},
+    });
 
     const result = await loadModelCatalog({
       config: {
@@ -496,11 +510,64 @@ describe("loadModelCatalog", () => {
     mocks.readFile.mockResolvedValueOnce(
       JSON.stringify({
         providers: {
+          openrouter: {},
+        },
+      }),
+    );
+    mocks.resolveProvidersForModelsJsonWithDeps.mockResolvedValueOnce({
+      google: {},
+      openrouter: {},
+    });
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {},
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(result).toEqual([
+      {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "google",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "openrouter",
+      },
+    ]);
+  });
+
+  it("keeps providers retained from merged models.json before filtering shadows", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gemini-3-flash-preview",
+        provider: "google",
+        name: "Gemini 3 Flash Preview",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        provider: "openrouter",
+        name: "Gemini 3 Flash Preview",
+      },
+    ]);
+
+    mocks.readFile.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
           google: {},
           openrouter: {},
         },
       }),
     );
+    mocks.resolveProvidersForModelsJsonWithDeps.mockResolvedValueOnce({
+      openrouter: {},
+    });
 
     const result = await loadModelCatalog({
       config: {
