@@ -20,6 +20,7 @@ export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
+  audioAsVoice?: boolean;
 };
 
 export type ActiveWebListener = {

@@ -450,6 +450,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime.error?.(danger("imessage: missing delivery target"));
           return;
         }
+        if (!client) {
+          runtime.error?.(danger("imessage: missing RPC client for outbound delivery"));
+          return;
+        }
         await deliverReplies({
           cfg,
           replies: [payload],
