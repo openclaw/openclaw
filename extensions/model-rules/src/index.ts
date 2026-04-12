@@ -77,7 +77,8 @@ export default definePluginEntry({
 
         if (section) {
           log.debug?.(`model-rules: matched section for ${bareId} (${section.length} chars)`);
-          ctx.bootstrapFiles.push({ name: "MODELS.md", content: section });
+          const framed = [`[Corrective behavioral rules for ${bareId}]`, section].join("\n\n");
+          ctx.bootstrapFiles.push({ name: "MODELS.md", content: framed });
         } else {
           log.debug?.(`model-rules: no section found for ${bareId}, skipping injection`);
         }
