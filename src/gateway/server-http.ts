@@ -16,6 +16,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { handleImageProxyRequest, handleWorkspaceFileRequest } from "./control-ui-file-serving.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -1039,6 +1040,23 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
+
+      // Workspace file serving and image proxy – must run before the Control UI
+      // SPA catch-all so that `/__file__/` and `/__image_proxy__/` URLs resolve.
+      requestStages.push({
+        name: "workspace-file",
+        run: () =>
+          handleWorkspaceFileRequest(req, res, {
+            basePath: controlUiBasePath,
+          }),
+      });
+      requestStages.push({
+        name: "image-proxy",
+        run: () =>
+          handleImageProxyRequest(req, res, {
+            basePath: controlUiBasePath,
+          }),
+      });
 
       if (controlUiEnabled) {
         requestStages.push({

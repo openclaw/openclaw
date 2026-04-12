@@ -255,6 +255,8 @@ export type SessionEntry = {
    */
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
+  /** Active leaf entry id for branched session navigation (edit, version-switch, delete). */
+  activeLeafId?: string;
 };
 
 export function resolveSessionPluginDebugLines(

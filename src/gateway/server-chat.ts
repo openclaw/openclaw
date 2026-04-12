@@ -55,6 +55,12 @@ function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boo
     return false;
   }
 
+  // Cron system events targeting the main session should never surface in webchat —
+  // they are internal housekeeping (memory consolidation, etc.).
+  if (runContext.provider === "cron-event") {
+    return true;
+  }
+
   try {
     const cfg = loadConfig();
     const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
@@ -72,6 +78,12 @@ function normalizeHeartbeatChatFinalText(params: {
 }): { suppress: boolean; text: string } {
   if (!shouldHideHeartbeatChatOutput(params.runId, params.sourceRunId)) {
     return { suppress: false, text: params.text };
+  }
+
+  // Cron-event heartbeats are always suppressed from webchat, regardless of content.
+  const runContext = resolveHeartbeatContext(params.runId, params.sourceRunId);
+  if (runContext?.provider === "cron-event") {
+    return { suppress: true, text: "" };
   }
 
   const stripped = stripHeartbeatToken(params.text, {

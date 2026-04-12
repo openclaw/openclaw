@@ -1551,6 +1551,12 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+/**
+ * Pending assistant prefill text for chat.continue / chat.regenerate.
+ * Keyed by idempotencyKey (runId). Consumed (deleted) on read.
+ */
+export const pendingAssistantPrefill = new Map<string, string>();
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {

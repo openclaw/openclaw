@@ -131,6 +131,14 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "chat.regenerate",
+  "chat.continue",
+  // Session message mutations
+  "sessions.fork",
+  "sessions.messages.edit",
+  "sessions.messages.delete",
+  "sessions.messages.versions",
+  "sessions.messages.switch-version",
 ];
 
 export function listGatewayMethods(): string[] {

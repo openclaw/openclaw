@@ -302,3 +302,85 @@ export const SessionsUsageParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// ── Message-level mutation schemas ──
+
+export const SessionsForkParamsSchema = Type.Object(
+  {
+    /** Session key to fork from. */
+    key: NonEmptyString,
+    /** Optional entry id to fork from. If omitted, forks from the current leaf. */
+    entryId: Type.Optional(NonEmptyString),
+    /** Target agent id for the new session. Defaults to the source session's agent. */
+    agentId: Type.Optional(NonEmptyString),
+    /** Optional label for the new session. */
+    label: Type.Optional(SessionLabelString),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesEditParamsSchema = Type.Object(
+  {
+    /** Session key containing the message to edit. */
+    key: NonEmptyString,
+    /** Entry id of the message to replace. */
+    entryId: NonEmptyString,
+    /** New content for the message (text). */
+    content: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesDeleteParamsSchema = Type.Object(
+  {
+    /** Session key containing the message to delete. */
+    key: NonEmptyString,
+    /** Entry id of the message to delete. The turn pair is also removed. */
+    entryId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesVersionsParamsSchema = Type.Object(
+  {
+    /** Session key. */
+    key: NonEmptyString,
+    /** Entry id whose sibling versions should be returned. */
+    entryId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsMessagesSwitchVersionParamsSchema = Type.Object(
+  {
+    /** Session key. */
+    key: NonEmptyString,
+    /** Entry id of the version to switch to. */
+    entryId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ChatRegenerateParamsSchema = Type.Object(
+  {
+    /** Session key. */
+    sessionKey: NonEmptyString,
+    /** Idempotency key for the regeneration run. */
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ChatContinueParamsSchema = Type.Object(
+  {
+    /** Session key. */
+    sessionKey: NonEmptyString,
+    /** Optional entry id of the assistant message to continue from. */
+    entryId: Type.Optional(NonEmptyString),
+    /** Optional prefill text ("Start reply with"). */
+    prefill: Type.Optional(Type.String()),
+    /** Idempotency key. */
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);

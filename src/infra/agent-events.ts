@@ -109,6 +109,8 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  /** The inbound message provider for this run (e.g. "heartbeat", "cron-event", "exec-event"). */
+  provider?: string;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */

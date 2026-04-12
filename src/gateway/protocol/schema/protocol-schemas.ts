@@ -181,6 +181,13 @@ import {
   SessionsResolveParamsSchema,
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsMessagesEditParamsSchema,
+  SessionsMessagesDeleteParamsSchema,
+  SessionsMessagesVersionsParamsSchema,
+  SessionsMessagesSwitchVersionParamsSchema,
+  ChatRegenerateParamsSchema,
+  ChatContinueParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
@@ -259,6 +266,13 @@ export const ProtocolSchemas = {
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
+  SessionsForkParams: SessionsForkParamsSchema,
+  SessionsMessagesEditParams: SessionsMessagesEditParamsSchema,
+  SessionsMessagesDeleteParams: SessionsMessagesDeleteParamsSchema,
+  SessionsMessagesVersionsParams: SessionsMessagesVersionsParamsSchema,
+  SessionsMessagesSwitchVersionParams: SessionsMessagesSwitchVersionParamsSchema,
+  ChatRegenerateParams: ChatRegenerateParamsSchema,
+  ChatContinueParams: ChatContinueParamsSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,

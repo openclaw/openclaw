@@ -237,6 +237,20 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type SessionsForkParams,
+  SessionsForkParamsSchema,
+  type SessionsMessagesEditParams,
+  SessionsMessagesEditParamsSchema,
+  type SessionsMessagesDeleteParams,
+  SessionsMessagesDeleteParamsSchema,
+  type SessionsMessagesVersionsParams,
+  SessionsMessagesVersionsParamsSchema,
+  type SessionsMessagesSwitchVersionParams,
+  SessionsMessagesSwitchVersionParamsSchema,
+  type ChatRegenerateParams,
+  ChatRegenerateParamsSchema,
+  type ChatContinueParams,
+  ChatContinueParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -408,6 +422,22 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateSessionsForkParams = ajv.compile<SessionsForkParams>(SessionsForkParamsSchema);
+export const validateSessionsMessagesEditParams = ajv.compile<SessionsMessagesEditParams>(
+  SessionsMessagesEditParamsSchema,
+);
+export const validateSessionsMessagesDeleteParams = ajv.compile<SessionsMessagesDeleteParams>(
+  SessionsMessagesDeleteParamsSchema,
+);
+export const validateSessionsMessagesVersionsParams = ajv.compile<SessionsMessagesVersionsParams>(
+  SessionsMessagesVersionsParamsSchema,
+);
+export const validateSessionsMessagesSwitchVersionParams =
+  ajv.compile<SessionsMessagesSwitchVersionParams>(SessionsMessagesSwitchVersionParamsSchema);
+export const validateChatRegenerateParams = ajv.compile<ChatRegenerateParams>(
+  ChatRegenerateParamsSchema,
+);
+export const validateChatContinueParams = ajv.compile<ChatContinueParams>(ChatContinueParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -594,6 +624,13 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsMessagesEditParamsSchema,
+  SessionsMessagesDeleteParamsSchema,
+  SessionsMessagesVersionsParamsSchema,
+  SessionsMessagesSwitchVersionParamsSchema,
+  ChatRegenerateParamsSchema,
+  ChatContinueParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -774,6 +811,13 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  SessionsForkParams,
+  SessionsMessagesEditParams,
+  SessionsMessagesDeleteParams,
+  SessionsMessagesVersionsParams,
+  SessionsMessagesSwitchVersionParams,
+  ChatRegenerateParams,
+  ChatContinueParams,
   CronJob,
   CronListParams,
   CronStatusParams,
