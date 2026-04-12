@@ -1097,6 +1097,13 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
       nextContent.push(block);
       continue;
     }
+    if (
+      !block.text.includes(PLAMO_BEGIN_TOOL_REQUEST) &&
+      !block.text.includes(PLAMO_BEGIN_TOOL_REQUESTS)
+    ) {
+      nextContent.push(block);
+      continue;
+    }
     const cleanedText = stripPlamoToolMarkup(block.text);
     if (cleanedText) {
       nextContent.push({ ...block, text: cleanedText });

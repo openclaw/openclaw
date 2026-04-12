@@ -1640,6 +1640,40 @@ describe("plamo provider plugin", () => {
     });
   });
 
+  it("preserves surrounding whitespace in text blocks when removing inline tool markup", () => {
+    const inlineToolMarkup =
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"notes.txt","content":"ok"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>";
+
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "Before " },
+        { type: "text", text: inlineToolMarkup },
+        { type: "text", text: " after" },
+      ],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "Before " },
+        { type: "text", text: " after" },
+        {
+          type: "toolCall",
+          name: "write",
+          arguments: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    });
+  });
+
   it("preserves non-stop terminal reasons when inline tool markup is normalized", () => {
     const inlineToolMarkup =
       "<|plamo:begin_tool_request:plamo|>" +
