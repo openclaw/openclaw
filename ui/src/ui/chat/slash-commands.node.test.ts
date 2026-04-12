@@ -209,4 +209,39 @@ describe("parseSlashCommand", () => {
       aliases: expect.arrayContaining(["tell"]),
     });
   });
+
+  it("lets UI-only commands win when the dynamic catalog reuses their names", () => {
+    const commands = resolveSlashCommands([
+      {
+        name: "clear",
+        textAliases: ["/clear"],
+        description: "Server-side clear",
+        acceptsArgs: false,
+        source: "skill",
+        scope: "both",
+        category: "tools",
+      },
+      {
+        name: "redirect",
+        textAliases: ["/redirect"],
+        description: "Server-side redirect",
+        acceptsArgs: false,
+        source: "skill",
+        scope: "both",
+        category: "tools",
+      },
+    ]);
+
+    expect(commands.find((entry) => entry.name === "clear")).toMatchObject({
+      key: "clear",
+      description: "Clear chat history",
+      executeLocal: true,
+    });
+    expect(commands.find((entry) => entry.name === "redirect")).toMatchObject({
+      key: "redirect",
+      description: "Abort and restart with a new message",
+      args: "[id] <message>",
+      executeLocal: true,
+    });
+  });
 });

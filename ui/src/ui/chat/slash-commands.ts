@@ -288,8 +288,8 @@ export function resolveSlashCommands(
     return SLASH_COMMANDS;
   }
   return dedupeSlashCommands([
-    ...commands.map(toSlashCommandFromCatalogEntry),
     ...UI_ONLY_COMMANDS,
+    ...commands.map(toSlashCommandFromCatalogEntry),
   ]);
 }
 
