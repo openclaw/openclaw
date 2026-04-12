@@ -10,6 +10,12 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
+export { createReplyActivityCallbacks } from "./reply-activity.js";
+export type {
+  CreateReplyActivityCallbacksOptions,
+  ReplyActivityCallbacks,
+  ReplyActivityEvent,
+} from "./reply-activity.js";
 export {
   dispatchInboundMessage,
   dispatchInboundMessageWithBufferedDispatcher,

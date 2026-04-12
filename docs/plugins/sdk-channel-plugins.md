@@ -485,6 +485,60 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
 
   </Step>
 
+  <Step title="Stream live agent activity">
+    If your channel wants to show live reasoning, tool calls, approvals, or
+    command output, attach a reply-activity listener to the same
+    `replyOptions` object you pass into inbound dispatch.
+
+    Prefer this direct reply path over the global `runtime.events.onAgentEvent`
+    bus. The reply callbacks fire for the current run even when your channel is
+    not an internal Control UI surface.
+
+    ```typescript
+    import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+    import { createReplyActivityCallbacks } from "openclaw/plugin-sdk/reply-runtime";
+
+    const activityReplyOptions = createReplyActivityCallbacks({
+      onEvent: async (event) => {
+        await publishActivityToClient({
+          sessionKey: route.sessionKey,
+          event,
+        });
+      },
+    });
+
+    await dispatchInboundReplyWithBase({
+      cfg,
+      channel: "acme-chat",
+      route,
+      storePath,
+      ctxPayload,
+      core,
+      deliver: async (payload) => {
+        await deliverAcmeReply(payload);
+      },
+      onRecordError: (err) => runtime.error?.(String(err)),
+      onDispatchError: (err) => runtime.error?.(String(err)),
+      replyOptions: {
+        ...activityReplyOptions,
+      },
+    });
+    ```
+
+    `createReplyActivityCallbacks(...)` normalizes live run events into one
+    ordered stream:
+
+    - agent-run start
+    - reasoning deltas and reasoning-end markers
+    - tool-start, item, plan-update, approval, command-output, and patch-summary events
+    - assistant-message and compaction boundaries
+
+    Partial text deltas stay opt-in. If your plugin already handles streamed
+    reply text separately, keep the default. If you also want text deltas on
+    the activity stream, pass `includePartialReplies: true`.
+
+  </Step>
+
   <Step title="Handle inbound messages">
     Your plugin needs to receive messages from the platform and forward them to
     OpenClaw. The typical pattern is a webhook that verifies the request and
