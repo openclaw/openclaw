@@ -452,12 +452,15 @@ export async function attachWebInboxToSocket(
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
+        logVerbose(`Skipping composing presence for ${chatJid}: no active socket`);
         return;
       }
       try {
+        logVerbose(`Sending composing presence -> ${chatJid}`);
         await currentSock.sendPresenceUpdate("composing", chatJid);
+        logVerbose(`Sent composing presence -> ${chatJid}`);
       } catch (err) {
-        logVerbose(`Presence update failed: ${String(err)}`);
+        logVerbose(`Composing presence update failed for ${chatJid}: ${String(err)}`);
       }
     };
     const reply = async (text: string) => {
