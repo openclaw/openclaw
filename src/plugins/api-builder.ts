@@ -2,6 +2,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
+function deepFreeze<T extends object>(obj: T): T {
+  Object.freeze(obj);
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === "object" && !Object.isFrozen(value)) {
+      deepFreeze(value as object);
+    }
+  }
+  return obj;
+}
+
 export type BuildPluginApiParams = {
   id: string;
   name: string;
@@ -110,7 +120,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     source: params.source,
     rootDir: params.rootDir,
     registrationMode: params.registrationMode,
-    config: params.config,
+    config: deepFreeze(structuredClone(params.config)),
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
