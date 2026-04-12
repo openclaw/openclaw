@@ -3826,14 +3826,21 @@ def cmd_state(args):
             time.sleep(wait)
             r_check = requests.get(f"{TFC_API}/state-versions/{sv_id}", headers=api_headers())
             if r_check.status_code == 200:
-                if r_check.json()["data"]["attributes"].get("resources-processed", False):
+                payload = r_check.json()
+                data = payload.get("data") if isinstance(payload, dict) else None
+                attrs = data.get("attributes") if isinstance(data, dict) else None
+                if isinstance(attrs, dict) and attrs.get("resources-processed", False):
                     break
             print(f"    still processing... ({attempt + 1}/6)")
         else:
             print("  ⚠️  Resources may be incomplete — TFC is still indexing. Re-run in a minute.")
 
     r3 = requests.get(f"{TFC_API}/state-versions/{sv_id}/resources", headers=api_headers())
-    resources = r3.json().get("data", [])
+    if r3.status_code >= 400:
+        print(f"ERROR: Failed to fetch resources for workspace '{args.workspace}' (HTTP {r3.status_code}).")
+        return
+    payload = r3.json()
+    resources = payload.get("data", []) if isinstance(payload, dict) else []
     if not resources:
         print("  (no resources)")
     for res in resources:
@@ -3857,6 +3864,9 @@ def cmd_outputs(args):
             continue
         if r2.status_code == 404:
             print(f"No outputs found for workspace '{args.workspace}' — nothing deployed yet.")
+            return
+        if r2.status_code >= 400:
+            print(f"ERROR: Failed to fetch outputs for workspace '{args.workspace}' (HTTP {r2.status_code}).")
             return
         r2.raise_for_status()
         break
