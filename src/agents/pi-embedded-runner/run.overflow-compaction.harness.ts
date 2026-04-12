@@ -149,6 +149,7 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   return (
     lower.includes("request_too_large") ||
     lower.includes("context window exceeded") ||
+    lower.includes("context_window_exceeded") ||
     lower.includes("prompt is too long")
   );
 });
@@ -275,6 +276,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     return (
       lower.includes("request_too_large") ||
       lower.includes("context window exceeded") ||
+      lower.includes("context_window_exceeded") ||
       lower.includes("prompt is too long")
     );
   });
