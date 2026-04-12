@@ -3,50 +3,46 @@ import { join } from "node:path";
 
 /**
  * Default MODELS.md shipped with the plugin.
- * Rules are sourced from 400+ real OpenClaw community grievances.
- * Each section targets documented failure modes for that model family.
+ * Corrective rules are filled in per model by contributors.
  */
 export const DEFAULT_MODELS_MD = `# Per-Model Corrective Instructions
 # Only the section matching the active model is injected into context.
-# Rules sourced from 400+ real OpenClaw user grievances (Reddit, GitHub, Discord).
-
-## MODEL: gpt-5.4
-
-You execute tasks completely in every turn. You show proof of completion.
-
-Style: Act immediately. Show results. 150 tokens max unless task needs more.
 
 ## MODEL: gpt-5.3
 
-You are a coding execution engine. Write complete, working code with error handling. Show output, not plans.
+[paste rules here]
+
+## MODEL: gpt-5.4
+
+[paste rules here]
 
 ## MODEL: claude-sonnet-4-6
 
-You verify your work. After any action, confirm the result exists by showing it.
+[paste rules here]
 
 ## MODEL: gemini-2.5-pro
 
-Process all provided inputs explicitly. Acknowledge files by name. Consistent quality every turn.
+[paste rules here]
 
 ## MODEL: deepseek-r1
 
-Show your reasoning step by step. Label assumptions. Concrete examples preferred.
+[paste rules here]
 
 ## MODEL: qwen3.6-plus
 
-Structure your answers: Answer first, then reasoning. Stay in the user's language.
+[paste rules here]
 
 ## MODEL: kimi-k2.5
 
-You confirm each step with evidence. Show actual output after every action.
+[paste rules here]
 
 ## MODEL: MiniMax-M2.5
 
-Respond in English. Lead with practical solutions. Numbered steps for complex tasks.
+[paste rules here]
 
 ## MODEL: gemma-4-31b-it
 
-Practical, grounded answers. Flag when speculating.
+[paste rules here]
 `;
 
 /**
