@@ -141,14 +141,36 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
 }
 
 function emitSessionsChanged(
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "getSessionEventSubscriberConnIds" | "getSessionMessageSubscriberConnIds"
+  >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
-  const connIds = context.getSessionEventSubscriberConnIds();
+  const evSubs = context.getSessionEventSubscriberConnIds();
+  const msgSubs = payload.sessionKey
+    ? context.getSessionMessageSubscriberConnIds(payload.sessionKey)
+    : new Set<string>();
+  const connIds = new Set<string>([...evSubs, ...msgSubs]);
   if (connIds.size === 0) {
     return;
   }
   const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+
+  if (payload.reason === "reset" || payload.reason === "deleted" || payload.reason === "delete" || payload.reason === "new") {
+    if (payload.sessionKey) {
+      context.broadcastToConnIds(
+        "socket.drain",
+        {
+          sessionKey: payload.sessionKey,
+          reason: payload.reason,
+          ts: Date.now(),
+        },
+        connIds,
+      );
+    }
+  }
+
   context.broadcastToConnIds(
     "sessions.changed",
     {
@@ -208,7 +230,14 @@ function emitSessionsChanged(
         : {}),
     },
     connIds,
-    { dropIfSlow: true },
+    {
+      dropIfSlow: !(
+        payload.reason === "reset" ||
+        payload.reason === "deleted" ||
+        payload.reason === "delete" ||
+        payload.reason === "new"
+      ),
+    },
   );
 }
 
