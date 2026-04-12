@@ -72,7 +72,7 @@ Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When
 0 9 15 * 1
 ```
 
-This fires ~5–6 times per month instead of 0–1 times per month. Croner 10.x does not support AND logic for these fields. To require both conditions, schedule on one field and guard the other in your job's prompt or command.
+This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw uses Croner's default OR behavior here. To require both conditions, use Croner's `+` day-of-week modifier (`0 9 15 * +1`) or schedule on one field and guard the other in your job's prompt or command.
 
 ## Execution styles
 
