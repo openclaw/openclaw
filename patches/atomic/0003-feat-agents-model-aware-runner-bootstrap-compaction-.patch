@@ -1,0 +1,4005 @@
+From e6dc590bd21151c9dc29be8294b6b6b71d95f184 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:06:51 +0800
+Subject: [PATCH 03/12] feat(agents): model-aware runner, bootstrap compaction,
+ and image pre-analysis
+
+---
+ src/agents/acp-spawn-parent-stream.ts         |   2 +-
+ src/agents/agent-command.ts                   |   1 -
+ ...sh-tools.exec.pty-fallback-failure.test.ts |   1 +
+ .../bash-tools.process.supervisor.test.ts     |   1 +
+ src/agents/bootstrap-budget.ts                |   2 +
+ src/agents/bootstrap-compaction.test.ts       | 601 ++++++++++++++++++
+ src/agents/bootstrap-compaction.ts            | 331 ++++++++++
+ src/agents/bootstrap-files.ts                 |   4 +-
+ src/agents/btw.ts                             |  12 +-
+ src/agents/command/session-store.ts           |  14 +
+ src/agents/model-aware-runner.test.ts         | 187 ++++++
+ src/agents/model-aware-runner.ts              | 118 ++++
+ src/agents/model-selection.test.ts            |  67 ++
+ src/agents/model-selection.ts                 |  73 +++
+ ...dels-config.providers.openai-codex.test.ts | 156 +++++
+ src/agents/openclaw-tools.web-runtime.test.ts | 231 +++++++
+ ...mbedded-helpers.bootstrap-profiles.test.ts | 106 +++
+ ...dded-helpers.isbillingerrormessage.test.ts |  17 +
+ src/agents/pi-embedded-helpers.ts             |   4 +
+ src/agents/pi-embedded-helpers/bootstrap.ts   |  51 +-
+ src/agents/pi-embedded-helpers/errors.ts      |  29 +
+ .../pi-embedded-helpers/failover-matches.ts   |   2 +
+ src/agents/pi-embedded-runner/compact.ts      |  13 +-
+ .../extra-params.openai.test.ts               |  98 +++
+ .../extra-params.xai-tool-payload.test.ts     |  76 +++
+ .../live-session-registry.ts                  |  81 +++
+ src/agents/pi-embedded-runner/run.ts          |   9 +-
+ src/agents/pi-embedded-runner/run/attempt.ts  |  71 ++-
+ .../run/image-pre-analysis.behavior.test.ts   | 110 ++++
+ .../run/image-pre-analysis.test.ts            | 133 ++++
+ .../run/image-pre-analysis.ts                 | 203 ++++++
+ src/agents/pi-embedded-runner/types.ts        |   8 +-
+ src/agents/pi-tools.read.ts                   |  31 +
+ src/agents/pi-tools.ts                        |  27 +-
+ src/agents/skills/skill-contract.ts           |  11 +-
+ src/agents/skills/workspace.ts                |  16 +
+ src/agents/system-prompt.ts                   |   4 +-
+ src/agents/tool-fs-policy.ts                  |  10 +-
+ src/agents/tool-summaries.ts                  |  13 +
+ src/agents/tools/session-status-tool.ts       |   1 +
+ .../reply/agent-runner-execution.ts           |   4 +
+ src/auto-reply/reply/normalize-reply.ts       |   7 +-
+ src/auto-reply/reply/reply-utils.test.ts      |  10 +
+ src/auto-reply/tokens.test.ts                 |  63 +-
+ src/auto-reply/tokens.ts                      |  57 +-
+ src/cron/isolated-agent/run.ts                |  57 +-
+ src/infra/outbound/payloads.test.ts           |   4 +
+ src/infra/outbound/payloads.ts                |   6 +-
+ 48 files changed, 3082 insertions(+), 51 deletions(-)
+ create mode 100644 src/agents/bootstrap-compaction.test.ts
+ create mode 100644 src/agents/bootstrap-compaction.ts
+ create mode 100644 src/agents/model-aware-runner.test.ts
+ create mode 100644 src/agents/model-aware-runner.ts
+ create mode 100644 src/agents/models-config.providers.openai-codex.test.ts
+ create mode 100644 src/agents/openclaw-tools.web-runtime.test.ts
+ create mode 100644 src/agents/pi-embedded-helpers.bootstrap-profiles.test.ts
+ create mode 100644 src/agents/pi-embedded-runner/extra-params.openai.test.ts
+ create mode 100644 src/agents/pi-embedded-runner/extra-params.xai-tool-payload.test.ts
+ create mode 100644 src/agents/pi-embedded-runner/live-session-registry.ts
+ create mode 100644 src/agents/pi-embedded-runner/run/image-pre-analysis.behavior.test.ts
+ create mode 100644 src/agents/pi-embedded-runner/run/image-pre-analysis.test.ts
+ create mode 100644 src/agents/pi-embedded-runner/run/image-pre-analysis.ts
+ create mode 100644 src/agents/tool-summaries.ts
+
+diff --git a/src/agents/acp-spawn-parent-stream.ts b/src/agents/acp-spawn-parent-stream.ts
+index 894188cb9d..61f1994d95 100644
+--- a/src/agents/acp-spawn-parent-stream.ts
++++ b/src/agents/acp-spawn-parent-stream.ts
+@@ -314,7 +314,7 @@ export function startAcpSpawnParentStreamRelay(params: {
+         (data as { delta?: unknown } | undefined)?.delta ??
+         (data as { text?: unknown } | undefined)?.text;
+       const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
+-      if (!delta || !delta.trim()) {
++      if (!delta) {
+         return;
+       }
+       logEvent("assistant_delta", { delta });
+diff --git a/src/agents/agent-command.ts b/src/agents/agent-command.ts
+index b643d917a2..677a71e1f8 100644
+--- a/src/agents/agent-command.ts
++++ b/src/agents/agent-command.ts
+@@ -152,7 +152,6 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
+   }
+   return trimmed;
+ }
+-
+ async function prepareAgentCommandExecution(
+   opts: AgentCommandOpts & { senderIsOwner: boolean },
+   runtime: RuntimeEnv,
+diff --git a/src/agents/bash-tools.exec.pty-fallback-failure.test.ts b/src/agents/bash-tools.exec.pty-fallback-failure.test.ts
+index b678672ab2..a1404dca24 100644
+--- a/src/agents/bash-tools.exec.pty-fallback-failure.test.ts
++++ b/src/agents/bash-tools.exec.pty-fallback-failure.test.ts
+@@ -13,6 +13,7 @@ const makeSupervisor = () => {
+     spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
+     cancel: noop,
+     cancelScope: noop,
++    cancelSession: vi.fn(() => 0),
+     reconcileOrphans: noop,
+     getRecord: noop,
+   };
+diff --git a/src/agents/bash-tools.process.supervisor.test.ts b/src/agents/bash-tools.process.supervisor.test.ts
+index 61cae6b440..d144177a20 100644
+--- a/src/agents/bash-tools.process.supervisor.test.ts
++++ b/src/agents/bash-tools.process.supervisor.test.ts
+@@ -5,6 +5,7 @@ const { supervisorMock } = vi.hoisted(() => ({
+     spawn: vi.fn(),
+     cancel: vi.fn(),
+     cancelScope: vi.fn(),
++    cancelSession: vi.fn(() => 0),
+     reconcileOrphans: vi.fn(),
+     getRecord: vi.fn(),
+   },
+diff --git a/src/agents/bootstrap-budget.ts b/src/agents/bootstrap-budget.ts
+index 060541925b..4e00861c1f 100644
+--- a/src/agents/bootstrap-budget.ts
++++ b/src/agents/bootstrap-budget.ts
+@@ -2,6 +2,8 @@ import path from "node:path";
+ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+ import type { WorkspaceBootstrapFile } from "./workspace.js";
+ 
++export type { BootstrapProfile, BootstrapProfileConfig } from "./pi-embedded-helpers.js";
++
+ export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
+ export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
+ export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
+diff --git a/src/agents/bootstrap-compaction.test.ts b/src/agents/bootstrap-compaction.test.ts
+new file mode 100644
+index 0000000000..40a3aff05e
+--- /dev/null
++++ b/src/agents/bootstrap-compaction.test.ts
+@@ -0,0 +1,601 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  type CompactionLlmFn,
++  DEFAULT_COMPACTION_TIMEOUT_MS,
++  clearCompactionCache,
++  compactBootstrapFile,
++  compactBootstrapFiles,
++  isCompactableFile,
++  resolveCompactionConfig,
++} from "./bootstrap-compaction.js";
++
++// ── Helpers ───────────────────────────────────────────────────────────────────
++
++const STRUCTURED_SUMMARY = `## Key Rules
++- Rule A
++- Rule B
++
++## Recent Decisions
++- Decision X made because Y
++
++## Open Tasks / Blockers
++- Task 1: in-progress
++
++## Critical References
++- /path/to/file.ts`;
++
++/**
++ * Input content that is longer than STRUCTURED_SUMMARY so the output-length
++ * guard (compacted.length < charsBefore) in compactBootstrapFile doesn't
++ * reject the compaction as counter-productive.
++ */
++const LONG_CONTENT =
++  "A".repeat(200) +
++  " — memory content that is intentionally longer than the structured summary output.";
++
++/** Creates a mock llmFn that returns the given text. */
++function makeLlmFn(response: string): CompactionLlmFn & ReturnType<typeof vi.fn> {
++  return vi.fn().mockResolvedValue(response) as CompactionLlmFn & ReturnType<typeof vi.fn>;
++}
++
++/** Creates a mock llmFn that rejects with the given error. */
++function makeFailingLlmFn(error: Error): CompactionLlmFn & ReturnType<typeof vi.fn> {
++  return vi.fn().mockRejectedValue(error) as CompactionLlmFn & ReturnType<typeof vi.fn>;
++}
++
++// ── isCompactableFile ─────────────────────────────────────────────────────────
++
++describe("isCompactableFile", () => {
++  it("accepts MEMORY.md", () => {
++    expect(isCompactableFile("/workspace/MEMORY.md")).toBe(true);
++    expect(isCompactableFile("MEMORY.md")).toBe(true);
++  });
++
++  it("accepts memory/YYYY-MM-DD.md", () => {
++    expect(isCompactableFile("/workspace/memory/2026-03-07.md")).toBe(true);
++    expect(isCompactableFile("memory/2024-01-01.md")).toBe(true);
++    expect(isCompactableFile("/home/user/memory/2025-12-31.md")).toBe(true);
++  });
++
++  it("rejects AGENTS.md", () => {
++    expect(isCompactableFile("/workspace/AGENTS.md")).toBe(false);
++  });
++
++  it("rejects SOUL.md", () => {
++    expect(isCompactableFile("/workspace/SOUL.md")).toBe(false);
++  });
++
++  it("rejects IDENTITY.md", () => {
++    expect(isCompactableFile("IDENTITY.md")).toBe(false);
++  });
++
++  it("rejects CONSTITUTION.md", () => {
++    expect(isCompactableFile("/workspace/CONSTITUTION.md")).toBe(false);
++  });
++
++  it("rejects arbitrary .md files", () => {
++    expect(isCompactableFile("/workspace/README.md")).toBe(false);
++    expect(isCompactableFile("/workspace/TOOLS.md")).toBe(false);
++    expect(isCompactableFile("/workspace/memory/notes.md")).toBe(false);
++  });
++
++  it("rejects MEMORY.md in wrong directory (date-like name but wrong parent)", () => {
++    // A date-named .md that is not inside a 'memory' directory
++    expect(isCompactableFile("/workspace/logs/2026-03-07.md")).toBe(false);
++  });
++
++  it("accepts memory/YYYY-MM-DD.md only when parent dir is 'memory'", () => {
++    expect(isCompactableFile("/workspace/archive/2026-03-07.md")).toBe(false);
++    expect(isCompactableFile("/workspace/memory/2026-03-07.md")).toBe(true);
++  });
++});
++
++// ── resolveCompactionConfig ───────────────────────────────────────────────────
++
++describe("resolveCompactionConfig", () => {
++  it("returns empty config when cfg is undefined", () => {
++    const result = resolveCompactionConfig(undefined);
++    expect(result.model).toBeUndefined();
++    expect(result.timeoutMs).toBeUndefined();
++  });
++
++  it("returns empty config when agents.defaults.compaction is absent", () => {
++    const result = resolveCompactionConfig({ agents: { defaults: {} } } as never);
++    expect(result.model).toBeUndefined();
++    expect(result.timeoutMs).toBeUndefined();
++  });
++
++  it("reads model from config", () => {
++    const cfg = {
++      agents: { defaults: { compaction: { model: "claude-haiku-4-5-20251001" } } },
++    } as never;
++    const result = resolveCompactionConfig(cfg);
++    expect(result.model).toBe("claude-haiku-4-5-20251001");
++  });
++
++  it("reads timeoutMs from config", () => {
++    const cfg = {
++      agents: { defaults: { compaction: { timeoutMs: 15_000 } } },
++    } as never;
++    const result = resolveCompactionConfig(cfg);
++    expect(result.timeoutMs).toBe(15_000);
++  });
++
++  it("reads both model and timeoutMs from config", () => {
++    const cfg = {
++      agents: {
++        defaults: { compaction: { model: "claude-opus-4-6", timeoutMs: 60_000 } },
++      },
++    } as never;
++    const result = resolveCompactionConfig(cfg);
++    expect(result.model).toBe("claude-opus-4-6");
++    expect(result.timeoutMs).toBe(60_000);
++  });
++
++  it("ignores non-string model values", () => {
++    const cfg = {
++      agents: { defaults: { compaction: { model: 42 } } },
++    } as never;
++    const result = resolveCompactionConfig(cfg);
++    expect(result.model).toBeUndefined();
++  });
++
++  it("ignores non-number timeoutMs values", () => {
++    const cfg = {
++      agents: { defaults: { compaction: { timeoutMs: "30000" } } },
++    } as never;
++    const result = resolveCompactionConfig(cfg);
++    expect(result.timeoutMs).toBeUndefined();
++  });
++
++  it("DEFAULT_COMPACTION_TIMEOUT_MS is 30 seconds", () => {
++    expect(DEFAULT_COMPACTION_TIMEOUT_MS).toBe(30_000);
++  });
++});
++
++// ── compactBootstrapFile ──────────────────────────────────────────────────────
++
++describe("compactBootstrapFile", () => {
++  beforeEach(() => {
++    clearCompactionCache();
++  });
++
++  it("calls llmFn and returns compacted content", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const { compacted, result } = await compactBootstrapFile({
++      content: LONG_CONTENT,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(compacted).toBe(STRUCTURED_SUMMARY);
++    expect(result.success).toBe(true);
++    expect(result.path).toBe("/workspace/MEMORY.md");
++    expect(result.charsBefore).toBe(LONG_CONTENT.length);
++    expect(result.charsAfter).toBe(STRUCTURED_SUMMARY.length);
++    expect(llmFn).toHaveBeenCalledOnce();
++  });
++
++  it("passes content as user prompt to llmFn", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    await compactBootstrapFile({
++      content: LONG_CONTENT,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(llmFn).toHaveBeenCalledWith(LONG_CONTENT, undefined);
++  });
++
++  it("returns original content with success=false on llmFn error", async () => {
++    const llmFn = makeFailingLlmFn(new Error("API error 500"));
++
++    const content = "Original memory content";
++    const { compacted, result } = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(result.success).toBe(false);
++    expect(compacted).toBe(content);
++    expect(result.fallbackReason).toContain("API error 500");
++    expect(result.charsAfter).toBe(content.length);
++  });
++
++  it("returns original content with success=false on llmFn rejection", async () => {
++    const llmFn = makeFailingLlmFn(new Error("Network error"));
++
++    const content = "Original memory content";
++    const { compacted, result } = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(result.success).toBe(false);
++    expect(compacted).toBe(content);
++    expect(result.fallbackReason).toContain("Network error");
++  });
++
++  it("truncates input to COMPACTION_MAX_INPUT_CHARS with head+tail split before sending", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const longContent = "H".repeat(5_000) + "T".repeat(10_000); // 15K, exceeds 10K limit
++    await compactBootstrapFile({
++      content: longContent,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    const sentPrompt = llmFn.mock.calls[0][0] as string;
++    // Head 30% = 3000 chars, tail 70% = 7000 chars, plus omission marker in between
++    expect(sentPrompt).toContain("[... middle content omitted for compaction ...]");
++    expect(sentPrompt.startsWith("H")).toBe(true);
++    expect(sentPrompt.endsWith("T")).toBe(true);
++    // Total should be 10K + marker length
++    const markerLen = "\n\n[... middle content omitted for compaction ...]\n\n".length;
++    expect(sentPrompt.length).toBe(10_000 + markerLen);
++  });
++
++  it("passes signal to llmFn", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++    const signal = AbortSignal.abort();
++
++    await compactBootstrapFile({
++      content: LONG_CONTENT,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++      signal,
++    });
++
++    expect(llmFn).toHaveBeenCalledWith(LONG_CONTENT, signal);
++  });
++});
++
++// ── Content-hash caching ──────────────────────────────────────────────────────
++
++describe("compactBootstrapFile - content-hash cache", () => {
++  beforeEach(() => {
++    clearCompactionCache();
++  });
++
++  it("returns cached result without calling LLM on second call with same content", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const content = LONG_CONTENT;
++
++    // First call — should hit the LLM
++    const first = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledOnce();
++
++    // Second call with same content — should use cache
++    const second = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledOnce(); // still only one call
++    expect(second.compacted).toBe(first.compacted);
++  });
++
++  it("calls LLM again when content changes (cache miss)", async () => {
++    const llmFn = vi
++      .fn()
++      .mockResolvedValueOnce("Summary A")
++      .mockResolvedValueOnce("Summary B") as CompactionLlmFn & ReturnType<typeof vi.fn>;
++
++    await compactBootstrapFile({
++      content: "Content version 1",
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(1);
++
++    await compactBootstrapFile({
++      content: "Content version 2 — different content",
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(2);
++  });
++
++  it("cache is keyed by file path — different paths do not share cache", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const content = LONG_CONTENT;
++
++    await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    await compactBootstrapFile({
++      content,
++      filePath: "/workspace/memory/2026-03-07.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    // Different file paths → two separate LLM calls
++    expect(llmFn).toHaveBeenCalledTimes(2);
++  });
++
++  it("invalidates cache when only middle content changes (full-content hash)", async () => {
++    const llmFn = vi
++      .fn()
++      .mockResolvedValueOnce("Summary A")
++      .mockResolvedValueOnce("Summary B") as CompactionLlmFn & ReturnType<typeof vi.fn>;
++
++    // Content > 10K so it gets truncated (head 3K + tail 7K).
++    // Head and tail stay identical; only the middle (which is omitted from LLM input) changes.
++    const head = "H".repeat(3_000);
++    const tail = "T".repeat(7_000);
++    const contentV1 = head + "MIDDLE-V1".repeat(500) + tail; // well over 10K
++    const contentV2 = head + "MIDDLE-V2".repeat(500) + tail; // same head/tail, different middle
++
++    await compactBootstrapFile({
++      content: contentV1,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(1);
++
++    // Middle changed → full-content hash differs → cache miss → second LLM call
++    const { compacted } = await compactBootstrapFile({
++      content: contentV2,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(2);
++    expect(compacted).toBe("Summary B");
++  });
++
++  it("cache invalidates when modelRef changes", async () => {
++    const llmFn = vi
++      .fn()
++      .mockResolvedValueOnce("Summary model-A")
++      .mockResolvedValueOnce("Summary model-B") as CompactionLlmFn & ReturnType<typeof vi.fn>;
++
++    const content = "Same content for both calls";
++
++    await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "provider/model-a",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(1);
++
++    // Same content, different model → cache miss
++    const { compacted } = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "provider/model-b",
++    });
++    expect(llmFn).toHaveBeenCalledTimes(2);
++    expect(compacted).toBe("Summary model-B");
++  });
++
++  it("hits cache when both content and modelRef are identical", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const content = LONG_CONTENT;
++    const modelRef = "anthropic/claude-haiku-4-5-20251001";
++
++    await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef,
++    });
++    await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef,
++    });
++    expect(llmFn).toHaveBeenCalledOnce();
++  });
++});
++
++// ── Timeout handling ──────────────────────────────────────────────────────────
++
++describe("compactBootstrapFile - timeout handling", () => {
++  beforeEach(() => {
++    clearCompactionCache();
++  });
++
++  it("falls back gracefully when llmFn is aborted", async () => {
++    const abortError = new DOMException("The operation was aborted.", "AbortError");
++    const llmFn = makeFailingLlmFn(abortError);
++
++    const content = "Memory content";
++    const { compacted, result } = await compactBootstrapFile({
++      content,
++      filePath: "/workspace/MEMORY.md",
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++      signal: AbortSignal.abort(), // pre-aborted
++    });
++
++    expect(result.success).toBe(false);
++    expect(compacted).toBe(content); // original content returned
++    expect(result.fallbackReason).toBeTruthy();
++  });
++});
++
++// ── compactBootstrapFiles (orchestrator) ──────────────────────────────────────
++
++describe("compactBootstrapFiles", () => {
++  beforeEach(() => {
++    clearCompactionCache();
++  });
++
++  it("returns unchanged files when no compactable files present", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const contextFiles = [
++      { path: "/workspace/AGENTS.md", content: "Agents content" },
++      { path: "/workspace/SOUL.md", content: "Soul content" },
++    ];
++
++    const { contextFiles: result, results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(result).toEqual(contextFiles);
++    expect(results).toHaveLength(0);
++    expect(llmFn).not.toHaveBeenCalled();
++  });
++
++  it("compacts MEMORY.md and replaces its content", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const contextFiles = [
++      { path: "/workspace/AGENTS.md", content: "Agents content (not compactable)" },
++      { path: "/workspace/MEMORY.md", content: "Long memory content".repeat(100) },
++    ];
++
++    const { contextFiles: result, results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(result).toHaveLength(2);
++    // AGENTS.md should be unchanged
++    expect(result[0].content).toBe("Agents content (not compactable)");
++    // MEMORY.md should be compacted
++    expect(result[1].content).toBe(STRUCTURED_SUMMARY);
++    expect(results).toHaveLength(1);
++    expect(results[0].success).toBe(true);
++    expect(results[0].path).toBe("/workspace/MEMORY.md");
++  });
++
++  it("compacts memory/YYYY-MM-DD.md files", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const contextFiles = [
++      { path: "/workspace/memory/2026-03-07.md", content: "Daily log content".repeat(50) },
++    ];
++
++    const { contextFiles: result, results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(result[0].content).toBe(STRUCTURED_SUMMARY);
++    expect(results[0].success).toBe(true);
++  });
++
++  it("selects only the largest 3 compactable files", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const contextFiles = [
++      { path: "/workspace/MEMORY.md", content: "A".repeat(5000) },
++      { path: "/workspace/memory/2026-03-05.md", content: "B".repeat(3000) },
++      { path: "/workspace/memory/2026-03-06.md", content: "C".repeat(4000) },
++      { path: "/workspace/memory/2026-03-07.md", content: "D".repeat(2000) },
++      // 4 compactable files → only 3 largest should be compacted
++    ];
++
++    const { results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(results).toHaveLength(3);
++    expect(llmFn).toHaveBeenCalledTimes(3);
++    // Verify the 3 largest were selected (MEMORY.md=5000, 2026-03-06=4000, 2026-03-05=3000)
++    const compactedPaths = results.map((r) => r.path).toSorted();
++    expect(compactedPaths).toContain("/workspace/MEMORY.md");
++    expect(compactedPaths).toContain("/workspace/memory/2026-03-06.md");
++    expect(compactedPaths).toContain("/workspace/memory/2026-03-05.md");
++    // Smallest (2026-03-07=2000) should NOT be compacted
++    expect(compactedPaths).not.toContain("/workspace/memory/2026-03-07.md");
++  });
++
++  it("preserves original content for files that fail compaction", async () => {
++    const llmFn = makeFailingLlmFn(new Error("API unavailable"));
++
++    const originalContent = "Memory content to compact";
++    const contextFiles = [{ path: "/workspace/MEMORY.md", content: originalContent }];
++
++    const { contextFiles: result, results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    // Content should be unchanged on failure
++    expect(result[0].content).toBe(originalContent);
++    expect(results[0].success).toBe(false);
++    expect(results[0].fallbackReason).toContain("API unavailable");
++  });
++
++  it("returns CompactionResult with correct charsBefore and charsAfter on success", async () => {
++    const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
++
++    const originalContent = LONG_CONTENT;
++    const contextFiles = [{ path: "/workspace/MEMORY.md", content: originalContent }];
++
++    const { results } = await compactBootstrapFiles({
++      contextFiles,
++      config: {},
++      llmFn,
++      modelRef: "test/model",
++    });
++
++    expect(results[0].charsBefore).toBe(originalContent.length);
++    expect(results[0].charsAfter).toBe(STRUCTURED_SUMMARY.length);
++  });
++});
+diff --git a/src/agents/bootstrap-compaction.ts b/src/agents/bootstrap-compaction.ts
+new file mode 100644
+index 0000000000..b797e9f52f
+--- /dev/null
++++ b/src/agents/bootstrap-compaction.ts
+@@ -0,0 +1,331 @@
++import { createHash } from "node:crypto";
++import path from "node:path";
++import type { OpenClawConfig } from "../config/config.js";
++import type { EmbeddedContextFile } from "./pi-embedded-helpers/types.js";
++
++// ── Constants ─────────────────────────────────────────────────────────────────
++
++export const DEFAULT_COMPACTION_TIMEOUT_MS = 30_000;
++const COMPACTION_MAX_INPUT_CHARS = 10_000;
++const COMPACTION_MAX_FILES = 3;
++/** Bump this when COMPACTION_SYSTEM_PROMPT changes to invalidate caches. */
++const COMPACTION_CACHE_VERSION = 1;
++
++export const COMPACTION_SYSTEM_PROMPT = [
++  "You are a memory compaction assistant. Given the content of a memory file, produce a structured summary using EXACTLY the following template — no additional sections, no content outside the headers:",
++  "",
++  "## Key Rules",
++  "[Essential rules and constraints from the original content]",
++  "",
++  "## Recent Decisions",
++  "[Decisions made recently with rationale]",
++  "",
++  "## Open Tasks / Blockers",
++  "[Active tasks, their status, and any blockers]",
++  "",
++  "## Critical References",
++  "[Important file paths, URLs, IDs, and technical details that must be preserved exactly]",
++  "",
++  "RULES:",
++  "- Use the exact four section headers above.",
++  "- Preserve all identifiers exactly: UUIDs, IDs, file paths, URLs, IP addresses, model names, config keys.",
++  "- Prioritize recent information over older information.",
++  "- Keep output under 5000 characters total.",
++  "- If a section has no relevant content, write '[none]' for that section.",
++].join("\n");
++
++// ── Types ─────────────────────────────────────────────────────────────────────
++
++export interface BootstrapCompactionConfig {
++  /**
++   * Model to use for compaction (provider/model format, e.g. "anthropic/claude-haiku-4-5-20251001").
++   * When unset, inherits the agent's current model.
++   */
++  model?: string;
++  /** Timeout in ms. Default 30_000. */
++  timeoutMs?: number;
++}
++
++export interface CompactionResult {
++  /** Original file path */
++  path: string;
++  /** Original char count */
++  charsBefore: number;
++  /** Compacted char count */
++  charsAfter: number;
++  /** Whether compaction was attempted and succeeded */
++  success: boolean;
++  /** If failed, the reason */
++  fallbackReason?: string;
++}
++
++/**
++ * Provider-agnostic LLM call function.
++ * Takes the user prompt (with system prompt already embedded by the caller or
++ * handled internally) and returns the model's text response.
++ *
++ * The caller is responsible for wiring up model resolution, auth, and the
++ * actual API call (via completeSimple or equivalent).
++ */
++export type CompactionLlmFn = (userPrompt: string, signal?: AbortSignal) => Promise<string>;
++
++// ── Content-hash cache ────────────────────────────────────────────────────────
++
++/**
++ * In-memory LRU cache (process lifetime). Key = file path, value = { hash, compacted }.
++ * Avoids redundant LLM calls when file content hasn't changed.
++ * Capped at MAX_CACHE_ENTRIES to prevent unbounded memory growth.
++ */
++const MAX_CACHE_ENTRIES = 100;
++const compactionCache = new Map<string, { hash: string; compacted: string }>();
++
++function cacheSet(key: string, value: { hash: string; compacted: string }): void {
++  // Delete-then-set to refresh LRU order (Map iterates in insertion order)
++  compactionCache.delete(key);
++  compactionCache.set(key, value);
++  // Evict oldest entries when over limit
++  if (compactionCache.size > MAX_CACHE_ENTRIES) {
++    const oldest = compactionCache.keys().next().value;
++    if (oldest !== undefined) {
++      compactionCache.delete(oldest);
++    }
++  }
++}
++
++/** Exported for testing only. */
++export function clearCompactionCache(): void {
++  compactionCache.clear();
++}
++
++function getContentHash(content: string): string {
++  return createHash("sha256").update(content).digest("hex").slice(0, 16);
++}
++
++// ── Public API ────────────────────────────────────────────────────────────────
++
++/**
++ * Resolve compaction config from OpenClawConfig.
++ * Config path: cfg.agents.defaults.compaction.model / .timeoutMs
++ */
++export function resolveCompactionConfig(cfg?: OpenClawConfig): BootstrapCompactionConfig {
++  const raw = cfg?.agents?.defaults?.compaction;
++  if (!raw || typeof raw !== "object") {
++    return {};
++  }
++  const obj = raw as Record<string, unknown>;
++  return {
++    model: typeof obj.model === "string" ? obj.model : undefined,
++    timeoutMs: typeof obj.timeoutMs === "number" ? obj.timeoutMs : undefined,
++  };
++}
++
++/**
++ * Check if a bootstrap file is eligible for compaction.
++ * Only MEMORY.md and memory/YYYY-MM-DD.md files can be compacted.
++ */
++export function isCompactableFile(filePath: string): boolean {
++  const basename = path.basename(filePath);
++  if (basename === "MEMORY.md") {
++    return true;
++  }
++  // Match memory/YYYY-MM-DD.md pattern
++  if (/^20\d{2}-\d{2}-\d{2}\.md$/.test(basename)) {
++    const dir = path.basename(path.dirname(filePath));
++    return dir === "memory";
++  }
++  return false;
++}
++
++// ── Core compaction functions ─────────────────────────────────────────────────
++
++/**
++ * Compact a single bootstrap file using LLM summarization.
++ *
++ * Uses content-hash caching: if the file content hasn't changed since last
++ * compaction, returns the cached result without calling the LLM.
++ *
++ * The actual LLM call is delegated to `llmFn`, making this function
++ * provider-agnostic. The caller wires up model resolution and auth.
++ *
++ * Always returns successfully — on LLM failure, returns the original content
++ * with success=false and fallbackReason set.
++ */
++export async function compactBootstrapFile(params: {
++  content: string;
++  filePath: string;
++  config: BootstrapCompactionConfig;
++  /** Provider-agnostic LLM call. The caller resolves model + auth. */
++  llmFn: CompactionLlmFn;
++  /** Resolved "provider/model" used for compaction. Included in cache key so switching models invalidates. */
++  modelRef: string;
++  signal?: AbortSignal;
++  /** Optional logger for diagnostic warnings. */
++  log?: (msg: string) => void;
++}): Promise<{ compacted: string; result: CompactionResult }> {
++  const { content, filePath, signal } = params;
++  const charsBefore = content.length;
++
++  // Enforce max input size — head+tail split to preserve recent content at end of file.
++  // MEMORY.md and daily memory files have latest entries at the bottom.
++  let inputContent: string;
++  if (content.length > COMPACTION_MAX_INPUT_CHARS) {
++    const headChars = Math.floor(COMPACTION_MAX_INPUT_CHARS * 0.3);
++    const tailChars = COMPACTION_MAX_INPUT_CHARS - headChars;
++    inputContent =
++      content.slice(0, headChars) +
++      "\n\n[... middle content omitted for compaction ...]\n\n" +
++      content.slice(-tailChars);
++  } else {
++    inputContent = content;
++  }
++
++  // Cache lookup — hash the FULL content (pre-truncation) so middle-of-file
++  // edits invalidate the cache. Include cache version + resolved model so
++  // prompt changes and model switches also miss.
++  const hashInput = `v${COMPACTION_CACHE_VERSION}:${params.modelRef}:${content}`;
++  const contentHash = getContentHash(hashInput);
++  const cached = compactionCache.get(filePath);
++  if (cached?.hash === contentHash) {
++    // Refresh LRU position on cache hit
++    cacheSet(filePath, cached);
++    return {
++      compacted: cached.compacted,
++      result: {
++        path: filePath,
++        charsBefore,
++        charsAfter: cached.compacted.length,
++        success: true,
++      },
++    };
++  }
++
++  try {
++    const compacted = await params.llmFn(inputContent, signal);
++    const normalizedCompacted = compacted.trim();
++
++    if (!normalizedCompacted) {
++      return {
++        compacted: content,
++        result: {
++          path: filePath,
++          charsBefore,
++          charsAfter: charsBefore,
++          success: false,
++          fallbackReason: "compacted output was empty",
++        },
++      };
++    }
++
++    // Guard: if LLM output is not shorter than original, compaction is
++    // counter-productive — fall back to original content.
++    if (normalizedCompacted.length >= charsBefore) {
++      return {
++        compacted: content,
++        result: {
++          path: filePath,
++          charsBefore,
++          charsAfter: charsBefore,
++          success: false,
++          fallbackReason: `compacted output (${normalizedCompacted.length} chars) not shorter than original (${charsBefore} chars)`,
++        },
++      };
++    }
++
++    cacheSet(filePath, { hash: contentHash, compacted: normalizedCompacted });
++
++    return {
++      compacted: normalizedCompacted,
++      result: {
++        path: filePath,
++        charsBefore,
++        charsAfter: normalizedCompacted.length,
++        success: true,
++      },
++    };
++  } catch (err) {
++    const fallbackReason = err instanceof Error ? err.message : String(err);
++    return {
++      compacted: content,
++      result: {
++        path: filePath,
++        charsBefore,
++        charsAfter: charsBefore,
++        success: false,
++        fallbackReason,
++      },
++    };
++  }
++}
++
++/**
++ * Try to compact eligible files in a bootstrap context file list.
++ * Selects up to COMPACTION_MAX_FILES largest compactable files.
++ * Returns new context files with compacted content + per-file results.
++ */
++export async function compactBootstrapFiles(params: {
++  contextFiles: EmbeddedContextFile[];
++  config: BootstrapCompactionConfig;
++  /** Provider-agnostic LLM call. The caller resolves model + auth. */
++  llmFn: CompactionLlmFn;
++  /** Resolved "provider/model" used for compaction. Passed to per-file cache key. */
++  modelRef: string;
++  signal?: AbortSignal;
++}): Promise<{
++  contextFiles: EmbeddedContextFile[];
++  results: CompactionResult[];
++}> {
++  const { contextFiles, config, signal } = params;
++
++  // Select compactable files, sorted by size descending, capped at max
++  const compactable = contextFiles
++    .filter((f) => isCompactableFile(f.path))
++    .toSorted((a, b) => b.content.length - a.content.length)
++    .slice(0, COMPACTION_MAX_FILES);
++
++  if (compactable.length === 0) {
++    return { contextFiles, results: [] };
++  }
++
++  const compactableSet = new Set(compactable.map((f) => f.path));
++  const results: CompactionResult[] = [];
++  const compactedMap = new Map<string, string>();
++
++  // Overall compaction deadline: total budget across all files.
++  // Per-file timeout prevents one slow file from starving the rest,
++  // but the overall deadline caps total compaction latency.
++  const rawTimeout = config.timeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS;
++  const sanitizedTimeout =
++    Number.isFinite(rawTimeout) && rawTimeout > 0
++      ? Math.floor(rawTimeout)
++      : DEFAULT_COMPACTION_TIMEOUT_MS;
++  const overallDeadline = AbortSignal.timeout(sanitizedTimeout * compactable.length);
++  const overallSignal = signal ? AbortSignal.any([signal, overallDeadline]) : overallDeadline;
++
++  for (const file of compactable) {
++    // Each file gets its own timeout to avoid one slow file starving the rest.
++    const perFileTimeout = AbortSignal.timeout(sanitizedTimeout);
++    const mergedSignal = AbortSignal.any([overallSignal, perFileTimeout]);
++    const { compacted, result } = await compactBootstrapFile({
++      content: file.content,
++      filePath: file.path,
++      config,
++      llmFn: params.llmFn,
++      modelRef: params.modelRef,
++      signal: mergedSignal,
++    });
++    results.push(result);
++    if (result.success) {
++      compactedMap.set(file.path, compacted);
++    }
++  }
++
++  // Rebuild context files list with compacted content where successful
++  const updatedContextFiles = contextFiles.map((f) => {
++    if (compactableSet.has(f.path) && compactedMap.has(f.path)) {
++      return { ...f, content: compactedMap.get(f.path) as string };
++    }
++    return f;
++  });
++
++  return { contextFiles: updatedContextFiles, results };
++}
+diff --git a/src/agents/bootstrap-files.ts b/src/agents/bootstrap-files.ts
+index 0b72de3e3b..c47ed60ccb 100644
+--- a/src/agents/bootstrap-files.ts
++++ b/src/agents/bootstrap-files.ts
+@@ -185,6 +185,8 @@ export async function resolveBootstrapContextForRun(params: {
+   warn?: (message: string) => void;
+   contextMode?: BootstrapContextMode;
+   runKind?: BootstrapContextRunKind;
++  /** When provided, dynamically adjusts bootstrap budget based on model context window. */
++  contextWindowTokens?: number;
+ }): Promise<{
+   bootstrapFiles: WorkspaceBootstrapFile[];
+   contextFiles: EmbeddedContextFile[];
+@@ -192,7 +194,7 @@ export async function resolveBootstrapContextForRun(params: {
+   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+     maxChars: resolveBootstrapMaxChars(params.config),
+-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
++    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.contextWindowTokens),
+     warn: params.warn,
+   });
+   return { bootstrapFiles, contextFiles };
+diff --git a/src/agents/btw.ts b/src/agents/btw.ts
+index b2c3b2766b..d71061a4e1 100644
+--- a/src/agents/btw.ts
++++ b/src/agents/btw.ts
+@@ -17,6 +17,7 @@ import {
+ import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+ import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+ import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
++import { resolveNonCliModelRef } from "./model-selection.js";
+ import { ensureOpenClawModelsJson } from "./models-config.js";
+ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
+ import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
+@@ -131,17 +132,22 @@ async function resolveRuntimeModel(params: {
+   authProfileId?: string;
+   authProfileIdSource?: "auto" | "user";
+ }> {
++  // Resolve CLI provider aliases before model lookup.
++  const cliResolved = resolveNonCliModelRef(
++    { provider: params.provider, model: params.model },
++    params.cfg,
++  );
+   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+   const authStorage = discoverAuthStorage(params.agentDir);
+   const modelRegistry = discoverModels(authStorage, params.agentDir);
+   const model = resolveModelWithRegistry({
+-    provider: params.provider,
+-    modelId: params.model,
++    provider: cliResolved.provider,
++    modelId: cliResolved.model,
+     modelRegistry,
+     cfg: params.cfg,
+   });
+   if (!model) {
+-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
++    throw new Error(`Unknown model: ${cliResolved.provider}/${cliResolved.model}`);
+   }
+ 
+   const authProfileId = await resolveSessionAuthProfileOverride({
+diff --git a/src/agents/command/session-store.ts b/src/agents/command/session-store.ts
+index b646e92234..90098752a8 100644
+--- a/src/agents/command/session-store.ts
++++ b/src/agents/command/session-store.ts
+@@ -6,8 +6,10 @@ import {
+   updateSessionStore,
+ } from "../../config/sessions.js";
+ import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
++import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
+ import { resolveContextTokensForModel } from "../context.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
++import { isCliProvider } from "../model-selection.js";
+ import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
+ 
+ type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+@@ -71,6 +73,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
+     provider: providerUsed,
+     model: modelUsed,
+   });
++  if (isCliProvider(providerUsed, cfg)) {
++    const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
++    if (cliSessionBinding?.sessionId?.trim()) {
++      setCliSessionBinding(next, providerUsed, cliSessionBinding);
++    } else {
++      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
++      if (cliSessionId) {
++        setCliSessionId(next, providerUsed, cliSessionId);
++      }
++    }
++    next.cliPromptLoad = result.meta.agentMeta?.cliPromptLoad;
++  }
+   next.abortedLastRun = result.meta.aborted ?? false;
+   if (result.meta.systemPromptReport) {
+     next.systemPromptReport = result.meta.systemPromptReport;
+diff --git a/src/agents/model-aware-runner.test.ts b/src/agents/model-aware-runner.test.ts
+new file mode 100644
+index 0000000000..dc05434e46
+--- /dev/null
++++ b/src/agents/model-aware-runner.test.ts
+@@ -0,0 +1,187 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import type { OpenClawConfig } from "../config/config.js";
++
++const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
++const runCliAgentMock = vi.hoisted(() => vi.fn());
++
++vi.mock("./pi-embedded.js", () => ({
++  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
++}));
++
++vi.mock("./cli-runner.js", () => ({
++  runCliAgent: (params: unknown) => runCliAgentMock(params),
++}));
++
++import { runModelAwareAgent } from "./model-aware-runner.js";
++
++describe("runModelAwareAgent", () => {
++  const baseParams = {
++    sessionId: "session-1",
++    sessionFile: "/tmp/oc-session.jsonl",
++    workspaceDir: "/tmp/oc-workspace",
++    prompt: "hello",
++    timeoutMs: 5_000,
++    runId: "run-1",
++  };
++
++  beforeEach(() => {
++    runEmbeddedPiAgentMock.mockReset();
++    runCliAgentMock.mockReset();
++  });
++
++  it("routes non-CLI providers to runEmbeddedPiAgent", async () => {
++    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "embedded-ok" }] });
++
++    const result = await runModelAwareAgent({
++      ...baseParams,
++      provider: "openai",
++      model: "gpt-4.1-mini",
++      config: {},
++    });
++
++    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
++    expect(runCliAgentMock).not.toHaveBeenCalled();
++    expect(result).toEqual({ payloads: [{ text: "embedded-ok" }] });
++  });
++
++  it("routes CLI providers to runCliAgent and maps streaming callbacks", async () => {
++    runCliAgentMock.mockImplementation(async (params: Record<string, unknown>) => {
++      (params.onAssistantTurn as ((text: string) => void) | undefined)?.("assistant text");
++      (
++        (params.onThinkingTurn as
++          | ((payload: { text: string; delta?: string }) => void)
++          | undefined) ?? (() => {})
++      )({
++        text: "thinking text",
++        delta: "delta",
++      });
++      (
++        (params.onToolUseEvent as
++          | ((payload: { name: string; toolUseId?: string; input?: unknown }) => void)
++          | undefined) ?? (() => {})
++      )({
++        name: "web_search",
++        toolUseId: "tool_1",
++        input: { q: "openclaw" },
++      });
++      (
++        (params.onToolResult as
++          | ((payload: { toolUseId?: string; text?: string; isError?: boolean }) => void)
++          | undefined) ?? (() => {})
++      )({
++        toolUseId: "tool_1",
++        text: "tool done",
++      });
++      return { payloads: [{ text: "cli-ok" }] };
++    });
++
++    const onPartialReply = vi.fn();
++    const onReasoningStream = vi.fn();
++    const onToolResult = vi.fn();
++    const onAgentEvent = vi.fn();
++
++    const result = await runModelAwareAgent({
++      ...baseParams,
++      provider: "claude-cli",
++      model: "opus",
++      config: {
++        agents: {
++          defaults: {
++            cliBackends: {
++              "claude-cli": {
++                command: "claude",
++              },
++            },
++          },
++        },
++      } as OpenClawConfig,
++      messageProvider: "feishu",
++      disableTools: true,
++      extraSystemPrompt: "BASE_SYSTEM",
++      onPartialReply,
++      onReasoningStream,
++      onToolResult,
++      onAgentEvent,
++    });
++
++    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
++    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
++    const cliCallArg = runCliAgentMock.mock.calls[0]?.[0] as
++      | { messageChannel?: string; extraSystemPrompt?: string }
++      | undefined;
++    expect(cliCallArg?.messageChannel).toBe("feishu");
++    expect(cliCallArg?.extraSystemPrompt).toContain("BASE_SYSTEM");
++    expect(cliCallArg?.extraSystemPrompt).toContain("Tools are disabled in this session.");
++
++    expect(onPartialReply).toHaveBeenCalledWith({ text: "assistant text" });
++    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking text" });
++    expect(onToolResult).toHaveBeenCalledWith({ text: "tool done" });
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "assistant",
++      data: { text: "assistant text", delta: "assistant text" },
++    });
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "thinking",
++      data: { text: "thinking text", delta: "delta" },
++    });
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "tool",
++      data: {
++        phase: "start",
++        name: "web_search",
++        toolUseId: "tool_1",
++        input: { q: "openclaw" },
++      },
++    });
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "tool",
++      data: {
++        phase: "result",
++        toolUseId: "tool_1",
++        result: "tool done",
++        partialResult: "tool done",
++      },
++    });
++    expect(result).toEqual({ payloads: [{ text: "cli-ok" }] });
++  });
++
++  it("suppresses split NO_REPLY fragments from CLI partial output", async () => {
++    runCliAgentMock.mockImplementation(async (params: Record<string, unknown>) => {
++      const onAssistantTurn = params.onAssistantTurn as ((text: string) => void) | undefined;
++      onAssistantTurn?.("NO");
++      onAssistantTurn?.("_REPLY");
++      onAssistantTurn?.("Actual answer");
++      return { payloads: [{ text: "cli-ok" }] };
++    });
++
++    const onPartialReply = vi.fn();
++    const onAgentEvent = vi.fn();
++
++    await runModelAwareAgent({
++      ...baseParams,
++      provider: "claude-cli",
++      model: "opus",
++      config: {
++        agents: {
++          defaults: {
++            cliBackends: {
++              "claude-cli": {
++                command: "claude",
++              },
++            },
++          },
++        },
++      } as OpenClawConfig,
++      onPartialReply,
++      onAgentEvent,
++    });
++
++    expect(onPartialReply).toHaveBeenCalledTimes(1);
++    expect(onPartialReply).toHaveBeenCalledWith({ text: "Actual answer" });
++    expect(onAgentEvent).toHaveBeenCalledTimes(1);
++    expect(onAgentEvent).toHaveBeenCalledWith({
++      stream: "assistant",
++      data: { text: "Actual answer", delta: "Actual answer" },
++    });
++  });
++});
+diff --git a/src/agents/model-aware-runner.ts b/src/agents/model-aware-runner.ts
+new file mode 100644
+index 0000000000..e12762a327
+--- /dev/null
++++ b/src/agents/model-aware-runner.ts
+@@ -0,0 +1,118 @@
++import { runCliAgent } from "./cli-runner.js";
++import { createAcpVisibleTextAccumulator } from "./command/attempt-execution.js";
++import { DEFAULT_PROVIDER } from "./defaults.js";
++import { isCliProvider } from "./model-selection.js";
++import type { RunEmbeddedPiAgentParams } from "./pi-embedded-runner/run/params.js";
++import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
++import { runEmbeddedPiAgent } from "./pi-embedded.js";
++
++function resolveDecisionLikeSystemPrompt(params: {
++  extraSystemPrompt?: string;
++  disableTools?: boolean;
++}): string | undefined {
++  const base = params.extraSystemPrompt?.trim();
++  if (!params.disableTools) {
++    return base || undefined;
++  }
++  return [base, "Tools are disabled in this session. Do not call tools."]
++    .filter((part): part is string => Boolean(part && part.trim()))
++    .join("\n");
++}
++
++function emitAgentEvent(
++  cb: RunEmbeddedPiAgentParams["onAgentEvent"],
++  event: { stream: string; data: Record<string, unknown> },
++): void {
++  if (!cb) {
++    return;
++  }
++  cb(event);
++}
++
++export async function runModelAwareAgent(
++  params: RunEmbeddedPiAgentParams & { cliSessionId?: string },
++): Promise<EmbeddedPiRunResult> {
++  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
++  if (!isCliProvider(provider, params.config)) {
++    return runEmbeddedPiAgent(params);
++  }
++
++  const messageChannel = params.messageChannel ?? params.messageProvider;
++  const extraSystemPrompt = resolveDecisionLikeSystemPrompt({
++    extraSystemPrompt: params.extraSystemPrompt,
++    disableTools: params.disableTools,
++  });
++  const visibleTextAccumulator = createAcpVisibleTextAccumulator();
++
++  return runCliAgent({
++    sessionId: params.sessionId,
++    sessionKey: params.sessionKey,
++    agentId: params.agentId,
++    sessionFile: params.sessionFile,
++    workspaceDir: params.workspaceDir,
++    config: params.config,
++    prompt: params.prompt,
++    provider,
++    model: params.model,
++    thinkLevel: params.thinkLevel,
++    timeoutMs: params.timeoutMs,
++    runId: params.runId,
++    extraSystemPrompt,
++    skillsSnapshot: params.skillsSnapshot,
++    ownerNumbers: params.ownerNumbers,
++    cliSessionId: params.cliSessionId,
++    images: params.images,
++    abortSignal: params.abortSignal,
++    trigger: params.trigger,
++    messageChannel,
++    onAssistantTurn: (text) => {
++      const visibleUpdate = visibleTextAccumulator.consume(text);
++      if (!visibleUpdate) {
++        return;
++      }
++      if (visibleUpdate.delta) {
++        void params.onPartialReply?.({ text: visibleUpdate.delta });
++      }
++      emitAgentEvent(params.onAgentEvent, {
++        stream: "assistant",
++        data: { text: visibleUpdate.text, delta: visibleUpdate.delta },
++      });
++    },
++    onThinkingTurn: (payload) => {
++      if (payload.text.trim()) {
++        void params.onReasoningStream?.({ text: payload.text });
++      }
++      emitAgentEvent(params.onAgentEvent, {
++        stream: "thinking",
++        data: payload.delta ? { text: payload.text, delta: payload.delta } : { text: payload.text },
++      });
++    },
++    onToolUseEvent: (payload) => {
++      emitAgentEvent(params.onAgentEvent, {
++        stream: "tool",
++        data: {
++          phase: "start",
++          name: payload.name,
++          ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++          ...(payload.input !== undefined ? { input: payload.input } : {}),
++        },
++      });
++    },
++    onToolResult: (payload) => {
++      if (payload.text || payload.isError) {
++        void params.onToolResult?.({
++          text: payload.text,
++        });
++      }
++      emitAgentEvent(params.onAgentEvent, {
++        stream: "tool",
++        data: {
++          phase: "result",
++          ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++          ...(payload.text ? { result: payload.text, partialResult: payload.text } : {}),
++          ...(payload.isError ? { isError: true } : {}),
++        },
++      });
++    },
++  });
++}
+diff --git a/src/agents/model-selection.test.ts b/src/agents/model-selection.test.ts
+index 8242b19692..f74dfbb5e9 100644
+--- a/src/agents/model-selection.test.ts
++++ b/src/agents/model-selection.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, it, expect, vi } from "vitest";
+ import type { OpenClawConfig } from "../config/config.js";
+ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
++import { DEFAULT_PROVIDER } from "./defaults.js";
+ import {
+   buildAllowedModelSet,
+   inferUniqueProviderFromConfiguredModels,
+@@ -14,6 +15,7 @@ import {
+   resolveAllowedModelRef,
+   resolveConfiguredModelRef,
+   resolveSubagentConfiguredModelSelection,
++  resolveNonCliModelRef,
+   resolveThinkingDefault,
+   resolveModelRefFromString,
+ } from "./model-selection.js";
+@@ -1002,6 +1004,71 @@ describe("model-selection", () => {
+   });
+ });
+ 
++describe("resolveNonCliModelRef", () => {
++  it("returns non-CLI provider ref as-is", () => {
++    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
++    expect(resolveNonCliModelRef(ref)).toEqual(ref);
++  });
++
++  it("returns non-CLI openai ref as-is", () => {
++    const ref = { provider: "openai", model: "gpt-4o" };
++    expect(resolveNonCliModelRef(ref)).toEqual(ref);
++  });
++
++  it("maps claude-cli to anthropic", () => {
++    const ref = { provider: "claude-cli", model: "claude-opus-4-6" };
++    const result = resolveNonCliModelRef(ref);
++    expect(result.provider).toBe("anthropic");
++    expect(result.model).toBe("claude-opus-4-6");
++  });
++
++  it("maps codex-cli to openai", () => {
++    const ref = { provider: "codex-cli", model: "o4-mini" };
++    const result = resolveNonCliModelRef(ref);
++    expect(result.provider).toBe("openai");
++    expect(result.model).toBe("o4-mini");
++  });
++
++  it("falls back to DEFAULT_PROVIDER for unknown custom CLI backend", () => {
++    const cfg = {
++      agents: {
++        defaults: {
++          cliBackends: {
++            "my-custom-cli": {},
++          },
++        },
++      },
++    } as never;
++    const ref = { provider: "my-custom-cli", model: "some-model" };
++    const result = resolveNonCliModelRef(ref, cfg);
++    expect(result.provider).toBe(DEFAULT_PROVIDER);
++    expect(result.model).toBe("some-model");
++  });
++
++  it("resolves through alias when cfg + alias index match", () => {
++    const cfg = {
++      agents: {
++        defaults: {
++          models: {
++            "anthropic/claude-haiku-4-5-20251001": { alias: "haiku" },
++          },
++        },
++      },
++    } as never;
++    const ref = { provider: "claude-cli", model: "haiku" };
++    const result = resolveNonCliModelRef(ref, cfg);
++    expect(result.provider).toBe("anthropic");
++    expect(result.model).toBe("claude-haiku-4-5-20251001");
++  });
++
++  it("returns mapped provider + original model when no alias matches", () => {
++    const ref = { provider: "claude-cli", model: "claude-opus-4-6" };
++    const result = resolveNonCliModelRef(ref, undefined);
++    expect(result.provider).toBe("anthropic");
++    expect(result.model).toBe("claude-opus-4-6");
++  });
++});
++
+ describe("normalizeModelSelection", () => {
+   it("returns trimmed string for string input", () => {
+     expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
+diff --git a/src/agents/model-selection.ts b/src/agents/model-selection.ts
+index a14cc3b2cd..0f419c11ae 100644
+--- a/src/agents/model-selection.ts
++++ b/src/agents/model-selection.ts
+@@ -27,6 +27,30 @@ import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalizat
+ 
+ let log: ReturnType<typeof createSubsystemLogger> | null = null;
+ 
++type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
++
++const CLI_BACKEND_RUNTIME_CANDIDATES = [
++  "../plugins/cli-backends.runtime.js",
++  "../plugins/cli-backends.runtime.ts",
++] as const;
++
++let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
++
++function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
++  if (cliBackendRuntimeModule) {
++    return cliBackendRuntimeModule;
++  }
++  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
++    try {
++      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
++      return cliBackendRuntimeModule;
++    } catch {
++      // Try source/runtime candidates in order.
++    }
++  }
++  return null;
++}
++
+ function getLog(): ReturnType<typeof createSubsystemLogger> {
+   log ??= createSubsystemLogger("model-selection");
+   return log;
+@@ -86,6 +110,19 @@ export {
+   normalizeProviderIdForAuth,
+ };
+ 
++export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
++  const normalized = normalizeProviderId(provider);
++  if (normalized === "claude-cli" || normalized === "codex-cli") {
++    return true;
++  }
++  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
++  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
++    return true;
++  }
++  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
++  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
++}
++
+ function normalizeProviderModelId(provider: string, model: string): string {
+   const staticModelId = normalizeStaticProviderModelId(provider, model);
+   return (
+@@ -393,6 +430,42 @@ export function resolveConfiguredModelRef(params: {
+   return { provider: params.defaultProvider, model: params.defaultModel };
+ }
+ 
++/**
++ * Resolve a ModelRef that may point to a CLI provider (claude-cli, codex-cli,
++ * or a custom cliBackend) to a real API provider.
++ *
++ * - Non-CLI providers are returned as-is.
++ * - `claude-cli` maps to `anthropic`; `codex-cli` maps to `openai`.
++ * - Unknown custom CLI backends fall back to DEFAULT_PROVIDER.
++ * - The model string is resolved through the alias index for the target provider.
++ */
++export function resolveNonCliModelRef(ref: ModelRef, cfg?: OpenClawConfig): ModelRef {
++  if (!isCliProvider(ref.provider, cfg)) {
++    return ref;
++  }
++
++  const normalized = normalizeProviderId(ref.provider);
++  let realProvider: string;
++  if (normalized === "claude-cli") {
++    realProvider = "anthropic";
++  } else if (normalized === "codex-cli") {
++    realProvider = "openai";
++  } else {
++    realProvider = DEFAULT_PROVIDER;
++  }
++
++  if (cfg) {
++    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: realProvider });
++    const aliasKey = normalizeAliasKey(ref.model);
++    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
++    if (aliasMatch) {
++      return aliasMatch.ref;
++    }
++  }
++
++  return { provider: realProvider, model: ref.model };
++}
++
+ export function resolveDefaultModelForAgent(params: {
+   cfg: OpenClawConfig;
+   agentId?: string;
+diff --git a/src/agents/models-config.providers.openai-codex.test.ts b/src/agents/models-config.providers.openai-codex.test.ts
+new file mode 100644
+index 0000000000..c641f02f77
+--- /dev/null
++++ b/src/agents/models-config.providers.openai-codex.test.ts
+@@ -0,0 +1,156 @@
++import fs from "node:fs/promises";
++import path from "node:path";
++import { describe, expect, it } from "vitest";
++import { resolveOpenClawAgentDir } from "./agent-paths.js";
++import {
++  installModelsConfigTestHooks,
++  MODELS_CONFIG_IMPLICIT_ENV_VARS,
++  resolveImplicitProvidersForTest,
++  unsetEnv,
++  withModelsTempHome,
++  withTempEnv,
++} from "./models-config.e2e-harness.js";
++import { ensureOpenClawModelsJson } from "./models-config.js";
++import { readGeneratedModelsJson } from "./models-config.test-utils.js";
++
++installModelsConfigTestHooks();
++
++async function writeCodexOauthProfile(agentDir: string) {
++  await fs.mkdir(agentDir, { recursive: true });
++  await fs.writeFile(
++    path.join(agentDir, "auth-profiles.json"),
++    JSON.stringify(
++      {
++        version: 1,
++        profiles: {
++          "openai-codex:default": {
++            type: "oauth",
++            provider: "openai-codex",
++            access: "access-token",
++            refresh: "refresh-token",
++            expires: Date.now() + 60_000,
++          },
++        },
++        order: {
++          "openai-codex": ["openai-codex:default"],
++        },
++      },
++      null,
++      2,
++    ),
++    "utf8",
++  );
++}
++
++describe("openai-codex implicit provider", () => {
++  it("injects an implicit provider when Codex OAuth exists", async () => {
++    await withModelsTempHome(async () => {
++      await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
++        unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
++        const agentDir = resolveOpenClawAgentDir();
++        await writeCodexOauthProfile(agentDir);
++
++        const providers = await resolveImplicitProvidersForTest({ agentDir });
++        expect(providers?.["openai-codex"]).toMatchObject({
++          baseUrl: "https://chatgpt.com/backend-api",
++          api: "openai-codex-responses",
++          models: [],
++        });
++        expect(providers?.["openai-codex"]).not.toHaveProperty("apiKey");
++      });
++    });
++  });
++
++  it("normalizes generated openai-codex rows back to the Codex transport when oauth exists", async () => {
++    await withModelsTempHome(async () => {
++      await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
++        unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
++        const agentDir = resolveOpenClawAgentDir();
++        await writeCodexOauthProfile(agentDir);
++        await fs.writeFile(
++          path.join(agentDir, "models.json"),
++          JSON.stringify(
++            {
++              providers: {
++                "openai-codex": {
++                  baseUrl: "https://api.openai.com/v1",
++                  api: "openai-responses",
++                  models: [
++                    {
++                      id: "gpt-5.4",
++                      name: "GPT-5.4",
++                      api: "openai-responses",
++                      contextWindow: 1_000_000,
++                      maxTokens: 100_000,
++                    },
++                  ],
++                },
++              },
++            },
++            null,
++            2,
++          ),
++          "utf8",
++        );
++
++        await ensureOpenClawModelsJson({});
++
++        const parsed = await readGeneratedModelsJson<{
++          providers: Record<string, { baseUrl?: string; api?: string }>;
++        }>();
++        expect(parsed.providers["openai-codex"]).toMatchObject({
++          baseUrl: "https://chatgpt.com/backend-api",
++          api: "openai-codex-responses",
++        });
++      });
++    });
++  });
++
++  it("preserves an existing baseUrl for explicit openai-codex config without oauth synthesis", async () => {
++    await withModelsTempHome(async () => {
++      await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
++        unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
++        const agentDir = resolveOpenClawAgentDir();
++        await fs.mkdir(agentDir, { recursive: true });
++        await fs.writeFile(
++          path.join(agentDir, "models.json"),
++          JSON.stringify(
++            {
++              providers: {
++                "openai-codex": {
++                  baseUrl: "https://chatgpt.com/backend-api",
++                  api: "openai-codex-responses",
++                  models: [],
++                },
++              },
++            },
++            null,
++            2,
++          ),
++          "utf8",
++        );
++
++        await ensureOpenClawModelsJson({
++          models: {
++            mode: "merge",
++            providers: {
++              "openai-codex": {
++                baseUrl: "",
++                api: "openai-codex-responses",
++                models: [],
++              },
++            },
++          },
++        });
++
++        const parsed = await readGeneratedModelsJson<{
++          providers: Record<string, { baseUrl?: string; api?: string }>;
++        }>();
++        expect(parsed.providers["openai-codex"]).toMatchObject({
++          baseUrl: "https://chatgpt.com/backend-api",
++          api: "openai-codex-responses",
++        });
++      });
++    });
++  });
++});
+diff --git a/src/agents/openclaw-tools.web-runtime.test.ts b/src/agents/openclaw-tools.web-runtime.test.ts
+new file mode 100644
+index 0000000000..5240d42b9a
+--- /dev/null
++++ b/src/agents/openclaw-tools.web-runtime.test.ts
+@@ -0,0 +1,231 @@
++import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
++import type { OpenClawConfig } from "../config/config.js";
++import type {
++  RuntimeWebFetchMetadata,
++  RuntimeWebSearchMetadata,
++} from "../secrets/runtime-web-tools.types.js";
++import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
++
++vi.mock("../plugins/tools.js", async () => {
++  const actual = await vi.importActual<typeof import("../plugins/tools.js")>("../plugins/tools.js");
++  return {
++    ...actual,
++    copyPluginToolMeta: () => undefined,
++  };
++});
++
++vi.mock("../gateway/call.js", () => ({
++  callGateway: vi.fn(),
++}));
++
++function createStubTool(name: string) {
++  return {
++    name,
++    description: name,
++    parameters: { type: "object", properties: {} },
++    execute: vi.fn(async () => ({ output: name })),
++  };
++}
++
++function mockToolFactory(name: string) {
++  return () => createStubTool(name);
++}
++
++vi.mock("./tools/agents-list-tool.js", () => ({
++  createAgentsListTool: mockToolFactory("agents_list_stub"),
++}));
++vi.mock("./tools/canvas-tool.js", () => ({
++  createCanvasTool: mockToolFactory("canvas_stub"),
++}));
++vi.mock("./tools/cron-tool.js", () => ({
++  createCronTool: mockToolFactory("cron_stub"),
++}));
++vi.mock("./tools/gateway-tool.js", () => ({
++  createGatewayTool: mockToolFactory("gateway_stub"),
++}));
++vi.mock("./tools/image-generate-tool.js", () => ({
++  createImageGenerateTool: mockToolFactory("image_generate_stub"),
++}));
++vi.mock("./tools/image-tool.js", () => ({
++  createImageTool: mockToolFactory("image_stub"),
++}));
++vi.mock("./tools/message-tool.js", () => ({
++  createMessageTool: mockToolFactory("message_stub"),
++}));
++vi.mock("./tools/nodes-tool.js", () => ({
++  createNodesTool: mockToolFactory("nodes_stub"),
++}));
++vi.mock("./tools/pdf-tool.js", () => ({
++  createPdfTool: mockToolFactory("pdf_stub"),
++}));
++vi.mock("./tools/session-status-tool.js", () => ({
++  createSessionStatusTool: mockToolFactory("session_status_stub"),
++}));
++vi.mock("./tools/sessions-history-tool.js", () => ({
++  createSessionsHistoryTool: mockToolFactory("sessions_history_stub"),
++}));
++vi.mock("./tools/sessions-list-tool.js", () => ({
++  createSessionsListTool: mockToolFactory("sessions_list_stub"),
++}));
++vi.mock("./tools/sessions-send-tool.js", () => ({
++  createSessionsSendTool: mockToolFactory("sessions_send_stub"),
++}));
++vi.mock("./tools/sessions-spawn-tool.js", () => ({
++  createSessionsSpawnTool: mockToolFactory("sessions_spawn_stub"),
++}));
++vi.mock("./tools/sessions-yield-tool.js", () => ({
++  createSessionsYieldTool: mockToolFactory("sessions_yield_stub"),
++}));
++vi.mock("./tools/subagents-tool.js", () => ({
++  createSubagentsTool: mockToolFactory("subagents_stub"),
++}));
++vi.mock("./tools/tts-tool.js", () => ({
++  createTtsTool: mockToolFactory("tts_stub"),
++}));
++
++function asConfig(value: unknown): OpenClawConfig {
++  return value as OpenClawConfig;
++}
++
++let secretsRuntime: typeof import("../secrets/runtime.js");
++let createWebSearchTool: typeof import("./tools/web-tools.js").createWebSearchTool;
++let createWebFetchTool: typeof import("./tools/web-tools.js").createWebFetchTool;
++
++function requireWebSearchTool(config: OpenClawConfig, runtimeWebSearch?: RuntimeWebSearchMetadata) {
++  const tool = createWebSearchTool({
++    config,
++    sandboxed: true,
++    runtimeWebSearch,
++  });
++  expect(tool).toBeDefined();
++  if (!tool) {
++    throw new Error("missing web_search tool");
++  }
++  return tool;
++}
++
++function requireWebFetchTool(config: OpenClawConfig, runtimeWebFetch?: RuntimeWebFetchMetadata) {
++  const tool = createWebFetchTool({
++    config,
++    sandboxed: true,
++    runtimeWebFetch,
++  });
++  expect(tool).toBeDefined();
++  if (!tool) {
++    throw new Error("missing web_fetch tool");
++  }
++  return tool;
++}
++
++function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
++  return {
++    get: (key) => map[key.toLowerCase()] ?? null,
++  };
++}
++
++async function prepareAndActivate(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
++  const snapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
++    config: params.config,
++    env: params.env,
++    agentDirs: ["/tmp/openclaw-agent-main"],
++    loadAuthStore: () => ({ version: 1, profiles: {} }),
++  });
++  secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
++  return snapshot;
++}
++
++describe("openclaw tools runtime web metadata wiring", () => {
++  const priorFetch = global.fetch;
++
++  beforeAll(async () => {
++    secretsRuntime = await import("../secrets/runtime.js");
++    ({ createWebFetchTool, createWebSearchTool } = await import("./tools/web-tools.js"));
++  });
++
++  afterEach(() => {
++    global.fetch = priorFetch;
++    secretsRuntime.clearSecretsRuntimeSnapshot();
++  });
++
++  it("uses runtime-selected provider when higher-precedence provider ref is unresolved", async () => {
++    const snapshot = await prepareAndActivate({
++      config: asConfig({
++        tools: {
++          web: {
++            search: {
++              apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_KEY_REF" },
++              gemini: {
++                apiKey: { source: "env", provider: "default", id: "GEMINI_WEB_KEY_REF" },
++              },
++            },
++          },
++        },
++      }),
++      env: {
++        GEMINI_WEB_KEY_REF: "gemini-runtime-key",
++      },
++    });
++
++    expect(snapshot.webTools.search.selectedProvider).toBe("gemini");
++
++    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
++      Promise.resolve({
++        ok: true,
++        json: () =>
++          Promise.resolve({
++            candidates: [
++              {
++                content: { parts: [{ text: "runtime gemini ok" }] },
++                groundingMetadata: { groundingChunks: [] },
++              },
++            ],
++          }),
++      } as Response),
++    );
++    global.fetch = withFetchPreconnect(mockFetch);
++
++    const webSearch = requireWebSearchTool(snapshot.config, snapshot.webTools.search);
++    const result = await webSearch.execute("call-runtime-search", { query: "runtime search" });
++
++    expect(mockFetch).toHaveBeenCalled();
++    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
++    expect((result.details as { provider?: string }).provider).toBe("gemini");
++  });
++
++  it("skips Firecrawl key resolution when runtime marks Firecrawl inactive", async () => {
++    const snapshot = await prepareAndActivate({
++      config: asConfig({
++        tools: {
++          web: {
++            fetch: {
++              firecrawl: {
++                enabled: false,
++                apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_KEY_REF" },
++              },
++            },
++          },
++        },
++      }),
++    });
++
++    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
++      Promise.resolve({
++        ok: true,
++        status: 200,
++        headers: makeHeaders({ "content-type": "text/html; charset=utf-8" }),
++        text: () =>
++          Promise.resolve(
++            "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
++          ),
++      } as Response),
++    );
++    global.fetch = withFetchPreconnect(mockFetch);
++
++    const webFetch = requireWebFetchTool(snapshot.config, snapshot.webTools.fetch);
++    await webFetch.execute("call-runtime-fetch", { url: "https://example.com/runtime-off" });
++
++    expect(mockFetch).toHaveBeenCalled();
++    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/runtime-off");
++    expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain("api.firecrawl.dev");
++  });
++});
+diff --git a/src/agents/pi-embedded-helpers.bootstrap-profiles.test.ts b/src/agents/pi-embedded-helpers.bootstrap-profiles.test.ts
+new file mode 100644
+index 0000000000..6fbfa213d2
+--- /dev/null
++++ b/src/agents/pi-embedded-helpers.bootstrap-profiles.test.ts
+@@ -0,0 +1,106 @@
++import { describe, expect, it } from "vitest";
++import {
++  getBootstrapProfileConfig,
++  resolveBootstrapBudgetForModel,
++  resolveBootstrapTotalMaxChars,
++  DEFAULT_BOOTSTRAP_MAX_CHARS,
++  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
++} from "./pi-embedded-helpers.js";
++
++describe("getBootstrapProfileConfig", () => {
++  it("normal profile returns default limits", () => {
++    const config = getBootstrapProfileConfig("normal");
++    expect(config.maxCharsPerFile).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
++    expect(config.totalMaxChars).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++  });
++
++  it("reduced profile has lower limits than normal", () => {
++    const normal = getBootstrapProfileConfig("normal");
++    const reduced = getBootstrapProfileConfig("reduced");
++    expect(reduced.maxCharsPerFile).toBeLessThan(normal.maxCharsPerFile);
++    expect(reduced.totalMaxChars).toBeLessThan(normal.totalMaxChars);
++    expect(reduced.maxCharsPerFile).toBe(10_000);
++    expect(reduced.totalMaxChars).toBe(50_000);
++  });
++
++  it("minimal profile has the lowest limits", () => {
++    const reduced = getBootstrapProfileConfig("reduced");
++    const minimal = getBootstrapProfileConfig("minimal");
++    expect(minimal.maxCharsPerFile).toBeLessThan(reduced.maxCharsPerFile);
++    expect(minimal.totalMaxChars).toBeLessThan(reduced.totalMaxChars);
++    expect(minimal.maxCharsPerFile).toBe(5_000);
++    expect(minimal.totalMaxChars).toBe(20_000);
++  });
++});
++
++describe("resolveBootstrapBudgetForModel", () => {
++  it("returns capped totalMaxChars for large context windows", () => {
++    // 200K token window: reserve = max(60K, 30K) = 60K, available = 140K, chars = 560K → capped at 150K
++    const budget = resolveBootstrapBudgetForModel(200_000);
++    expect(budget.totalMaxChars).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++  });
++
++  it("returns floored totalMaxChars for tiny context windows", () => {
++    // 1K token window: reserve = max(300, 30K) = 30K, available = -29K → chars = floor(-29K*4) → floor at 20K
++    const budget = resolveBootstrapBudgetForModel(1_000);
++    expect(budget.totalMaxChars).toBe(20_000);
++  });
++
++  it("scales appropriately for mid-range context windows", () => {
++    // 50K token window: reserve = max(15K, 30K) = 30K, available = 20K, chars = 80K → below cap
++    const budget = resolveBootstrapBudgetForModel(50_000);
++    expect(budget.totalMaxChars).toBe(80_000);
++    expect(budget.totalMaxChars).toBeLessThan(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++  });
++
++  it("applies 30K minimum reserve", () => {
++    // 60K token window: reserve = max(18K, 30K) = 30K, available = 30K, chars = 120K
++    const budget = resolveBootstrapBudgetForModel(60_000);
++    expect(budget.totalMaxChars).toBe(120_000);
++  });
++
++  it("preserves default maxCharsPerFile", () => {
++    const budget = resolveBootstrapBudgetForModel(100_000);
++    expect(budget.maxCharsPerFile).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
++  });
++
++  it("totalMaxChars is always at least 20K", () => {
++    for (const tokens of [0.001, 100, 1_000, 10_000]) {
++      const budget = resolveBootstrapBudgetForModel(tokens);
++      expect(budget.totalMaxChars).toBeGreaterThanOrEqual(20_000);
++    }
++  });
++
++  it("totalMaxChars never exceeds DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS", () => {
++    for (const tokens of [100_000, 500_000, 1_000_000]) {
++      const budget = resolveBootstrapBudgetForModel(tokens);
++      expect(budget.totalMaxChars).toBeLessThanOrEqual(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++    }
++  });
++});
++
++describe("resolveBootstrapTotalMaxChars with contextWindowTokens", () => {
++  it("returns config value when set, ignoring contextWindowTokens", () => {
++    const cfg = { agents: { defaults: { bootstrapTotalMaxChars: 75_000 } } } as Parameters<
++      typeof resolveBootstrapTotalMaxChars
++    >[0];
++    const result = resolveBootstrapTotalMaxChars(cfg, 200_000);
++    expect(result).toBe(75_000);
++  });
++
++  it("uses contextWindowTokens when config is not set", () => {
++    // 50K token window → resolveBootstrapBudgetForModel gives 80K
++    const result = resolveBootstrapTotalMaxChars(undefined, 50_000);
++    expect(result).toBe(80_000);
++  });
++
++  it("returns default when neither config nor contextWindowTokens is set", () => {
++    const result = resolveBootstrapTotalMaxChars();
++    expect(result).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++  });
++
++  it("ignores contextWindowTokens of 0", () => {
++    const result = resolveBootstrapTotalMaxChars(undefined, 0);
++    expect(result).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
++  });
++});
+diff --git a/src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts b/src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts
+index becaca64da..149e764124 100644
+--- a/src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts
++++ b/src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts
+@@ -489,6 +489,17 @@ describe("isLikelyContextOverflowError", () => {
+       expect(isLikelyContextOverflowError(sample)).toBe(false);
+     }
+   });
++
++  it("excludes raw CLI stream transcripts even when they mention historical overflow text", () => {
++    const sample = [
++      '{"type":"system","subtype":"init","session_id":"480007d1-b916-417c-b504-71d76bf35f7e"}',
++      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."}]}}',
++      '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Command running in background with ID: bm4efo1mn."}]}}',
++    ].join("\n");
++
++    expect(isContextOverflowError(sample)).toBe(false);
++    expect(isLikelyContextOverflowError(sample)).toBe(false);
++  });
+ });
+ 
+ describe("extractObservedOverflowTokenCount", () => {
+@@ -1064,4 +1075,10 @@ describe("classifyFailoverReason", () => {
+       ),
+     ).toBe("auth_permanent");
+   });
++
++  it("classifies bare 'Internal server error' text as timeout", () => {
++    expect(classifyFailoverReason("HTTP 400: Internal server error")).toBe("timeout");
++    expect(classifyFailoverReason("400 Internal server error")).toBe("timeout");
++    expect(classifyFailoverReason("Internal server error")).toBe("timeout");
++  });
+ });
+diff --git a/src/agents/pi-embedded-helpers.ts b/src/agents/pi-embedded-helpers.ts
+index 77ae492bc3..6bf5ed41b1 100644
+--- a/src/agents/pi-embedded-helpers.ts
++++ b/src/agents/pi-embedded-helpers.ts
+@@ -4,10 +4,14 @@ export {
+   DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
+   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+   ensureSessionHeader,
++  getBootstrapProfileConfig,
++  resolveBootstrapBudgetForModel,
+   resolveBootstrapMaxChars,
+   resolveBootstrapPromptTruncationWarningMode,
+   resolveBootstrapTotalMaxChars,
+   stripThoughtSignatures,
++  type BootstrapProfile,
++  type BootstrapProfileConfig,
+ } from "./pi-embedded-helpers/bootstrap.js";
+ export {
+   BILLING_ERROR_USER_MESSAGE,
+diff --git a/src/agents/pi-embedded-helpers/bootstrap.ts b/src/agents/pi-embedded-helpers/bootstrap.ts
+index e6e0792f4b..219b9ea56c 100644
+--- a/src/agents/pi-embedded-helpers/bootstrap.ts
++++ b/src/agents/pi-embedded-helpers/bootstrap.ts
+@@ -104,14 +104,63 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
+   return DEFAULT_BOOTSTRAP_MAX_CHARS;
+ }
+ 
+-export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
++export function resolveBootstrapTotalMaxChars(
++  cfg?: OpenClawConfig,
++  contextWindowTokens?: number,
++): number {
+   const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
+   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+     return Math.floor(raw);
+   }
++  if (typeof contextWindowTokens === "number" && contextWindowTokens > 0) {
++    return resolveBootstrapBudgetForModel(contextWindowTokens).totalMaxChars;
++  }
+   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+ }
+ 
++// ── Bootstrap profiles ────────────────────────────────────────────────────────
++
++/** Controls how aggressively bootstrap content is trimmed for context overflow prevention. */
++export type BootstrapProfile = "normal" | "reduced" | "minimal";
++
++export type BootstrapProfileConfig = {
++  maxCharsPerFile: number;
++  totalMaxChars: number;
++};
++
++const BOOTSTRAP_PROFILE_CONFIGS: Record<BootstrapProfile, BootstrapProfileConfig> = {
++  normal: {
++    maxCharsPerFile: DEFAULT_BOOTSTRAP_MAX_CHARS,
++    totalMaxChars: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
++  },
++  reduced: { maxCharsPerFile: 10_000, totalMaxChars: 50_000 },
++  minimal: { maxCharsPerFile: 5_000, totalMaxChars: 20_000 },
++};
++
++/** Returns the character budget limits for a given bootstrap profile. */
++export function getBootstrapProfileConfig(profile: BootstrapProfile): BootstrapProfileConfig {
++  return BOOTSTRAP_PROFILE_CONFIGS[profile];
++}
++
++/**
++ * Layer 3: Calculates a dynamic bootstrap budget based on the model's context window.
++ * Reserves 30% (minimum 30K tokens) for output and tool calls.
++ */
++export function resolveBootstrapBudgetForModel(
++  contextWindowTokens: number,
++): BootstrapProfileConfig {
++  const reserve = Math.max(contextWindowTokens * 0.3, 30_000);
++  const available = contextWindowTokens - reserve;
++  const bootstrapTotalMaxChars = Math.min(
++    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
++    Math.max(20_000, Math.floor(available * 4)),
++  );
++  return {
++    maxCharsPerFile: DEFAULT_BOOTSTRAP_MAX_CHARS,
++    totalMaxChars: bootstrapTotalMaxChars,
++  };
++}
++
+ export function resolveBootstrapPromptTruncationWarningMode(
+   cfg?: OpenClawConfig,
+ ): "off" | "once" | "always" {
+diff --git a/src/agents/pi-embedded-helpers/errors.ts b/src/agents/pi-embedded-helpers/errors.ts
+index eb202045c1..af37e07d03 100644
+--- a/src/agents/pi-embedded-helpers/errors.ts
++++ b/src/agents/pi-embedded-helpers/errors.ts
+@@ -215,6 +215,22 @@ function hasRateLimitTpmHint(raw: string): boolean {
+   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+ }
+ 
++function looksLikeCliStreamTranscript(raw: string): boolean {
++  if (!raw || raw.length < 100) {
++    return false;
++  }
++  if (!raw.includes('"type":"system"') || !raw.includes('"subtype":"init"')) {
++    return false;
++  }
++  return (
++    raw.includes('"type":"assistant"') ||
++    raw.includes('"type":"user"') ||
++    raw.includes('"type":"result"') ||
++    raw.includes('"session_id"') ||
++    raw.includes('"sessionId"')
++  );
++}
++
+ export function isContextOverflowError(errorMessage?: string): boolean {
+   if (!errorMessage) {
+     return false;
+@@ -230,6 +246,13 @@ export function isContextOverflowError(errorMessage?: string): boolean {
+     return false;
+   }
+ 
++  // Claude CLI can emit a whole prior session transcript on failure. Historical
++  // mentions of "Context overflow" inside that transcript are not a signal that
++  // the current attempt actually overflowed.
++  if (looksLikeCliStreamTranscript(errorMessage)) {
++    return false;
++  }
++
+   const hasRequestSizeExceeds = lower.includes("request size exceeds");
+   const hasContextWindow =
+     lower.includes("context window") ||
+@@ -248,6 +271,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
+     (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
+     (hasRequestSizeExceeds && hasContextWindow) ||
+     lower.includes("context overflow:") ||
++    lower.includes("context overflow \u2014") || // claude-cli uses em-dash: "Context overflow — prompt too large"
++    lower.includes("context overflow --") || // ascii fallback variant
+     lower.includes("exceed context limit") ||
+     lower.includes("exceeds the model's maximum context") ||
+     (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
+@@ -294,6 +319,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
+     return false;
+   }
+ 
++  if (looksLikeCliStreamTranscript(errorMessage)) {
++    return false;
++  }
++
+   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
+     return false;
+   }
+diff --git a/src/agents/pi-embedded-helpers/failover-matches.ts b/src/agents/pi-embedded-helpers/failover-matches.ts
+index c4685986d0..f504fa9e37 100644
+--- a/src/agents/pi-embedded-helpers/failover-matches.ts
++++ b/src/agents/pi-embedded-helpers/failover-matches.ts
+@@ -109,6 +109,8 @@ const ERROR_PATTERNS = {
+     // falls through to reason=unknown (#58315).
+     /\boperation was aborted\b/i,
+     /\bstream (?:was )?(?:closed|aborted)\b/i,
++    // OpenAI generic 500: "An error occurred while processing your request. You can retry your request..."
++    /you can retry your request/i,
+   ],
+   billing: [
+     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
+diff --git a/src/agents/pi-embedded-runner/compact.ts b/src/agents/pi-embedded-runner/compact.ts
+index 429aba0164..51ebee72e5 100644
+--- a/src/agents/pi-embedded-runner/compact.ts
++++ b/src/agents/pi-embedded-runner/compact.ts
+@@ -53,6 +53,7 @@ import {
+   getApiKeyForModel,
+   resolveModelAuthMode,
+ } from "../model-auth.js";
++import { resolveNonCliModelRef } from "../model-selection.js";
+ import { supportsModelTools } from "../model-tool-support.js";
+ import { ensureOpenClawModelsJson } from "../models-config.js";
+ import { resolveOwnerDisplaySetting } from "../owner-display.js";
+@@ -308,8 +309,16 @@ export async function compactEmbeddedPiSessionDirect(
+     defaultProvider: DEFAULT_PROVIDER,
+     defaultModel: DEFAULT_MODEL,
+   });
+-  const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+-  const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
++  // Resolve CLI provider aliases before model lookup.
++  const cliResolved = resolveNonCliModelRef(
++    {
++      provider: resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER,
++      model: resolvedCompactionTarget.model ?? DEFAULT_MODEL,
++    },
++    params.config,
++  );
++  const provider = cliResolved.provider;
++  const modelId = cliResolved.model;
+   const authProfileId = resolvedCompactionTarget.authProfileId;
+   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
+   const attemptedThinking = new Set<ThinkLevel>();
+diff --git a/src/agents/pi-embedded-runner/extra-params.openai.test.ts b/src/agents/pi-embedded-runner/extra-params.openai.test.ts
+new file mode 100644
+index 0000000000..c44fa07f16
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/extra-params.openai.test.ts
+@@ -0,0 +1,98 @@
++import type { Model } from "@mariozechner/pi-ai";
++import { afterEach, describe, expect, it } from "vitest";
++import { captureEnv } from "../../test-utils/env.js";
++import { runExtraParamsCase } from "./extra-params.test-support.js";
++
++function applyAndCapture(params: {
++  provider: string;
++  modelId: string;
++  baseUrl?: string;
++  callerHeaders?: Record<string, string>;
++}) {
++  return runExtraParamsCase({
++    applyModelId: params.modelId,
++    applyProvider: params.provider,
++    callerHeaders: params.callerHeaders,
++    model: {
++      api: "openai-responses",
++      provider: params.provider,
++      id: params.modelId,
++      baseUrl: params.baseUrl,
++    } as Model<"openai-responses">,
++    payload: {},
++  });
++}
++
++describe("extra-params: OpenAI attribution", () => {
++  const envSnapshot = captureEnv(["OPENCLAW_VERSION"]);
++
++  afterEach(() => {
++    envSnapshot.restore();
++  });
++
++  it("injects originator and release-based user agent for native OpenAI", () => {
++    process.env.OPENCLAW_VERSION = "2026.3.22";
++
++    const { headers } = applyAndCapture({
++      provider: "openai",
++      modelId: "gpt-5.4",
++      baseUrl: "https://api.openai.com/v1",
++    });
++
++    expect(headers).toEqual({
++      originator: "openclaw",
++      version: "2026.3.22",
++      "User-Agent": "openclaw/2026.3.22",
++    });
++  });
++
++  it("overrides caller-supplied OpenAI attribution headers", () => {
++    process.env.OPENCLAW_VERSION = "2026.3.22";
++
++    const { headers } = applyAndCapture({
++      provider: "openai",
++      modelId: "gpt-5.4",
++      baseUrl: "https://api.openai.com/v1",
++      callerHeaders: {
++        originator: "spoofed",
++        "User-Agent": "spoofed/0.0.0",
++        "X-Custom": "1",
++      },
++    });
++
++    expect(headers).toEqual({
++      originator: "openclaw",
++      version: "2026.3.22",
++      "User-Agent": "openclaw/2026.3.22",
++      "X-Custom": "1",
++    });
++  });
++
++  it("does not inject attribution on non-native OpenAI-compatible base URLs", () => {
++    process.env.OPENCLAW_VERSION = "2026.3.22";
++
++    const { headers } = applyAndCapture({
++      provider: "openai",
++      modelId: "gpt-5.4",
++      baseUrl: "https://proxy.example.com/v1",
++    });
++
++    expect(headers).toBeUndefined();
++  });
++
++  it("injects attribution for ChatGPT-backed OpenAI Codex traffic", () => {
++    process.env.OPENCLAW_VERSION = "2026.3.22";
++
++    const { headers } = applyAndCapture({
++      provider: "openai-codex",
++      modelId: "gpt-5.4",
++      baseUrl: "https://chatgpt.com/backend-api",
++    });
++
++    expect(headers).toEqual({
++      originator: "openclaw",
++      version: "2026.3.22",
++      "User-Agent": "openclaw/2026.3.22",
++    });
++  });
++});
+diff --git a/src/agents/pi-embedded-runner/extra-params.xai-tool-payload.test.ts b/src/agents/pi-embedded-runner/extra-params.xai-tool-payload.test.ts
+new file mode 100644
+index 0000000000..bed568b970
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/extra-params.xai-tool-payload.test.ts
+@@ -0,0 +1,76 @@
++import type { Model } from "@mariozechner/pi-ai";
++import { describe, expect, it, vi } from "vitest";
++import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
++import { runExtraParamsCase } from "./extra-params.test-support.js";
++
++vi.mock("@mariozechner/pi-ai", async () =>
++  createPiAiStreamSimpleMock(() =>
++    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
++  ),
++);
++
++function runToolPayloadCase(provider: "openai" | "xai", modelId: string) {
++  return runExtraParamsCase({
++    applyProvider: provider,
++    applyModelId: modelId,
++    model: {
++      api: "openai-completions",
++      provider,
++      id: modelId,
++    } as Model<"openai-completions">,
++    payload: {
++      model: modelId,
++      messages: [],
++      tools: [
++        {
++          type: "function",
++          function: {
++            name: "write",
++            description: "write a file",
++            parameters: { type: "object", properties: {} },
++            strict: true,
++          },
++        },
++      ],
++    },
++  }).payload as {
++    tools?: Array<{ function?: Record<string, unknown> }>;
++  };
++}
++
++describe("extra-params: xAI tool payload compatibility", () => {
++  it("strips function.strict for xai providers", () => {
++    const payload = runToolPayloadCase("xai", "grok-4-1-fast-reasoning");
++
++    expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
++  });
++
++  it("strips xai Responses reasoning payload fields", () => {
++    const payload = runExtraParamsCase({
++      applyProvider: "xai",
++      applyModelId: "grok-4.20-beta-latest-reasoning",
++      model: {
++        api: "openai-responses",
++        provider: "xai",
++        id: "grok-4.20-beta-latest-reasoning",
++      } as Model<"openai-responses">,
++      payload: {
++        model: "grok-4.20-beta-latest-reasoning",
++        input: [],
++        reasoning: { effort: "high", summary: "auto" },
++        reasoningEffort: "high",
++        reasoning_effort: "high",
++      },
++    }).payload as Record<string, unknown>;
++
++    expect(payload).not.toHaveProperty("reasoning");
++    expect(payload).not.toHaveProperty("reasoningEffort");
++    expect(payload).not.toHaveProperty("reasoning_effort");
++  });
++
++  it("keeps function.strict for non-xai providers", () => {
++    const payload = runToolPayloadCase("openai", "gpt-5.4");
++
++    expect(payload.tools?.[0]?.function?.strict).toBe(true);
++  });
++});
+diff --git a/src/agents/pi-embedded-runner/live-session-registry.ts b/src/agents/pi-embedded-runner/live-session-registry.ts
+new file mode 100644
+index 0000000000..f74bd0c93b
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/live-session-registry.ts
+@@ -0,0 +1,81 @@
++type SessionEntryReader = {
++  getEntries?: () => unknown[];
++};
++
++type LiveSessionRegistration = {
++  token: symbol;
++  readEntries: () => unknown[] | undefined;
++};
++
++const LIVE_SESSION_BY_KEY = new Map<string, LiveSessionRegistration>();
++const LIVE_SESSION_BY_ID = new Map<string, LiveSessionRegistration>();
++
++function normalizeLookupKey(value: string | undefined): string | undefined {
++  if (typeof value !== "string") {
++    return undefined;
++  }
++  const trimmed = value.trim();
++  return trimmed ? trimmed.toLowerCase() : undefined;
++}
++
++function normalizeSessionId(value: string | undefined): string | undefined {
++  if (typeof value !== "string") {
++    return undefined;
++  }
++  const trimmed = value.trim();
++  return trimmed ? trimmed : undefined;
++}
++
++export function registerLiveSessionTranscript(params: {
++  sessionKey?: string;
++  sessionId?: string;
++  sessionReader: SessionEntryReader;
++}): () => void {
++  const sessionKey = normalizeLookupKey(params.sessionKey);
++  const sessionId = normalizeSessionId(params.sessionId);
++  const token = Symbol("live-session-transcript");
++  const registration: LiveSessionRegistration = {
++    token,
++    readEntries: () => {
++      try {
++        const entries = params.sessionReader.getEntries?.();
++        return Array.isArray(entries) ? entries.slice() : undefined;
++      } catch {
++        return undefined;
++      }
++    },
++  };
++
++  if (sessionKey) {
++    LIVE_SESSION_BY_KEY.set(sessionKey, registration);
++  }
++  if (sessionId) {
++    LIVE_SESSION_BY_ID.set(sessionId, registration);
++  }
++
++  return () => {
++    if (sessionKey && LIVE_SESSION_BY_KEY.get(sessionKey)?.token === token) {
++      LIVE_SESSION_BY_KEY.delete(sessionKey);
++    }
++    if (sessionId && LIVE_SESSION_BY_ID.get(sessionId)?.token === token) {
++      LIVE_SESSION_BY_ID.delete(sessionId);
++    }
++  };
++}
++
++export function getLiveSessionTranscriptEntries(params: {
++  sessionKey?: string;
++  sessionId?: string;
++}): unknown[] | undefined {
++  const sessionKey = normalizeLookupKey(params.sessionKey);
++  const sessionId = normalizeSessionId(params.sessionId);
++  const registration =
++    (sessionKey ? LIVE_SESSION_BY_KEY.get(sessionKey) : undefined) ??
++    (sessionId ? LIVE_SESSION_BY_ID.get(sessionId) : undefined);
++  return registration?.readEntries();
++}
++
++export function resetLiveSessionTranscriptRegistryForTests(): void {
++  LIVE_SESSION_BY_KEY.clear();
++  LIVE_SESSION_BY_ID.clear();
++}
+diff --git a/src/agents/pi-embedded-runner/run.ts b/src/agents/pi-embedded-runner/run.ts
+index e230c95c34..e5e71f9209 100644
+--- a/src/agents/pi-embedded-runner/run.ts
++++ b/src/agents/pi-embedded-runner/run.ts
+@@ -36,7 +36,7 @@ import {
+   resolveAuthProfileOrder,
+   shouldPreferExplicitConfigApiKeyAuth,
+ } from "../model-auth.js";
+-import { normalizeProviderId } from "../model-selection.js";
++import { normalizeProviderId, resolveNonCliModelRef } from "../model-selection.js";
+ import { ensureOpenClawModelsJson } from "../models-config.js";
+ import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
+ import {
+@@ -166,6 +166,13 @@ export async function runEmbeddedPiAgent(
+ 
+       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
++
++      // Resolve CLI provider aliases (e.g. claude-cli/kimi → real provider/model)
++      // before the embedded runner tries to look up the model in the registry.
++      const resolvedCliRef = resolveNonCliModelRef({ provider, model: modelId }, params.config);
++      provider = resolvedCliRef.provider;
++      modelId = resolvedCliRef.model;
++
+       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+       const fallbackConfigured = hasConfiguredModelFallbacks({
+         cfg: params.config,
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index 274775e47e..fbdd80a46a 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -108,6 +108,7 @@ import { buildEmbeddedExtensionFactories } from "../extensions.js";
+ import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
+ import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
++import { registerLiveSessionTranscript } from "../live-session-registry.js";
+ import { log } from "../logger.js";
+ import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+ import {
+@@ -201,7 +202,8 @@ import {
+   shouldFlagCompactionTimeout,
+ } from "./compaction-timeout.js";
+ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
+-import { detectAndLoadPromptImages } from "./images.js";
++import { shouldUseImagePreAnalysis, analyzeImagesWithImageModel } from "./image-pre-analysis.js";
++import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
+ import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
+ import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+@@ -772,6 +774,7 @@ export async function runEmbeddedAttempt(
+     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
+     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+     let removeToolResultContextGuard: (() => void) | undefined;
++    let unregisterLiveSessionTranscript: (() => void) | undefined;
+     try {
+       await repairSessionFileIfNeeded({
+         sessionFile: params.sessionFile,
+@@ -923,6 +926,11 @@ export async function runEmbeddedAttempt(
+       queueYieldInterruptForSession = () => {
+         queueSessionsYieldInterruptMessage(activeSession);
+       };
++      unregisterLiveSessionTranscript = registerLiveSessionTranscript({
++        sessionKey: sandboxSessionKey,
++        sessionId: activeSession.sessionId,
++        sessionReader: sessionManager,
++      });
+       removeToolResultContextGuard = installToolResultContextGuard({
+         agent: activeSession.agent,
+         contextWindowTokens: Math.max(
+@@ -1746,7 +1754,65 @@ export async function runEmbeddedAttempt(
+           // Only pass images option if there are actually images to pass
+           // This avoids potential issues with models that don't expect the images parameter
+           if (imageResult.images.length > 0) {
+-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
++            const mainModelSupportsImages = modelSupportsImages(params.model);
++            const usePreAnalysis = shouldUseImagePreAnalysis({ config: params.config });
++
++            if (usePreAnalysis) {
++              // Pre-analyze images with imageModel, then pass text analysis to main model
++              log.debug(`Image pre-analysis: using configured imageModel for image analysis`);
++              try {
++                const preAnalysis = await analyzeImagesWithImageModel({
++                  images: imageResult.images,
++                  config: params.config,
++                  agentDir: params.agentDir ?? "",
++                  userPrompt: effectivePrompt,
++                });
++                if (preAnalysis.successfulImageCount > 0 && preAnalysis.analysisText) {
++                  log.debug(
++                    `Image pre-analysis: analyzed ${preAnalysis.imageCount} image(s) with ${preAnalysis.provider}/${preAnalysis.model}`,
++                  );
++                  const promptWithAnalysis = effectivePrompt + preAnalysis.analysisText;
++                  await abortable(activeSession.prompt(promptWithAnalysis));
++                } else {
++                  // No successful analysis produced, fall back to main model with images if supported.
++                  if (mainModelSupportsImages) {
++                    log.debug(
++                      `Image pre-analysis: no successful analyses, falling back to main model with images`,
++                    );
++                    await abortable(
++                      activeSession.prompt(effectivePrompt, { images: imageResult.images }),
++                    );
++                  } else {
++                    await abortable(activeSession.prompt(effectivePrompt));
++                  }
++                }
++              } catch (preAnalysisErr) {
++                log.warn(
++                  `Image pre-analysis failed: ${preAnalysisErr instanceof Error ? preAnalysisErr.message : String(preAnalysisErr)}`,
++                );
++                // Fall back to main model with images if supported
++                if (mainModelSupportsImages) {
++                  log.debug(`Image pre-analysis: failed, falling back to main model with images`);
++                  await abortable(
++                    activeSession.prompt(effectivePrompt, { images: imageResult.images }),
++                  );
++                } else {
++                  await abortable(activeSession.prompt(effectivePrompt));
++                }
++              }
++            } else {
++              // No imageModel configured, use main model directly
++              if (mainModelSupportsImages) {
++                await abortable(
++                  activeSession.prompt(effectivePrompt, { images: imageResult.images }),
++                );
++              } else {
++                log.debug(
++                  `Image pre-analysis: no imageModel configured and main model doesn't support images, ignoring images`,
++                );
++                await abortable(activeSession.prompt(effectivePrompt));
++              }
++            }
+           } else {
+             await abortable(activeSession.prompt(effectivePrompt));
+           }
+@@ -2009,6 +2075,7 @@ export async function runEmbeddedAttempt(
+         if (params.replyOperation) {
+           params.replyOperation.detachBackend(queueHandle);
+         }
++        unregisterLiveSessionTranscript?.();
+         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+         params.abortSignal?.removeEventListener?.("abort", onAbort);
+       }
+diff --git a/src/agents/pi-embedded-runner/run/image-pre-analysis.behavior.test.ts b/src/agents/pi-embedded-runner/run/image-pre-analysis.behavior.test.ts
+new file mode 100644
+index 0000000000..607303eac0
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/run/image-pre-analysis.behavior.test.ts
+@@ -0,0 +1,110 @@
++import type { ImageContent } from "@mariozechner/pi-ai";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++const {
++  runWithImageModelFallbackMock,
++  ensureOpenClawModelsJsonMock,
++  discoverAuthStorageMock,
++  discoverModelsMock,
++} = vi.hoisted(() => ({
++  runWithImageModelFallbackMock: vi.fn(),
++  ensureOpenClawModelsJsonMock: vi.fn(),
++  discoverAuthStorageMock: vi.fn(),
++  discoverModelsMock: vi.fn(),
++}));
++
++vi.mock("../../model-fallback.js", () => ({
++  runWithImageModelFallback: runWithImageModelFallbackMock,
++}));
++
++vi.mock("../../models-config.js", () => ({
++  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
++}));
++
++vi.mock("../../pi-model-discovery.js", () => ({
++  discoverAuthStorage: discoverAuthStorageMock,
++  discoverModels: discoverModelsMock,
++}));
++
++import { analyzeImagesWithImageModel } from "./image-pre-analysis.js";
++
++const TEST_IMAGES: ImageContent[] = [
++  {
++    type: "image",
++    data: "aW1hZ2UtMQ==",
++    mimeType: "image/png",
++  },
++  {
++    type: "image",
++    data: "aW1hZ2UtMg==",
++    mimeType: "image/jpeg",
++  },
++];
++
++describe("analyzeImagesWithImageModel", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    ensureOpenClawModelsJsonMock.mockResolvedValue(undefined);
++    discoverAuthStorageMock.mockReturnValue({
++      setRuntimeApiKey: vi.fn(),
++    });
++    discoverModelsMock.mockReturnValue({
++      find: vi.fn(),
++    });
++  });
++
++  it("reports zero successful analyses when all image-model attempts fail", async () => {
++    runWithImageModelFallbackMock.mockRejectedValue(new Error("vision unavailable"));
++
++    const result = await analyzeImagesWithImageModel({
++      images: TEST_IMAGES,
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              primary: "openai/gpt-4o",
++            },
++          },
++        },
++      },
++      agentDir: "/tmp/agent",
++      userPrompt: "what is in these images?",
++    });
++
++    expect(result.imageCount).toBe(2);
++    expect(result.successfulImageCount).toBe(0);
++    expect(result.provider).toBe("");
++    expect(result.model).toBe("");
++    expect(result.analysisText).toContain("(Image analysis failed.)");
++    expect(runWithImageModelFallbackMock).toHaveBeenCalledTimes(2);
++  });
++
++  it("tracks successful analyses when some images are analyzed successfully", async () => {
++    runWithImageModelFallbackMock
++      .mockResolvedValueOnce({
++        result: { text: "A cat on a sofa.", provider: "openai", model: "gpt-4o" },
++      })
++      .mockRejectedValueOnce(new Error("second image failed"));
++
++    const result = await analyzeImagesWithImageModel({
++      images: TEST_IMAGES,
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              primary: "openai/gpt-4o",
++            },
++          },
++        },
++      },
++      agentDir: "/tmp/agent",
++    });
++
++    expect(result.imageCount).toBe(2);
++    expect(result.successfulImageCount).toBe(1);
++    expect(result.provider).toBe("openai");
++    expect(result.model).toBe("gpt-4o");
++    expect(result.analysisText).toContain("[Image 1 Analysis]");
++    expect(result.analysisText).toContain("[Image 2]");
++  });
++});
+diff --git a/src/agents/pi-embedded-runner/run/image-pre-analysis.test.ts b/src/agents/pi-embedded-runner/run/image-pre-analysis.test.ts
+new file mode 100644
+index 0000000000..c4f3311444
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/run/image-pre-analysis.test.ts
+@@ -0,0 +1,133 @@
++import { describe, expect, it } from "vitest";
++import { shouldUseImagePreAnalysis } from "./image-pre-analysis.js";
++
++describe("shouldUseImagePreAnalysis", () => {
++  it("returns true when imageModel.primary is configured", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              primary: "gemini-crs/gemini-3-flash-preview",
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(true);
++  });
++
++  it("returns true when imageModel.fallbacks is configured", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              fallbacks: ["openai/gpt-4o", "anthropic/claude-3-sonnet"],
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(true);
++  });
++
++  it("returns true when both primary and fallbacks are configured", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              primary: "gemini-crs/gemini-3-flash-preview",
++              fallbacks: ["openai/gpt-4o"],
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(true);
++  });
++
++  it("returns false when imageModel is not configured", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            model: {
++              primary: "anthropic/claude-3-opus",
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(false);
++  });
++
++  it("returns false when imageModel is empty object", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {},
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(false);
++  });
++
++  it("returns false when imageModel.primary is empty string", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              primary: "   ",
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(false);
++  });
++
++  it("returns false when imageModel.fallbacks is empty array", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {
++          defaults: {
++            imageModel: {
++              fallbacks: [],
++            },
++          },
++        },
++      },
++    });
++
++    expect(result).toBe(false);
++  });
++
++  it("returns false when config is undefined", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: undefined,
++    });
++
++    expect(result).toBe(false);
++  });
++
++  it("returns false when agents.defaults is undefined", () => {
++    const result = shouldUseImagePreAnalysis({
++      config: {
++        agents: {},
++      },
++    });
++
++    expect(result).toBe(false);
++  });
++});
+diff --git a/src/agents/pi-embedded-runner/run/image-pre-analysis.ts b/src/agents/pi-embedded-runner/run/image-pre-analysis.ts
+new file mode 100644
+index 0000000000..e259e09093
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/run/image-pre-analysis.ts
+@@ -0,0 +1,203 @@
++/**
++ * Image pre-analysis module.
++ *
++ * When `agents.defaults.imageModel` is configured, this module analyzes images using the
++ * configured imageModel first, then passes the text analysis results to the main model.
++ * The main model's image capability is only used as a fallback.
++ *
++ * This helps models like MiniMax M2.1 or GLM that lack native vision capabilities
++ * to still understand image content through a vision-capable model.
++ */
++
++import type { ImageContent } from "@mariozechner/pi-ai";
++import type { OpenClawConfig } from "../../../config/config.js";
++import { getApiKeyForModel, requireApiKey } from "../../model-auth.js";
++import { runWithImageModelFallback } from "../../model-fallback.js";
++import { ensureOpenClawModelsJson } from "../../models-config.js";
++import { discoverAuthStorage, discoverModels } from "../../pi-model-discovery.js";
++import { coerceImageModelConfig } from "../../tools/image-tool.helpers.js";
++import { log } from "../logger.js";
++
++const DEFAULT_IMAGE_ANALYSIS_PROMPT =
++  "Describe this image in detail. Include all visible text, objects, people, colors, layout, and any other relevant information.";
++
++/**
++ * Check if image pre-analysis should be used.
++ *
++ * Returns true when imageModel is configured (has primary or fallbacks).
++ * When imageModel is explicitly configured, it takes priority over the main model's
++ * image capabilities. The main model's vision capability serves as a fallback only.
++ */
++export function shouldUseImagePreAnalysis(params: { config?: OpenClawConfig }): boolean {
++  const imageModelConfig = coerceImageModelConfig(params.config);
++  const hasImageModel =
++    Boolean(imageModelConfig.primary?.trim()) || (imageModelConfig.fallbacks?.length ?? 0) > 0;
++
++  return hasImageModel;
++}
++
++/**
++ * Analyze images using the configured imageModel.
++ *
++ * @returns Text description of the images that can be appended to the prompt
++ */
++export async function analyzeImagesWithImageModel(params: {
++  images: ImageContent[];
++  config?: OpenClawConfig;
++  agentDir: string;
++  userPrompt?: string;
++}): Promise<{
++  analysisText: string;
++  provider: string;
++  model: string;
++  imageCount: number;
++  successfulImageCount: number;
++}> {
++  const { images, config, agentDir } = params;
++
++  if (images.length === 0) {
++    return {
++      analysisText: "",
++      provider: "",
++      model: "",
++      imageCount: 0,
++      successfulImageCount: 0,
++    };
++  }
++
++  const imageModelConfig = coerceImageModelConfig(config);
++  if (!imageModelConfig.primary && (imageModelConfig.fallbacks?.length ?? 0) === 0) {
++    throw new Error("No imageModel configured for image pre-analysis");
++  }
++
++  await ensureOpenClawModelsJson(config, agentDir);
++  const authStorage = discoverAuthStorage(agentDir);
++  const modelRegistry = discoverModels(authStorage, agentDir);
++
++  // Build analysis prompt
++  const analysisPrompt = params.userPrompt
++    ? `User's question about this image: "${params.userPrompt}"\n\nPlease describe the image in detail to help answer the user's question.`
++    : DEFAULT_IMAGE_ANALYSIS_PROMPT;
++
++  // Build tasks for all valid images, then run in parallel.
++  const tasks: Array<{ index: number; image: ImageContent; label: string }> = [];
++  for (let i = 0; i < images.length; i++) {
++    const image = images[i];
++    if (!image || image.type !== "image") {
++      continue;
++    }
++    tasks.push({
++      index: i,
++      image,
++      label: images.length > 1 ? `Image ${i + 1}` : "Image",
++    });
++  }
++
++  let lastProvider = "";
++  let lastModel = "";
++
++  const settled = await Promise.allSettled(
++    tasks.map(async (task) => {
++      const result = await runWithImageModelFallback({
++        cfg: config,
++        run: async (provider, modelId) => {
++          const model = modelRegistry.find(provider, modelId);
++          if (!model) {
++            throw new Error(`Unknown model: ${provider}/${modelId}`);
++          }
++          if (!model.input?.includes("image")) {
++            throw new Error(`Model does not support images: ${provider}/${modelId}`);
++          }
++
++          const apiKeyInfo = await getApiKeyForModel({
++            model,
++            cfg: config,
++            agentDir,
++          });
++          const apiKey = requireApiKey(apiKeyInfo, model.provider);
++          authStorage.setRuntimeApiKey(model.provider, apiKey);
++
++          // Import complete dynamically to avoid circular dependencies
++          const { complete } = await import("@mariozechner/pi-ai");
++
++          // Build context with image
++          const context = {
++            messages: [
++              {
++                role: "user" as const,
++                timestamp: Date.now(),
++                content: [
++                  { type: "text" as const, text: analysisPrompt },
++                  {
++                    type: "image" as const,
++                    data: task.image.data,
++                    mimeType: task.image.mimeType,
++                  },
++                ],
++              },
++            ],
++          };
++
++          const message = await complete(model, context, {
++            apiKey,
++            maxTokens: 1024,
++          });
++
++          // Extract text from response
++          let text = "";
++          if (message.content) {
++            for (const block of message.content) {
++              if (block && typeof block === "object" && "type" in block) {
++                if (block.type === "text" && "text" in block) {
++                  text += block.text;
++                }
++              }
++            }
++          }
++
++          if (!text.trim()) {
++            throw new Error(`Image model returned no text (${provider}/${modelId})`);
++          }
++
++          return { text: text.trim(), provider, model: modelId };
++        },
++      });
++      return { label: task.label, result };
++    }),
++  );
++
++  // Collect results in original order.
++  const analyses: string[] = [];
++  const analyzedCount = tasks.length;
++  let successCount = 0;
++
++  for (const outcome of settled) {
++    if (outcome.status === "fulfilled") {
++      const { label, result } = outcome.value;
++      analyses.push(`[${label} Analysis]\n${result.result.text}`);
++      successCount += 1;
++      lastProvider = result.result.provider;
++      lastModel = result.result.model;
++      log.debug(
++        `Image pre-analysis: analyzed ${label} with ${result.result.provider}/${result.result.model}`,
++      );
++    } else {
++      const errorMsg =
++        outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
++      log.warn(`Image pre-analysis failed: ${errorMsg}`);
++    }
++  }
++
++  const analysisText =
++    successCount > 0 && analyses.length > 0
++      ? `\n\n---\nThe following image analysis was performed by a vision model (${lastProvider}/${lastModel}):\n\n${analyses.join("\n\n")}\n---\n`
++      : "";
++
++  return {
++    analysisText,
++    provider: lastProvider,
++    model: lastModel,
++    imageCount: analyzedCount,
++    successfulImageCount: successCount,
++  };
++}
+diff --git a/src/agents/pi-embedded-runner/types.ts b/src/agents/pi-embedded-runner/types.ts
+index 5ef74aa70e..acbeeda811 100644
+--- a/src/agents/pi-embedded-runner/types.ts
++++ b/src/agents/pi-embedded-runner/types.ts
+@@ -1,10 +1,16 @@
+-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
++import type {
++  CliPromptLoadStatus,
++  CliSessionBinding,
++  SessionSystemPromptReport,
++} from "../../config/sessions/types.js";
+ import type { MessagingToolSend } from "../pi-embedded-messaging.js";
+ 
+ export type EmbeddedPiAgentMeta = {
+   sessionId: string;
+   provider: string;
+   model: string;
++  cliSessionBinding?: CliSessionBinding;
++  cliPromptLoad?: CliPromptLoadStatus;
+   compactionCount?: number;
+   promptTokens?: number;
+   usage?: {
+diff --git a/src/agents/pi-tools.read.ts b/src/agents/pi-tools.read.ts
+index 91050b2069..4ec87e65a3 100644
+--- a/src/agents/pi-tools.read.ts
++++ b/src/agents/pi-tools.read.ts
+@@ -671,6 +671,37 @@ function createSandboxReadOperations(params: SandboxToolParams) {
+   } as const;
+ }
+ 
++/** Unrestricted host read operations — no workspace boundary enforced. */
++function createHostReadOperations() {
++  return {
++    readFile: async (absolutePath: string) => {
++      const resolved = path.resolve(absolutePath);
++      return fs.readFile(resolved);
++    },
++    access: async (absolutePath: string) => {
++      const resolved = path.resolve(absolutePath);
++      await fs.access(resolved);
++    },
++    detectImageMimeType: async (absolutePath: string) => {
++      const resolved = path.resolve(absolutePath);
++      const buffer = await fs.readFile(resolved);
++      const mime = await detectMime({ buffer, filePath: absolutePath });
++      return mime && mime.startsWith("image/") ? mime : undefined;
++    },
++  } as const;
++}
++
++/**
++ * Create a host read tool with no workspace boundary restriction.
++ * Used when tools.fs.allowReadOutsideWorkspace is true.
++ */
++export function createHostReadTool(root: string, options?: OpenClawReadToolOptions): AnyAgentTool {
++  const base = createReadTool(root, {
++    operations: createHostReadOperations(),
++  }) as unknown as AnyAgentTool;
++  return createOpenClawReadTool(base, options);
++}
++
+ function createSandboxWriteOperations(params: SandboxToolParams) {
+   return {
+     mkdir: async (dir: string) => {
+diff --git a/src/agents/pi-tools.ts b/src/agents/pi-tools.ts
+index de2a313e24..13d3d34f07 100644
+--- a/src/agents/pi-tools.ts
++++ b/src/agents/pi-tools.ts
+@@ -4,6 +4,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
+ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+ import { logWarn } from "../logger.js";
++import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { getPluginToolMeta } from "../plugins/tools.js";
+ import { isSubagentSessionKey } from "../routing/session-key.js";
+ import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+@@ -32,6 +33,7 @@ import {
+ } from "./pi-tools.policy.js";
+ import {
+   assertRequiredParams,
++  createHostReadTool,
+   createHostWorkspaceEditTool,
+   createHostWorkspaceWriteTool,
+   createOpenClawReadTool,
+@@ -60,6 +62,8 @@ import {
+ } from "./tool-policy.js";
+ import { resolveWorkspaceRoot } from "./workspace-dir.js";
+ 
++const piToolsLogger = createSubsystemLogger("pi-tools");
++
+ function isOpenAIProvider(provider?: string) {
+   const normalized = provider?.trim().toLowerCase();
+   return normalized === "openai" || normalized === "openai-codex";
+@@ -393,12 +397,15 @@ export function createOpenClawCodingTools(options?: {
+   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
+   const fsPolicy = createToolFsPolicy({
+     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
++    allowReadOutsideWorkspace: fsConfig.allowReadOutsideWorkspace,
+   });
+   const sandboxRoot = sandbox?.workspaceDir;
+   const sandboxFsBridge = sandbox?.fsBridge;
+   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
+   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
+   const workspaceOnly = fsPolicy.workspaceOnly;
++  // allowReadOutsideWorkspace has no effect when workspaceOnly is active (workspaceOnly wins).
++  const allowReadOutsideWorkspace = !workspaceOnly && fsPolicy.allowReadOutsideWorkspace;
+   const applyPatchConfig = execConfig.applyPatch;
+   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
+   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+@@ -420,6 +427,7 @@ export function createOpenClawCodingTools(options?: {
+   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
+     if (tool.name === readTool.name) {
+       if (sandboxRoot) {
++        // Sandbox boundary takes precedence over allowReadOutsideWorkspace.
+         const sandboxed = createSandboxedReadTool({
+           root: sandboxRoot,
+           bridge: sandboxFsBridge!,
+@@ -434,11 +442,24 @@ export function createOpenClawCodingTools(options?: {
+             : sandboxed,
+         ];
+       }
+-      const freshReadTool = createReadTool(workspaceRoot);
+-      const wrapped = createOpenClawReadTool(freshReadTool, {
++      const readToolOptions = {
+         modelContextWindowTokens: options?.modelContextWindowTokens,
+         imageSanitization,
+-      });
++      };
++      if (allowReadOutsideWorkspace) {
++        // Unrestricted: bypass pi-coding-agent's internal root boundary entirely.
++        // tools.fs.allowReadOutsideWorkspace=true grants full host read access to the model.
++        piToolsLogger.warn(
++          "tools.fs.allowReadOutsideWorkspace is enabled — read tool has no workspace boundary",
++          {
++            agentId,
++            workspaceRoot,
++          },
++        );
++        return [createHostReadTool(workspaceRoot, readToolOptions)];
++      }
++      const freshReadTool = createReadTool(workspaceRoot);
++      const wrapped = createOpenClawReadTool(freshReadTool, readToolOptions);
+       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+     }
+     if (tool.name === "bash" || tool.name === execToolName) {
+diff --git a/src/agents/skills/skill-contract.ts b/src/agents/skills/skill-contract.ts
+index 1662ed8aa5..916d5e7380 100644
+--- a/src/agents/skills/skill-contract.ts
++++ b/src/agents/skills/skill-contract.ts
+@@ -1,4 +1,4 @@
+-import type { Skill as CanonicalSkill, SourceInfo } from "@mariozechner/pi-coding-agent";
++import type { Skill as CanonicalSkill } from "@mariozechner/pi-coding-agent";
+ 
+ export type SourceScope = "user" | "project" | "temporary";
+ export type SourceOrigin = "package" | "top-level";
+@@ -6,6 +6,13 @@ export type SourceOrigin = "package" | "top-level";
+ export type Skill = CanonicalSkill & {
+   // Preserve legacy source reads while keeping the canonical upstream shape.
+   source?: string;
++  sourceInfo?: {
++    path: string;
++    source: string;
++    scope: SourceScope;
++    origin: SourceOrigin;
++    baseDir?: string;
++  };
+ };
+ 
+ export function createSyntheticSourceInfo(
+@@ -16,7 +23,7 @@ export function createSyntheticSourceInfo(
+     origin?: SourceOrigin;
+     baseDir?: string;
+   },
+-): SourceInfo {
++): NonNullable<Skill["sourceInfo"]> {
+   return {
+     path,
+     source: options.source,
+diff --git a/src/agents/skills/workspace.ts b/src/agents/skills/workspace.ts
+index 2b51a6d80b..0ba2875f2e 100644
+--- a/src/agents/skills/workspace.ts
++++ b/src/agents/skills/workspace.ts
+@@ -159,6 +159,8 @@ function resolveContainedSkillPath(params: {
+   rootDir: string;
+   rootRealPath: string;
+   candidatePath: string;
++  /** When true, allow symlinks that resolve outside the root (opt-in). */
++  allowSymlinksOutsideRoot?: boolean;
+ }): string | null {
+   const candidateRealPath = tryRealpath(params.candidatePath);
+   if (!candidateRealPath) {
+@@ -167,6 +169,10 @@ function resolveContainedSkillPath(params: {
+   if (isPathInside(params.rootRealPath, candidateRealPath)) {
+     return candidateRealPath;
+   }
++  if (params.allowSymlinksOutsideRoot) {
++    // Opted in: accept the resolved real path even though it escapes the root.
++    return candidateRealPath;
++  }
+   warnEscapedSkillPath({
+     source: params.source,
+     rootDir: params.rootDir,
+@@ -181,6 +187,7 @@ function filterLoadedSkillsInsideRoot(params: {
+   source: string;
+   rootDir: string;
+   rootRealPath: string;
++  allowSymlinksOutsideRoot?: boolean;
+ }): Skill[] {
+   return params.skills.filter((skill) => {
+     const baseDirRealPath = resolveContainedSkillPath({
+@@ -188,6 +195,7 @@ function filterLoadedSkillsInsideRoot(params: {
+       rootDir: params.rootDir,
+       rootRealPath: params.rootRealPath,
+       candidatePath: skill.baseDir,
++      allowSymlinksOutsideRoot: params.allowSymlinksOutsideRoot,
+     });
+     if (!baseDirRealPath) {
+       return false;
+@@ -197,6 +205,7 @@ function filterLoadedSkillsInsideRoot(params: {
+       rootDir: params.rootDir,
+       rootRealPath: params.rootRealPath,
+       candidatePath: skill.filePath,
++      allowSymlinksOutsideRoot: params.allowSymlinksOutsideRoot,
+     });
+     return Boolean(skillFileRealPath);
+   });
+@@ -254,6 +263,7 @@ function loadSkillEntries(
+   },
+ ): SkillEntry[] {
+   const limits = resolveSkillsLimits(opts?.config);
++  const allowSymlinksOutsideRoot = opts?.config?.skills?.load?.allowSymlinksOutsideRoot ?? false;
+ 
+   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
+     const rootDir = path.resolve(params.dir);
+@@ -267,6 +277,7 @@ function loadSkillEntries(
+       rootDir,
+       rootRealPath,
+       candidatePath: baseDir,
++      allowSymlinksOutsideRoot,
+     });
+     if (!baseDirRealPath) {
+       return [];
+@@ -280,6 +291,7 @@ function loadSkillEntries(
+         rootDir,
+         rootRealPath: baseDirRealPath,
+         candidatePath: rootSkillMd,
++        allowSymlinksOutsideRoot,
+       });
+       if (!rootSkillRealPath) {
+         return [];
+@@ -309,6 +321,7 @@ function loadSkillEntries(
+         source: params.source,
+         rootDir,
+         rootRealPath: baseDirRealPath,
++        allowSymlinksOutsideRoot,
+       });
+     }
+ 
+@@ -345,6 +358,7 @@ function loadSkillEntries(
+         rootDir,
+         rootRealPath: baseDirRealPath,
+         candidatePath: skillDir,
++        allowSymlinksOutsideRoot,
+       });
+       if (!skillDirRealPath) {
+         continue;
+@@ -358,6 +372,7 @@ function loadSkillEntries(
+         rootDir,
+         rootRealPath: baseDirRealPath,
+         candidatePath: skillMd,
++        allowSymlinksOutsideRoot,
+       });
+       if (!skillMdRealPath) {
+         continue;
+@@ -388,6 +403,7 @@ function loadSkillEntries(
+           source: params.source,
+           rootDir,
+           rootRealPath: baseDirRealPath,
++          allowSymlinksOutsideRoot,
+         }),
+       );
+ 
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+index 810a908876..23184cb727 100644
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -213,7 +213,9 @@ function buildMessagingSection(params: {
+           "",
+           "### message tool",
+           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+-          "- For `action=send`, include `to` and `message`.",
++          "- Prefer `target` for routing. `to` is a legacy alias; do not rely on it.",
++          "- For `action=send`, include `target` and `message`.",
++          "- For `action=read`, provide a concrete `messageId` when reading a specific message. Include `target` when the action is channel-scoped.",
+           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
+           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+           params.inlineButtonsEnabled
+diff --git a/src/agents/tool-fs-policy.ts b/src/agents/tool-fs-policy.ts
+index cdaba44fc1..fa6fad45a0 100644
+--- a/src/agents/tool-fs-policy.ts
++++ b/src/agents/tool-fs-policy.ts
+@@ -6,16 +6,22 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js
+ 
+ export type ToolFsPolicy = {
+   workspaceOnly: boolean;
++  allowReadOutsideWorkspace?: boolean;
+ };
+ 
+-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
++export function createToolFsPolicy(params: {
++  workspaceOnly?: boolean;
++  allowReadOutsideWorkspace?: boolean;
++}): ToolFsPolicy {
+   return {
+     workspaceOnly: params.workspaceOnly === true,
++    allowReadOutsideWorkspace: params.allowReadOutsideWorkspace === true,
+   };
+ }
+ 
+ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
+   workspaceOnly?: boolean;
++  allowReadOutsideWorkspace?: boolean;
+ } {
+   const cfg = params.cfg;
+   const globalFs = cfg?.tools?.fs;
+@@ -23,6 +29,8 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
+     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
+   return {
+     workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
++    allowReadOutsideWorkspace:
++      agentFs?.allowReadOutsideWorkspace ?? globalFs?.allowReadOutsideWorkspace,
+   };
+ }
+ 
+diff --git a/src/agents/tool-summaries.ts b/src/agents/tool-summaries.ts
+new file mode 100644
+index 0000000000..bca325e4b8
+--- /dev/null
++++ b/src/agents/tool-summaries.ts
+@@ -0,0 +1,13 @@
++import type { AgentTool } from "@mariozechner/pi-agent-core";
++
++export function buildToolSummaryMap(tools: AgentTool[]): Record<string, string> {
++  const summaries: Record<string, string> = {};
++  for (const tool of tools) {
++    const summary = tool.description?.trim() || tool.label?.trim();
++    if (!summary) {
++      continue;
++    }
++    summaries[tool.name.toLowerCase()] = summary;
++  }
++  return summaries;
++}
+diff --git a/src/agents/tools/session-status-tool.ts b/src/agents/tools/session-status-tool.ts
+index 44eae404fa..26b3c7a2c2 100644
+--- a/src/agents/tools/session-status-tool.ts
++++ b/src/agents/tools/session-status-tool.ts
+@@ -516,6 +516,7 @@ export function createSessionStatusTool(opts?: {
+           sessionKey: resolved.key,
+           changedModel,
+           statusText: fullStatusText,
++          cliPromptLoad: resolved.entry.cliPromptLoad,
+         },
+       };
+     },
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index f94f8d5d2c..a14f8c8d3e 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -42,6 +42,7 @@ import type { VerboseLevel } from "../thinking.js";
+ import {
+   HEARTBEAT_TOKEN,
+   isSilentReplyPrefixText,
++  isSilentReplyTailFragmentText,
+   isSilentReplyText,
+   SILENT_REPLY_TOKEN,
+ } from "../tokens.js";
+@@ -620,6 +621,9 @@ export async function runAgentTurnWithFallback(params: {
+         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+           return { skip: true };
+         }
++        if (isSilentReplyTailFragmentText(text, SILENT_REPLY_TOKEN)) {
++          return { skip: true };
++        }
+         if (
+           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+diff --git a/src/auto-reply/reply/normalize-reply.ts b/src/auto-reply/reply/normalize-reply.ts
+index 192cfa0170..71b4022339 100644
+--- a/src/auto-reply/reply/normalize-reply.ts
++++ b/src/auto-reply/reply/normalize-reply.ts
+@@ -4,6 +4,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
+ import {
+   HEARTBEAT_TOKEN,
+   isSilentReplyPayloadText,
++  isSilentReplyTailFragmentText,
+   isSilentReplyText,
+   SILENT_REPLY_TOKEN,
+   stripSilentToken,
+@@ -51,7 +52,11 @@ export function normalizeReplyPayload(
+ 
+   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
+   let text = payload.text ?? undefined;
+-  if (text && isSilentReplyPayloadText(text, silentToken)) {
++  if (
++    text &&
++    (isSilentReplyPayloadText(text, silentToken) ||
++      isSilentReplyTailFragmentText(text, silentToken))
++  ) {
+     if (!hasContent("")) {
+       opts.onSkip?.("silent");
+       return null;
+diff --git a/src/auto-reply/reply/reply-utils.test.ts b/src/auto-reply/reply/reply-utils.test.ts
+index 8ba915b415..1425418e23 100644
+--- a/src/auto-reply/reply/reply-utils.test.ts
++++ b/src/auto-reply/reply/reply-utils.test.ts
+@@ -141,6 +141,16 @@ describe("normalizeReplyPayload", () => {
+     expect(reasons).toEqual(["silent"]);
+   });
+ 
++  it("suppresses standalone silent-token tail fragments", () => {
++    const reasons: string[] = [];
++    const result = normalizeReplyPayload(
++      { text: "  _REPLY  " },
++      { onSkip: (reason) => reasons.push(reason) },
++    );
++    expect(result).toBeNull();
++    expect(reasons).toEqual(["silent"]);
++  });
++
+   it("suppresses JSON NO_REPLY action payloads", () => {
+     const reasons: string[] = [];
+     const result = normalizeReplyPayload(
+diff --git a/src/auto-reply/tokens.test.ts b/src/auto-reply/tokens.test.ts
+index 9c4b3611f1..286f766f21 100644
+--- a/src/auto-reply/tokens.test.ts
++++ b/src/auto-reply/tokens.test.ts
+@@ -1,5 +1,11 @@
+ import { describe, it, expect } from "vitest";
+-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
++import {
++  couldBeSilentTokenStart,
++  isSilentReplyPrefixText,
++  isSilentReplyTailFragmentText,
++  isSilentReplyText,
++  stripSilentToken,
++} from "./tokens.js";
+ 
+ describe("isSilentReplyText", () => {
+   it("returns true for exact token", () => {
+@@ -107,3 +113,58 @@ describe("isSilentReplyPrefixText", () => {
+     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+   });
+ });
++
++describe("couldBeSilentTokenStart", () => {
++  it("matches uppercase-only prefixes shorter than token", () => {
++    expect(couldBeSilentTokenStart("N")).toBe(true);
++    expect(couldBeSilentTokenStart("NO")).toBe(true);
++    expect(couldBeSilentTokenStart("NO_")).toBe(true);
++    expect(couldBeSilentTokenStart("NO_RE")).toBe(true);
++  });
++
++  it("returns false for exact full token (not a strict prefix)", () => {
++    expect(couldBeSilentTokenStart("NO_REPLY")).toBe(false);
++  });
++
++  it("rejects lowercase / mixed case", () => {
++    expect(couldBeSilentTokenStart("No")).toBe(false);
++    expect(couldBeSilentTokenStart("no")).toBe(false);
++    expect(couldBeSilentTokenStart("No_Reply")).toBe(false);
++  });
++
++  it("rejects non-prefix matches", () => {
++    expect(couldBeSilentTokenStart("NO_X")).toBe(false);
++    expect(couldBeSilentTokenStart("NX")).toBe(false);
++    expect(couldBeSilentTokenStart("HELLO")).toBe(false);
++  });
++
++  it("rejects text with non-token characters", () => {
++    expect(couldBeSilentTokenStart("NO ")).toBe(false);
++    expect(couldBeSilentTokenStart("NO:")).toBe(false);
++    expect(couldBeSilentTokenStart("NO_REPLY: reason")).toBe(false);
++  });
++
++  it("works with HEARTBEAT_OK token", () => {
++    expect(couldBeSilentTokenStart("HEART", "HEARTBEAT_OK")).toBe(true);
++    expect(couldBeSilentTokenStart("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
++  });
++
++  it("handles undefined/empty", () => {
++    expect(couldBeSilentTokenStart(undefined)).toBe(false);
++    expect(couldBeSilentTokenStart("")).toBe(false);
++  });
++});
++
++describe("isSilentReplyTailFragmentText", () => {
++  it("matches standalone silent-token tail fragments", () => {
++    expect(isSilentReplyTailFragmentText("_REPLY")).toBe(true);
++    expect(isSilentReplyTailFragmentText("  _REPLY  ")).toBe(true);
++  });
++
++  it("rejects full tokens and regular text", () => {
++    expect(isSilentReplyTailFragmentText("NO_REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("x_REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("_REPLY done")).toBe(false);
++  });
++});
+diff --git a/src/auto-reply/tokens.ts b/src/auto-reply/tokens.ts
+index d028d00916..5fc256557f 100644
+--- a/src/auto-reply/tokens.ts
++++ b/src/auto-reply/tokens.ts
+@@ -3,6 +3,7 @@ import { escapeRegExp } from "../utils.js";
+ export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+ export const SILENT_REPLY_TOKEN = "NO_REPLY";
+ 
++const TOKEN_CHARS_ONLY = /[^A-Z_]/;
+ const silentExactRegexByToken = new Map<string, RegExp>();
+ const silentTrailingRegexByToken = new Map<string, RegExp>();
+ 
+@@ -86,6 +87,60 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
+   return text.replace(getSilentTrailingRegex(token), "").trim();
+ }
+ 
++/**
++ * Lenient prefix check for streaming buffering.
++ * Unlike isSilentReplyPrefixText, does NOT require an underscore —
++ * catches "NO" as a valid prefix of "NO_REPLY" from BPE tokenizers
++ * that split the token across streaming chunks (e.g. "NO" + "_REPLY").
++ * Returns true only for strict prefixes (shorter than full token).
++ */
++export function couldBeSilentTokenStart(
++  text: string | undefined,
++  token: string = SILENT_REPLY_TOKEN,
++): boolean {
++  if (!text) {
++    return false;
++  }
++  const trimmed = text.trimStart();
++  if (!trimmed) {
++    return false;
++  }
++  // Must already be uppercase + underscores only (reject "No", "no", etc.)
++  if (TOKEN_CHARS_ONLY.test(trimmed)) {
++    return false;
++  }
++  const upper = token.toUpperCase();
++  return trimmed.length < upper.length && upper.startsWith(trimmed);
++}
++
++export function isSilentReplyTailFragmentText(
++  text: string | undefined,
++  token: string = SILENT_REPLY_TOKEN,
++): boolean {
++  if (!text) {
++    return false;
++  }
++  const trimmed = text.trim();
++  if (!trimmed) {
++    return false;
++  }
++  if (trimmed !== trimmed.toUpperCase()) {
++    return false;
++  }
++  const normalized = trimmed.toUpperCase();
++  if (!normalized.startsWith("_")) {
++    return false;
++  }
++  const tokenUpper = token.toUpperCase();
++  if (normalized.length >= tokenUpper.length) {
++    return false;
++  }
++  if (TOKEN_CHARS_ONLY.test(normalized)) {
++    return false;
++  }
++  return tokenUpper.endsWith(normalized);
++}
++
+ export function isSilentReplyPrefixText(
+   text: string | undefined,
+   token: string = SILENT_REPLY_TOKEN,
+@@ -109,7 +164,7 @@ export function isSilentReplyPrefixText(
+   if (normalized.length < 2) {
+     return false;
+   }
+-  if (/[^A-Z_]/.test(normalized)) {
++  if (TOKEN_CHARS_ONLY.test(normalized)) {
+     return false;
+   }
+   const tokenUpper = token.toUpperCase();
+diff --git a/src/cron/isolated-agent/run.ts b/src/cron/isolated-agent/run.ts
+index e89e954f35..a87ec3b3ae 100644
+--- a/src/cron/isolated-agent/run.ts
++++ b/src/cron/isolated-agent/run.ts
+@@ -1,8 +1,37 @@
++import {
++  resolveAgentConfig,
++  resolveAgentDir,
++  resolveAgentWorkspaceDir,
++  resolveDefaultAgentId,
++} from "../../agents/agent-scope.js";
++import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
++import { lookupContextTokens } from "../../agents/context.js";
++import { resolveCronStyleNow } from "../../agents/current-time.js";
++import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
++import { loadModelCatalog } from "../../agents/model-catalog.js";
++import { resolveThinkingDefault } from "../../agents/model-selection.js";
+ import type { SkillSnapshot } from "../../agents/skills.js";
+-import type { ThinkLevel } from "../../auto-reply/thinking.js";
++import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
++import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
++import { ensureAgentWorkspace } from "../../agents/workspace.js";
++import {
++  normalizeThinkLevel,
++  supportsXHighThinking,
++  type ThinkLevel,
++} from "../../auto-reply/thinking.js";
+ import type { CliDeps } from "../../cli/outbound-send-deps.js";
+ import type { OpenClawConfig } from "../../config/config.js";
++import { setSessionRuntimeModel } from "../../config/sessions.js";
+ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
++import { logWarn } from "../../logger.js";
++import { normalizeAgentId } from "../../routing/session-key.js";
++import {
++  buildSafeExternalPrompt,
++  detectSuspiciousPatterns,
++  isExternalHookSession,
++  mapHookExternalContentSource,
++  resolveHookExternalContentSource,
++} from "../../security/external-content.js";
+ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+ import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
+ import {
+@@ -27,32 +56,6 @@ import {
+   type MutableCronSession,
+   type PersistCronSessionEntry,
+ } from "./run-session-state.js";
+-import {
+-  DEFAULT_CONTEXT_TOKENS,
+-  buildSafeExternalPrompt,
+-  deriveSessionTotalTokens,
+-  detectSuspiciousPatterns,
+-  ensureAgentWorkspace,
+-  hasNonzeroUsage,
+-  isExternalHookSession,
+-  loadModelCatalog,
+-  logWarn,
+-  lookupContextTokens,
+-  mapHookExternalContentSource,
+-  normalizeAgentId,
+-  normalizeThinkLevel,
+-  resolveAgentConfig,
+-  resolveAgentDir,
+-  resolveAgentTimeoutMs,
+-  resolveAgentWorkspaceDir,
+-  resolveCronStyleNow,
+-  resolveDefaultAgentId,
+-  resolveHookExternalContentSource,
+-  resolveSessionAuthProfileOverride,
+-  resolveThinkingDefault,
+-  setSessionRuntimeModel,
+-  supportsXHighThinking,
+-} from "./run.runtime.js";
+ import { resolveCronAgentSessionKey } from "./session-key.js";
+ import { resolveCronSession } from "./session.js";
+ import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
+diff --git a/src/infra/outbound/payloads.test.ts b/src/infra/outbound/payloads.test.ts
+index 531956f223..910468347c 100644
+--- a/src/infra/outbound/payloads.test.ts
++++ b/src/infra/outbound/payloads.test.ts
+@@ -61,6 +61,10 @@ describe("normalizeReplyPayloadsForDelivery", () => {
+     ).toEqual([]);
+   });
+ 
++  it("drops standalone silent-token tail fragments without media", () => {
++    expect(normalizeReplyPayloadsForDelivery([{ text: "_REPLY" }])).toEqual([]);
++  });
++
+   it("keeps JSON NO_REPLY objects that include extra fields", () => {
+     expect(
+       normalizeReplyPayloadsForDelivery([{ text: '{"action":"NO_REPLY","note":"example"}' }]),
+diff --git a/src/infra/outbound/payloads.ts b/src/infra/outbound/payloads.ts
+index 285dd99c0b..9e9fb7bdfe 100644
+--- a/src/infra/outbound/payloads.ts
++++ b/src/infra/outbound/payloads.ts
+@@ -5,6 +5,7 @@ import {
+   isRenderablePayload,
+   shouldSuppressReasoningPayload,
+ } from "../../auto-reply/reply/reply-payloads.js";
++import { isSilentReplyTailFragmentText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+ import type { ReplyPayload } from "../../auto-reply/types.js";
+ import {
+   hasInteractiveReplyBlocks,
+@@ -83,7 +84,10 @@ export function normalizeReplyPayloadsForDelivery(
+       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
+       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+     };
+-    if (parsed.isSilent && mergedMedia.length === 0) {
++    if (
++      (parsed.isSilent || isSilentReplyTailFragmentText(next.text, SILENT_REPLY_TOKEN)) &&
++      mergedMedia.length === 0
++    ) {
+       continue;
+     }
+     if (!isRenderablePayload(next)) {
+-- 
+2.47.1
+

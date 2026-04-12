@@ -1,0 +1,731 @@
+From 8048b254c76d79875a6bfd9d93e931a743b7b524 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:07:01 +0800
+Subject: [PATCH 08/12] feat(feishu): outbound message hooks, media/image
+ sending, channel binding
+
+---
+ extensions/feishu/src/media-types.ts          | 29 ++++++
+ extensions/feishu/src/media.test.ts           | 17 ++--
+ extensions/feishu/src/media.ts                | 14 +--
+ extensions/feishu/src/outbound.test.ts        | 80 +++++++++++++++-
+ extensions/feishu/src/outbound.ts             | 64 ++++++++++---
+ extensions/feishu/src/send-result.ts          | 14 ++-
+ .../feishu/src/send.reply-fallback.test.ts    |  1 +
+ extensions/feishu/src/send.test.ts            | 96 -------------------
+ extensions/feishu/src/send.ts                 | 19 ++--
+ 9 files changed, 193 insertions(+), 141 deletions(-)
+ create mode 100644 extensions/feishu/src/media-types.ts
+
+diff --git a/extensions/feishu/src/media-types.ts b/extensions/feishu/src/media-types.ts
+new file mode 100644
+index 0000000000..761cddf9b5
+--- /dev/null
++++ b/extensions/feishu/src/media-types.ts
+@@ -0,0 +1,29 @@
++import path from "node:path";
++
++export const IMAGE_EXTENSIONS = new Set([
++  ".jpg",
++  ".jpeg",
++  ".png",
++  ".gif",
++  ".webp",
++  ".bmp",
++  ".ico",
++  ".tiff",
++]);
++export const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".avi"]);
++export const AUDIO_EXTENSIONS = new Set([".opus", ".ogg", ".mp3", ".wav"]);
++
++/**
++ * Resolve media content type from a file extension or URL.
++ * Accepts either a bare extension (e.g. ".png") or a full URL/path
++ * from which the extension will be extracted.
++ */
++export function resolveMediaContentType(extOrUrl: string): string {
++  const ext = extOrUrl.startsWith(".")
++    ? extOrUrl.toLowerCase()
++    : path.extname(extOrUrl).toLowerCase();
++  if (IMAGE_EXTENSIONS.has(ext)) return "image";
++  if (VIDEO_EXTENSIONS.has(ext)) return "video";
++  if (AUDIO_EXTENSIONS.has(ext)) return "audio";
++  return "file";
++}
+diff --git a/extensions/feishu/src/media.test.ts b/extensions/feishu/src/media.test.ts
+index a6ddc834c6..e28f2e1932 100644
+--- a/extensions/feishu/src/media.test.ts
++++ b/extensions/feishu/src/media.test.ts
+@@ -278,7 +278,7 @@ describe("sendMediaFeishu msg_type routing", () => {
+     );
+   });
+ 
+-  it("uses msg_type=media when replying with mp4", async () => {
++  it("uses message.create when replying with mp4 without replyInThread", async () => {
+     await sendMediaFeishu({
+       cfg: emptyConfig,
+       to: "user:ou_target",
+@@ -287,14 +287,13 @@ describe("sendMediaFeishu msg_type routing", () => {
+       replyToMessageId: "om_parent",
+     });
+ 
+-    expect(messageReplyMock).toHaveBeenCalledWith(
++    expect(messageCreateMock).toHaveBeenCalledWith(
+       expect.objectContaining({
+-        path: { message_id: "om_parent" },
+         data: expect.objectContaining({ msg_type: "media" }),
+       }),
+     );
+ 
+-    expect(messageCreateMock).not.toHaveBeenCalled();
++    expect(messageReplyMock).not.toHaveBeenCalled();
+   });
+ 
+   it("passes reply_in_thread when replyInThread is true", async () => {
+@@ -318,7 +317,7 @@ describe("sendMediaFeishu msg_type routing", () => {
+     );
+   });
+ 
+-  it("omits reply_in_thread when replyInThread is false", async () => {
++  it("uses message.create when replyInThread is false", async () => {
+     await sendMediaFeishu({
+       cfg: emptyConfig,
+       to: "user:ou_target",
+@@ -328,8 +327,12 @@ describe("sendMediaFeishu msg_type routing", () => {
+       replyInThread: false,
+     });
+ 
+-    const callData = messageReplyMock.mock.calls[0][0].data;
+-    expect(callData).not.toHaveProperty("reply_in_thread");
++    expect(messageCreateMock).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({ msg_type: "media" }),
++      }),
++    );
++    expect(messageReplyMock).not.toHaveBeenCalled();
+   });
+ 
+   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
+diff --git a/extensions/feishu/src/media.ts b/extensions/feishu/src/media.ts
+index 391ba18fd1..002b6e1da9 100644
+--- a/extensions/feishu/src/media.ts
++++ b/extensions/feishu/src/media.ts
+@@ -311,6 +311,8 @@ export type UploadFileResult = {
+ export type SendMediaResult = {
+   messageId: string;
+   chatId: string;
++  /** Raw Feishu message content JSON (e.g. {"image_key":"..."} or {"file_key":"..."}) */
++  rawContent?: string;
+ };
+ 
+ /**
+@@ -418,7 +420,7 @@ export async function sendImageFeishu(params: {
+   });
+   const content = JSON.stringify({ image_key: imageKey });
+ 
+-  if (replyToMessageId) {
++  if (replyToMessageId && replyInThread) {
+     const response = await client.im.message.reply({
+       path: { message_id: replyToMessageId },
+       data: {
+@@ -428,7 +430,7 @@ export async function sendImageFeishu(params: {
+       },
+     });
+     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+-    return toFeishuSendResult(response, receiveId);
++    return { ...toFeishuSendResult(response, receiveId), rawContent: content };
+   }
+ 
+   const response = await client.im.message.create({
+@@ -440,7 +442,7 @@ export async function sendImageFeishu(params: {
+     },
+   });
+   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+-  return toFeishuSendResult(response, receiveId);
++  return { ...toFeishuSendResult(response, receiveId), rawContent: content };
+ }
+ 
+ /**
+@@ -465,7 +467,7 @@ export async function sendFileFeishu(params: {
+   });
+   const content = JSON.stringify({ file_key: fileKey });
+ 
+-  if (replyToMessageId) {
++  if (replyToMessageId && replyInThread) {
+     const response = await client.im.message.reply({
+       path: { message_id: replyToMessageId },
+       data: {
+@@ -475,7 +477,7 @@ export async function sendFileFeishu(params: {
+       },
+     });
+     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+-    return toFeishuSendResult(response, receiveId);
++    return { ...toFeishuSendResult(response, receiveId), rawContent: content };
+   }
+ 
+   const response = await client.im.message.create({
+@@ -487,7 +489,7 @@ export async function sendFileFeishu(params: {
+     },
+   });
+   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+-  return toFeishuSendResult(response, receiveId);
++  return { ...toFeishuSendResult(response, receiveId), rawContent: content };
+ }
+ 
+ /**
+diff --git a/extensions/feishu/src/outbound.test.ts b/extensions/feishu/src/outbound.test.ts
+index 4eb5924fc0..f305a3edb5 100644
+--- a/extensions/feishu/src/outbound.test.ts
++++ b/extensions/feishu/src/outbound.test.ts
+@@ -9,6 +9,11 @@ const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+ const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
+ const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+ const replyCommentMock = vi.hoisted(() => vi.fn());
++const shouldUseFeishuMarkdownCardMock = vi.hoisted(() =>
++  vi.fn((text: string) => {
++    return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
++  }),
++);
+ 
+ vi.mock("./media.js", () => ({
+   sendMediaFeishu: sendMediaFeishuMock,
+@@ -18,6 +23,7 @@ vi.mock("./send.js", () => ({
+   sendMessageFeishu: sendMessageFeishuMock,
+   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
++  shouldUseFeishuMarkdownCard: shouldUseFeishuMarkdownCardMock,
+ }));
+ 
+ vi.mock("./runtime.js", () => ({
+@@ -54,7 +60,10 @@ function resetOutboundMocks() {
+   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+-  sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
++  sendMediaFeishuMock.mockResolvedValue({
++    messageId: "media_msg",
++    rawContent: '{"image_key":"img_test_1"}',
++  });
+   replyCommentMock.mockResolvedValue({ reply_id: "reply_msg" });
+ }
+ 
+@@ -101,7 +110,14 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
+       );
+       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+       expect(result).toEqual(
+-        expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
++        expect.objectContaining({
++          channel: "feishu",
++          messageId: "media_msg",
++          meta: {
++            contentType: "image",
++            rawContent: '{"image_key":"img_test_1"}',
++          },
++        }),
+       );
+     } finally {
+       await fs.rm(dir, { recursive: true, force: true });
+@@ -166,7 +182,42 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
+       }),
+     );
+     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
++    expect(result).toEqual(
++      expect.objectContaining({
++        channel: "feishu",
++        messageId: "card_msg",
++        meta: {
++          contentType: "interactive",
++          finalContent: "| a | b |\n| - | - |",
++        },
++      }),
++    );
++  });
++
++  it("stores normalized finalContent metadata for card mentions", async () => {
++    const result = await sendText({
++      cfg: {
++        channels: {
++          feishu: {
++            renderMode: "card",
++          },
++        },
++      } as any,
++      to: "chat_1",
++      text: '<at user_id="ou_123">Emma</at> hello',
++      accountId: "main",
++    });
++
++    expect(result).toEqual(
++      expect.objectContaining({
++        channel: "feishu",
++        messageId: "card_msg",
++        meta: {
++          contentType: "interactive",
++          finalContent: "<at id=ou_123></at> hello",
++        },
++      }),
++    );
+   });
+ 
+   it("forwards replyToId as replyToMessageId on sendText", async () => {
+@@ -364,7 +415,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
+   });
+ 
+   it("forwards replyToId to sendMediaFeishu", async () => {
+-    await feishuOutbound.sendMedia?.({
++    const result = await feishuOutbound.sendMedia?.({
+       cfg: emptyConfig,
+       to: "chat_1",
+       text: "",
+@@ -378,6 +429,16 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
+         replyToMessageId: "om_reply_target",
+       }),
+     );
++    expect(result).toEqual(
++      expect.objectContaining({
++        channel: "feishu",
++        messageId: "media_msg",
++        meta: {
++          contentType: "image",
++          rawContent: '{"image_key":"img_test_1"}',
++        },
++      }),
++    );
+   });
+ 
+   it("forwards replyToId to text caption send", async () => {
+@@ -427,7 +488,16 @@ describe("feishuOutbound.sendMedia renderMode", () => {
+       }),
+     );
+     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
++    expect(result).toEqual(
++      expect.objectContaining({
++        channel: "feishu",
++        messageId: "media_msg",
++        meta: {
++          contentType: "image",
++          rawContent: '{"image_key":"img_test_1"}',
++        },
++      }),
++    );
+   });
+ 
+   it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
+diff --git a/extensions/feishu/src/outbound.ts b/extensions/feishu/src/outbound.ts
+index 822ca4bb50..553659d564 100644
+--- a/extensions/feishu/src/outbound.ts
++++ b/extensions/feishu/src/outbound.ts
+@@ -5,10 +5,17 @@ import { resolveFeishuAccount } from "./accounts.js";
+ import { createFeishuClient } from "./client.js";
+ import { parseFeishuCommentTarget } from "./comment-target.js";
+ import { replyComment } from "./drive.js";
++import { resolveMediaContentType } from "./media-types.js";
+ import { sendMediaFeishu } from "./media.js";
++import { normalizeMentionTagsForCard } from "./mention.js";
+ import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+ import { getFeishuRuntime } from "./runtime.js";
+-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
++import {
++  sendMarkdownCardFeishu,
++  sendMessageFeishu,
++  sendStructuredCardFeishu,
++  shouldUseFeishuMarkdownCard,
++} from "./send.js";
+ 
+ function normalizePossibleLocalImagePath(text: string | undefined): string | null {
+   const raw = text?.trim();
+@@ -43,10 +50,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
+   return raw;
+ }
+ 
+-function shouldUseCard(text: string): boolean {
+-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+-}
+-
+ function resolveReplyToMessageId(params: {
+   replyToId?: string | null;
+   threadId?: string | number | null;
+@@ -108,13 +111,27 @@ async function sendOutboundText(params: {
+   const account = resolveFeishuAccount({ cfg, accountId });
+   const renderMode = account.config?.renderMode ?? "auto";
+ 
+-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
++  if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text))) {
+     return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+   }
+ 
+   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+ }
+ 
++function attachFeishuMediaMetadata<
++  T extends { rawContent?: string; meta?: Record<string, unknown> },
++>(sent: T, mediaUrl: string) {
++  const contentType = resolveMediaContentType(mediaUrl);
++  return {
++    ...sent,
++    meta: {
++      ...(sent.meta ?? {}),
++      contentType,
++      rawContent: sent.rawContent ?? `[${contentType}: ${mediaUrl}]`,
++    },
++  };
++}
++
+ export const feishuOutbound: ChannelOutboundAdapter = {
+   deliveryMode: "direct",
+   chunker: chunkTextForOutbound,
+@@ -139,7 +156,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+       const localImagePath = normalizePossibleLocalImagePath(text);
+       if (localImagePath) {
+         try {
+-          return await sendMediaFeishu({
++          const sent = await sendMediaFeishu({
+             cfg,
+             to,
+             mediaUrl: localImagePath,
+@@ -147,6 +164,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+             replyToMessageId,
+             mediaLocalRoots,
+           });
++          return attachFeishuMediaMetadata(sent, localImagePath);
+         } catch (err) {
+           console.error(`[feishu] local image path auto-send failed:`, err);
+           // fall through to plain text as last resort
+@@ -165,7 +183,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+ 
+       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+       const renderMode = account.config?.renderMode ?? "auto";
+-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
++      const useCard =
++        renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text));
+       if (useCard) {
+         const header = identity
+           ? {
+@@ -175,7 +194,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+               template: "blue" as const,
+             }
+           : undefined;
+-        return await sendStructuredCardFeishu({
++        const sent = await sendStructuredCardFeishu({
+           cfg,
+           to,
+           text,
+@@ -184,14 +203,30 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+           accountId: accountId ?? undefined,
+           header: header?.title ? header : undefined,
+         });
++        return {
++          ...sent,
++          meta: {
++            ...(sent.meta ?? {}),
++            contentType: "interactive",
++            finalContent: normalizeMentionTagsForCard(text),
++          },
++        };
+       }
+-      return await sendOutboundText({
++      const sent = await sendOutboundText({
+         cfg,
+         to,
+         text,
+         accountId: accountId ?? undefined,
+         replyToMessageId,
+       });
++      return {
++        ...sent,
++        meta: {
++          ...("meta" in sent ? (sent.meta ?? {}) : {}),
++          contentType: "post",
++          finalContent: text,
++        },
++      };
+     },
+     sendMedia: async ({
+       cfg,
+@@ -230,7 +265,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+       // Upload and send media if URL or local path provided
+       if (mediaUrl) {
+         try {
+-          return await sendMediaFeishu({
++          const sent = await sendMediaFeishu({
+             cfg,
+             to,
+             mediaUrl,
+@@ -238,14 +273,17 @@ export const feishuOutbound: ChannelOutboundAdapter = {
+             mediaLocalRoots,
+             replyToMessageId,
+           });
++          return attachFeishuMediaMetadata(sent, mediaUrl);
+         } catch (err) {
+           // Log the error for debugging
+           console.error(`[feishu] sendMediaFeishu failed:`, err);
+-          // Fallback to URL link if upload fails
++          // Fallback: send user-friendly error instead of exposing internal paths
++          const isLocalPath = !mediaUrl.startsWith("http://") && !mediaUrl.startsWith("https://");
++          const fallbackText = isLocalPath ? "📎 [Media upload failed]" : `📎 ${mediaUrl}`;
+           return await sendOutboundText({
+             cfg,
+             to,
+-            text: `📎 ${mediaUrl}`,
++            text: fallbackText,
+             accountId: accountId ?? undefined,
+             replyToMessageId,
+           });
+diff --git a/extensions/feishu/src/send-result.ts b/extensions/feishu/src/send-result.ts
+index b9ba39ba0b..42ce565c6a 100644
+--- a/extensions/feishu/src/send-result.ts
++++ b/extensions/feishu/src/send-result.ts
+@@ -3,6 +3,7 @@ export type FeishuMessageApiResponse = {
+   msg?: string;
+   data?: {
+     message_id?: string;
++    chat_id?: string;
+   };
+ };
+ 
+@@ -15,6 +16,14 @@ export function assertFeishuMessageApiSuccess(
+   }
+ }
+ 
++export function rethrowWithFeishuErrorDetail(err: unknown, prefix: string): never {
++  const data = (err as any)?.response?.data;
++  if (data && typeof data.msg === "string") {
++    throw new Error(`${prefix}: ${data.msg}`, { cause: err });
++  }
++  throw err;
++}
++
+ export function toFeishuSendResult(
+   response: FeishuMessageApiResponse,
+   chatId: string,
+@@ -24,6 +33,9 @@ export function toFeishuSendResult(
+ } {
+   return {
+     messageId: response.data?.message_id ?? "unknown",
+-    chatId,
++    // Prefer API-returned chat_id over the caller-provided fallback.
++    // For DMs sent via open_id, the caller passes the user's open_id as chatId,
++    // but the API response contains the actual oc_* conversation chat_id.
++    chatId: response.data?.chat_id ?? chatId,
+   };
+ }
+diff --git a/extensions/feishu/src/send.reply-fallback.test.ts b/extensions/feishu/src/send.reply-fallback.test.ts
+index 7148b98284..93e541db90 100644
+--- a/extensions/feishu/src/send.reply-fallback.test.ts
++++ b/extensions/feishu/src/send.reply-fallback.test.ts
+@@ -118,6 +118,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
+         to: "user:ou_target",
+         text: "hello",
+         replyToMessageId: "om_parent",
++        replyInThread: true,
+       }),
+     ).rejects.toThrow("Feishu reply failed");
+ 
+diff --git a/extensions/feishu/src/send.test.ts b/extensions/feishu/src/send.test.ts
+index 067ecd5b1f..f43b18abc0 100644
+--- a/extensions/feishu/src/send.test.ts
++++ b/extensions/feishu/src/send.test.ts
+@@ -41,15 +41,6 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+ 
+ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+   convertMarkdownTables: mockConvertMarkdownTables,
+-  stripInlineDirectiveTagsForDelivery: vi.fn((text: string) => ({
+-    text: text
+-      .replace(
+-        /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi,
+-        " ",
+-      )
+-      .trim(),
+-    changed: true,
+-  })),
+ }));
+ 
+ vi.mock("./client.js", () => ({
+@@ -397,39 +388,6 @@ describe("sendMessageFeishu", () => {
+     );
+     expect(result).toEqual(expect.objectContaining({ messageId: "om_card" }));
+   });
+-
+-  it("strips inline reply tags before sending post text", async () => {
+-    const create = vi.fn().mockResolvedValue({
+-      code: 0,
+-      data: { message_id: "om_post" },
+-    });
+-    mockCreateFeishuClient.mockReturnValue({
+-      im: {
+-        message: {
+-          create,
+-          reply: vi.fn(),
+-        },
+-      },
+-    });
+-
+-    await sendMessageFeishu({
+-      cfg: {} as ClawdbotConfig,
+-      to: "chat:oc_group_1",
+-      text: "[[reply_to_current]] hello",
+-    });
+-
+-    expect(create).toHaveBeenCalledWith(
+-      expect.objectContaining({
+-        data: expect.objectContaining({
+-          content: JSON.stringify({
+-            zh_cn: {
+-              content: [[{ tag: "md", text: "hello" }]],
+-            },
+-          }),
+-        }),
+-      }),
+-    );
+-  });
+ });
+ 
+ describe("shouldUseFeishuMarkdownCard", () => {
+@@ -683,34 +641,6 @@ describe("editMessageFeishu", () => {
+     });
+     expect(result).toEqual({ messageId: "om_edit_auto", contentType: "interactive" });
+   });
+-
+-  it("strips inline reply tags before patching text content", async () => {
+-    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+-
+-    await editMessageFeishu({
+-      cfg: {} as ClawdbotConfig,
+-      messageId: "om_edit_strip_tag",
+-      text: "[[reply_to_current]] updated body",
+-    });
+-
+-    expect(mockClientPatch).toHaveBeenCalledWith({
+-      path: { message_id: "om_edit_strip_tag" },
+-      data: {
+-        content: JSON.stringify({
+-          zh_cn: {
+-            content: [
+-              [
+-                {
+-                  tag: "md",
+-                  text: "updated body",
+-                },
+-              ],
+-            ],
+-          },
+-        }),
+-      },
+-    });
+-  });
+ });
+ 
+ describe("resolveFeishuCardTemplate", () => {
+@@ -768,18 +698,6 @@ describe("buildStructuredCard", () => {
+     );
+   });
+ 
+-  it("strips inline reply tags from markdown body content", () => {
+-    const card = buildStructuredCard("[[reply_to_current]] hello");
+-
+-    expect(card).toEqual(
+-      expect.objectContaining({
+-        body: {
+-          elements: [{ tag: "markdown", content: "hello" }],
+-        },
+-      }),
+-    );
+-  });
+-
+   it("renders thinking as a collapsible panel instead of blockquote markdown", () => {
+     const card = buildStructuredCard("final answer", {
+       thinkingTitle: "💭 Thinking",
+@@ -887,18 +805,4 @@ describe("buildMarkdownCard", () => {
+     expect(card.config.enable_forward).toBeUndefined();
+     expect(card.config.wide_screen_mode).toBeUndefined();
+   });
+-
+-  it("strips inline reply tags before building markdown cards", () => {
+-    const card = buildMarkdownCard("[[reply_to_current]] hello");
+-
+-    expect(card).toEqual({
+-      schema: "2.0",
+-      config: {
+-        width_mode: "fill",
+-      },
+-      body: {
+-        elements: [{ tag: "markdown", content: "hello" }],
+-      },
+-    });
+-  });
+ });
+diff --git a/extensions/feishu/src/send.ts b/extensions/feishu/src/send.ts
+index bb215554e8..529609de19 100644
+--- a/extensions/feishu/src/send.ts
++++ b/extensions/feishu/src/send.ts
+@@ -1,8 +1,5 @@
+ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+-import {
+-  convertMarkdownTables,
+-  stripInlineDirectiveTagsForDelivery,
+-} from "openclaw/plugin-sdk/text-runtime";
++import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+ import type { ClawdbotConfig } from "../runtime-api.js";
+ import { resolveFeishuAccount, resolveFeishuRuntimeAccount } from "./accounts.js";
+ import { createFeishuClient } from "./client.js";
+@@ -36,10 +33,6 @@ const FEISHU_CARD_TEMPLATES = new Set([
+   "lime",
+ ]);
+ 
+-function sanitizeFeishuTextForDelivery(text: string): string {
+-  return stripInlineDirectiveTagsForDelivery(text).text;
+-}
+-
+ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
+   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+     return true;
+@@ -584,7 +577,7 @@ export async function sendMessageFeishu(
+   });
+ 
+   // Build message content (with @mention support)
+-  let rawText = sanitizeFeishuTextForDelivery(text ?? "");
++  let rawText = text ?? "";
+   if (mentions && mentions.length > 0) {
+     rawText = buildMentionedMessage(mentions, rawText);
+   }
+@@ -671,7 +664,7 @@ export async function editMessageFeishu(params: {
+ 
+   const renderMode = account.config?.renderMode ?? "auto";
+   if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text!))) {
+-    const normalizedCardText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text!));
++    const normalizedCardText = normalizeMentionTagsForCard(text!);
+     const response = await client.im.message.patch({
+       path: { message_id: messageId },
+       data: { content: JSON.stringify(buildMarkdownCard(normalizedCardText)) },
+@@ -688,7 +681,7 @@ export async function editMessageFeishu(params: {
+     cfg,
+     channel: "feishu",
+   });
+-  const messageText = convertMarkdownTables(sanitizeFeishuTextForDelivery(text!), tableMode);
++  const messageText = convertMarkdownTables(text!, tableMode);
+   const payload = buildFeishuPostMessagePayload({ messageText });
+   const response = await client.im.message.patch({
+     path: { message_id: messageId },
+@@ -737,7 +730,7 @@ export function shouldUseFeishuMarkdownCard(text: string): boolean {
+  * Uses schema 2.0 format for proper markdown rendering.
+  */
+ export function buildMarkdownCard(text: string): Record<string, unknown> {
+-  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
++  const normalizedText = normalizeMentionTagsForCard(text);
+   return {
+     schema: "2.0",
+     config: {
+@@ -784,7 +777,7 @@ export function buildStructuredCard(
+     thinkingExpanded?: boolean;
+   },
+ ): Record<string, unknown> {
+-  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
++  const normalizedText = normalizeMentionTagsForCard(text);
+   const elements: Record<string, unknown>[] = [];
+   const thinkingText = options?.thinkingText?.trim();
+   if (thinkingText) {
+-- 
+2.47.1
+

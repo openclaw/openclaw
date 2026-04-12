@@ -1,0 +1,1085 @@
+From a5a5399fc4043140113eae999c6e828807377dc3 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:06:48 +0800
+Subject: [PATCH 02/12] feat(gateway): harden node override policy, MCP bridge,
+ session archive, visible-text persistence
+
+---
+ src/gateway/chat-sanitize.test.ts             |  32 ++++
+ src/gateway/chat-sanitize.ts                  |   5 +-
+ .../chat-visible-text-persistence.test.ts     | 111 +++++++++++++
+ src/gateway/chat-visible-text-persistence.ts  |  56 +++++++
+ src/gateway/gateway-misc.test.ts              | 154 ++++++++++++++++++
+ src/gateway/mcp-http.schema.ts                |  19 +++
+ src/gateway/node-command-policy.ts            |  63 ++++++-
+ src/gateway/node-connect-reconcile.ts         |   2 +
+ src/gateway/server-chat.agent-events.test.ts  |  53 ++++++
+ src/gateway/server-chat.ts                    |  19 ++-
+ src/gateway/server-methods/chat.ts            |  17 +-
+ src/gateway/server-methods/nodes.ts           |   2 +
+ src/gateway/session-archive.fs.ts             |   7 -
+ src/gateway/session-archive.runtime.ts        |   4 +-
+ src/gateway/session-transcript-files.fs.ts    |   3 +-
+ .../assistant-visible-text-merge.test.ts      |  33 ++++
+ src/shared/assistant-visible-text-merge.ts    |  61 +++++++
+ ui/src/ui/controllers/chat.test.ts            |  71 +++++++-
+ ui/src/ui/controllers/chat.ts                 |  40 ++++-
+ 19 files changed, 707 insertions(+), 45 deletions(-)
+ create mode 100644 src/gateway/chat-visible-text-persistence.test.ts
+ create mode 100644 src/gateway/chat-visible-text-persistence.ts
+ delete mode 100644 src/gateway/session-archive.fs.ts
+ create mode 100644 src/shared/assistant-visible-text-merge.test.ts
+ create mode 100644 src/shared/assistant-visible-text-merge.ts
+
+diff --git a/src/gateway/chat-sanitize.test.ts b/src/gateway/chat-sanitize.test.ts
+index d287160db1..6d2ba7a2d9 100644
+--- a/src/gateway/chat-sanitize.test.ts
++++ b/src/gateway/chat-sanitize.test.ts
+@@ -22,6 +22,22 @@ describe("stripEnvelopeFromMessage", () => {
+     expect(result.content?.[0]?.text).toBe("hi");
+   });
+ 
++  test("removes inbound metadata from input_text content arrays", () => {
++    const input = {
++      role: "user",
++      content: [
++        {
++          type: "input_text",
++          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nHello there',
++        },
++      ],
++    };
++    const result = stripEnvelopeFromMessage(input) as {
++      content?: Array<{ type: string; text?: string }>;
++    };
++    expect(result.content?.[0]?.text).toBe("Hello there");
++  });
++
+   test("does not strip inline message_id text that is part of a line", () => {
+     const input = {
+       role: "user",
+@@ -50,6 +66,22 @@ describe("stripEnvelopeFromMessage", () => {
+     expect(result.content).toBe("Assistant body");
+   });
+ 
++  test("defensively strips inbound metadata blocks from output_text content arrays", () => {
++    const input = {
++      role: "assistant",
++      content: [
++        {
++          type: "output_text",
++          text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
++        },
++      ],
++    };
++    const result = stripEnvelopeFromMessage(input) as {
++      content?: Array<{ type: string; text?: string }>;
++    };
++    expect(result.content?.[0]?.text).toBe("Assistant body");
++  });
++
+   test("removes inbound un-bracketed conversation info blocks from user messages", () => {
+     const input = {
+       role: "user",
+diff --git a/src/gateway/chat-sanitize.ts b/src/gateway/chat-sanitize.ts
+index 79fe822071..cee21551c1 100644
+--- a/src/gateway/chat-sanitize.ts
++++ b/src/gateway/chat-sanitize.ts
+@@ -44,7 +44,10 @@ function stripEnvelopeFromContentWithRole(
+       return item;
+     }
+     const entry = item as Record<string, unknown>;
+-    if (entry.type !== "text" || typeof entry.text !== "string") {
++    if (
++      (entry.type !== "text" && entry.type !== "input_text" && entry.type !== "output_text") ||
++      typeof entry.text !== "string"
++    ) {
+       return item;
+     }
+     const inboundStripped = stripInboundMetadata(entry.text);
+diff --git a/src/gateway/chat-visible-text-persistence.test.ts b/src/gateway/chat-visible-text-persistence.test.ts
+new file mode 100644
+index 0000000000..e3f1dbd9b2
+--- /dev/null
++++ b/src/gateway/chat-visible-text-persistence.test.ts
+@@ -0,0 +1,111 @@
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
++import { afterEach, describe, expect, it } from "vitest";
++import { persistVisibleAssistantTextToTranscript } from "./chat-visible-text-persistence.js";
++
++function createTranscriptFile(prefix: string): string {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
++  const sessionFile = path.join(dir, "sess.jsonl");
++  fs.writeFileSync(
++    sessionFile,
++    `${JSON.stringify({
++      type: "session",
++      version: CURRENT_SESSION_VERSION,
++      id: "sess-1",
++      timestamp: new Date(0).toISOString(),
++      cwd: "/tmp",
++    })}\n`,
++    "utf-8",
++  );
++  return sessionFile;
++}
++
++describe("persistVisibleAssistantTextToTranscript", () => {
++  const createdDirs: string[] = [];
++
++  afterEach(() => {
++    for (const dir of createdDirs.splice(0)) {
++      fs.rmSync(dir, { recursive: true, force: true });
++    }
++  });
++
++  it("writes the preserved visible prefix into the latest assistant transcript entry", () => {
++    const sessionFile = createTranscriptFile("openclaw-visible-text-persist-");
++    createdDirs.push(path.dirname(sessionFile));
++    const sessionManager = SessionManager.open(sessionFile);
++    sessionManager.appendMessage({
++      role: "assistant",
++      content: [{ type: "text", text: "Complete reply" }],
++      timestamp: 1,
++      stopReason: "stop",
++      usage: {
++        input: 0,
++        output: 0,
++        totalTokens: 0,
++        cacheRead: 0,
++        cacheWrite: 0,
++        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++      },
++    } as Parameters<typeof sessionManager.appendMessage>[0]);
++
++    expect(
++      persistVisibleAssistantTextToTranscript({
++        sessionFile,
++        sessionKey: "main",
++        visibleText: "Streamed prefix:",
++      }),
++    ).toBe(true);
++
++    const assistantEntry = SessionManager.open(sessionFile)
++      .getBranch()
++      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
++    expect(assistantEntry?.type).toBe("message");
++    expect((assistantEntry as { message: { text?: string } }).message.text).toBe(
++      "Streamed prefix: Complete reply",
++    );
++  });
++
++  it("fills commentary-only assistant entries with the streamed visible text", () => {
++    const sessionFile = createTranscriptFile("openclaw-visible-text-commentary-");
++    createdDirs.push(path.dirname(sessionFile));
++    const sessionManager = SessionManager.open(sessionFile);
++    sessionManager.appendMessage({
++      role: "assistant",
++      content: [
++        {
++          type: "text",
++          text: "thinking like caveman",
++          textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
++        },
++      ],
++      timestamp: 1,
++      stopReason: "stop",
++      usage: {
++        input: 0,
++        output: 0,
++        totalTokens: 0,
++        cacheRead: 0,
++        cacheWrite: 0,
++        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++      },
++    } as Parameters<typeof sessionManager.appendMessage>[0]);
++
++    expect(
++      persistVisibleAssistantTextToTranscript({
++        sessionFile,
++        sessionKey: "main",
++        visibleText: "Visible streamed text",
++      }),
++    ).toBe(true);
++
++    const assistantEntry = SessionManager.open(sessionFile)
++      .getBranch()
++      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
++    expect(assistantEntry?.type).toBe("message");
++    expect((assistantEntry as { message: { text?: string } }).message.text).toBe(
++      "Visible streamed text",
++    );
++  });
++});
+diff --git a/src/gateway/chat-visible-text-persistence.ts b/src/gateway/chat-visible-text-persistence.ts
+new file mode 100644
+index 0000000000..ad297018d0
+--- /dev/null
++++ b/src/gateway/chat-visible-text-persistence.ts
+@@ -0,0 +1,56 @@
++import { SessionManager } from "@mariozechner/pi-coding-agent";
++import { rewriteTranscriptEntriesInSessionManager } from "../agents/pi-embedded-runner/transcript-rewrite.js";
++import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
++import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
++import { mergeAssistantVisibleText } from "../shared/assistant-visible-text-merge.js";
++import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
++
++export function persistVisibleAssistantTextToTranscript(params: {
++  sessionFile: string;
++  sessionKey?: string;
++  visibleText: string;
++}): boolean {
++  const trimmedVisibleText = params.visibleText.trim();
++  if (!trimmedVisibleText || isSilentReplyText(trimmedVisibleText, SILENT_REPLY_TOKEN)) {
++    return false;
++  }
++
++  const sessionManager = SessionManager.open(params.sessionFile);
++  const branch = sessionManager.getBranch();
++  const target = [...branch]
++    .toReversed()
++    .find((entry) => entry.type === "message" && entry.message.role === "assistant");
++  if (!target || target.type !== "message") {
++    return false;
++  }
++
++  const existingVisibleText = extractAssistantVisibleText(target.message) ?? "";
++  const mergedVisibleText = mergeAssistantVisibleText(trimmedVisibleText, existingVisibleText);
++  const existingTopLevelText =
++    typeof (target.message as { text?: unknown }).text === "string"
++      ? ((target.message as { text?: string }).text ?? "")
++      : "";
++  if (!mergedVisibleText || existingTopLevelText === mergedVisibleText) {
++    return false;
++  }
++
++  const result = rewriteTranscriptEntriesInSessionManager({
++    sessionManager,
++    replacements: [
++      {
++        entryId: target.id,
++        message: {
++          ...target.message,
++          text: mergedVisibleText,
++        } as unknown as Parameters<typeof sessionManager.appendMessage>[0],
++      },
++    ],
++  });
++  if (result.changed) {
++    emitSessionTranscriptUpdate({
++      sessionFile: params.sessionFile,
++      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
++    });
++  }
++  return result.changed;
++}
+diff --git a/src/gateway/gateway-misc.test.ts b/src/gateway/gateway-misc.test.ts
+index 954aa65c62..cf317f6e0f 100644
+--- a/src/gateway/gateway-misc.test.ts
++++ b/src/gateway/gateway-misc.test.ts
+@@ -423,6 +423,160 @@ describe("resolveNodeCommandAllowlist", () => {
+     expect(allow.has("system.which")).toBe(false);
+     expect(allow.has("device.info")).toBe(true);
+   });
++
++  it("per-node denyCommands merges with global deny", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            denyCommands: ["camera.snap"],
++            overrides: {
++              "lukin-dev": {
++                denyCommands: ["browser.proxy"],
++              },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "node-123", displayName: "lukin-dev" },
++    );
++    expect(allow.has("camera.snap")).toBe(false);
++    expect(allow.has("browser.proxy")).toBe(false);
++    expect(allow.has("system.run")).toBe(true);
++  });
++
++  it("per-node allowCommands merges with global allow", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            allowCommands: ["camera.snap"],
++            overrides: {
++              "my-node": {
++                allowCommands: ["screen.record"],
++              },
++            },
++          },
++        },
++      },
++      { platform: "ios", deviceFamily: "iPhone", nodeId: "n1", displayName: "my-node" },
++    );
++    expect(allow.has("camera.snap")).toBe(true);
++    expect(allow.has("screen.record")).toBe(true);
++  });
++
++  it("nodeId match takes priority over displayName", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            overrides: {
++              "my-display": { denyCommands: ["system.run"] },
++              "node-abc": { denyCommands: ["system.notify"] },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "node-abc", displayName: "my-display" },
++    );
++    // nodeId override wins: system.notify denied, system.run allowed
++    expect(allow.has("system.notify")).toBe(false);
++    expect(allow.has("system.run")).toBe(true);
++  });
++
++  it("matches by nodeId prefix", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            overrides: {
++              "node-": { denyCommands: ["browser.proxy"] },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "node-lukin-20", displayName: "" },
++    );
++    expect(allow.has("browser.proxy")).toBe(false);
++    expect(allow.has("system.run")).toBe(true);
++  });
++
++  it("falls back to global config when no override matches", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            denyCommands: ["camera.snap"],
++            overrides: {
++              "other-node": { denyCommands: ["browser.proxy"] },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "my-node", displayName: "my-node" },
++    );
++    // Global deny applies, per-node deny for "other-node" does not
++    expect(allow.has("camera.snap")).toBe(false);
++    expect(allow.has("browser.proxy")).toBe(true);
++  });
++
++  it("per-node allow and deny coexist; deny wins over allow", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            overrides: {
++              "my-node": {
++                allowCommands: ["camera.snap", "screen.record"],
++                denyCommands: ["camera.snap"],
++              },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "n1", displayName: "my-node" },
++    );
++    // camera.snap added by allow but removed by deny
++    expect(allow.has("camera.snap")).toBe(false);
++    // screen.record only in allow, not denied
++    expect(allow.has("screen.record")).toBe(true);
++  });
++
++  it("ignores empty-string override key", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            overrides: {
++              "": { denyCommands: ["system.run"] },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "any-node", displayName: "" },
++    );
++    // Empty key should not match — system.run stays allowed
++    expect(allow.has("system.run")).toBe(true);
++  });
++
++  it("prefix match picks longest matching key", () => {
++    const allow = resolveNodeCommandAllowlist(
++      {
++        gateway: {
++          nodes: {
++            overrides: {
++              "node-": { denyCommands: ["system.run", "browser.proxy"] },
++              "node-lukin-": { denyCommands: ["browser.proxy"] },
++            },
++          },
++        },
++      },
++      { platform: "linux", deviceFamily: "", nodeId: "node-lukin-20", displayName: "" },
++    );
++    // "node-lukin-" is the longest prefix → only browser.proxy denied
++    expect(allow.has("browser.proxy")).toBe(false);
++    expect(allow.has("system.run")).toBe(true);
++  });
+ });
+ 
+ describe("normalizeVoiceWakeTriggers", () => {
+diff --git a/src/gateway/mcp-http.schema.ts b/src/gateway/mcp-http.schema.ts
+index 4997619158..97f6ac2f71 100644
+--- a/src/gateway/mcp-http.schema.ts
++++ b/src/gateway/mcp-http.schema.ts
+@@ -42,6 +42,25 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
+           mergedProps[key] = merged;
+           continue;
+         }
++        // enum + const: append the const value to the existing enum array.
++        if (Array.isArray(existing.enum) && "const" in incoming) {
++          mergedProps[key] = {
++            ...existing,
++            enum: [...new Set([...(existing.enum as unknown[]), incoming.const])],
++          };
++          continue;
++        }
++        if ("const" in existing && Array.isArray(incoming.enum)) {
++          mergedProps[key] = {
++            ...incoming,
++            enum: [...new Set([existing.const, ...(incoming.enum as unknown[])])],
++          };
++          continue;
++        }
++        // Same base type with different description/metadata — compatible, keep first.
++        if (existing.type && existing.type === incoming.type) {
++          continue;
++        }
+         logWarn(
+           `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
+         );
+diff --git a/src/gateway/node-command-policy.ts b/src/gateway/node-command-policy.ts
+index b760f6a84f..b608bc87a7 100644
+--- a/src/gateway/node-command-policy.ts
++++ b/src/gateway/node-command-policy.ts
+@@ -1,4 +1,5 @@
+ import type { OpenClawConfig } from "../config/config.js";
++import type { GatewayNodeOverrideConfig } from "../config/types.gateway.js";
+ import {
+   NODE_BROWSER_PROXY_COMMAND,
+   NODE_SYSTEM_NOTIFY_COMMAND,
+@@ -175,18 +176,29 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
+ 
+ export function resolveNodeCommandAllowlist(
+   cfg: OpenClawConfig,
+-  node?: Pick<NodeSession, "platform" | "deviceFamily">,
++  node?: Pick<NodeSession, "platform" | "deviceFamily"> &
++    Partial<Pick<NodeSession, "nodeId" | "displayName">>,
+ ): Set<string> {
+   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
+   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
+-  const extra = cfg.gateway?.nodes?.allowCommands ?? [];
+-  const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
+-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
+-  for (const blocked of deny) {
+-    const trimmed = blocked.trim();
+-    if (trimmed) {
+-      allow.delete(trimmed);
+-    }
++
++  // Global config
++  const extraGlobal = cfg.gateway?.nodes?.allowCommands ?? [];
++  const denyGlobal = cfg.gateway?.nodes?.denyCommands ?? [];
++
++  // Per-node override lookup
++  const override = resolveNodeOverride(cfg, node);
++  const extraNode = override?.allowCommands ?? [];
++  const denyNode = override?.denyCommands ?? [];
++
++  // Merge: base + global allow + per-node allow
++  const allow = new Set(
++    [...base, ...extraGlobal, ...extraNode].map((cmd) => cmd.trim()).filter(Boolean),
++  );
++
++  // Remove: global deny + per-node deny
++  for (const cmd of [...denyGlobal, ...denyNode].map((c) => c.trim()).filter(Boolean)) {
++    allow.delete(cmd);
+   }
+   return allow;
+ }
+@@ -217,6 +229,39 @@ export function normalizeDeclaredNodeCommands(params: {
+   );
+ }
+ 
++function resolveNodeOverride(
++  cfg: OpenClawConfig,
++  node?: Partial<Pick<NodeSession, "nodeId" | "displayName">>,
++): GatewayNodeOverrideConfig | undefined {
++  const overrides = cfg.gateway?.nodes?.overrides;
++  if (!overrides || !node) {
++    return undefined;
++  }
++  // 1. nodeId exact match
++  if (node.nodeId && overrides[node.nodeId]) {
++    return overrides[node.nodeId];
++  }
++  // 2. displayName exact match
++  if (node.displayName && overrides[node.displayName]) {
++    return overrides[node.displayName];
++  }
++  // 3. nodeId prefix match (longest prefix wins; skip empty keys)
++  if (node.nodeId) {
++    let bestKey: string | undefined;
++    for (const key of Object.keys(overrides)) {
++      if (key && node.nodeId.startsWith(key)) {
++        if (!bestKey || key.length > bestKey.length) {
++          bestKey = key;
++        }
++      }
++    }
++    if (bestKey) {
++      return overrides[bestKey];
++    }
++  }
++  return undefined;
++}
++
+ export function isNodeCommandAllowed(params: {
+   command: string;
+   declaredCommands?: string[];
+diff --git a/src/gateway/node-connect-reconcile.ts b/src/gateway/node-connect-reconcile.ts
+index a3ca9caf38..d17a6b8644 100644
+--- a/src/gateway/node-connect-reconcile.ts
++++ b/src/gateway/node-connect-reconcile.ts
+@@ -52,6 +52,8 @@ export async function reconcileNodePairingOnConnect(params: {
+   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
+     platform: params.connectParams.client.platform,
+     deviceFamily: params.connectParams.client.deviceFamily,
++    nodeId,
++    displayName: params.connectParams.client.displayName,
+   });
+   const declared = normalizeDeclaredNodeCommands({
+     declaredCommands: Array.isArray(params.connectParams.commands)
+diff --git a/src/gateway/server-chat.agent-events.test.ts b/src/gateway/server-chat.agent-events.test.ts
+index 0fd0069059..7b0721c28c 100644
+--- a/src/gateway/server-chat.agent-events.test.ts
++++ b/src/gateway/server-chat.agent-events.test.ts
+@@ -2,12 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+ 
+ const persistGatewaySessionLifecycleEventMock = vi.fn();
++const persistVisibleAssistantTextToTranscriptMock = vi.fn();
+ 
+ vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
+   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
+     persistGatewaySessionLifecycleEventMock(...args),
+ }));
+ 
++vi.mock("./chat-visible-text-persistence.js", () => ({
++  persistVisibleAssistantTextToTranscript: (...args: unknown[]) =>
++    persistVisibleAssistantTextToTranscriptMock(...args),
++}));
++
++vi.mock("./session-utils.js", () => ({
++  loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: { sessionFile: "/tmp/session.jsonl" } })),
++}));
++
+ vi.mock("../config/config.js", () => ({
+   loadConfig: vi.fn(() => ({})),
+ }));
+@@ -42,6 +52,7 @@ describe("agent event handler", () => {
+       showAlerts: true,
+       useIndicator: true,
+     });
++    persistVisibleAssistantTextToTranscriptMock.mockReset().mockReturnValue(true);
+     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
+     resetAgentRunContextForTest();
+@@ -421,6 +432,48 @@ describe("agent event handler", () => {
+     nowSpy.mockRestore();
+   });
+ 
++  it("preserves a visible prefix when a later assistant snapshot restarts shorter", () => {
++    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
++      now: 4_000,
++    });
++    chatRunState.registry.add("run-prefix", {
++      sessionKey: "session-prefix",
++      clientRunId: "client-prefix",
++    });
++
++    handler({
++      runId: "run-prefix",
++      seq: 1,
++      stream: "assistant",
++      ts: Date.now(),
++      data: { text: "补充一个架构图：" },
++    });
++    handler({
++      runId: "run-prefix",
++      seq: 2,
++      stream: "assistant",
++      ts: Date.now(),
++      data: { text: "项目结构总结" },
++    });
++    emitLifecycleEnd(handler, "run-prefix", 3);
++
++    const chatCalls = chatBroadcastCalls(broadcast);
++    expect(chatCalls).toHaveLength(3);
++    const finalPayload = chatCalls[2]?.[1] as {
++      state?: string;
++      message?: { content?: Array<{ text?: string }> };
++    };
++    expect(finalPayload.state).toBe("final");
++    expect(finalPayload.message?.content?.[0]?.text).toBe("补充一个架构图：项目结构总结");
++    expect(persistVisibleAssistantTextToTranscriptMock).toHaveBeenCalledWith({
++      sessionFile: "/tmp/session.jsonl",
++      sessionKey: "session-prefix",
++      visibleText: "补充一个架构图：项目结构总结",
++    });
++    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
++    nowSpy?.mockRestore();
++  });
++
+   it("does not flush an extra delta when the latest text already broadcast", () => {
+     let now = 11_000;
+     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+diff --git a/src/gateway/server-chat.ts b/src/gateway/server-chat.ts
+index d96a07c72f..f7f349f5a4 100644
+--- a/src/gateway/server-chat.ts
++++ b/src/gateway/server-chat.ts
+@@ -4,7 +4,9 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+ import { loadConfig } from "../config/config.js";
+ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
++import { mergeAssistantVisibleText } from "../shared/assistant-visible-text-merge.js";
+ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
++import { persistVisibleAssistantTextToTranscript } from "./chat-visible-text-persistence.js";
+ import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+ import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+ import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+@@ -129,7 +131,7 @@ function resolveMergedAssistantText(params: {
+     return appendUniqueSuffix(previousText, nextDelta);
+   }
+   if (nextText) {
+-    return nextText;
++    return mergeAssistantVisibleText(previousText, nextText);
+   }
+   return previousText;
+ }
+@@ -661,6 +663,21 @@ export function createAgentEventHandler({
+     chatRunState.buffers.delete(clientRunId);
+     chatRunState.deltaSentAt.delete(clientRunId);
+     if (jobState === "done") {
++      if (text && !shouldSuppressSilent) {
++        try {
++          const { entry } = loadSessionEntry(sessionKey);
++          const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
++          if (sessionFile) {
++            persistVisibleAssistantTextToTranscript({
++              sessionFile,
++              sessionKey,
++              visibleText: text,
++            });
++          }
++        } catch {
++          // Best effort: chat final delivery should not fail when transcript repair cannot run.
++        }
++      }
+       const payload = {
+         runId: clientRunId,
+         sessionKey,
+diff --git a/src/gateway/server-methods/chat.ts b/src/gateway/server-methods/chat.ts
+index b76ebbfe98..66bd9a3009 100644
+--- a/src/gateway/server-methods/chat.ts
++++ b/src/gateway/server-methods/chat.ts
+@@ -11,6 +11,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
+ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+ import type { ReplyPayload } from "../../auto-reply/types.js";
+ import { resolveSessionFilePath } from "../../config/sessions.js";
++import { transcriptFindIdempotencyKey } from "../../config/sessions/transcript.js";
+ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+ import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
+@@ -815,21 +816,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
+ }
+ 
+ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
+-  try {
+-    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
+-    for (const line of lines) {
+-      if (!line.trim()) {
+-        continue;
+-      }
+-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+-      if (parsed?.message?.idempotencyKey === idempotencyKey) {
+-        return true;
+-      }
+-    }
+-    return false;
+-  } catch {
+-    return false;
+-  }
++  return transcriptFindIdempotencyKey(transcriptPath, idempotencyKey) !== undefined;
+ }
+ 
+ function appendAssistantTranscriptMessage(params: {
+diff --git a/src/gateway/server-methods/nodes.ts b/src/gateway/server-methods/nodes.ts
+index 77446ecbd5..8a140a6de5 100644
+--- a/src/gateway/server-methods/nodes.ts
++++ b/src/gateway/server-methods/nodes.ts
+@@ -222,6 +222,8 @@ function resolveAllowedPendingNodeActions(params: {
+   const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
+     platform: connect?.client?.platform,
+     deviceFamily: connect?.client?.deviceFamily,
++    nodeId: params.nodeId,
++    displayName: connect?.client?.displayName,
+   });
+   const allowed = pending.filter((entry) => {
+     const result = isNodeCommandAllowed({
+diff --git a/src/gateway/session-archive.fs.ts b/src/gateway/session-archive.fs.ts
+deleted file mode 100644
+index 5c878b9bda..0000000000
+--- a/src/gateway/session-archive.fs.ts
++++ /dev/null
+@@ -1,7 +0,0 @@
+-export {
+-  archiveFileOnDisk,
+-  archiveSessionTranscriptsDetailed,
+-  archiveSessionTranscripts,
+-  cleanupArchivedSessionTranscripts,
+-  resolveStableSessionEndTranscript,
+-} from "./session-transcript-files.fs.js";
+diff --git a/src/gateway/session-archive.runtime.ts b/src/gateway/session-archive.runtime.ts
+index feb7059bb6..c5112100ba 100644
+--- a/src/gateway/session-archive.runtime.ts
++++ b/src/gateway/session-archive.runtime.ts
+@@ -1,6 +1,6 @@
+ export {
+-  archiveSessionTranscriptsDetailed,
+   archiveSessionTranscripts,
++  archiveSessionTranscriptsDetailed,
+   cleanupArchivedSessionTranscripts,
+   resolveStableSessionEndTranscript,
+-} from "./session-archive.fs.js";
++} from "./session-transcript-files.fs.js";
+diff --git a/src/gateway/session-transcript-files.fs.ts b/src/gateway/session-transcript-files.fs.ts
+index 3fd0cf1137..6b880c37a6 100644
+--- a/src/gateway/session-transcript-files.fs.ts
++++ b/src/gateway/session-transcript-files.fs.ts
+@@ -158,8 +158,9 @@ export function archiveSessionTranscriptsDetailed(opts: {
+   restrictToStoreDir?: boolean;
+ }): ArchivedSessionTranscript[] {
+   const archived: ArchivedSessionTranscript[] = [];
++  const restrictToStoreDir = opts.restrictToStoreDir ?? true;
+   const storeDir =
+-    opts.restrictToStoreDir && opts.storePath
++    restrictToStoreDir && opts.storePath
+       ? canonicalizePathForComparison(path.dirname(opts.storePath))
+       : null;
+   for (const candidate of resolveSessionTranscriptCandidates(
+diff --git a/src/shared/assistant-visible-text-merge.test.ts b/src/shared/assistant-visible-text-merge.test.ts
+new file mode 100644
+index 0000000000..e8e5ae4cfa
+--- /dev/null
++++ b/src/shared/assistant-visible-text-merge.test.ts
+@@ -0,0 +1,33 @@
++import { describe, expect, it } from "vitest";
++import {
++  appendUniqueVisibleTextSuffix,
++  mergeAssistantVisibleText,
++} from "./assistant-visible-text-merge.js";
++
++describe("appendUniqueVisibleTextSuffix", () => {
++  it("inserts a space when joining ASCII words", () => {
++    expect(appendUniqueVisibleTextSuffix("Hello", "world")).toBe("Hello world");
++  });
++
++  it("does not add a space for CJK punctuation boundaries", () => {
++    expect(appendUniqueVisibleTextSuffix("补充一个架构图：", "项目结构总结")).toBe(
++      "补充一个架构图：项目结构总结",
++    );
++  });
++
++  it("deduplicates overlapping suffix text", () => {
++    expect(appendUniqueVisibleTextSuffix("Hello wor", "world")).toBe("Hello world");
++  });
++});
++
++describe("mergeAssistantVisibleText", () => {
++  it("keeps growing snapshots intact", () => {
++    expect(mergeAssistantVisibleText("Hello", "Hello world")).toBe("Hello world");
++  });
++
++  it("keeps an already visible longer prefix when a later snapshot gets shorter", () => {
++    expect(mergeAssistantVisibleText("补充一个架构图：", "项目结构总结")).toBe(
++      "补充一个架构图：项目结构总结",
++    );
++  });
++});
+diff --git a/src/shared/assistant-visible-text-merge.ts b/src/shared/assistant-visible-text-merge.ts
+new file mode 100644
+index 0000000000..cb84a23e0b
+--- /dev/null
++++ b/src/shared/assistant-visible-text-merge.ts
+@@ -0,0 +1,61 @@
++const ASCII_WORD_RE = /[A-Za-z0-9]/;
++const ASCII_PUNCTUATION_RE = /[,:;.!?]/;
++
++function resolveVisibleTextSeparator(base: string, suffix: string): string {
++  const lastChar = base.slice(-1);
++  const firstChar = suffix[0] ?? "";
++  if (!lastChar || !firstChar) {
++    return "";
++  }
++  if (/\s/.test(lastChar) || /\s/.test(firstChar)) {
++    return "";
++  }
++  if (/[,.;:!?)]/.test(firstChar)) {
++    return "";
++  }
++  if (/[([{"'`]/.test(lastChar)) {
++    return "";
++  }
++  if (ASCII_WORD_RE.test(lastChar) && ASCII_WORD_RE.test(firstChar)) {
++    return " ";
++  }
++  if (ASCII_PUNCTUATION_RE.test(lastChar) && ASCII_WORD_RE.test(firstChar)) {
++    return " ";
++  }
++  return "";
++}
++
++export function appendUniqueVisibleTextSuffix(base: string, suffix: string): string {
++  if (!suffix) {
++    return base;
++  }
++  if (!base) {
++    return suffix;
++  }
++  if (base.endsWith(suffix)) {
++    return base;
++  }
++  const maxOverlap = Math.min(base.length, suffix.length);
++  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
++    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
++      return base + suffix.slice(overlap);
++    }
++  }
++  return `${base}${resolveVisibleTextSeparator(base, suffix)}${suffix}`;
++}
++
++export function mergeAssistantVisibleText(previousText: string, nextText: string): string {
++  if (!previousText) {
++    return nextText;
++  }
++  if (!nextText) {
++    return previousText;
++  }
++  if (nextText.startsWith(previousText)) {
++    return nextText;
++  }
++  if (previousText.startsWith(nextText)) {
++    return previousText;
++  }
++  return appendUniqueVisibleTextSuffix(previousText, nextText);
++}
+diff --git a/ui/src/ui/controllers/chat.test.ts b/ui/src/ui/controllers/chat.test.ts
+index 6831c0874c..398eee32b6 100644
+--- a/ui/src/ui/controllers/chat.test.ts
++++ b/ui/src/ui/controllers/chat.test.ts
+@@ -134,7 +134,7 @@ describe("handleChatEvent", () => {
+     expect(state.chatMessages).toEqual([]);
+   });
+ 
+-  it("replaces the stream when a delta snapshot gets shorter", () => {
++  it("preserves the visible stream when a later delta snapshot gets shorter", () => {
+     const state = createState({
+       sessionKey: "main",
+       chatRunId: "run-1",
+@@ -150,7 +150,7 @@ describe("handleChatEvent", () => {
+       },
+     };
+     expect(handleChatEvent(state, payload)).toBe("delta");
+-    expect(state.chatStream).toBe("Alpha");
++    expect(state.chatStream).toBe("Alpha beta");
+   });
+ 
+   it("returns final for another run when payload has no message", () => {
+@@ -229,11 +229,11 @@ describe("handleChatEvent", () => {
+     expect(state.chatMessages).toEqual([]);
+   });
+ 
+-  it("prefers final payload message over streamed text", () => {
++  it("preserves the visible streamed prefix when final payload restarts from a shorter answer", () => {
+     const state = createState({
+       sessionKey: "main",
+       chatRunId: "run-1",
+-      chatStream: "Streamed partial",
++      chatStream: "Streamed prefix: ",
+       chatStreamStartedAt: 100,
+     });
+     const finalMsg = {
+@@ -247,11 +247,74 @@ describe("handleChatEvent", () => {
+       state: "final",
+       message: finalMsg,
+     };
++    expect(handleChatEvent(state, payload)).toBe("final");
++    expect(state.chatMessages).toEqual([
++      {
++        ...finalMsg,
++        text: "Streamed prefix: Complete reply",
++      },
++    ]);
++    expect(state.chatStream).toBe(null);
++  });
++
++  it("keeps the final payload unchanged when it already extends the streamed text", () => {
++    const state = createState({
++      sessionKey: "main",
++      chatRunId: "run-1",
++      chatStream: "Complete",
++      chatStreamStartedAt: 100,
++    });
++    const finalMsg = {
++      role: "assistant",
++      content: [{ type: "text", text: "Complete reply" }],
++      timestamp: 101,
++    };
++    const payload: ChatEventPayload = {
++      runId: "run-1",
++      sessionKey: "main",
++      state: "final",
++      message: finalMsg,
++    };
++
+     expect(handleChatEvent(state, payload)).toBe("final");
+     expect(state.chatMessages).toEqual([finalMsg]);
+     expect(state.chatStream).toBe(null);
+   });
+ 
++  it("fills assistant final messages that have no visible text with the streamed text", () => {
++    const state = createState({
++      sessionKey: "main",
++      chatRunId: "run-1",
++      chatStream: "Visible streamed text",
++      chatStreamStartedAt: 100,
++    });
++    const payload: ChatEventPayload = {
++      runId: "run-1",
++      sessionKey: "main",
++      state: "final",
++      message: {
++        role: "assistant",
++        content: [
++          {
++            type: "text",
++            text: "thinking like caveman",
++            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
++          },
++        ],
++        timestamp: 101,
++      },
++    };
++
++    expect(handleChatEvent(state, payload)).toBe("final");
++    expect(state.chatMessages).toEqual([
++      {
++        ...(payload.message as Record<string, unknown>),
++        text: "Visible streamed text",
++      },
++    ]);
++    expect(state.chatStream).toBe(null);
++  });
++
+   it("appends final payload message from own run before clearing stream state", () => {
+     const state = createState({
+       sessionKey: "main",
+diff --git a/ui/src/ui/controllers/chat.ts b/ui/src/ui/controllers/chat.ts
+index 3fadb09a97..ab5ebddfd6 100644
+--- a/ui/src/ui/controllers/chat.ts
++++ b/ui/src/ui/controllers/chat.ts
+@@ -1,3 +1,4 @@
++import { mergeAssistantVisibleText } from "../../../../src/shared/assistant-visible-text-merge.ts";
+ import { resetToolStream } from "../app-tool-stream.ts";
+ import { extractText } from "../chat/message-extract.ts";
+ import { formatConnectError } from "../connect-error.ts";
+@@ -14,6 +15,29 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+ function isSilentReplyStream(text: string): boolean {
+   return SILENT_REPLY_PATTERN.test(text);
+ }
++
++function mergeAssistantMessageWithStream(
++  message: Record<string, unknown>,
++  streamedText: string | null,
++): Record<string, unknown> {
++  if (!streamedText?.trim()) {
++    return message;
++  }
++  if (isSilentReplyStream(streamedText)) {
++    return message;
++  }
++
++  const messageVisibleText = extractText(message) ?? "";
++  const mergedText = mergeAssistantVisibleText(streamedText, messageVisibleText);
++  if (!mergedText || mergedText === messageVisibleText) {
++    return message;
++  }
++
++  return {
++    ...message,
++    text: mergedText,
++  };
++}
+ /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
+ function isAssistantSilentReply(message: unknown): boolean {
+   if (!message || typeof message !== "object") {
+@@ -295,12 +319,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+   if (payload.state === "delta") {
+     const next = extractText(payload.message);
+     if (typeof next === "string" && !isSilentReplyStream(next)) {
+-      state.chatStream = next;
++      state.chatStream = mergeAssistantVisibleText(state.chatStream ?? "", next);
+     }
+   } else if (payload.state === "final") {
+     const finalMessage = normalizeFinalAssistantMessage(payload.message);
+-    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+-      state.chatMessages = [...state.chatMessages, finalMessage];
++    const mergedFinalMessage = finalMessage
++      ? mergeAssistantMessageWithStream(finalMessage, state.chatStream)
++      : null;
++    if (mergedFinalMessage && !isAssistantSilentReply(mergedFinalMessage)) {
++      state.chatMessages = [...state.chatMessages, mergedFinalMessage];
+     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+       state.chatMessages = [
+         ...state.chatMessages,
+@@ -316,8 +343,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+     state.chatStreamStartedAt = null;
+   } else if (payload.state === "aborted") {
+     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+-      state.chatMessages = [...state.chatMessages, normalizedMessage];
++    const mergedAbortedMessage = normalizedMessage
++      ? mergeAssistantMessageWithStream(normalizedMessage, state.chatStream)
++      : null;
++    if (mergedAbortedMessage && !isAssistantSilentReply(mergedAbortedMessage)) {
++      state.chatMessages = [...state.chatMessages, mergedAbortedMessage];
+     } else {
+       const streamedText = state.chatStream ?? "";
+       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+-- 
+2.47.1
+

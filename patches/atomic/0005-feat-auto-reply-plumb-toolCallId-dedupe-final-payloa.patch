@@ -1,0 +1,2143 @@
+From 4ca129445b5b51cc53207f8e759559031cece172 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:06:56 +0800
+Subject: [PATCH 05/12] feat(auto-reply): plumb toolCallId, dedupe final
+ payloads, harden reply dispatch
+
+---
+ src/auto-reply/heartbeat.ts                   |   2 +-
+ src/auto-reply/reply.block-streaming.test.ts  |   7 +-
+ src/auto-reply/reply/abort.test.ts            |  43 ++
+ src/auto-reply/reply/abort.ts                 |  46 ++-
+ .../reply/agent-runner-execution.ts           | 136 +------
+ src/auto-reply/reply/agent-runner-memory.ts   |   5 +-
+ .../agent-runner.misc.runreplyagent.test.ts   | 371 +++++++++++++++++-
+ .../agent-runner.runreplyagent.e2e.test.ts    |  13 +
+ src/auto-reply/reply/agent-runner.ts          |  16 +-
+ src/auto-reply/reply/commands-core.ts         |  22 +-
+ .../reply/commands-session-abort.ts           |   4 +-
+ .../reply/dispatch-from-config.test.ts        |  56 +++
+ src/auto-reply/reply/dispatch-from-config.ts  |  53 ++-
+ src/auto-reply/reply/followup-runner.ts       |  22 +-
+ .../get-reply.reset-hooks-fallback.test.ts    |  77 ++++
+ src/auto-reply/reply/get-reply.ts             |  66 ++--
+ src/auto-reply/reply/reply-utils.test.ts      |  45 +++
+ .../reply/session-hooks-context.test.ts       |  30 ++
+ src/auto-reply/reply/session-usage.ts         |  52 ++-
+ src/auto-reply/reply/session.test.ts          |  14 -
+ src/auto-reply/reply/session.ts               |   6 +-
+ src/auto-reply/reply/streaming-directives.ts  |  58 ++-
+ src/auto-reply/status.cli-prompt-load.test.ts |  33 --
+ src/auto-reply/status.test.ts                 |  75 ----
+ src/auto-reply/status.ts                      |  48 +--
+ src/auto-reply/templating.ts                  |   2 +
+ src/auto-reply/tokens.test.ts                 |  15 -
+ src/auto-reply/tokens.ts                      |  28 --
+ src/auto-reply/types.ts                       |   7 +-
+ 29 files changed, 960 insertions(+), 392 deletions(-)
+
+diff --git a/src/auto-reply/heartbeat.ts b/src/auto-reply/heartbeat.ts
+index e2ffa71b6c..86a9271e6e 100644
+--- a/src/auto-reply/heartbeat.ts
++++ b/src/auto-reply/heartbeat.ts
+@@ -11,7 +11,7 @@ export type HeartbeatTask = {
+ // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
+ // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
+ export const HEARTBEAT_PROMPT =
+-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
++  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK as plain text — do NOT use the message tool to send it.";
+ export const DEFAULT_HEARTBEAT_EVERY = "30m";
+ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+ 
+diff --git a/src/auto-reply/reply.block-streaming.test.ts b/src/auto-reply/reply.block-streaming.test.ts
+index 81ec783dea..b6f995c8a3 100644
+--- a/src/auto-reply/reply.block-streaming.test.ts
++++ b/src/auto-reply/reply.block-streaming.test.ts
+@@ -110,7 +110,12 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
+         workspace: "/tmp/workspace",
+       },
+     },
+-    channels: { telegram: { allowFrom: ["*"], ...(streamMode ? { streaming: streamMode } : {}) } },
++    channels: {
++      telegram: {
++        allowFrom: ["*"],
++        ...(streamMode ? { streaming: { mode: streamMode } } : {}),
++      },
++    },
+     session: { store: "/tmp/sessions.json" },
+   };
+ }
+diff --git a/src/auto-reply/reply/abort.test.ts b/src/auto-reply/reply/abort.test.ts
+index a1cb96ea99..5e7e453e46 100644
+--- a/src/auto-reply/reply/abort.test.ts
++++ b/src/auto-reply/reply/abort.test.ts
+@@ -64,6 +64,10 @@ const acpManagerMocks = vi.hoisted(() => ({
+   cancelSession: vi.fn(async () => {}),
+ }));
+ 
++const processSupervisorMocks = vi.hoisted(() => ({
++  cancelSession: vi.fn(() => 0),
++}));
++
+ vi.mock("../../acp/control-plane/manager.js", () => ({
+   getAcpSessionManager: () => ({
+     resolveSession: acpManagerMocks.resolveSession,
+@@ -179,6 +183,10 @@ describe("abort detection", () => {
+       abortEmbeddedPiRun: () => true,
+       getLatestSubagentRunByChildSessionKey:
+         subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
++      getProcessSupervisor: (() =>
++        ({
++          cancelSession: processSupervisorMocks.cancelSession,
++        }) as never) as never,
+       listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+     });
+@@ -197,6 +205,7 @@ describe("abort detection", () => {
+     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
+     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
+     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
++    processSupervisorMocks.cancelSession.mockReset().mockReturnValue(0);
+   });
+ 
+   it("isAbortTrigger matches standalone abort trigger phrases", () => {
+@@ -414,6 +423,40 @@ describe("abort detection", () => {
+     expectSessionLaneCleared(sessionKey);
+   });
+ 
++  it("fast-abort cancels active CLI supervisor runs for the target session", async () => {
++    const sessionKey = "telegram:cli";
++    const sessionId = "session-cli";
++    const { cfg } = await createAbortConfig({
++      sessionIdsByKey: { [sessionKey]: sessionId },
++    });
++    processSupervisorMocks.cancelSession.mockReturnValueOnce(1);
++    abortTesting.setDepsForTests({
++      getAcpSessionManager: (() =>
++        ({
++          resolveSession: acpManagerMocks.resolveSession,
++          cancelSession: acpManagerMocks.cancelSession,
++        }) as never) as never,
++      abortEmbeddedPiRun: () => false,
++      getProcessSupervisor: (() =>
++        ({
++          cancelSession: processSupervisorMocks.cancelSession,
++        }) as never) as never,
++      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
++      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
++    });
++
++    const result = await runStopCommand({
++      cfg,
++      sessionKey,
++      from: "telegram:123",
++      to: "telegram:123",
++    });
++
++    expect(result.handled).toBe(true);
++    expect(result.aborted).toBe(true);
++    expect(processSupervisorMocks.cancelSession).toHaveBeenCalledWith(sessionId, "manual-cancel");
++  });
++
+   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
+     const sessionKey = "agent:codex:acp:test-1";
+     const sessionId = "session-123";
+diff --git a/src/auto-reply/reply/abort.ts b/src/auto-reply/reply/abort.ts
+index ace2314bd6..cbdfb9d6ca 100644
+--- a/src/auto-reply/reply/abort.ts
++++ b/src/auto-reply/reply/abort.ts
+@@ -20,6 +20,7 @@ import {
+   updateSessionStore,
+ } from "../../config/sessions.js";
+ import { logVerbose } from "../../globals.js";
++import { getProcessSupervisor } from "../../process/supervisor/index.js";
+ import { parseAgentSessionKey } from "../../routing/session-key.js";
+ import { resolveCommandAuthorization } from "../command-auth.js";
+ import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+@@ -54,6 +55,7 @@ const defaultAbortDeps = {
+   getAcpSessionManager,
+   abortEmbeddedPiRun,
+   getLatestSubagentRunByChildSessionKey,
++  getProcessSupervisor,
+   listSubagentRunsForController,
+   markSubagentRunTerminated,
+ };
+@@ -70,6 +72,8 @@ export const __testing = {
+     abortDeps.getLatestSubagentRunByChildSessionKey =
+       deps?.getLatestSubagentRunByChildSessionKey ??
+       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
++    abortDeps.getProcessSupervisor =
++      deps?.getProcessSupervisor ?? defaultAbortDeps.getProcessSupervisor;
+     abortDeps.listSubagentRunsForController =
+       deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
+     abortDeps.markSubagentRunTerminated =
+@@ -80,11 +84,39 @@ export const __testing = {
+     abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
+     abortDeps.getLatestSubagentRunByChildSessionKey =
+       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
++    abortDeps.getProcessSupervisor = defaultAbortDeps.getProcessSupervisor;
+     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
+     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
+   },
+ };
+ 
++export function abortSessionExecutions(sessionId: string | undefined): {
++  embeddedAborted: boolean;
++  cliCancelled: number;
++} {
++  const normalizedSessionId = sessionId?.trim();
++  if (!normalizedSessionId) {
++    return { embeddedAborted: false, cliCancelled: 0 };
++  }
++  const embeddedAborted = abortDeps.abortEmbeddedPiRun(normalizedSessionId);
++  let cliCancelled = 0;
++  try {
++    cliCancelled = abortDeps
++      .getProcessSupervisor()
++      .cancelSession(normalizedSessionId, "manual-cancel");
++  } catch (error) {
++    logVerbose(
++      `abort: process supervisor cancel failed for ${normalizedSessionId}: ${
++        error instanceof Error ? error.message : String(error)
++      }`,
++    );
++  }
++  if (cliCancelled > 0) {
++    logVerbose(`abort: cancelled ${cliCancelled} cli run(s) for session ${normalizedSessionId}`);
++  }
++  return { embeddedAborted, cliCancelled };
++}
++
+ export function formatAbortReplyText(stoppedSubagents?: number): string {
+   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
+     return "⚙️ Agent was aborted.";
+@@ -199,6 +231,7 @@ export function stopSubagentsForRequester(params: {
+       const aborted =
+         (childKey ? replyRunRegistry.abort(childKey) : false) ||
+         (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
++      const { embeddedAborted, cliCancelled } = abortSessionExecutions(sessionId);
+       const markedTerminated =
+         abortDeps.markSubagentRunTerminated({
+           runId: run.runId,
+@@ -206,7 +239,14 @@ export function stopSubagentsForRequester(params: {
+           reason: "killed",
+         }) > 0;
+ 
+-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
++      if (
++        markedTerminated ||
++        aborted ||
++        embeddedAborted ||
++        cliCancelled > 0 ||
++        cleared.followupCleared > 0 ||
++        cleared.laneCleared > 0
++      ) {
+         stopped += 1;
+       }
+     }
+@@ -291,9 +331,11 @@ export async function tryFastAbortFromMessage(params: {
+       }
+     }
+     const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
+-    const aborted =
++    const registryAborted =
+       replyRunRegistry.abort(resolvedTargetKey) ||
+       (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
++    const { embeddedAborted, cliCancelled } = abortSessionExecutions(sessionId);
++    const aborted = registryAborted || embeddedAborted || cliCancelled > 0;
+     const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
+     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+       logVerbose(
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index c4df115e89..691cc08a0f 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -23,7 +23,6 @@ import {
+   sanitizeUserFacingText,
+ } from "../../agents/pi-embedded-helpers.js";
+ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
+-import { formatReasoningMessage } from "../../agents/pi-embedded-utils.js";
+ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+ import {
+   resolveGroupSessionKey,
+@@ -640,6 +639,14 @@ export async function runAgentTurnWithFallback(params: {
+           }
+           return { skip: true };
+         }
++        // Pure-whitespace deltas (single space, newline) are valid streaming
++        // tokens — they preserve markdown spacing between words and bullet
++        // markers. sanitizeUserFacingText would .trim() them to "" and drop
++        // them entirely. They contain no patterns worth sanitizing, so pass
++        // them through as-is.
++        if (!text.trim()) {
++          return { text, skip: false };
++        }
+         const sanitized = sanitizeUserFacingText(text, {
+           errorContext: Boolean(payload.isError),
+         });
+@@ -743,7 +750,6 @@ export async function runAgentTurnWithFallback(params: {
+               // ensures markRunComplete() isn't called before streaming initialises.
+               let streamingChain: Promise<void> = Promise.resolve();
+               let cliReasoningOpen = false;
+-              let assistantMessageStartQueued = false;
+               const queueStreamingStep = (step: () => Promise<void>) => {
+                 streamingChain = streamingChain.then(step).catch((err) => {
+                   defaultRuntime.error(
+@@ -751,16 +757,6 @@ export async function runAgentTurnWithFallback(params: {
+                   );
+                 });
+               };
+-              const queueAssistantMessageStart = () => {
+-                if (assistantMessageStartQueued) {
+-                  return;
+-                }
+-                assistantMessageStartQueued = true;
+-                queueStreamingStep(async () => {
+-                  await params.typingSignals.signalMessageStart();
+-                  await params.opts?.onAssistantMessageStart?.();
+-                });
+-              };
+               const queueReasoningEndIfNeeded = () => {
+                 if (!cliReasoningOpen) {
+                   return;
+@@ -785,7 +781,6 @@ export async function runAgentTurnWithFallback(params: {
+                   timeoutMs: params.followupRun.run.timeoutMs,
+                   runId,
+                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+-                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                   ownerNumbers: params.followupRun.run.ownerNumbers,
+                   cliSessionId,
+                   cliSessionBinding,
+@@ -799,121 +794,6 @@ export async function runAgentTurnWithFallback(params: {
+                   imageOrder: params.opts?.imageOrder,
+                   messageProvider: params.followupRun.run.messageProvider,
+                   agentAccountId: params.followupRun.run.agentAccountId,
+-                  onSystemInit: ({ subtype }) => {
+-                    if (subtype === "init") {
+-                      queueAssistantMessageStart();
+-                    }
+-                  },
+-                  onAssistantTurn: (text) => {
+-                    queueAssistantMessageStart();
+-                    queueReasoningEndIfNeeded();
+-                    emitAgentEvent({
+-                      runId,
+-                      stream: "assistant",
+-                      data: { text },
+-                    });
+-                    queueStreamingStep(async () => {
+-                      const textForTyping = await handlePartialForTyping({ text });
+-                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
+-                        return;
+-                      }
+-                      await params.opts.onPartialReply({ text: textForTyping });
+-                    });
+-                  },
+-                  onThinkingTurn: (payload) => {
+-                    if (!payload.text.trim()) {
+-                      return;
+-                    }
+-                    queueAssistantMessageStart();
+-                    cliReasoningOpen = true;
+-                    emitAgentEvent({
+-                      runId,
+-                      stream: "thinking",
+-                      data: payload.delta
+-                        ? { text: payload.text, delta: payload.delta }
+-                        : { text: payload.text },
+-                    });
+-                    queueStreamingStep(async () => {
+-                      await params.typingSignals.signalReasoningDelta();
+-                      const formatted = formatReasoningMessage(payload.text);
+-                      if (!formatted) {
+-                        return;
+-                      }
+-                      await params.opts?.onReasoningStream?.({
+-                        text: formatted,
+-                        isReasoning: true,
+-                      });
+-                    });
+-                  },
+-                  onToolUseEvent: (payload) => {
+-                    queueAssistantMessageStart();
+-                    queueReasoningEndIfNeeded();
+-                    emitAgentEvent({
+-                      runId,
+-                      stream: "tool",
+-                      data: {
+-                        phase: "start",
+-                        name: payload.name,
+-                        ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
+-                        ...(payload.input !== undefined ? { input: payload.input } : {}),
+-                      },
+-                    });
+-                    queueStreamingStep(async () => {
+-                      await params.typingSignals.signalToolStart();
+-                      await params.opts?.onToolStart?.({
+-                        name: payload.name,
+-                        phase: "start",
+-                        toolCallId: payload.toolUseId,
+-                      });
+-                    });
+-                  },
+-                  onToolResult: onToolResult
+-                    ? (() => {
+-                        let toolResultChain: Promise<void> = Promise.resolve();
+-                        return (payload) => {
+-                          queueReasoningEndIfNeeded();
+-                          const preview =
+-                            typeof payload.text === "string" && payload.text.trim()
+-                              ? payload.text.trim().slice(0, 1_200)
+-                              : undefined;
+-                          emitAgentEvent({
+-                            runId,
+-                            stream: "tool",
+-                            data: {
+-                              phase: "result",
+-                              ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
+-                              ...(preview ? { partialResult: preview, result: preview } : {}),
+-                              ...(payload.isError ? { isError: true } : {}),
+-                            },
+-                          });
+-                          toolResultChain = toolResultChain
+-                            .then(async () => {
+-                              const { text, skip } = normalizeStreamingText({
+-                                text: payload.text,
+-                                ...(payload.isError ? { isError: true } : {}),
+-                              });
+-                              if (skip) {
+-                                return;
+-                              }
+-                              if (text !== undefined) {
+-                                await params.typingSignals.signalTextDelta(text);
+-                              }
+-                              await onToolResult({
+-                                ...(payload.toolUseId ? { toolCallId: payload.toolUseId } : {}),
+-                                ...(text !== undefined ? { text } : {}),
+-                                ...(payload.isError ? { isError: true } : {}),
+-                              });
+-                            })
+-                            .catch((err) => {
+-                              logVerbose(`cli tool result delivery failed: ${String(err)}`);
+-                            });
+-                          const task = toolResultChain.finally(() => {
+-                            params.pendingToolTasks.delete(task);
+-                          });
+-                          params.pendingToolTasks.add(task);
+-                        };
+-                      })()
+-                    : undefined,
+                 });
+                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                   result.meta?.systemPromptReport,
+diff --git a/src/auto-reply/reply/agent-runner-memory.ts b/src/auto-reply/reply/agent-runner-memory.ts
+index 84ac336449..7bbc556a70 100644
+--- a/src/auto-reply/reply/agent-runner-memory.ts
++++ b/src/auto-reply/reply/agent-runner-memory.ts
+@@ -3,8 +3,9 @@ import fs from "node:fs";
+ import type { AgentMessage } from "@mariozechner/pi-agent-core";
+ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+ import { estimateMessagesTokens } from "../../agents/compaction.js";
++import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
+ import { runWithModelFallback } from "../../agents/model-fallback.js";
+-import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
++import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+ import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+ import {
+   derivePromptTokens,
+@@ -694,7 +695,7 @@ export async function runMemoryFlushIfNeeded(params: {
+           runId: flushRunId,
+           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+         });
+-        const result = await runEmbeddedPiAgent({
++        const result = await runModelAwareAgent({
+           ...embeddedContext,
+           ...senderContext,
+           ...runBaseParams,
+diff --git a/src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts b/src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+index 5f77dd880f..19d8ebf103 100644
+--- a/src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
++++ b/src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+@@ -1,7 +1,9 @@
++import crypto from "node:crypto";
+ import fs from "node:fs/promises";
+ import os from "node:os";
+ import path from "node:path";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { FailoverError } from "../../agents/failover-error.js";
+ import {
+   abortEmbeddedPiRun,
+   getActiveEmbeddedRunCount,
+@@ -10,6 +12,7 @@ import {
+ import type { OpenClawConfig } from "../../config/config.js";
+ import type { SessionEntry } from "../../config/sessions.js";
+ import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
++import { onAgentEvent } from "../../infra/agent-events.js";
+ import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+ import {
+   clearMemoryPluginState,
+@@ -24,12 +27,18 @@ import { createMockTypingController } from "./test-helpers.js";
+ function createCliBackendTestConfig() {
+   return {
+     agents: {
+-      defaults: {},
++      defaults: {
++        cliBackends: {
++          "claude-cli": {},
++          "google-gemini-cli": {},
++        },
++      },
+     },
+   };
+ }
+ 
+ const runEmbeddedPiAgentMock = vi.fn();
++const runCliAgentMock = vi.fn();
+ const runWithModelFallbackMock = vi.fn();
+ const runtimeErrorMock = vi.fn();
+ const abortEmbeddedPiRunMock = vi.fn();
+@@ -71,6 +80,12 @@ vi.mock("../../agents/pi-embedded.js", () => {
+   };
+ });
+ 
++vi.mock("../../agents/cli-runner.js", () => {
++  return {
++    runCliAgent: (params: unknown) => runCliAgentMock(params),
++  };
++});
++
+ vi.mock("../../runtime.js", () => {
+   return {
+     defaultRuntime: {
+@@ -121,6 +136,7 @@ type RunWithModelFallbackParams = {
+ 
+ beforeEach(() => {
+   runEmbeddedPiAgentMock.mockClear();
++  runCliAgentMock.mockClear();
+   runWithModelFallbackMock.mockClear();
+   runtimeErrorMock.mockClear();
+   abortEmbeddedPiRunMock.mockClear();
+@@ -1507,6 +1523,287 @@ describe("runReplyAgent block streaming", () => {
+   });
+ });
+ 
++describe("runReplyAgent claude-cli routing", () => {
++  function createRun(params?: {
++    typingMode?: "instant" | "thinking";
++    opts?: {
++      onAssistantMessageStart?: () => Promise<void> | void;
++      onReasoningStream?: (payload: {
++        text?: string;
++        isReasoning?: boolean;
++      }) => Promise<void> | void;
++      onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
++      onReasoningEnd?: () => Promise<void> | void;
++      onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
++    };
++  }) {
++    const typing = createMockTypingController();
++    const sessionCtx = {
++      Provider: "webchat",
++      OriginatingTo: "session:1",
++      AccountId: "primary",
++      MessageSid: "msg",
++    } as unknown as TemplateContext;
++    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
++    const followupRun = {
++      prompt: "hello",
++      summaryLine: "hello",
++      enqueuedAt: Date.now(),
++      run: {
++        sessionId: "session",
++        sessionKey: "main",
++        messageProvider: "webchat",
++        sessionFile: "/tmp/session.jsonl",
++        workspaceDir: "/tmp",
++        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
++        skillsSnapshot: {},
++        provider: "claude-cli",
++        model: "opus-4.5",
++        thinkLevel: "low",
++        verboseLevel: "off",
++        elevatedLevel: "off",
++        bashElevated: {
++          enabled: false,
++          allowed: false,
++          defaultLevel: "off",
++        },
++        timeoutMs: 1_000,
++        blockReplyBreak: "message_end",
++      },
++    } as unknown as FollowupRun;
++
++    return runReplyAgent({
++      commandBody: "hello",
++      followupRun,
++      queueKey: "main",
++      resolvedQueue,
++      shouldSteer: false,
++      shouldFollowup: false,
++      isActive: false,
++      isStreaming: false,
++      typing,
++      sessionCtx,
++      defaultModel: "claude-cli/opus-4.5",
++      resolvedVerboseLevel: "off",
++      isNewSession: false,
++      blockStreamingEnabled: false,
++      resolvedBlockStreamingBreak: "message_end",
++      shouldInjectGroupIntro: false,
++      typingMode: params?.typingMode ?? "instant",
++      opts: params?.opts,
++    });
++  }
++
++  it("uses claude-cli runner for claude-cli provider", async () => {
++    const runId = "00000000-0000-0000-0000-000000000001";
++    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
++    const lifecyclePhases: string[] = [];
++    const unsubscribe = onAgentEvent((evt) => {
++      if (evt.runId !== runId) {
++        return;
++      }
++      if (evt.stream !== "lifecycle") {
++        return;
++      }
++      const phase = evt.data?.phase;
++      if (typeof phase === "string") {
++        lifecyclePhases.push(phase);
++      }
++    });
++    runCliAgentMock.mockResolvedValueOnce({
++      payloads: [{ text: "ok" }],
++      meta: {
++        agentMeta: {
++          provider: "claude-cli",
++          model: "opus-4.5",
++        },
++      },
++    });
++
++    const result = await createRun();
++    unsubscribe();
++    randomSpy.mockRestore();
++
++    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
++    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
++    expect(lifecyclePhases).toEqual(["start", "end"]);
++    expect(result).toMatchObject({ text: "ok" });
++  });
++
++  it("forwards cli thinking/tool stream events to reply callbacks", async () => {
++    const runId = "00000000-0000-0000-0000-000000000002";
++    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
++    const onReasoningStream = vi.fn();
++    const onToolStart = vi.fn();
++    const toolPhases: string[] = [];
++    const thinkingEvents: string[] = [];
++    const unsubscribe = onAgentEvent((evt) => {
++      if (evt.runId !== runId) {
++        return;
++      }
++      if (evt.stream === "tool" && typeof evt.data?.phase === "string") {
++        toolPhases.push(evt.data.phase);
++      }
++      if (evt.stream === "thinking" && typeof evt.data?.text === "string") {
++        thinkingEvents.push(evt.data.text);
++      }
++    });
++    runCliAgentMock.mockImplementationOnce(
++      async (params: {
++        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
++        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
++        onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
++        onAssistantTurn?: (text: string) => void;
++      }) => {
++        params.onThinkingTurn?.({
++          text: "Check_*files*\n\nThen_more",
++          delta: "Check_*files*\n\nThen_more",
++        });
++        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
++        params.onToolResult?.({ toolUseId: "toolu_1", text: "README contents" });
++        params.onAssistantTurn?.("Final answer");
++        return {
++          payloads: [{ text: "Final answer" }],
++          meta: {
++            agentMeta: {
++              provider: "claude-cli",
++              model: "opus-4.5",
++            },
++          },
++        };
++      },
++    );
++
++    const result = await createRun({
++      typingMode: "thinking",
++      opts: {
++        onReasoningStream,
++        onToolStart,
++      },
++    });
++    unsubscribe();
++    randomSpy.mockRestore();
++
++    expect(onReasoningStream).toHaveBeenCalledWith({
++      text: "Reasoning:\n_Check\\_\\*files\\*_\n\n_Then\\_more_",
++      isReasoning: true,
++    });
++    expect(onToolStart).toHaveBeenCalledWith({
++      name: "Read",
++      phase: "start",
++    });
++    expect(thinkingEvents).toEqual(["Check_*files*\n\nThen_more"]);
++    expect(toolPhases).toEqual(expect.arrayContaining(["start", "result"]));
++    expect(result).toMatchObject({ text: "Final answer" });
++  });
++
++  it("bridges cli system init to assistant message start once", async () => {
++    const callbackOrder: string[] = [];
++    const onAssistantMessageStart = vi.fn(() => {
++      callbackOrder.push("start");
++    });
++    const onReasoningStream = vi.fn(() => {
++      callbackOrder.push("reasoning");
++    });
++    const onToolStart = vi.fn(() => {
++      callbackOrder.push("tool");
++    });
++
++    runCliAgentMock.mockImplementationOnce(
++      async (params: {
++        onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
++        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
++        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
++        onAssistantTurn?: (text: string) => void;
++      }) => {
++        params.onSystemInit?.({ subtype: "init", sessionId: "cli-session-1" });
++        params.onThinkingTurn?.({ text: "step", delta: "step" });
++        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
++        params.onAssistantTurn?.("Answer");
++        return {
++          payloads: [{ text: "Answer" }],
++          meta: {
++            agentMeta: {
++              provider: "claude-cli",
++              model: "opus-4.5",
++            },
++          },
++        };
++      },
++    );
++
++    const result = await createRun({
++      typingMode: "thinking",
++      opts: {
++        onAssistantMessageStart,
++        onReasoningStream,
++        onToolStart,
++      },
++    });
++
++    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
++    expect(callbackOrder[0]).toBe("start");
++    expect(callbackOrder).toEqual(expect.arrayContaining(["reasoning", "tool"]));
++    expect(result).toMatchObject({ text: "Answer" });
++  });
++
++  it("strips reply directive tags from cli partial replies (including split tags)", async () => {
++    const onPartialReply = vi.fn();
++    runCliAgentMock.mockImplementationOnce(
++      async (params: { onAssistantTurn?: (text: string) => void }) => {
++        params.onAssistantTurn?.("[[reply_to_cur");
++        params.onAssistantTurn?.("rent]]7452136093975117843 请确认一下");
++        return {
++          payloads: [{ text: "[[reply_to_current]]7452136093975117843 请确认一下" }],
++          meta: {
++            agentMeta: {
++              provider: "claude-cli",
++              model: "opus-4.5",
++            },
++          },
++        };
++      },
++    );
++
++    const result = await createRun({
++      opts: {
++        onPartialReply,
++      },
++    });
++
++    const partialTexts = onPartialReply.mock.calls
++      .map((call) => call[0]?.text)
++      .filter((value): value is string => typeof value === "string");
++    expect(partialTexts).toEqual(["7452136093975117843 请确认一下"]);
++    expect(partialTexts.some((value) => value.includes("[[reply_to"))).toBe(false);
++    expect(result).toMatchObject({
++      text: "7452136093975117843 请确认一下",
++    });
++  });
++
++  it("closes reasoning stream when cli runner throws after thinking", async () => {
++    const onReasoningEnd = vi.fn();
++    runCliAgentMock.mockImplementationOnce(
++      async (params: { onThinkingTurn?: (payload: { text: string; delta?: string }) => void }) => {
++        params.onThinkingTurn?.({ text: "debug path", delta: "debug path" });
++        throw new Error("cli boom");
++      },
++    );
++
++    const result = await createRun({
++      typingMode: "thinking",
++      opts: {
++        onReasoningEnd,
++      },
++    });
++
++    expect(result).toMatchObject({
++      text: expect.stringContaining("cli boom"),
++    });
++    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
++  });
++});
++
+ describe("runReplyAgent messaging tool suppression", () => {
+   function createRun(
+     messageProvider = "slack",
+@@ -2330,6 +2627,78 @@ describe("runReplyAgent billing error classification", () => {
+     expect(payload?.text).toContain("billing error");
+     expect(payload?.text).not.toContain("Context overflow");
+   });
++
++  it("does not relabel format FailoverErrors as context overflow when the message is a CLI transcript", async () => {
++    const transcriptMessage = [
++      '{"type":"system","subtype":"init","session_id":"480007d1-b916-417c-b504-71d76bf35f7e"}',
++      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."}]}}',
++    ].join("\n");
++    runEmbeddedPiAgentMock.mockRejectedValueOnce(
++      new FailoverError(transcriptMessage, {
++        reason: "format",
++        provider: "claude-cli",
++        model: "opus[1m]",
++        status: 400,
++      }),
++    );
++
++    const typing = createMockTypingController();
++    const sessionCtx = {
++      Provider: "telegram",
++      MessageSid: "msg",
++    } as unknown as TemplateContext;
++    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
++    const followupRun = {
++      prompt: "hello",
++      summaryLine: "hello",
++      enqueuedAt: Date.now(),
++      run: {
++        sessionId: "session",
++        sessionKey: "main",
++        messageProvider: "telegram",
++        sessionFile: "/tmp/session.jsonl",
++        workspaceDir: "/tmp",
++        config: {},
++        skillsSnapshot: {},
++        provider: "anthropic",
++        model: "claude",
++        thinkLevel: "low",
++        verboseLevel: "off",
++        elevatedLevel: "off",
++        bashElevated: {
++          enabled: false,
++          allowed: false,
++          defaultLevel: "off",
++        },
++        timeoutMs: 1_000,
++        blockReplyBreak: "message_end",
++      },
++    } as unknown as FollowupRun;
++
++    const result = await runReplyAgent({
++      commandBody: "hello",
++      followupRun,
++      queueKey: "main",
++      resolvedQueue,
++      shouldSteer: false,
++      shouldFollowup: false,
++      isActive: false,
++      isStreaming: false,
++      typing,
++      sessionCtx,
++      defaultModel: "anthropic/claude",
++      resolvedVerboseLevel: "off",
++      isNewSession: false,
++      blockStreamingEnabled: false,
++      resolvedBlockStreamingBreak: "message_end",
++      shouldInjectGroupIntro: false,
++      typingMode: "instant",
++    });
++
++    const payload = Array.isArray(result) ? result[0] : result;
++    expect(payload?.text).toContain("malformed output");
++    expect(payload?.text).not.toContain("Context overflow");
++  });
+ });
+ 
+ describe("runReplyAgent mid-turn rate-limit fallback", () => {
+diff --git a/src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts b/src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+index a4bc0502ec..d45f8f26dd 100644
+--- a/src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
++++ b/src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+@@ -1634,6 +1634,19 @@ describe("runReplyAgent typing (heartbeat)", () => {
+     });
+   });
+ 
++  it("suppresses plain AbortError failures before reply", async () => {
++    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
++      const err = new Error("aborted");
++      err.name = "AbortError";
++      throw err;
++    });
++
++    const { run } = createMinimalRun();
++    const res = await run();
++
++    expect(res).toBeUndefined();
++  });
++
+   it("still replies even if session reset fails to persist", async () => {
+     await withTempStateDir(async (stateDir) => {
+       const saveSpy = vi
+diff --git a/src/auto-reply/reply/agent-runner.ts b/src/auto-reply/reply/agent-runner.ts
+index da2fb5ef88..5a1472c901 100644
+--- a/src/auto-reply/reply/agent-runner.ts
++++ b/src/auto-reply/reply/agent-runner.ts
+@@ -2,6 +2,7 @@ import fs from "node:fs";
+ import { lookupContextTokens } from "../../agents/context.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+ import { resolveModelAuthMode } from "../../agents/model-auth.js";
++import { isCliProvider } from "../../agents/model-selection.js";
+ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+ import { hasNonzeroUsage } from "../../agents/usage.js";
+ import {
+@@ -473,6 +474,10 @@ export async function runReplyAgent(params: {
+       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+     }
+ 
++    if (runOutcome.kind === "aborted") {
++      return undefined;
++    }
++
+     const {
+       runId,
+       runResult,
+@@ -521,6 +526,12 @@ export async function runReplyAgent(params: {
+     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+     const providerUsed =
+       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
++    const cliSessionId = isCliProvider(providerUsed, cfg)
++      ? runResult.meta?.agentMeta?.sessionId?.trim()
++      : undefined;
++    const cliSessionBinding = isCliProvider(providerUsed, cfg)
++      ? runResult.meta?.agentMeta?.cliSessionBinding
++      : undefined;
+     const verboseEnabled = resolvedVerboseLevel !== "off";
+     const selectedProvider = followupRun.run.provider;
+     const selectedModel = followupRun.run.model;
+@@ -574,7 +585,10 @@ export async function runReplyAgent(params: {
+       providerUsed,
+       contextTokensUsed,
+       systemPromptReport: runResult.meta?.systemPromptReport,
+-      usageIsContextSnapshot: false,
++      cliSessionId,
++      cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding ?? cliSessionBinding,
++      cliPromptLoad: runResult.meta?.agentMeta?.cliPromptLoad,
++      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
+     });
+ 
+     // Drain any late tool/block deliveries before deciding there's "nothing to send".
+diff --git a/src/auto-reply/reply/commands-core.ts b/src/auto-reply/reply/commands-core.ts
+index 5b99105ff4..17a49bd24f 100644
+--- a/src/auto-reply/reply/commands-core.ts
++++ b/src/auto-reply/reply/commands-core.ts
+@@ -116,33 +116,39 @@ export async function emitResetCommandHooks(params: {
+   action: ResetCommandAction;
+   ctx: HandleCommandsParams["ctx"];
+   cfg: HandleCommandsParams["cfg"];
+-  command: Pick<
++  command?: Pick<
+     HandleCommandsParams["command"],
+     "surface" | "senderId" | "channel" | "from" | "to" | "resetHookTriggered"
+   >;
++  commandSource?: string;
++  senderId?: string;
+   sessionKey?: string;
+   sessionEntry?: HandleCommandsParams["sessionEntry"];
+   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+   workspaceDir: string;
++  routeHookMessages?: boolean;
+ }): Promise<void> {
++  const commandSource = params.command?.surface ?? params.commandSource;
++  const senderId = params.command?.senderId ?? params.senderId;
+   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
+     sessionEntry: params.sessionEntry,
+     previousSessionEntry: params.previousSessionEntry,
+-    commandSource: params.command.surface,
+-    senderId: params.command.senderId,
+-    workspaceDir: params.workspaceDir,
++    commandSource,
++    senderId,
+     cfg: params.cfg, // Pass config for LLM slug generation
+   });
+   await triggerInternalHook(hookEvent);
+-  params.command.resetHookTriggered = true;
++  if (params.command) {
++    params.command.resetHookTriggered = true;
++  }
+ 
+   // Send hook messages immediately if present
+-  if (hookEvent.messages.length > 0) {
++  if (params.routeHookMessages !== false && hookEvent.messages.length > 0) {
+     // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
+     // oxlint-disable-next-line typescript/no-explicit-any
+-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
++    const channel = params.ctx.OriginatingChannel || (params.command?.channel as any);
+     // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
+-    const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
++    const to = params.ctx.OriginatingTo || params.command?.from || params.command?.to;
+ 
+     if (channel && to) {
+       const { routeReply } = await loadRouteReplyRuntime();
+diff --git a/src/auto-reply/reply/commands-session-abort.ts b/src/auto-reply/reply/commands-session-abort.ts
+index d20527a8d6..002dbecb27 100644
+--- a/src/auto-reply/reply/commands-session-abort.ts
++++ b/src/auto-reply/reply/commands-session-abort.ts
+@@ -1,4 +1,3 @@
+-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+ import type { SessionEntry } from "../../config/sessions.js";
+ import { logVerbose } from "../../globals.js";
+ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+@@ -8,6 +7,7 @@ import {
+   type AbortCutoff,
+ } from "./abort-cutoff.js";
+ import {
++  abortSessionExecutions,
+   formatAbortReplyText,
+   isAbortTrigger,
+   resolveSessionEntryForKey,
+@@ -84,7 +84,7 @@ async function applyAbortTarget(params: {
+     replyRunRegistry.abort(abortTarget.key);
+   }
+   if (abortTarget.sessionId) {
+-    abortEmbeddedPiRun(abortTarget.sessionId);
++    abortSessionExecutions(abortTarget.sessionId);
+   }
+ 
+   const persisted = await persistAbortTargetEntry({
+diff --git a/src/auto-reply/reply/dispatch-from-config.test.ts b/src/auto-reply/reply/dispatch-from-config.test.ts
+index a00c6a8b11..2fa3395c04 100644
+--- a/src/auto-reply/reply/dispatch-from-config.test.ts
++++ b/src/auto-reply/reply/dispatch-from-config.test.ts
+@@ -2255,6 +2255,12 @@ describe("dispatchReplyFromConfig", () => {
+       AccountId: "acc-1",
+       GroupSpace: "guild-123",
+       GroupChannel: "alerts",
++      ChannelData: {
++        feishu: {
++          messageId: "om_123",
++          chatId: "oc_456",
++        },
++      },
+     });
+ 
+     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+@@ -2269,6 +2275,12 @@ describe("dispatchReplyFromConfig", () => {
+           originatingChannel: "Telegram",
+           originatingTo: "telegram:999",
+           messageId: "sid-full",
++          channelData: {
++            feishu: {
++              messageId: "om_123",
++              chatId: "oc_456",
++            },
++          },
+           senderId: "user-1",
+           senderName: "Alice",
+           senderUsername: "alice",
+@@ -2433,6 +2445,50 @@ describe("dispatchReplyFromConfig", () => {
+     );
+   });
+ 
++  it("deduplicates equivalent Feishu final replies that only differ by mention tag format", async () => {
++    setNoAbort();
++    const cfg = emptyConfig;
++    const dispatcher = createDispatcher();
++    const ctx = buildTestCtx({
++      Provider: "feishu",
++      Surface: "feishu",
++      OriginatingChannel: "feishu",
++      OriginatingTo: "chat:oc_group_1",
++      To: "chat:oc_group_1",
++      AccountId: "default",
++      SenderId: "user-9",
++      SenderUsername: "ada",
++      CommandAuthorized: true,
++      WasMentioned: true,
++      CommandBody: "reply",
++      RawBody: "reply",
++      Body: "reply",
++      MessageSid: "msg-feishu-final-dedupe",
++      SessionKey: "agent:main:feishu:group:oc_group_1",
++    });
++    const replyResolver = vi.fn(
++      async () =>
++        [
++          {
++            text: '<at user_id="ou_lukin">Lukin</at> <at user_id="ou_cody">Cody</at> 确认，可以进 Human Gate。',
++          },
++          {
++            text: "<at id=ou_lukin></at> <at id=ou_cody></at> 确认，可以进 Human Gate。",
++          },
++        ] satisfies ReplyPayload[],
++    );
++
++    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
++
++    expect(result.queuedFinal).toBe(true);
++    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
++    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
++      expect.objectContaining({
++        text: '<at user_id="ou_lukin">Lukin</at> <at user_id="ou_cody">Cody</at> 确认，可以进 Human Gate。',
++      }),
++    );
++  });
++
+   it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
+     setNoAbort();
+     hookMocks.runner.hasHooks.mockImplementation(
+diff --git a/src/auto-reply/reply/dispatch-from-config.ts b/src/auto-reply/reply/dispatch-from-config.ts
+index d394a35e54..17a5290c96 100644
+--- a/src/auto-reply/reply/dispatch-from-config.ts
++++ b/src/auto-reply/reply/dispatch-from-config.ts
+@@ -952,18 +952,63 @@ export async function dispatchReplyFromConfig(params: {
+     }
+ 
+     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+-
+     let queuedFinal = false;
+     let routedFinalCount = 0;
++    /** Dedup equivalent finals — normalizes mention tag formats before comparison. */
++    const deliveredFinalTexts = new Set<string>();
++    const normalizeMentionsForDedup = (t: string): string =>
++      t
++        .replace(/<at\s+user_id="([^"]+)">[^<]*<\/at>/g, "<at:$1>")
++        .replace(/<at\s+id=(?:"([^"]+)"|'([^']+)'|([^>\s]+))><\/at>/g, "<at:$1$2$3>")
++        .trim();
+     for (const reply of replies) {
+       // Suppress reasoning payloads from channel delivery — channels using this
+       // generic dispatch path do not have a dedicated reasoning lane.
+       if (reply.isReasoning === true) {
+         continue;
+       }
+-      const finalReply = await sendFinalPayload(reply);
+-      queuedFinal = finalReply.queuedFinal || queuedFinal;
+-      routedFinalCount += finalReply.routedFinalCount;
++      // Dedup equivalent final replies (e.g. same text with different mention tag formats).
++      if (reply.text) {
++        const normalizedText = normalizeMentionsForDedup(reply.text);
++        if (deliveredFinalTexts.has(normalizedText)) {
++          continue;
++        }
++        deliveredFinalTexts.add(normalizedText);
++      }
++      const ttsReply = await maybeApplyTtsToReplyPayload({
++        payload: reply,
++        cfg,
++        channel: ttsChannel,
++        kind: "final",
++        inboundAudio,
++        ttsAuto: sessionTtsAuto,
++      });
++      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
++        // Route final reply to originating channel.
++        const result = await routeReplyRuntime.routeReply({
++          payload: ttsReply,
++          channel: originatingChannel,
++          to: originatingTo,
++          sessionKey: ctx.SessionKey,
++          accountId: ctx.AccountId,
++          threadId: routeThreadId,
++          cfg,
++          isGroup,
++          groupId,
++        });
++        if (!result.ok) {
++          logVerbose(
++            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
++          );
++        }
++        queuedFinal = result.ok || queuedFinal;
++        if (result.ok) {
++          routedFinalCount += 1;
++        }
++      } else {
++        const didQueue = dispatcher.sendFinalReply(ttsReply);
++        queuedFinal = didQueue || queuedFinal;
++      }
+     }
+ 
+     const ttsMode = resolveConfiguredTtsMode(cfg);
+diff --git a/src/auto-reply/reply/followup-runner.ts b/src/auto-reply/reply/followup-runner.ts
+index 40485734c4..68ca75c9d9 100644
+--- a/src/auto-reply/reply/followup-runner.ts
++++ b/src/auto-reply/reply/followup-runner.ts
+@@ -7,8 +7,9 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+ import { lookupContextTokens } from "../../agents/context.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
++import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
+ import { runWithModelFallback } from "../../agents/model-fallback.js";
+-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
++import { isCliProvider } from "../../agents/model-selection.js";
+ import type { SessionEntry } from "../../config/sessions.js";
+ import type { TypingMode } from "../../config/types.js";
+ import { logVerbose } from "../../globals.js";
+@@ -158,7 +159,7 @@ export function createFollowupRunner(params: {
+         });
+       }
+       let autoCompactionCount = 0;
+-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
++      let runResult: Awaited<ReturnType<typeof runModelAwareAgent>>;
+       let fallbackProvider = queued.run.provider;
+       let fallbackModel = queued.run.model;
+       let activeSessionEntry =
+@@ -196,7 +197,7 @@ export function createFollowupRunner(params: {
+             const authProfile = resolveRunAuthProfile(queued.run, provider);
+             let attemptCompactionCount = 0;
+             try {
+-              const result = await runEmbeddedPiAgent({
++              const result = await runModelAwareAgent({
+                 allowGatewaySubagentBinding: true,
+                 replyOperation,
+                 sessionId: queued.run.sessionId,
+@@ -286,6 +287,11 @@ export function createFollowupRunner(params: {
+       const usage = runResult.meta?.agentMeta?.usage;
+       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
++      const providerUsed =
++        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
++      const cliSessionId = isCliProvider(providerUsed, queued.run.config)
++        ? runResult.meta?.agentMeta?.sessionId?.trim()
++        : undefined;
+       const contextTokensUsed =
+         agentCfgContextTokens ??
+         lookupContextTokens(modelUsed) ??
+@@ -301,10 +307,16 @@ export function createFollowupRunner(params: {
+           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+           promptTokens,
+           modelUsed,
+-          providerUsed: fallbackProvider,
++          providerUsed,
+           contextTokensUsed,
+           systemPromptReport: runResult.meta?.systemPromptReport,
+-          usageIsContextSnapshot: false,
++          cliSessionId,
++          cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
++          cliPromptLoad: runResult.meta?.agentMeta?.cliPromptLoad,
++          usageIsContextSnapshot: isCliProvider(
++            fallbackProvider ?? queued.run.provider,
++            queued.run.config,
++          ),
+           logLabel: "followup",
+         });
+       }
+diff --git a/src/auto-reply/reply/get-reply.reset-hooks-fallback.test.ts b/src/auto-reply/reply/get-reply.reset-hooks-fallback.test.ts
+index 214a0edc53..fe07c766cf 100644
+--- a/src/auto-reply/reply/get-reply.reset-hooks-fallback.test.ts
++++ b/src/auto-reply/reply/get-reply.reset-hooks-fallback.test.ts
+@@ -48,6 +48,22 @@ function buildNativeResetContext(): MsgContext {
+   };
+ }
+ 
++function buildRegularContext(): MsgContext {
++  return {
++    Provider: "telegram",
++    Surface: "telegram",
++    ChatType: "direct",
++    Body: "hello",
++    RawBody: "hello",
++    CommandBody: "hello",
++    CommandSource: "text",
++    CommandAuthorized: true,
++    SessionKey: "agent:main:telegram:direct:123",
++    From: "telegram:123",
++    To: "telegram:bot",
++  };
++}
++
+ function createContinueDirectivesResult(resetHookTriggered: boolean) {
+   return {
+     kind: "continue" as const,
+@@ -150,4 +166,65 @@ describe("getReplyFromConfig reset-hook fallback", () => {
+ 
+     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+   });
++
++  it("emits auto-rotation hooks when session rolls without explicit /new command", async () => {
++    mocks.initSessionState.mockResolvedValue({
++      sessionCtx: buildRegularContext(),
++      sessionEntry: { sessionId: "session-2" },
++      previousSessionEntry: { sessionId: "old-session-1", claudeCliSessionId: "cli-old-session" },
++      sessionStore: {},
++      sessionKey: "agent:main:telegram:direct:123",
++      sessionId: "session-2",
++      isNewSession: true,
++      resetTriggered: false,
++      systemSent: false,
++      abortedLastRun: false,
++      storePath: "/tmp/sessions.json",
++      sessionScope: "per-sender",
++      groupResolution: undefined,
++      isGroup: false,
++      triggerBodyNormalized: "hello",
++      bodyStripped: "hello",
++    });
++    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
++    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
++
++    await getReplyFromConfig(buildRegularContext(), undefined, {});
++
++    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
++      expect.objectContaining({
++        action: "reset",
++        sessionKey: "agent:main:telegram:direct:123",
++        routeHookMessages: false,
++        commandSource: "auto-rotation",
++      }),
++    );
++  });
++
++  it("keeps API auto-rotation behavior unchanged (no reset hook emission)", async () => {
++    mocks.initSessionState.mockResolvedValue({
++      sessionCtx: buildRegularContext(),
++      sessionEntry: { sessionId: "session-2" },
++      previousSessionEntry: { sessionId: "old-session-1" },
++      sessionStore: {},
++      sessionKey: "agent:main:telegram:direct:123",
++      sessionId: "session-2",
++      isNewSession: true,
++      resetTriggered: false,
++      systemSent: false,
++      abortedLastRun: false,
++      storePath: "/tmp/sessions.json",
++      sessionScope: "per-sender",
++      groupResolution: undefined,
++      isGroup: false,
++      triggerBodyNormalized: "hello",
++      bodyStripped: "hello",
++    });
++    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
++    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
++
++    await getReplyFromConfig(buildRegularContext(), undefined, {});
++
++    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
++  });
+ });
+diff --git a/src/auto-reply/reply/get-reply.ts b/src/auto-reply/reply/get-reply.ts
+index d1e16007b4..6c75cc25e6 100644
+--- a/src/auto-reply/reply/get-reply.ts
++++ b/src/auto-reply/reply/get-reply.ts
+@@ -4,7 +4,7 @@ import {
+   resolveSessionAgentId,
+   resolveAgentSkillsFilter,
+ } from "../../agents/agent-scope.js";
+-import { resolveModelRefFromString } from "../../agents/model-selection.js";
++import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+@@ -22,23 +22,16 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
+ import { runPreparedReply } from "./get-reply-run.js";
+ import { finalizeInboundContext } from "./inbound-context.js";
+ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
++import { applyResetModelOverride } from "./session-reset-model.runtime.js";
+ import { initSessionState } from "./session.js";
+ import { createTypingController } from "./typing.js";
+ 
+ type ResetCommandAction = "new" | "reset";
+ 
+-let sessionResetModelRuntimePromise: Promise<
+-  typeof import("./session-reset-model.runtime.js")
+-> | null = null;
+ let stageSandboxMediaRuntimePromise: Promise<
+   typeof import("./stage-sandbox-media.runtime.js")
+ > | null = null;
+ 
+-function loadSessionResetModelRuntime() {
+-  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
+-  return sessionResetModelRuntimePromise;
+-}
+-
+ function loadStageSandboxMediaRuntime() {
+   stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
+   return stageSandboxMediaRuntimePromise;
+@@ -251,25 +244,52 @@ export async function getReplyFromConfig(
+     bodyStripped,
+   } = sessionState;
+ 
+-  if (resetTriggered && bodyStripped?.trim()) {
+-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+-    await applyResetModelOverride({
+-      cfg,
+-      agentId,
+-      resetTriggered,
+-      bodyStripped,
+-      sessionCtx,
++  const previousProviderCandidate =
++    previousSessionEntry?.modelProvider ?? previousSessionEntry?.providerOverride ?? "";
++  const previousHasCliSessionMarker = Boolean(
++    previousSessionEntry?.claudeCliSessionId?.trim() ||
++    Object.keys(previousSessionEntry?.cliSessionIds ?? {}).length > 0,
++  );
++  const shouldEmitAutoRotationResetHooks =
++    isNewSession &&
++    !resetTriggered &&
++    previousSessionEntry?.sessionId &&
++    (isCliProvider(provider, cfg) ||
++      isCliProvider(previousProviderCandidate, cfg) ||
++      previousHasCliSessionMarker);
++
++  if (shouldEmitAutoRotationResetHooks) {
++    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
++    await emitResetCommandHooks({
++      action: "reset",
+       ctx: finalized,
+-      sessionEntry,
+-      sessionStore,
++      cfg,
+       sessionKey,
+-      storePath,
+-      defaultProvider,
+-      defaultModel,
+-      aliasIndex,
++      sessionEntry,
++      previousSessionEntry,
++      workspaceDir,
++      routeHookMessages: false,
++      commandSource: "auto-rotation",
++      senderId: finalized.SenderId,
+     });
+   }
+ 
++  await applyResetModelOverride({
++    cfg,
++    agentId,
++    resetTriggered,
++    bodyStripped,
++    sessionCtx,
++    ctx: finalized,
++    sessionEntry,
++    sessionStore,
++    sessionKey,
++    storePath,
++    defaultProvider,
++    defaultModel,
++    aliasIndex,
++  });
++
+   const channelModelOverride = resolveChannelModelOverride({
+     cfg,
+     channel:
+diff --git a/src/auto-reply/reply/reply-utils.test.ts b/src/auto-reply/reply/reply-utils.test.ts
+index 1425418e23..baa1379f48 100644
+--- a/src/auto-reply/reply/reply-utils.test.ts
++++ b/src/auto-reply/reply/reply-utils.test.ts
+@@ -978,6 +978,51 @@ describe("createStreamingDirectiveAccumulator", () => {
+     expect(afterReset?.replyToTag).toBe(false);
+     expect(afterReset?.replyToId).toBeUndefined();
+   });
++
++  it("buffers split silent-token prefix 'NO' then swallows completed 'NO_REPLY'", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
++    expect(acc.consume("_REPLY", { silentToken: "NO_REPLY" })).toBeNull();
++  });
++
++  it("flushes buffered prefix when next chunk proves it is not a silent token", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
++    const result = acc.consume("T really");
++    expect(result?.text).toBe("NOT really");
++  });
++
++  it("does not buffer lowercase 'No' (natural language)", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    const result = acc.consume("No");
++    expect(result?.text).toBe("No");
++  });
++
++  it("handles single-token NO_REPLY without buffering", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("NO_REPLY", { silentToken: "NO_REPLY" })).toBeNull();
++  });
++
++  it("buffers split HEARTBEAT_OK prefix then swallows completed token", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("HEART", { silentToken: "HEARTBEAT_OK" })).toBeNull();
++    expect(acc.consume("BEAT_OK", { silentToken: "HEARTBEAT_OK" })).toBeNull();
++  });
++
++  it("flushes buffered prefix as text on final with no continuation", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
++    const result = acc.consume("", { final: true });
++    expect(result?.text).toBe("NO");
++  });
++
++  it("reset clears pending silent buffer", () => {
++    const acc = createStreamingDirectiveAccumulator();
++    expect(acc.consume("NO", { silentToken: "NO_REPLY" })).toBeNull();
++    acc.reset();
++    const result = acc.consume("Hello");
++    expect(result?.text).toBe("Hello");
++  });
+ });
+ 
+ describe("extractShortModelName", () => {
+diff --git a/src/auto-reply/reply/session-hooks-context.test.ts b/src/auto-reply/reply/session-hooks-context.test.ts
+index c7fe1ce5dc..805bc34deb 100644
+--- a/src/auto-reply/reply/session-hooks-context.test.ts
++++ b/src/auto-reply/reply/session-hooks-context.test.ts
+@@ -287,4 +287,34 @@ describe("session hook context wiring", () => {
+       vi.useRealTimers();
+     }
+   });
++
++  it("fires session_end/session_start when session rolls automatically by reset policy", async () => {
++    const sessionKey = "agent:main:telegram:direct:auto";
++    const storePath = await createStorePath("openclaw-session-hook-auto-rollover");
++    await writeStore(storePath, {
++      [sessionKey]: {
++        sessionId: "old-auto-session",
++        updatedAt: Date.now() - 5 * 60_000,
++      },
++    });
++    const cfg = {
++      session: {
++        store: storePath,
++        reset: { mode: "idle", idleMinutes: 1 },
++      },
++    } as OpenClawConfig;
++
++    await initSessionState({
++      ctx: { Body: "hello", SessionKey: sessionKey },
++      cfg,
++      commandAuthorized: true,
++    });
++
++    await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
++    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
++    const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
++    const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
++    expect(endEvent).toMatchObject({ sessionKey, sessionId: "old-auto-session" });
++    expect(startEvent).toMatchObject({ sessionKey, resumedFrom: "old-auto-session" });
++  });
+ });
+diff --git a/src/auto-reply/reply/session-usage.ts b/src/auto-reply/reply/session-usage.ts
+index 714dce039f..196aa04516 100644
+--- a/src/auto-reply/reply/session-usage.ts
++++ b/src/auto-reply/reply/session-usage.ts
+@@ -1,3 +1,4 @@
++import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
+ import {
+   deriveSessionTotalTokens,
+   hasNonzeroUsage,
+@@ -6,6 +7,8 @@ import {
+ import type { OpenClawConfig } from "../../config/config.js";
+ import { loadConfig } from "../../config/config.js";
+ import {
++  type CliPromptLoadStatus,
++  type CliSessionBinding,
+   type SessionSystemPromptReport,
+   type SessionEntry,
+   updateSessionStoreEntry,
+@@ -13,6 +16,48 @@ import {
+ import { logVerbose } from "../../globals.js";
+ import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+ 
++function applyCliSessionStateToSessionPatch(
++  params: {
++    providerUsed?: string;
++    cliSessionId?: string;
++    cliSessionBinding?: CliSessionBinding;
++    cliPromptLoad?: CliPromptLoadStatus;
++  },
++  entry: SessionEntry,
++  patch: Partial<SessionEntry>,
++): Partial<SessionEntry> {
++  const cliProvider = params.providerUsed ?? entry.modelProvider;
++  const nextPatch = { ...patch };
++  if (params.cliPromptLoad) {
++    nextPatch.cliPromptLoad = params.cliPromptLoad;
++  }
++  if (!cliProvider) {
++    return nextPatch;
++  }
++
++  if (params.cliSessionBinding?.sessionId?.trim()) {
++    const nextEntry = { ...entry, ...patch };
++    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
++    return {
++      ...nextPatch,
++      cliSessionBindings: nextEntry.cliSessionBindings,
++      cliSessionIds: nextEntry.cliSessionIds,
++      claudeCliSessionId: nextEntry.claudeCliSessionId,
++    };
++  }
++
++  if (params.cliSessionId) {
++    const nextEntry = { ...entry, ...patch };
++    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
++    return {
++      ...nextPatch,
++      cliSessionIds: nextEntry.cliSessionIds,
++      claudeCliSessionId: nextEntry.claudeCliSessionId,
++    };
++  }
++  return nextPatch;
++}
++
+ function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+ }
+@@ -52,6 +97,9 @@ export async function persistSessionUsageUpdate(params: {
+   promptTokens?: number;
+   usageIsContextSnapshot?: boolean;
+   systemPromptReport?: SessionSystemPromptReport;
++  cliSessionId?: string;
++  cliSessionBinding?: CliSessionBinding;
++  cliPromptLoad?: CliPromptLoadStatus;
+   logLabel?: string;
+ }): Promise<void> {
+   const { storePath, sessionKey } = params;
+@@ -122,7 +170,7 @@ export async function persistSessionUsageUpdate(params: {
+           // context utilization is stale/unknown.
+           patch.totalTokens = totalTokens;
+           patch.totalTokensFresh = typeof totalTokens === "number";
+-          return patch;
++          return applyCliSessionStateToSessionPatch(params, entry, patch);
+         },
+       });
+     } catch (err) {
+@@ -144,7 +192,7 @@ export async function persistSessionUsageUpdate(params: {
+             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+             updatedAt: Date.now(),
+           };
+-          return patch;
++          return applyCliSessionStateToSessionPatch(params, entry, patch);
+         },
+       });
+     } catch (err) {
+diff --git a/src/auto-reply/reply/session.test.ts b/src/auto-reply/reply/session.test.ts
+index 8fd555d3da..58cb706ea0 100644
+--- a/src/auto-reply/reply/session.test.ts
++++ b/src/auto-reply/reply/session.test.ts
+@@ -2277,15 +2277,8 @@ describe("persistSessionUsageUpdate", () => {
+       },
+       cliPromptLoad: {
+         sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+-        currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+-        sessionPromptFiles: [
+-          "/tmp/session.claude-system-prompt.txt",
+-          "/tmp/session.part002.claude-system-prompt.txt",
+-        ],
+         loaderMode: "normal",
+         verifiedRead: true,
+-        chunkCount: 2,
+-        verifiedChunkCount: 2,
+       },
+     });
+ 
+@@ -2304,15 +2297,8 @@ describe("persistSessionUsageUpdate", () => {
+     });
+     expect(stored[sessionKey].cliPromptLoad).toEqual({
+       sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+-      currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+-      sessionPromptFiles: [
+-        "/tmp/session.claude-system-prompt.txt",
+-        "/tmp/session.part002.claude-system-prompt.txt",
+-      ],
+       loaderMode: "normal",
+       verifiedRead: true,
+-      chunkCount: 2,
+-      verifiedChunkCount: 2,
+     });
+   });
+ });
+diff --git a/src/auto-reply/reply/session.ts b/src/auto-reply/reply/session.ts
+index 03b9d69770..31c59eddfc 100644
+--- a/src/auto-reply/reply/session.ts
++++ b/src/auto-reply/reply/session.ts
+@@ -415,6 +415,7 @@ export async function initSessionState(params: {
+     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+   }
+   const entry = sessionStore[sessionKey];
++  let previousSessionEntry: SessionEntry | undefined;
+   const now = Date.now();
+   const isThread = resolveThreadFlag({
+     sessionKey,
+@@ -453,7 +454,7 @@ export async function initSessionState(params: {
+   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
+   // and for scheduled/daily resets where the session has become stale (!freshEntry).
+   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
++  previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+   const previousSessionEndReason = resetTriggered
+     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
+     : resolveStaleSessionEndReason({
+@@ -511,6 +512,9 @@ export async function initSessionState(params: {
+       persistedDisplayName = entry.displayName;
+     }
+   }
++  if (isNewSession && entry?.sessionId) {
++    previousSessionEntry = { ...entry };
++  }
+ 
+   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+   // Track the originating channel/to for announce routing (subagent announce-back).
+diff --git a/src/auto-reply/reply/streaming-directives.ts b/src/auto-reply/reply/streaming-directives.ts
+index ab4e6bedae..0bd1e28cc7 100644
+--- a/src/auto-reply/reply/streaming-directives.ts
++++ b/src/auto-reply/reply/streaming-directives.ts
+@@ -1,7 +1,12 @@
+ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+ import { splitMediaFromOutput } from "../../media/parse.js";
+ import { parseInlineDirectives } from "../../utils/directive-tags.js";
+-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
++import {
++  couldBeSilentTokenStart,
++  isSilentReplyPrefixText,
++  isSilentReplyText,
++  SILENT_REPLY_TOKEN,
++} from "../tokens.js";
+ import type { ReplyDirectiveParseResult } from "./reply-directives.js";
+ 
+ type PendingReplyState = {
+@@ -72,17 +77,37 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
+ 
+ export function createStreamingDirectiveAccumulator() {
+   let pendingTail = "";
++  let pendingSilent = "";
+   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+ 
+   const reset = () => {
+     pendingTail = "";
++    pendingSilent = "";
+     pendingReply = { sawCurrent: false, hasTag: false };
+     activeReply = { sawCurrent: false, hasTag: false };
+   };
+ 
+   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
+-    let combined = `${pendingTail}${raw ?? ""}`;
++    const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
++    let normalizedRaw = raw ?? "";
++    if (pendingSilent) {
++      const resumed = `${pendingSilent}${normalizedRaw}`;
++      pendingSilent = "";
++      if (!options.final && couldBeSilentTokenStart(resumed, silentToken)) {
++        pendingSilent = resumed;
++        return null;
++      }
++      if (
++        isSilentReplyText(resumed, silentToken) ||
++        (!options.final && isSilentReplyPrefixText(resumed, silentToken))
++      ) {
++        return null;
++      }
++      normalizedRaw = resumed;
++    }
++
++    let combined = `${pendingTail}${normalizedRaw}`;
+     pendingTail = "";
+ 
+     if (!options.final) {
+@@ -95,7 +120,34 @@ export function createStreamingDirectiveAccumulator() {
+       return null;
+     }
+ 
+-    const parsed = parseChunk(combined, { silentToken: options.silentToken });
++    if (!options.final && couldBeSilentTokenStart(combined, silentToken)) {
++      pendingSilent = combined;
++      return null;
++    }
++
++    const parsed =
++      options.final &&
++      isSilentReplyPrefixText(combined, silentToken) &&
++      !isSilentReplyText(combined, silentToken)
++        ? parseChunk(combined, { silentToken: "__OPENCLAW_NO_SILENT_PREFIX__" })
++        : parseChunk(combined, { silentToken: options.silentToken });
++
++    // Buffer potential silent-token prefixes (e.g. "NO" from split "NO_REPLY").
++    // Wait for the next chunk to decide: if it completes to "NO_REPLY" → swallow;
++    // if it doesn't (e.g. "NOT really") → flush as normal text.
++    if (
++      !options.final &&
++      !parsed.isSilent &&
++      parsed.text &&
++      couldBeSilentTokenStart(parsed.text, silentToken) &&
++      !parsed.mediaUrl &&
++      (parsed.mediaUrls?.length ?? 0) === 0 &&
++      !parsed.audioAsVoice
++    ) {
++      pendingSilent = combined;
++      return null;
++    }
++
+     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
+     const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
+     const explicitId =
+diff --git a/src/auto-reply/status.cli-prompt-load.test.ts b/src/auto-reply/status.cli-prompt-load.test.ts
+index 5a277d63ba..5f5107d5f7 100644
+--- a/src/auto-reply/status.cli-prompt-load.test.ts
++++ b/src/auto-reply/status.cli-prompt-load.test.ts
+@@ -27,37 +27,4 @@ describe("buildStatusMessage cli prompt load", () => {
+     expect(normalized).toContain("CLI prompt: file/strict");
+     expect(normalized).toContain("fallback=verification_retry");
+   });
+-
+-  it("renders chunk-aware cli prompt loader status when chunk metadata is present", () => {
+-    const text = buildStatusMessage({
+-      agent: {
+-        model: "claude-cli/sonnet",
+-      },
+-      sessionEntry: {
+-        sessionId: "abc",
+-        updatedAt: 0,
+-        cliPromptLoad: {
+-          sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
+-          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
+-          sessionPromptFiles: [
+-            "/tmp/abc.claude-system-prompt.txt",
+-            "/tmp/abc.part002.claude-system-prompt.txt",
+-            "/tmp/abc.part003.claude-system-prompt.txt",
+-          ],
+-          loaderMode: "strict",
+-          verifiedRead: false,
+-          chunkCount: 3,
+-          verifiedChunkCount: 2,
+-          fallbackReason: "verification_retry",
+-        },
+-      },
+-      sessionKey: "agent:main:main",
+-      sessionScope: "per-sender",
+-      now: 10 * 60_000,
+-    });
+-
+-    const normalized = normalizeTestText(text);
+-    expect(normalized).toContain("CLI prompt: chunks/strict (2/3)");
+-    expect(normalized).toContain("fallback=verification_retry");
+-  });
+ });
+diff --git a/src/auto-reply/status.test.ts b/src/auto-reply/status.test.ts
+index 9d745b9b3f..514b249a5a 100644
+--- a/src/auto-reply/status.test.ts
++++ b/src/auto-reply/status.test.ts
+@@ -79,7 +79,6 @@ describe("buildStatusMessage", () => {
+ 
+     expect(normalized).toContain("OpenClaw");
+     expect(normalized).toContain("Model: anthropic/pi:opus");
+-    expect(normalized).not.toContain("Last runtime:");
+     expect(normalized).toContain("api-key");
+     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
+     expect(normalized).toContain("Cost: $0.0020");
+@@ -104,12 +103,6 @@ describe("buildStatusMessage", () => {
+         updatedAt: 0,
+         cliPromptLoad: {
+           sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
+-          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
+-          sessionPromptFiles: [
+-            "/tmp/abc.claude-system-prompt.txt",
+-            "/tmp/abc.part002.claude-system-prompt.txt",
+-            "/tmp/abc.part003.claude-system-prompt.txt",
+-          ],
+           loaderMode: "strict",
+           verifiedRead: false,
+           fallbackReason: "verification_retry",
+@@ -124,74 +117,6 @@ describe("buildStatusMessage", () => {
+     expect(normalized).toContain("fallback=verification_retry");
+   });
+ 
+-  it("shows chunk-aware cli prompt loader status when chunk metadata is present", () => {
+-    const text = buildStatusMessage({
+-      agent: {
+-        model: "claude-cli/sonnet",
+-      },
+-      sessionEntry: {
+-        sessionId: "abc",
+-        updatedAt: 0,
+-        cliPromptLoad: {
+-          sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
+-          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
+-          sessionPromptFiles: [
+-            "/tmp/abc.claude-system-prompt.txt",
+-            "/tmp/abc.part002.claude-system-prompt.txt",
+-            "/tmp/abc.part003.claude-system-prompt.txt",
+-          ],
+-          loaderMode: "strict",
+-          verifiedRead: false,
+-          chunkCount: 3,
+-          verifiedChunkCount: 1,
+-          fallbackReason: "verification_retry",
+-        },
+-      },
+-      sessionKey: "agent:main:main",
+-      sessionScope: "per-sender",
+-      now: 10 * 60_000,
+-    });
+-    const normalized = normalizeTestText(text);
+-    expect(normalized).toContain("CLI prompt: chunks/strict (1/3)");
+-    expect(normalized).toContain("fallback=verification_retry");
+-  });
+-
+-  it("distinguishes configured model from last runtime model", () => {
+-    const text = buildStatusMessage({
+-      agent: {
+-        model: "minimax/minimax",
+-      },
+-      sessionEntry: {
+-        sessionId: "runtime-diff",
+-        updatedAt: 0,
+-        modelProvider: "claude-cli",
+-        model: "sonnet",
+-        cliPromptLoad: {
+-          sessionPromptFile: "/tmp/runtime-diff.claude-system-prompt.txt",
+-          currentSessionPromptFile: "/tmp/runtime-diff.part003.claude-system-prompt.txt",
+-          sessionPromptFiles: [
+-            "/tmp/runtime-diff.claude-system-prompt.txt",
+-            "/tmp/runtime-diff.part002.claude-system-prompt.txt",
+-            "/tmp/runtime-diff.part003.claude-system-prompt.txt",
+-          ],
+-          loaderMode: "normal",
+-          verifiedRead: true,
+-          chunkCount: 3,
+-          verifiedChunkCount: 3,
+-        },
+-      },
+-      sessionKey: "agent:main:main",
+-      sessionScope: "per-sender",
+-      queue: { mode: "collect", depth: 0 },
+-      now: 10 * 60_000,
+-    });
+-    const normalized = normalizeTestText(text);
+-
+-    expect(normalized).toContain("Model: minimax/minimax");
+-    expect(normalized).toContain("Last runtime: claude-cli/sonnet");
+-    expect(normalized).toContain("CLI prompt: chunks (3/3)");
+-  });
+-
+   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
+     const text = buildStatusMessage({
+       agent: {
+diff --git a/src/auto-reply/status.ts b/src/auto-reply/status.ts
+index 04703d4f20..346b8513b8 100644
+--- a/src/auto-reply/status.ts
++++ b/src/auto-reply/status.ts
+@@ -4,7 +4,6 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
+ import { resolveModelAuthMode } from "../agents/model-auth.js";
+ import {
+   buildModelAliasIndex,
+-  isCliProvider,
+   resolveConfiguredModelRef,
+   resolveModelRefFromString,
+ } from "../agents/model-selection.js";
+@@ -442,28 +441,15 @@ const formatCliPromptLoadLine = (status?: CliPromptLoadStatus): string | null =>
+   if (!status) {
+     return null;
+   }
+-  const usesChunks = (status.chunkCount ?? 0) > 1;
+-  const progressValue =
+-    status.verifiedChunkCount ??
+-    (status.verifiedRead ? status.chunkCount : undefined) ??
+-    (status.verifiedRead ? 1 : 0);
+   const modeLabel =
+     status.loaderMode === "disabled"
+       ? "direct"
+-      : usesChunks
+-        ? status.loaderMode === "strict"
+-          ? "chunks/strict"
+-          : "chunks"
+-        : status.loaderMode === "strict"
+-          ? "file/strict"
+-          : "file";
+-  const progressLabel =
+-    usesChunks && typeof status.chunkCount === "number"
+-      ? ` (${Math.min(progressValue, status.chunkCount)}/${status.chunkCount})`
+-      : "";
++      : status.loaderMode === "strict"
++        ? "file/strict"
++        : "file";
+   const stateLabel = status.verifiedRead ? "verified" : "unverified";
+   const fallbackLabel = status.fallbackReason ? ` · fallback=${status.fallbackReason}` : "";
+-  return `📄 CLI prompt: ${modeLabel}${progressLabel} · ${stateLabel}${fallbackLabel}`;
++  return `📄 CLI prompt: ${modeLabel} · ${stateLabel}${fallbackLabel}`;
+ };
+ 
+ export function buildStatusMessage(args: StatusArgs): string {
+@@ -842,23 +828,6 @@ export function buildStatusMessage(args: StatusArgs): string {
+   })();
+   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
+   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+-  const runtimeModelPresent = Boolean(
+-    runtimeModelRaw || runtimeProviderRaw || fallbackState.active,
+-  );
+-  const lastRuntimeAuthLabel =
+-    activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue
+-      ? ` · 🔑 ${activeAuthLabelValue}`
+-      : "";
+-  const lastRuntimeReason =
+-    fallbackState.active && fallbackState.reason
+-      ? ` (fallback: ${fallbackState.reason})`
+-      : fallbackState.active
+-        ? " (fallback)"
+-        : "";
+-  const lastRuntimeLine =
+-    runtimeModelPresent && (activeProvider !== selectedProvider || activeModel !== selectedModel)
+-      ? `↪️ Last runtime: ${activeModelLabel}${lastRuntimeAuthLabel}${lastRuntimeReason}`
+-      : null;
+   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
+   const fallbackLine = fallbackState.active
+     ? `↪️ Fallback: ${activeModelLabel}${
+@@ -874,18 +843,13 @@ export function buildStatusMessage(args: StatusArgs): string {
+     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
+   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
+   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+-  const cliPromptLoadLine =
+-    args.sessionEntry?.cliPromptLoad &&
+-    (isCliProvider(selectedProvider, args.config) || isCliProvider(activeProvider, args.config))
+-      ? formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad)
+-      : null;
++  const cliPromptLoadLine = formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad);
+ 
+   return [
+     versionLine,
+     args.timeLine,
+     modelLine,
+-    lastRuntimeLine,
+-    lastRuntimeLine ? null : fallbackLine,
++    fallbackLine,
+     usageCostLine,
+     cacheLine,
+     `📚 ${contextLine}`,
+diff --git a/src/auto-reply/templating.ts b/src/auto-reply/templating.ts
+index f68b4b7b72..1204cefdcf 100644
+--- a/src/auto-reply/templating.ts
++++ b/src/auto-reply/templating.ts
+@@ -181,6 +181,8 @@ export type MsgContext = {
+    * The chat/channel/user ID where the reply should be sent.
+    */
+   OriginatingTo?: string;
++  /** Provider-specific inbound payload (structured raw event data). */
++  ChannelData?: Record<string, unknown>;
+   /**
+    * True when the current turn intentionally requested external delivery to
+    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
+diff --git a/src/auto-reply/tokens.test.ts b/src/auto-reply/tokens.test.ts
+index 286f766f21..d0507e063b 100644
+--- a/src/auto-reply/tokens.test.ts
++++ b/src/auto-reply/tokens.test.ts
+@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
+ import {
+   couldBeSilentTokenStart,
+   isSilentReplyPrefixText,
+-  isSilentReplyTailFragmentText,
+   isSilentReplyText,
+   stripSilentToken,
+ } from "./tokens.js";
+@@ -154,17 +153,3 @@ describe("couldBeSilentTokenStart", () => {
+     expect(couldBeSilentTokenStart("")).toBe(false);
+   });
+ });
+-
+-describe("isSilentReplyTailFragmentText", () => {
+-  it("matches standalone silent-token tail fragments", () => {
+-    expect(isSilentReplyTailFragmentText("_REPLY")).toBe(true);
+-    expect(isSilentReplyTailFragmentText("  _REPLY  ")).toBe(true);
+-  });
+-
+-  it("rejects full tokens and regular text", () => {
+-    expect(isSilentReplyTailFragmentText("NO_REPLY")).toBe(false);
+-    expect(isSilentReplyTailFragmentText("REPLY")).toBe(false);
+-    expect(isSilentReplyTailFragmentText("x_REPLY")).toBe(false);
+-    expect(isSilentReplyTailFragmentText("_REPLY done")).toBe(false);
+-  });
+-});
+diff --git a/src/auto-reply/tokens.ts b/src/auto-reply/tokens.ts
+index 5fc256557f..c3a9eeb952 100644
+--- a/src/auto-reply/tokens.ts
++++ b/src/auto-reply/tokens.ts
+@@ -113,34 +113,6 @@ export function couldBeSilentTokenStart(
+   return trimmed.length < upper.length && upper.startsWith(trimmed);
+ }
+ 
+-export function isSilentReplyTailFragmentText(
+-  text: string | undefined,
+-  token: string = SILENT_REPLY_TOKEN,
+-): boolean {
+-  if (!text) {
+-    return false;
+-  }
+-  const trimmed = text.trim();
+-  if (!trimmed) {
+-    return false;
+-  }
+-  if (trimmed !== trimmed.toUpperCase()) {
+-    return false;
+-  }
+-  const normalized = trimmed.toUpperCase();
+-  if (!normalized.startsWith("_")) {
+-    return false;
+-  }
+-  const tokenUpper = token.toUpperCase();
+-  if (normalized.length >= tokenUpper.length) {
+-    return false;
+-  }
+-  if (TOKEN_CHARS_ONLY.test(normalized)) {
+-    return false;
+-  }
+-  return tokenUpper.endsWith(normalized);
+-}
+-
+ export function isSilentReplyPrefixText(
+   text: string | undefined,
+   token: string = SILENT_REPLY_TOKEN,
+diff --git a/src/auto-reply/types.ts b/src/auto-reply/types.ts
+index b01afbb52d..15a9ebb3d4 100644
+--- a/src/auto-reply/types.ts
++++ b/src/auto-reply/types.ts
+@@ -68,7 +68,11 @@ export type GetReplyOptions = {
+   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
+-  onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
++  onToolStart?: (payload: {
++    name?: string;
++    phase?: string;
++    toolCallId?: string;
++  }) => Promise<void> | void;
+   /** Called when a concrete work item starts, updates, or completes. */
+   onItemEvent?: (payload: {
+     itemId?: string;
+@@ -150,6 +154,7 @@ export type GetReplyOptions = {
+ 
+ export type ReplyPayload = {
+   text?: string;
++  toolCallId?: string;
+   mediaUrl?: string;
+   mediaUrls?: string[];
+   interactive?: InteractiveReply;
+-- 
+2.47.1
+

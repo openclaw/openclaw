@@ -1,0 +1,1197 @@
+From e7ba44f1adc6e9cc186155722372d9d7112f5c2f Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Sat, 11 Apr 2026 20:29:59 +0800
+Subject: [PATCH 11/12] feat(agents): proactive compaction, CLI-provider
+ routing, abort signal propagation
+
+---
+ src/agents/cli-runner.ts                      |   8 +
+ src/agents/cli-runner/execute.ts              |  37 ++
+ src/agents/command/attempt-execution.ts       |  34 ++
+ src/agents/pi-embedded-runner/run.ts          | 140 +++++++-
+ src/agents/pi-settings.ts                     |  23 ++
+ src/agents/workspace.test.ts                  |  32 ++
+ src/agents/workspace.ts                       |   7 +
+ .../reply/agent-runner-execution.ts           |   1 +
+ src/config/schema.base.generated.ts           | 334 ++----------------
+ src/config/schema.help.ts                     |   2 +
+ src/config/types.agent-defaults.ts            |   7 +
+ src/config/zod-schema.agent-defaults.ts       |   1 +
+ .../isolated-agent/run-execution.runtime.ts   |   2 +
+ src/cron/isolated-agent/run-executor.ts       | 113 +++---
+ src/cron/isolated-agent/run.test-harness.ts   |   8 +
+ src/logging/config.ts                         |  51 ++-
+ src/logging/logger.ts                         |  17 +-
+ 17 files changed, 448 insertions(+), 369 deletions(-)
+
+diff --git a/src/agents/cli-runner.ts b/src/agents/cli-runner.ts
+index b4da68d605..01b4f69ec5 100644
+--- a/src/agents/cli-runner.ts
++++ b/src/agents/cli-runner.ts
+@@ -148,6 +148,14 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
+         }
+         throw err;
+       }
++      // AbortError (user /stop) must pass through unchanged so that the
++      // higher-level runner recognises it via `err.name === "AbortError"`.
++      // Without this early return, a future addition to the failover
++      // classifier could accidentally rewrap an AbortError as FailoverError
++      // and lose the name.
++      if (err instanceof Error && err.name === "AbortError") {
++        throw err;
++      }
+       const message = err instanceof Error ? err.message : String(err);
+       if (isFailoverErrorMessage(message, { provider: params.provider })) {
+         const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
+diff --git a/src/agents/cli-runner/execute.ts b/src/agents/cli-runner/execute.ts
+index fea772bc1d..2501a509e8 100644
+--- a/src/agents/cli-runner/execute.ts
++++ b/src/agents/cli-runner/execute.ts
+@@ -202,6 +202,31 @@ function resolveChunkIndexByPath(
+   return chunk?.index;
+ }
+ 
++/**
++ * Throws an AbortError when the given signal has already fired, so the
++ * CLI runner's JS orchestration exits promptly on user /stop instead of
++ * spawning another subprocess through the retry/recovery paths.
++ *
++ * Mirrors the embedded runner's `throwIfAborted` helper: preserves an
++ * Error reason directly; otherwise constructs a new Error with
++ * name = "AbortError" so downstream code recognises the abort uniformly.
++ */
++export function checkAbortSignal(signal: AbortSignal | undefined): void {
++  if (!signal?.aborted) {
++    return;
++  }
++  const reason = signal.reason;
++  if (reason instanceof Error) {
++    throw reason;
++  }
++  const err =
++    reason !== undefined
++      ? new Error("CLI runner aborted", { cause: reason })
++      : new Error("CLI runner aborted");
++  err.name = "AbortError";
++  throw err;
++}
++
+ /**
+  * Wraps executePreparedCliRun with:
+  *  - Layer 1: Session prompt file writing + loader prompt + read verification
+@@ -282,6 +307,12 @@ export async function executeWithOverflowProtection(
+     forceReloadSystemPromptFile: boolean,
+     loaderPromptMode: "normal" | "strict" | "disabled",
+   ): Promise<CliOutput> => {
++    // Single choke point for every subprocess spawn in this module (main run,
++    // loader retries, strict/disabled fallbacks, overflow-recovery /compact,
++    // profile downgrade retry). Checking abort here stops the JS orchestration
++    // from issuing a fresh spawn after the supervisor killed the previous
++    // subprocess via /stop → abortSessionExecutions → cancelSession.
++    checkAbortSignal(params.abortSignal);
+     const backend = context.preparedBackend.backend;
+     const currentCompactionCount =
+       Math.max(0, params.sessionCompactionCount ?? 0) + compactionsThisRun;
+@@ -1391,6 +1422,12 @@ export async function executeWithOverflowProtection(
+           if (compactErr instanceof FailoverError && compactErr.reason === "session_expired") {
+             throw compactErr;
+           }
++          // /stop fired during /compact — don't swallow the abort into a
++          // profile-downgrade retry; propagate so the outer catch recognises
++          // it as a user abort.
++          if (compactErr instanceof Error && compactErr.name === "AbortError") {
++            throw compactErr;
++          }
+           cliBackendLog.warn(
+             `cli-runner: /compact failed (${compactErr instanceof Error ? compactErr.message : String(compactErr)}), proceeding with profile downgrade only`,
+           );
+diff --git a/src/agents/command/attempt-execution.ts b/src/agents/command/attempt-execution.ts
+index 14e4744a84..9b7498cab3 100644
+--- a/src/agents/command/attempt-execution.ts
++++ b/src/agents/command/attempt-execution.ts
+@@ -15,8 +15,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
+ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+ import { resolveMessageChannel } from "../../utils/message-channel.js";
+ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
++import { runCliAgent } from "../cli-runner.js";
+ import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
+ import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
++import { isCliProvider } from "../model-selection.js";
+ import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
+ import { runEmbeddedPiAgent } from "../pi-embedded.js";
+ import { buildWorkspaceSkillSnapshot } from "../skills.js";
+@@ -337,6 +339,38 @@ export function runAgentAttempt(params: {
+     params.providerOverride === params.authProfileProvider
+       ? params.sessionEntry?.authProfileOverride
+       : undefined;
++  // Dispatch to cli-runner for CLI-provider models so that fallbacks like
++  // cli-sonnet (= claude-cli/sonnet) go through claude -p, not through the
++  // embedded runner where they'd be silently rewritten into
++  // anthropic/claude-sonnet-4-6 via the alias index collision.
++  if (isCliProvider(params.providerOverride, params.cfg)) {
++    return runCliAgent({
++      sessionId: params.sessionId,
++      sessionKey: params.sessionKey,
++      agentId: params.sessionAgentId,
++      sessionFile: params.sessionFile,
++      workspaceDir: params.workspaceDir,
++      config: params.cfg,
++      prompt: effectivePrompt,
++      provider: params.providerOverride,
++      model: params.modelOverride,
++      thinkLevel: params.resolvedThinkLevel,
++      timeoutMs: params.timeoutMs,
++      runId: params.runId,
++      extraSystemPrompt: params.opts.extraSystemPrompt,
++      skillsSnapshot: params.skillsSnapshot,
++      authProfileId,
++      bootstrapPromptWarningSignaturesSeen,
++      bootstrapPromptWarningSignature,
++      images: params.isFallbackRetry ? undefined : params.opts.images,
++      imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
++      messageChannel: params.messageChannel,
++      agentAccountId: params.runContext.accountId,
++      abortSignal: params.opts.abortSignal,
++      trigger: "user",
++      streamParams: params.opts.streamParams,
++    });
++  }
+   return runEmbeddedPiAgent({
+     sessionId: params.sessionId,
+     sessionKey: params.sessionKey,
+diff --git a/src/agents/pi-embedded-runner/run.ts b/src/agents/pi-embedded-runner/run.ts
+index e5e71f9209..bedce21ed7 100644
+--- a/src/agents/pi-embedded-runner/run.ts
++++ b/src/agents/pi-embedded-runner/run.ts
+@@ -36,7 +36,7 @@ import {
+   resolveAuthProfileOrder,
+   shouldPreferExplicitConfigApiKeyAuth,
+ } from "../model-auth.js";
+-import { normalizeProviderId, resolveNonCliModelRef } from "../model-selection.js";
++import { isCliProvider, normalizeProviderId } from "../model-selection.js";
+ import { ensureOpenClawModelsJson } from "../models-config.js";
+ import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
+ import {
+@@ -55,6 +55,7 @@ import {
+   parseImageSizeError,
+   pickFallbackThinkingLevel,
+ } from "../pi-embedded-helpers.js";
++import { resolveProactiveCompactionRatio } from "../pi-settings.js";
+ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+@@ -167,11 +168,21 @@ export async function runEmbeddedPiAgent(
+       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+ 
+-      // Resolve CLI provider aliases (e.g. claude-cli/kimi → real provider/model)
+-      // before the embedded runner tries to look up the model in the registry.
+-      const resolvedCliRef = resolveNonCliModelRef({ provider, model: modelId }, params.config);
+-      provider = resolvedCliRef.provider;
+-      modelId = resolvedCliRef.model;
++      // Refuse CLI-provider refs loudly rather than silently rewriting them
++      // into a non-CLI model via the alias index. The embedded runner is not
++      // the right path for claude-cli/* or codex-cli/* — callers must dispatch
++      // to cli-runner (runCliAgent) first. Letting a cli ref through here used
++      // to silently map e.g. `claude-cli/sonnet` to `anthropic/claude-sonnet-4-6`
++      // because the "sonnet" alias is also registered on the anthropic provider,
++      // picking up the wrong account pool and returning
++      // "500 No available accounts in group OpenClaw".
++      if (isCliProvider(provider, params.config)) {
++        throw new FailoverError(
++          `CLI-provider model ${provider}/${modelId} was routed to the embedded runner; ` +
++            `caller must dispatch claude-cli/codex-cli refs to runCliAgent.`,
++          { reason: "model_not_found", provider, model: modelId },
++        );
++      }
+ 
+       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+       const fallbackConfigured = hasConfiguredModelFallbacks({
+@@ -325,6 +336,11 @@ export async function runEmbeddedPiAgent(
+ 
+       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
+       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
++      // Proactive compaction ratio resolved from config; when the last API
++      // call's prompt size exceeds this fraction of the context window, we
++      // compact the session after a successful run so the next turn starts
++      // with headroom. A value of 0 disables proactive compaction.
++      const proactiveCompactionRatio = resolveProactiveCompactionRatio(params.config);
+       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+       let overflowCompactionAttempts = 0;
+       let toolResultTruncationAttempted = false;
+@@ -1487,6 +1503,118 @@ export async function runEmbeddedPiAgent(
+               agentDir: params.agentDir,
+             });
+           }
++
++          // ── Proactive post-run compaction ────────────────────────────────
++          // After a successful run, if the last API call's prompt size is a
++          // high fraction of the context window, compact now so the next turn
++          // starts with headroom. Skip when this run already compacted (the
++          // fresh session is already small), when we're aborting/timing out,
++          // or when the configured ratio disables proactive compaction.
++          if (!aborted && !timedOut && autoCompactionCount === 0 && proactiveCompactionRatio > 0) {
++            const proactivePromptTokens = derivePromptTokens(lastRunPromptUsage);
++            const proactiveRatio =
++              proactivePromptTokens != null && ctxInfo.tokens > 0
++                ? proactivePromptTokens / ctxInfo.tokens
++                : 0;
++            if (proactiveRatio > proactiveCompactionRatio) {
++              const proactiveDiagId = createCompactionDiagId();
++              log.info(
++                `[proactive-compaction] prompt tokens ${proactivePromptTokens}/${ctxInfo.tokens} ` +
++                  `(${Math.round(proactiveRatio * 100)}%) > ${Math.round(proactiveCompactionRatio * 100)}% threshold; ` +
++                  `compacting after successful run for ${provider}/${modelId} diagId=${proactiveDiagId}`,
++              );
++              let proactiveResult: Awaited<ReturnType<typeof contextEngine.compact>>;
++              await runOwnsCompactionBeforeHook("proactive");
++              try {
++                const proactiveRuntimeContext = {
++                  ...buildEmbeddedCompactionRuntimeContext({
++                    sessionKey: params.sessionKey,
++                    messageChannel: params.messageChannel,
++                    messageProvider: params.messageProvider,
++                    agentAccountId: params.agentAccountId,
++                    currentChannelId: params.currentChannelId,
++                    currentThreadTs: params.currentThreadTs,
++                    currentMessageId: params.currentMessageId,
++                    authProfileId: lastProfileId,
++                    workspaceDir: resolvedWorkspace,
++                    agentDir,
++                    config: params.config,
++                    skillsSnapshot: params.skillsSnapshot,
++                    senderIsOwner: params.senderIsOwner,
++                    senderId: params.senderId,
++                    provider,
++                    modelId,
++                    thinkLevel,
++                    reasoningLevel: params.reasoningLevel,
++                    bashElevated: params.bashElevated,
++                    extraSystemPrompt: params.extraSystemPrompt,
++                    ownerNumbers: params.ownerNumbers,
++                  }),
++                  runId: params.runId,
++                  trigger: "proactive",
++                  currentTokenCount: proactivePromptTokens,
++                  diagId: proactiveDiagId,
++                };
++                proactiveResult = await contextEngine.compact({
++                  sessionId: params.sessionId,
++                  sessionKey: params.sessionKey,
++                  sessionFile: params.sessionFile,
++                  tokenBudget: ctxInfo.tokens,
++                  currentTokenCount: proactivePromptTokens,
++                  force: true,
++                  compactionTarget: "budget",
++                  runtimeContext: proactiveRuntimeContext,
++                });
++                if (proactiveResult.ok && proactiveResult.compacted) {
++                  await runContextEngineMaintenance({
++                    contextEngine,
++                    sessionId: params.sessionId,
++                    sessionKey: params.sessionKey,
++                    sessionFile: params.sessionFile,
++                    reason: "compaction",
++                    runtimeContext: proactiveRuntimeContext,
++                  });
++                }
++              } catch (compactErr) {
++                log.warn(
++                  `[proactive-compaction] contextEngine.compact() threw for ${provider}/${modelId}: ${String(compactErr)}`,
++                );
++                proactiveResult = {
++                  ok: false,
++                  compacted: false,
++                  reason: String(compactErr),
++                };
++              }
++              await runOwnsCompactionAfterHook("proactive", proactiveResult);
++              if (proactiveResult.compacted) {
++                autoCompactionCount += 1;
++                agentMeta.compactionCount = autoCompactionCount;
++                // Clear stale pre-compaction usage from agentMeta so that
++                // persistRunSessionUsage does not overwrite the session entry
++                // with the old high-water totalTokens. The downstream
++                // incrementRunCompactionCount path will write the correct
++                // post-compaction tokensAfter estimate via lastCallUsage.
++                agentMeta.usage = undefined;
++                agentMeta.lastCallUsage = undefined;
++                agentMeta.promptTokens = undefined;
++                if (contextEngine.info.ownsCompaction === true) {
++                  await runPostCompactionSideEffects({
++                    config: params.config,
++                    sessionKey: params.sessionKey,
++                    sessionFile: params.sessionFile,
++                  });
++                }
++                log.info(
++                  `[proactive-compaction] compaction succeeded for ${provider}/${modelId} diagId=${proactiveDiagId}`,
++                );
++              } else {
++                log.warn(
++                  `[proactive-compaction] compaction did not reduce context for ${provider}/${modelId}: ${proactiveResult.reason ?? "unknown"}`,
++                );
++              }
++            }
++          }
++
+           return {
+             payloads: payloads.length ? payloads : undefined,
+             meta: {
+diff --git a/src/agents/pi-settings.ts b/src/agents/pi-settings.ts
+index f1b66c6ea6..dd35904ed1 100644
+--- a/src/agents/pi-settings.ts
++++ b/src/agents/pi-settings.ts
+@@ -3,6 +3,14 @@ import type { ContextEngineInfo } from "../context-engine/types.js";
+ 
+ export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+ 
++/**
++ * Default ratio for triggering proactive compaction after a successful run.
++ * When the last API call's prompt tokens / context window exceeds this value,
++ * the runner compacts the session so the next turn starts with headroom.
++ * Override via `agents.defaults.compaction.proactiveTriggerRatio`.
++ */
++export const DEFAULT_PROACTIVE_COMPACTION_RATIO = 0.8;
++
+ type PiSettingsManagerLike = {
+   getCompactionReserveTokens: () => number;
+   getCompactionKeepRecentTokens: () => number;
+@@ -41,6 +49,21 @@ export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): numbe
+   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+ }
+ 
++/**
++ * Resolve the proactive-compaction trigger ratio from config.
++ *
++ * Returns the configured `agents.defaults.compaction.proactiveTriggerRatio`
++ * when it is a finite number in [0, 1]; otherwise returns the default.
++ * Callers should treat a value of 0 as "disabled".
++ */
++export function resolveProactiveCompactionRatio(cfg?: OpenClawConfig): number {
++  const raw = cfg?.agents?.defaults?.compaction?.proactiveTriggerRatio;
++  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1) {
++    return raw;
++  }
++  return DEFAULT_PROACTIVE_COMPACTION_RATIO;
++}
++
+ function toNonNegativeInt(value: unknown): number | undefined {
+   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+     return undefined;
+diff --git a/src/agents/workspace.test.ts b/src/agents/workspace.test.ts
+index 4493ef716a..1d82c689dd 100644
+--- a/src/agents/workspace.test.ts
++++ b/src/agents/workspace.test.ts
+@@ -213,6 +213,38 @@ describe("loadWorkspaceBootstrapFiles", () => {
+     expect(getMemoryEntries(files)).toHaveLength(0);
+   });
+ 
++  it("omits BOOTSTRAP.md entirely when the file is absent (post-onboarding)", async () => {
++    const tempDir = await makeTempWorkspace("openclaw-workspace-");
++
++    const files = await loadWorkspaceBootstrapFiles(tempDir);
++    const bootstrapEntry = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
++    expect(bootstrapEntry).toBeUndefined();
++  });
++
++  it("still includes BOOTSTRAP.md as a loaded entry when present (onboarding phase)", async () => {
++    const tempDir = await makeTempWorkspace("openclaw-workspace-");
++    await writeWorkspaceFile({
++      dir: tempDir,
++      name: DEFAULT_BOOTSTRAP_FILENAME,
++      content: "bootstrap-instructions",
++    });
++
++    const files = await loadWorkspaceBootstrapFiles(tempDir);
++    const bootstrapEntry = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
++    expect(bootstrapEntry).toBeDefined();
++    expect(bootstrapEntry?.missing).toBe(false);
++    expect(bootstrapEntry?.content).toBe("bootstrap-instructions");
++  });
++
++  it("still reports other bootstrap files as missing when absent", async () => {
++    const tempDir = await makeTempWorkspace("openclaw-workspace-");
++
++    const files = await loadWorkspaceBootstrapFiles(tempDir);
++    const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
++    expect(agents).toBeDefined();
++    expect(agents?.missing).toBe(true);
++  });
++
+   it("treats hardlinked bootstrap aliases as missing", async () => {
+     if (process.platform === "win32") {
+       return;
+diff --git a/src/agents/workspace.ts b/src/agents/workspace.ts
+index 09159b4b07..110b12a41d 100644
+--- a/src/agents/workspace.ts
++++ b/src/agents/workspace.ts
+@@ -540,6 +540,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
+         missing: false,
+       });
+     } else {
++      // BOOTSTRAP.md is an onboarding-only file. Once the agent deletes it
++      // after completing onboarding, it should disappear entirely — not
++      // show up as a [MISSING] diagnostic that tempts the model to try
++      // reading a file that is intentionally gone.
++      if (entry.name === DEFAULT_BOOTSTRAP_FILENAME) {
++        continue;
++      }
+       result.push({ name: entry.name, path: entry.filePath, missing: true });
+     }
+   }
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index 27734fea38..3ae04d5738 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -786,6 +786,7 @@ export async function runAgentTurnWithFallback(params: {
+                   runId,
+                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                   ownerNumbers: params.followupRun.run.ownerNumbers,
++                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                   cliSessionId,
+                   cliSessionBinding,
+                   authProfileId,
+diff --git a/src/config/schema.base.generated.ts b/src/config/schema.base.generated.ts
+index 2e2f3820f6..3a5dcb1830 100644
+--- a/src/config/schema.base.generated.ts
++++ b/src/config/schema.base.generated.ts
+@@ -3280,289 +3280,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 exclusiveMinimum: 0,
+                 maximum: 9007199254740991,
+               },
+-              cliBackends: {
+-                type: "object",
+-                propertyNames: {
+-                  type: "string",
+-                },
+-                additionalProperties: {
+-                  type: "object",
+-                  properties: {
+-                    command: {
+-                      type: "string",
+-                    },
+-                    args: {
+-                      type: "array",
+-                      items: {
+-                        type: "string",
+-                      },
+-                    },
+-                    output: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "json",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "text",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "jsonl",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "stream-json",
+-                        },
+-                      ],
+-                    },
+-                    resumeOutput: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "json",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "text",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "jsonl",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "stream-json",
+-                        },
+-                      ],
+-                    },
+-                    input: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "arg",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "stdin",
+-                        },
+-                      ],
+-                    },
+-                    maxPromptArgChars: {
+-                      type: "integer",
+-                      exclusiveMinimum: 0,
+-                      maximum: 9007199254740991,
+-                    },
+-                    env: {
+-                      type: "object",
+-                      propertyNames: {
+-                        type: "string",
+-                      },
+-                      additionalProperties: {
+-                        type: "string",
+-                      },
+-                    },
+-                    clearEnv: {
+-                      type: "array",
+-                      items: {
+-                        type: "string",
+-                      },
+-                    },
+-                    modelArg: {
+-                      type: "string",
+-                    },
+-                    modelAliases: {
+-                      type: "object",
+-                      propertyNames: {
+-                        type: "string",
+-                      },
+-                      additionalProperties: {
+-                        type: "string",
+-                      },
+-                    },
+-                    sessionArg: {
+-                      type: "string",
+-                    },
+-                    sessionArgs: {
+-                      type: "array",
+-                      items: {
+-                        type: "string",
+-                      },
+-                    },
+-                    resumeArgs: {
+-                      type: "array",
+-                      items: {
+-                        type: "string",
+-                      },
+-                    },
+-                    sessionMode: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "always",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "existing",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "none",
+-                        },
+-                      ],
+-                    },
+-                    sessionIdFields: {
+-                      type: "array",
+-                      items: {
+-                        type: "string",
+-                      },
+-                    },
+-                    systemPromptArg: {
+-                      type: "string",
+-                    },
+-                    systemPromptMode: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "append",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "replace",
+-                        },
+-                      ],
+-                    },
+-                    systemPromptWhen: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "first",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "always",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "never",
+-                        },
+-                      ],
+-                    },
+-                    imageArg: {
+-                      type: "string",
+-                    },
+-                    imageMode: {
+-                      anyOf: [
+-                        {
+-                          type: "string",
+-                          const: "repeat",
+-                        },
+-                        {
+-                          type: "string",
+-                          const: "list",
+-                        },
+-                      ],
+-                    },
+-                    serialize: {
+-                      type: "boolean",
+-                    },
+-                    reliability: {
+-                      type: "object",
+-                      properties: {
+-                        watchdog: {
+-                          type: "object",
+-                          properties: {
+-                            fresh: {
+-                              type: "object",
+-                              properties: {
+-                                noOutputTimeoutMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                                noOutputTimeoutRatio: {
+-                                  type: "number",
+-                                  minimum: 0.05,
+-                                  maximum: 0.95,
+-                                },
+-                                minMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                                maxMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                              },
+-                              additionalProperties: false,
+-                            },
+-                            resume: {
+-                              type: "object",
+-                              properties: {
+-                                noOutputTimeoutMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                                noOutputTimeoutRatio: {
+-                                  type: "number",
+-                                  minimum: 0.05,
+-                                  maximum: 0.95,
+-                                },
+-                                minMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                                maxMs: {
+-                                  type: "integer",
+-                                  minimum: 1000,
+-                                  maximum: 9007199254740991,
+-                                },
+-                              },
+-                              additionalProperties: false,
+-                            },
+-                          },
+-                          additionalProperties: false,
+-                        },
+-                      },
+-                      additionalProperties: false,
+-                    },
+-                    mcp: {
+-                      type: "object",
+-                      properties: {
+-                        enabled: {
+-                          type: "boolean",
+-                        },
+-                        strict: {
+-                          type: "boolean",
+-                        },
+-                        configPath: {
+-                          type: "string",
+-                        },
+-                        mergeConfigPath: {
+-                          type: "string",
+-                        },
+-                        servers: {
+-                          type: "object",
+-                          propertyNames: {
+-                            type: "string",
+-                          },
+-                          additionalProperties: {},
+-                        },
+-                      },
+-                      additionalProperties: false,
+-                    },
+-                  },
+-                  required: ["command"],
+-                  additionalProperties: false,
+-                },
+-                title: "CLI Backends",
+-                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+-              },
+               memorySearch: {
+                 type: "object",
+                 properties: {
+@@ -4234,6 +3951,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+               compaction: {
+                 type: "object",
+                 properties: {
++                  model: {
++                    type: "string",
++                    title: "Compaction Model Override",
++                    description:
++                      "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
++                  },
+                   timeoutMs: {
+                     type: "integer",
+                     exclusiveMinimum: 0,
+@@ -4286,6 +4009,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                     description:
+                       "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
+                   },
++                  proactiveTriggerRatio: {
++                    type: "number",
++                    minimum: 0,
++                    maximum: 1,
++                    description:
++                      "Proactive compaction trigger ratio (0.0-1.0). After a successful run, if the last API call's prompt tokens divided by the context window exceeds this value, compact the session before the next turn so it starts with headroom. Default: 0.8. Set to 0 to disable proactive compaction.",
++                  },
+                   customInstructions: {
+                     type: "string",
+                   },
+@@ -4361,20 +4091,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                     description:
+                       'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
+                   },
+-                  model: {
+-                    type: "string",
+-                    title: "Compaction Model Override",
+-                    description:
+-                      "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+-                  },
+-                  timeoutSeconds: {
+-                    type: "integer",
+-                    exclusiveMinimum: 0,
+-                    maximum: 9007199254740991,
+-                    title: "Compaction Timeout (Seconds)",
+-                    description:
+-                      "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+-                  },
+                   memoryFlush: {
+                     type: "object",
+                     properties: {
+@@ -4437,6 +4153,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 description:
+                   "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+               },
++              cliBackends: {
++                type: "object",
++                propertyNames: {
++                  type: "string",
++                },
++                additionalProperties: {
++                  type: "object",
++                  propertyNames: {
++                    type: "string",
++                  },
++                  additionalProperties: {},
++                },
++                title: "CLI Backends",
++                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
++              },
+               embeddedPi: {
+                 type: "object",
+                 properties: {
+@@ -21448,6 +21179,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                   },
+                   additionalProperties: false,
+                 },
++                title: "Per-Node Command Overrides",
++                description:
++                  "Per-node command policy overrides, keyed by node displayName, nodeId, or nodeId prefix. Each entry may specify allowCommands and denyCommands that merge with the global lists. Match precedence is nodeId exact, then displayName exact, then longest nodeId prefix.",
+               },
+             },
+             additionalProperties: false,
+@@ -26544,6 +26278,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+       help: "Plugin entry name inside the source marketplace, used for later updates.",
+       tags: ["advanced"],
+     },
++    "agents.defaults.compaction.proactiveTriggerRatio": {
++      help: "Proactive compaction trigger ratio (0.0-1.0). After a successful run, if the last API call's prompt tokens divided by the context window exceeds this value, compact the session before the next turn so it starts with headroom. Default: 0.8. Set to 0 to disable proactive compaction.",
++      tags: ["advanced"],
++    },
+     "models.providers.*.headers.*": {
+       sensitive: true,
+       tags: ["security", "models"],
+@@ -26945,6 +26683,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+       tags: ["advanced", "url-secret"],
+     },
+   },
+-  version: "2026.4.5",
++  version: "2026.4.6",
+   generatedAt: "2026-03-22T21:17:33.302Z",
+ };
+diff --git a/src/config/schema.help.ts b/src/config/schema.help.ts
+index 9dc9e44288..a65844174f 100644
+--- a/src/config/schema.help.ts
++++ b/src/config/schema.help.ts
+@@ -1135,6 +1135,8 @@ export const FIELD_HELP: Record<string, string> = {
+     "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+   "agents.defaults.compaction.maxHistoryShare":
+     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
++  "agents.defaults.compaction.proactiveTriggerRatio":
++    "Proactive compaction trigger ratio (0.0-1.0). After a successful run, if the last API call's prompt tokens divided by the context window exceeds this value, compact the session before the next turn so it starts with headroom. Default: 0.8. Set to 0 to disable proactive compaction.",
+   "agents.defaults.compaction.identifierPolicy":
+     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
+   "agents.defaults.compaction.identifierInstructions":
+diff --git a/src/config/types.agent-defaults.ts b/src/config/types.agent-defaults.ts
+index 81e9af3605..f4dacbfde6 100644
+--- a/src/config/types.agent-defaults.ts
++++ b/src/config/types.agent-defaults.ts
+@@ -353,6 +353,13 @@ export type AgentCompactionConfig = {
+   reserveTokensFloor?: number;
+   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
+   maxHistoryShare?: number;
++  /**
++   * Proactive compaction trigger ratio (0.0–1.0). After a successful run,
++   * if the last API call's prompt tokens / context window exceeds this
++   * fraction, compact before the next turn so it starts with headroom.
++   * Set to 0 to disable proactive compaction. Default: 0.8.
++   */
++  proactiveTriggerRatio?: number;
+   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
+   customInstructions?: string;
+   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
+diff --git a/src/config/zod-schema.agent-defaults.ts b/src/config/zod-schema.agent-defaults.ts
+index 83f47792b7..ee3a30cdf9 100644
+--- a/src/config/zod-schema.agent-defaults.ts
++++ b/src/config/zod-schema.agent-defaults.ts
+@@ -113,6 +113,7 @@ export const AgentDefaultsSchema = z
+         keepRecentTokens: z.number().int().positive().optional(),
+         reserveTokensFloor: z.number().int().nonnegative().optional(),
+         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
++        proactiveTriggerRatio: z.number().min(0).max(1).optional(),
+         customInstructions: z.string().optional(),
+         identifierPolicy: z
+           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
+diff --git a/src/cron/isolated-agent/run-execution.runtime.ts b/src/cron/isolated-agent/run-execution.runtime.ts
+index 97ada9d65d..730dbe2b97 100644
+--- a/src/cron/isolated-agent/run-execution.runtime.ts
++++ b/src/cron/isolated-agent/run-execution.runtime.ts
+@@ -3,6 +3,8 @@ export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
+ export { resolveFastModeState } from "../../agents/fast-mode.js";
+ export { resolveNestedAgentLane } from "../../agents/lanes.js";
+ export { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
++export { runCliAgent } from "../../agents/cli-runner.js";
++export { isCliProvider } from "../../agents/model-selection.js";
+ export { runWithModelFallback } from "../../agents/model-fallback.js";
+ export { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+ export {
+diff --git a/src/cron/isolated-agent/run-executor.ts b/src/cron/isolated-agent/run-executor.ts
+index 0938d8b90c..32ba87b7a1 100644
+--- a/src/cron/isolated-agent/run-executor.ts
++++ b/src/cron/isolated-agent/run-executor.ts
+@@ -6,6 +6,7 @@ import type { CronJob } from "../types.js";
+ import { resolveCronPayloadOutcome } from "./helpers.js";
+ import {
+   countActiveDescendantRuns,
++  isCliProvider,
+   listDescendantRunsForRequester,
+   LiveSessionModelSwitchError,
+   logWarn,
+@@ -15,6 +16,7 @@ import {
+   resolveFastModeState,
+   resolveNestedAgentLane,
+   resolveSessionTranscriptPath,
++  runCliAgent,
+   runEmbeddedPiAgent,
+   runWithModelFallback,
+ } from "./run-execution.runtime.js";
+@@ -95,49 +97,80 @@ export function createCronPromptExecutor(params: {
+         }
+         const bootstrapPromptWarningSignature =
+           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+-        const result = await runEmbeddedPiAgent({
+-          sessionId: params.cronSession.sessionEntry.sessionId,
+-          sessionKey: params.agentSessionKey,
+-          agentId: params.agentId,
+-          trigger: "cron",
+-          allowGatewaySubagentBinding: true,
+-          senderIsOwner: true,
+-          messageChannel: params.messageChannel,
+-          agentAccountId: params.resolvedDelivery.accountId,
+-          sessionFile,
+-          agentDir: params.agentDir,
+-          workspaceDir: params.workspaceDir,
+-          config: params.cfgWithAgentDefaults,
+-          skillsSnapshot: params.skillsSnapshot,
+-          prompt: promptText,
+-          lane: resolveNestedAgentLane(params.lane),
+-          provider: providerOverride,
+-          model: modelOverride,
+-          authProfileId: params.liveSelection.authProfileId,
+-          authProfileIdSource: params.liveSelection.authProfileId
+-            ? params.liveSelection.authProfileIdSource
+-            : undefined,
+-          thinkLevel: params.thinkLevel,
+-          fastMode: resolveFastModeState({
+-            cfg: params.cfgWithAgentDefaults,
++        // Dispatch to cli-runner for CLI-provider models (e.g. claude-cli/sonnet
++        // from builder.model.fallbacks) instead of letting them fall into the
++        // embedded runner's silent alias rewrite at pi-embedded-runner/run.ts,
++        // which would turn `claude-cli/sonnet` into `anthropic/claude-sonnet-4-6`
++        // and call the generic anthropic provider — a model nobody configured.
++        let result: CronPromptRunResult;
++        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
++          result = await runCliAgent({
++            sessionId: params.cronSession.sessionEntry.sessionId,
++            sessionKey: params.agentSessionKey,
++            agentId: params.agentId,
++            sessionFile,
++            workspaceDir: params.workspaceDir,
++            config: params.cfgWithAgentDefaults,
++            prompt: promptText,
+             provider: providerOverride,
+             model: modelOverride,
++            thinkLevel: params.thinkLevel,
++            timeoutMs: params.timeoutMs,
++            runId: params.cronSession.sessionEntry.sessionId,
++            skillsSnapshot: params.skillsSnapshot,
++            authProfileId: params.liveSelection.authProfileId,
++            bootstrapPromptWarningSignaturesSeen,
++            bootstrapPromptWarningSignature,
++            agentAccountId: params.resolvedDelivery.accountId,
++            messageChannel: params.messageChannel,
++            abortSignal: params.abortSignal,
++            trigger: "cron",
++          });
++        } else {
++          result = await runEmbeddedPiAgent({
++            sessionId: params.cronSession.sessionEntry.sessionId,
++            sessionKey: params.agentSessionKey,
+             agentId: params.agentId,
+-            sessionEntry: params.cronSession.sessionEntry,
+-          }).enabled,
+-          verboseLevel: params.resolvedVerboseLevel,
+-          timeoutMs: params.timeoutMs,
+-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+-          bootstrapContextRunKind: "cron",
+-          toolsAllow: params.agentPayload?.toolsAllow,
+-          runId: params.cronSession.sessionEntry.sessionId,
+-          requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
+-          disableMessageTool: params.toolPolicy.disableMessageTool,
+-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+-          abortSignal: params.abortSignal,
+-          bootstrapPromptWarningSignaturesSeen,
+-          bootstrapPromptWarningSignature,
+-        });
++            trigger: "cron",
++            allowGatewaySubagentBinding: true,
++            senderIsOwner: true,
++            messageChannel: params.messageChannel,
++            agentAccountId: params.resolvedDelivery.accountId,
++            sessionFile,
++            agentDir: params.agentDir,
++            workspaceDir: params.workspaceDir,
++            config: params.cfgWithAgentDefaults,
++            skillsSnapshot: params.skillsSnapshot,
++            prompt: promptText,
++            lane: resolveNestedAgentLane(params.lane),
++            provider: providerOverride,
++            model: modelOverride,
++            authProfileId: params.liveSelection.authProfileId,
++            authProfileIdSource: params.liveSelection.authProfileId
++              ? params.liveSelection.authProfileIdSource
++              : undefined,
++            thinkLevel: params.thinkLevel,
++            fastMode: resolveFastModeState({
++              cfg: params.cfgWithAgentDefaults,
++              provider: providerOverride,
++              model: modelOverride,
++              agentId: params.agentId,
++              sessionEntry: params.cronSession.sessionEntry,
++            }).enabled,
++            verboseLevel: params.resolvedVerboseLevel,
++            timeoutMs: params.timeoutMs,
++            bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
++            bootstrapContextRunKind: "cron",
++            toolsAllow: params.agentPayload?.toolsAllow,
++            runId: params.cronSession.sessionEntry.sessionId,
++            requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
++            disableMessageTool: params.toolPolicy.disableMessageTool,
++            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
++            abortSignal: params.abortSignal,
++            bootstrapPromptWarningSignaturesSeen,
++            bootstrapPromptWarningSignature,
++          });
++        }
+         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+           result.meta?.systemPromptReport,
+         );
+diff --git a/src/cron/isolated-agent/run.test-harness.ts b/src/cron/isolated-agent/run.test-harness.ts
+index 3687ccef4c..6fa93c0d02 100644
+--- a/src/cron/isolated-agent/run.test-harness.ts
++++ b/src/cron/isolated-agent/run.test-harness.ts
+@@ -50,6 +50,8 @@ export const resolveHooksGmailModelMock = createMock();
+ export const resolveThinkingDefaultMock = createMock();
+ export const runWithModelFallbackMock = createMock();
+ export const runEmbeddedPiAgentMock = createMock();
++export const runCliAgentMock = createMock();
++export const isCliProviderMock = createMock();
+ export const lookupContextTokensMock = createMock();
+ export const updateSessionStoreMock = createMock();
+ export const resolveCronSessionMock = createMock();
+@@ -132,6 +134,8 @@ vi.mock("./run-execution.runtime.js", () => ({
+   resolveFastModeState: resolveFastModeStateMock,
+   resolveNestedAgentLane: resolveNestedAgentLaneMock,
+   LiveSessionModelSwitchError,
++  isCliProvider: (...args: unknown[]) => isCliProviderMock(...args),
++  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+   runWithModelFallback: runWithModelFallbackMock,
+   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+   countActiveDescendantRuns: countActiveDescendantRunsMock,
+@@ -274,6 +278,10 @@ function resetRunExecutionMocks(): void {
+   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
+   runEmbeddedPiAgentMock.mockReset();
+   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
++  runCliAgentMock.mockReset();
++  runCliAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
++  isCliProviderMock.mockReset();
++  isCliProviderMock.mockReturnValue(false);
+   countActiveDescendantRunsMock.mockReset();
+   countActiveDescendantRunsMock.mockReturnValue(0);
+   listDescendantRunsForRequesterMock.mockReset();
+diff --git a/src/logging/config.ts b/src/logging/config.ts
+index cc54d7d83d..93457d198b 100644
+--- a/src/logging/config.ts
++++ b/src/logging/config.ts
+@@ -1,27 +1,60 @@
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
+ import { getCommandPathWithRootOptions } from "../cli/argv.js";
+ import type { OpenClawConfig } from "../config/config.js";
+-import { resolveNodeRequireFromMeta } from "./node-require.js";
+ 
+ type LoggingConfig = OpenClawConfig["logging"];
+ 
+-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
+-
+ export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
+   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+   return primary === "config" && (secondary === "schema" || secondary === "validate");
+ }
+ 
++/**
++ * Resolve the config file path using lightweight env-only logic.
++ *
++ * This intentionally avoids importing the full config/paths module — the
++ * logger initialises very early and must not pull in heavy side effects.
++ */
++function resolveLoggingConfigPath(env: NodeJS.ProcessEnv = process.env): string {
++  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
++  if (explicit) {
++    if (explicit.startsWith("~/")) {
++      return path.join(env.HOME ?? os.homedir(), explicit.slice(2));
++    }
++    return path.resolve(explicit);
++  }
++  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
++  const homeDir = env.HOME ?? os.homedir();
++  if (stateDir) {
++    const resolved = stateDir.startsWith("~/")
++      ? path.join(homeDir, stateDir.slice(2))
++      : path.resolve(stateDir);
++    return path.join(resolved, "openclaw.json");
++  }
++  return path.join(homeDir, ".openclaw", "openclaw.json");
++}
++
++/**
++ * Read the `logging` section from openclaw.json directly via the filesystem.
++ *
++ * Previous implementation used a late-bound `createRequire` → `require("../config/config.js")`
++ * to load the full config module.  After tsdown bundling the relative path breaks
++ * (`dist/logger-*.js` can no longer resolve `../config/config.js`), causing the read
++ * to silently fail and the logger to fall back to the default "info" level — ignoring
++ * whatever the user configured in `logging.level`.
++ *
++ * This version reads the JSON file directly and is bundle-safe.
++ */
+ export function readLoggingConfig(): LoggingConfig | undefined {
+   if (shouldSkipMutatingLoggingConfigRead()) {
+     return undefined;
+   }
+   try {
+-    const loaded = requireConfig?.("../config/config.js") as
+-      | {
+-          loadConfig?: () => OpenClawConfig;
+-        }
+-      | undefined;
+-    const parsed = loaded?.loadConfig?.();
++    const configPath = resolveLoggingConfigPath();
++    const raw = fs.readFileSync(configPath, "utf-8");
++    const parsed = JSON.parse(raw);
+     const logging = parsed?.logging;
+     if (!logging || typeof logging !== "object" || Array.isArray(logging)) {
+       return undefined;
+diff --git a/src/logging/logger.ts b/src/logging/logger.ts
+index 0f67641f53..b1ce4fdb4c 100644
+--- a/src/logging/logger.ts
++++ b/src/logging/logger.ts
+@@ -10,7 +10,6 @@ import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config
+ import type { ConsoleStyle } from "./console.js";
+ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
+ import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+-import { resolveNodeRequireFromMeta } from "./node-require.js";
+ import { loggingState } from "./state.js";
+ import { formatTimestamp } from "./timestamps.js";
+ 
+@@ -48,8 +47,6 @@ const LOG_SUFFIX = ".log";
+ const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+ const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
+ 
+-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
+-
+ export type LoggerSettings = {
+   level?: LogLevel;
+   file?: string;
+@@ -113,20 +110,8 @@ function resolveSettings(): ResolvedSettings {
+     };
+   }
+ 
+-  let cfg: OpenClawConfig["logging"] | undefined =
++  const cfg: OpenClawConfig["logging"] | undefined =
+     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+-  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
+-    try {
+-      const loaded = requireConfig?.("../config/config.js") as
+-        | {
+-            loadConfig?: () => OpenClawConfig;
+-          }
+-        | undefined;
+-      cfg = loaded?.loadConfig?.().logging;
+-    } catch {
+-      cfg = undefined;
+-    }
+-  }
+   const defaultLevel =
+     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
+   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
+-- 
+2.47.1
+

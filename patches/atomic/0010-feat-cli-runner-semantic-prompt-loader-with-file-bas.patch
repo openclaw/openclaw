@@ -1,0 +1,1008 @@
+From 9115c6ba4c61ff5b2f0a0a236fdfe5c5ddd73733 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Thu, 9 Apr 2026 15:52:24 +0800
+Subject: [PATCH 10/12] feat(cli-runner): semantic prompt loader with
+ file-based session context
+
+---
+ src/agents/cli-runner.ts                      |  17 +
+ src/agents/cli-runner/execute.ts              | 290 +++++++++++++++++-
+ src/agents/cli-runner/flags.ts                |  17 +
+ src/agents/cli-runner/helpers.ts              |  17 +-
+ src/agents/cli-runner/semantic-prompt.test.ts | 231 ++++++++++++++
+ src/agents/cli-runner/semantic-prompt.ts      | 133 ++++++++
+ src/agents/cli-session.ts                     |  31 ++
+ src/agents/system-prompt.ts                   |  51 +++
+ src/config/sessions/types.ts                  |   5 +
+ 9 files changed, 782 insertions(+), 10 deletions(-)
+ create mode 100644 src/agents/cli-runner/flags.ts
+ create mode 100644 src/agents/cli-runner/semantic-prompt.test.ts
+ create mode 100644 src/agents/cli-runner/semantic-prompt.ts
+
+diff --git a/src/agents/cli-runner.ts b/src/agents/cli-runner.ts
+index 1420078428..b4da68d605 100644
+--- a/src/agents/cli-runner.ts
++++ b/src/agents/cli-runner.ts
+@@ -66,6 +66,14 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
+                             result.cliSessionBinding.systemPromptCompactionCount,
+                         }
+                       : {}),
++                    ...(result.cliSessionBinding?.semanticSessionFile
++                      ? {
++                          semanticContextFiles: result.cliSessionBinding.semanticContextFiles,
++                          semanticSessionFile: result.cliSessionBinding.semanticSessionFile,
++                          semanticSessionHash: result.cliSessionBinding.semanticSessionHash,
++                          semanticCompactionCount: result.cliSessionBinding.semanticCompactionCount,
++                        }
++                      : {}),
+                   },
+                 }
+               : {}),
+@@ -121,6 +129,15 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
+                                 result.cliSessionBinding.systemPromptCompactionCount,
+                             }
+                           : {}),
++                        ...(result.cliSessionBinding?.semanticSessionFile
++                          ? {
++                              semanticContextFiles: result.cliSessionBinding.semanticContextFiles,
++                              semanticSessionFile: result.cliSessionBinding.semanticSessionFile,
++                              semanticSessionHash: result.cliSessionBinding.semanticSessionHash,
++                              semanticCompactionCount:
++                                result.cliSessionBinding.semanticCompactionCount,
++                            }
++                          : {}),
+                       },
+                     }
+                   : {}),
+diff --git a/src/agents/cli-runner/execute.ts b/src/agents/cli-runner/execute.ts
+index a92db294ce..fea772bc1d 100644
+--- a/src/agents/cli-runner/execute.ts
++++ b/src/agents/cli-runner/execute.ts
+@@ -21,6 +21,7 @@ import {
+   getBootstrapProfileConfig,
+   isContextOverflowError,
+ } from "../pi-embedded-helpers.js";
++import { ENABLE_SEMANTIC_PROMPT_LOADER } from "./flags.js";
+ import {
+   appendImagePathsToPrompt,
+   buildCliSupervisorScopeKey,
+@@ -51,6 +52,14 @@ import {
+   estimatePromptTokens,
+   ESTIMATED_TOKENS_PER_IMAGE,
+ } from "./prepare.js";
++import {
++  type SemanticPromptFiles,
++  writeSemanticSessionFile,
++  buildSemanticLoaderPrompt,
++  buildSemanticCompletionPrompt,
++  isExpectedSemanticPromptFile,
++  resolveSemanticExpectedFiles,
++} from "./semantic-prompt.js";
+ import type { PreparedCliRunContext } from "./types.js";
+ 
+ const executeDeps = {
+@@ -115,6 +124,11 @@ export type CliSessionBindingResult = {
+   systemPromptFile?: string;
+   systemPromptHash?: string;
+   systemPromptCompactionCount?: number;
++  // Semantic prompt loader fields (coexist with legacy chunk-based fields)
++  semanticContextFiles?: string[];
++  semanticSessionFile?: string;
++  semanticSessionHash?: string;
++  semanticCompactionCount?: number;
+ };
+ 
+ export type CliPromptLoadResult = {
+@@ -217,6 +231,8 @@ export async function executeWithOverflowProtection(
+   let latestCliPromptLoad: CliPromptLoadResult | undefined;
+   let latestPromptChunks: ClaudeSystemPromptChunk[] = [];
+   const verifiedPromptChunkCounts = new Map<string, number>();
++  let latestSemanticFiles: SemanticPromptFiles | undefined;
++  const verifiedPromptFileSets = new Map<string, Set<string>>();
+   const buildCliPromptLoadState = (params: {
+     sessionPromptFile?: string;
+     currentSessionPromptFile?: string;
+@@ -313,7 +329,85 @@ export async function executeWithOverflowProtection(
+         : undefined;
+ 
+     // Layer 1: Write session prompt file and build loader prompt (Claude CLI only)
+-    if (context.isClaude && !isSystemCall) {
++    if (context.isClaude && !isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER) {
++      // Semantic prompt loader path: write one session file + reference workspace context files directly
++      try {
++        const semanticContextPaths = _activeContextFiles.map((f) => f.path);
++        const semanticSessionResult = await writeSemanticSessionFile({
++          sessionFile: params.sessionFile,
++          sessionPromptContent: systemPrompt,
++        });
++        latestSemanticFiles = {
++          contextFiles: semanticContextPaths,
++          sessionFile: semanticSessionResult.filePath,
++          sessionHash: semanticSessionResult.hash,
++        };
++        const reloadReason = (() => {
++          if (!resolvedSessionId) {
++            return undefined;
++          }
++          if (!useResume || !matchingCliSessionBinding?.sessionId?.trim()) {
++            return "new-session" as const;
++          }
++          if (forceReloadSystemPromptFile) {
++            return "compaction" as const;
++          }
++          const contextMatch =
++            JSON.stringify(matchingCliSessionBinding.semanticContextFiles ?? []) ===
++            JSON.stringify(latestSemanticFiles.contextFiles);
++          if (!contextMatch) {
++            return "prompt-changed" as const;
++          }
++          if (
++            matchingCliSessionBinding.semanticSessionHash?.trim() !==
++            latestSemanticFiles.sessionHash
++          ) {
++            return "prompt-changed" as const;
++          }
++          if ((matchingCliSessionBinding.semanticCompactionCount ?? 0) < currentCompactionCount) {
++            return "compaction" as const;
++          }
++          return undefined;
++        })();
++        if (cliDebugEnabled) {
++          cliBackendLog.debug("cli semantic prompt file prepared", {
++            sessionId: resolvedSessionId ?? sessionId ?? null,
++            useResume,
++            loaderPromptMode,
++            currentCompactionCount,
++            forceReloadSystemPromptFile,
++            sessionFile: latestSemanticFiles.sessionFile,
++            sessionHash: latestSemanticFiles.sessionHash,
++            contextFileCount: latestSemanticFiles.contextFiles.length,
++            reloadReason: reloadReason ?? null,
++          });
++        }
++        systemPromptToSend =
++          loaderPromptMode === "disabled"
++            ? systemPrompt
++            : reloadReason
++              ? buildSemanticLoaderPrompt({
++                  files: latestSemanticFiles,
++                  reason: reloadReason,
++                  strict: loaderPromptMode === "strict",
++                })
++              : undefined;
++        promptFileTrustedFromBinding = Boolean(
++          !reloadReason &&
++          matchingCliSessionBinding?.semanticSessionFile?.trim() ===
++            latestSemanticFiles.sessionFile &&
++          matchingCliSessionBinding?.semanticSessionHash?.trim() ===
++            latestSemanticFiles.sessionHash,
++        );
++      } catch (error) {
++        cliBackendLog.warn(
++          `failed to write semantic session prompt file; falling back to direct prompt: ${String(error)}`,
++        );
++        systemPromptToSend = systemPrompt;
++        latestSemanticFiles = undefined;
++        loaderFallbackReason = "write_failed";
++      }
++    } else if (context.isClaude && !isSystemCall) {
+       try {
+         cliSystemPromptFile = await writeClaudeSystemPromptFile({
+           sessionFile: params.sessionFile,
+@@ -410,7 +504,7 @@ export async function executeWithOverflowProtection(
+     const mustVerifyPromptFileRead = Boolean(
+       context.isClaude &&
+       !isSystemCall &&
+-      cliSystemPromptFile &&
++      (cliSystemPromptFile || (ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles)) &&
+       systemPromptToSend &&
+       loaderPromptMode !== "disabled",
+     );
+@@ -440,6 +534,21 @@ export async function executeWithOverflowProtection(
+       prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+         preserveExactPrompt: context.heartbeatPrompt,
+       });
++    // On resume, Claude CLI does not accept --append-system-prompt, so
++    // buildCliArgs will drop systemPromptToSend. When a reload is required
++    // (compaction, prompt-changed), prepend the loader instruction to the
++    // user message so the agent sees the "re-read files" directive on the
++    // first call instead of only after a verification-retry round-trip.
++    if (
++      !promptOverride &&
++      context.isClaude &&
++      !isSystemCall &&
++      useResume &&
++      systemPromptToSend &&
++      systemPromptToSend !== systemPrompt
++    ) {
++      prompt = `${systemPromptToSend}\n\n---\n\n${prompt}`;
++    }
+     const resolvedImages =
+       !promptOverride && params.images && params.images.length > 0
+         ? params.images
+@@ -614,6 +723,54 @@ export async function executeWithOverflowProtection(
+                       `cli tool start: ${name}${toolUseId ? ` (${toolUseId})` : ""}`,
+                     );
+                   }
++                  if (
++                    ENABLE_SEMANTIC_PROMPT_LOADER &&
++                    mustVerifyPromptFileRead &&
++                    latestSemanticFiles
++                  ) {
++                    // Semantic verifier: match against expected files set
++                    if (promptFileReadVerified) {
++                      return;
++                    }
++                    if (name !== "Read" && name !== "read") {
++                      return;
++                    }
++                    const readRequest = resolveReadToolRequest(input);
++                    const normalizedFilePath = readRequest.filePath
++                      ? path.resolve(readRequest.filePath)
++                      : undefined;
++                    if (!normalizedFilePath) {
++                      return;
++                    }
++                    const matchedPromptFile = isExpectedSemanticPromptFile(
++                      latestSemanticFiles,
++                      normalizedFilePath,
++                    );
++                    const partialReadRequest =
++                      matchedPromptFile &&
++                      ((typeof readRequest.offset === "number" && readRequest.offset > 1) ||
++                        typeof readRequest.limit === "number");
++                    if (cliDebugEnabled) {
++                      cliBackendLog.debug("cli semantic verifier saw tool use", {
++                        sessionId: resolvedSessionId ?? sessionId ?? null,
++                        toolName: name,
++                        filePath: normalizedFilePath,
++                        matchedPromptFile,
++                        partialReadRequest,
++                        input,
++                      });
++                    }
++                    if (matchedPromptFile && toolUseId?.trim()) {
++                      promptFileReadAttempted = true;
++                      promptFileReadAttemptedPartially = partialReadRequest;
++                      promptFileReadRequests.set(toolUseId.trim(), {
++                        filePath: normalizedFilePath,
++                        partialReadRequest,
++                        chunkIndex: 0, // unused in semantic path but required by type
++                      });
++                    }
++                    return;
++                  }
+                   if (!(mustVerifyPromptFileRead && cliSystemPromptFile)) {
+                     return;
+                   }
+@@ -675,6 +832,59 @@ export async function executeWithOverflowProtection(
+                   cliBackendLog.info(
+                     `cli tool result${toolUseId ? ` (${toolUseId})` : ""}: ${formatCliLogValue(text)}`,
+                   );
++                  if (
++                    ENABLE_SEMANTIC_PROMPT_LOADER &&
++                    mustVerifyPromptFileRead &&
++                    latestSemanticFiles &&
++                    toolUseId
++                  ) {
++                    // Semantic verifier: Set-based, no sequential order requirement
++                    const request = promptFileReadRequests.get(toolUseId);
++                    promptFileReadRequests.delete(toolUseId);
++                    if (!request) {
++                      return;
++                    }
++                    const expectedFiles = resolveSemanticExpectedFiles(latestSemanticFiles);
++                    if (!expectedFiles.has(request.filePath)) {
++                      return;
++                    }
++                    promptFileReadAttempted = true;
++                    if (isError) {
++                      // File not found or read error — treat as "confirmed absent"
++                      // so we don't retry it endlessly. Add to verified set and move on.
++                      let verifiedSet = verifiedPromptFileSets.get(resolvedSessionId ?? "");
++                      if (!verifiedSet) {
++                        verifiedSet = new Set();
++                        if (resolvedSessionId) {
++                          verifiedPromptFileSets.set(resolvedSessionId, verifiedSet);
++                        }
++                      }
++                      verifiedSet.add(request.filePath);
++                      promptFileReadVerified = verifiedSet.size >= expectedFiles.size;
++                      return;
++                    }
++                    if (request.partialReadRequest) {
++                      promptFileReadAttemptedPartially = true;
++                      return;
++                    }
++                    // Guard against tool-side truncation (e.g., large file exceeding
++                    // Read output limit) even when the request had no offset/limit.
++                    if (looksLikePartialReadToolResult(text)) {
++                      promptFileReadAttemptedPartially = true;
++                      return;
++                    }
++                    // No sequential order check — just add to verified set.
++                    let verifiedSet = verifiedPromptFileSets.get(resolvedSessionId ?? "");
++                    if (!verifiedSet) {
++                      verifiedSet = new Set();
++                      if (resolvedSessionId) {
++                        verifiedPromptFileSets.set(resolvedSessionId, verifiedSet);
++                      }
++                    }
++                    verifiedSet.add(request.filePath);
++                    promptFileReadVerified = verifiedSet.size >= expectedFiles.size;
++                    return;
++                  }
+                   if (!(mustVerifyPromptFileRead && cliSystemPromptFile && toolUseId)) {
+                     return;
+                   }
+@@ -849,6 +1059,23 @@ export async function executeWithOverflowProtection(
+ 
+         // Layer 1: Verify prompt file was read
+         if (mustVerifyPromptFileRead && !promptFileReadVerified) {
++          if (ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles) {
++            const expectedFiles = resolveSemanticExpectedFiles(latestSemanticFiles);
++            const verifiedSet =
++              verifiedPromptFileSets.get(resolvedSessionId ?? "") ?? new Set<string>();
++            const unverifiedPaths = [...expectedFiles].filter((p) => !verifiedSet.has(p));
++            throw new PromptFileReadRequiredError({
++              message: `Claude session did not verify a successful complete Read of the session prompt files.`,
++              reason: promptFileReadErrored
++                ? "read-error"
++                : promptFileReadAttempted
++                  ? "partial-read"
++                  : "not-read",
++              sessionId: cliOutput.sessionId ?? resolvedSessionId,
++              promptFile: unverifiedPaths[0] ?? latestSemanticFiles.sessionFile,
++              unverifiedPaths,
++            });
++          }
+           const nextUnreadChunk =
+             cliSystemPromptFile?.chunks[verifiedPromptChunkCount] ?? cliSystemPromptFile?.chunks[0];
+           throw new PromptFileReadRequiredError({
+@@ -864,7 +1091,47 @@ export async function executeWithOverflowProtection(
+         }
+ 
+         // Track session binding metadata
+-        if (!isSystemCall) {
++        if (!isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles) {
++          // Persist semantic binding fields when:
++          //   (a) verification just passed, OR
++          //   (b) verification was not required because the current binding already
++          //       trusts this prompt (trust carry-over — keep the fields across
++          //       trusted resumes so the next turn also skips re-reads).
++          const persistSemanticMetadata =
++            loaderPromptMode !== "disabled" &&
++            (promptFileReadVerified ||
++              (!mustVerifyPromptFileRead &&
++                JSON.stringify(matchingCliSessionBinding?.semanticContextFiles ?? []) ===
++                  JSON.stringify(latestSemanticFiles.contextFiles) &&
++                matchingCliSessionBinding?.semanticSessionHash?.trim() ===
++                  latestSemanticFiles.sessionHash));
++          latestCliSessionBinding =
++            cliOutput.sessionId || resolvedSessionId
++              ? {
++                  sessionId: cliOutput.sessionId ?? resolvedSessionId ?? "",
++                  ...(persistSemanticMetadata
++                    ? {
++                        semanticContextFiles: latestSemanticFiles.contextFiles,
++                        semanticSessionFile: latestSemanticFiles.sessionFile,
++                        semanticSessionHash: latestSemanticFiles.sessionHash,
++                        semanticCompactionCount:
++                          currentCompactionCount > 0 ? currentCompactionCount : undefined,
++                      }
++                    : {}),
++                }
++              : undefined;
++          latestCliPromptLoad = context.isClaude
++            ? buildCliPromptLoadState({
++                sessionPromptFile: latestSemanticFiles.sessionFile,
++                currentSessionPromptFile: latestSemanticFiles.sessionFile,
++                loaderMode: loaderPromptMode,
++                verifiedRead: mustVerifyPromptFileRead
++                  ? promptFileReadVerified
++                  : promptFileTrustedFromBinding,
++                fallbackReason: loaderFallbackReason,
++              })
++            : undefined;
++        } else if (!isSystemCall) {
+           const persistPromptFileMetadata =
+             loaderPromptMode !== "disabled" &&
+             Boolean(cliSystemPromptFile) &&
+@@ -962,12 +1229,21 @@ export async function executeWithOverflowProtection(
+             verifiedChunkCount: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
+           });
+           try {
++            const completionPrompt =
++              ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles
++                ? buildSemanticCompletionPrompt({
++                    files: latestSemanticFiles,
++                    unverifiedPaths: completionError.unverifiedPaths ?? [
++                      completionError.promptFile ?? "",
++                    ],
++                  })
++                : buildClaudeSystemPromptCompletionPrompt({
++                    chunks: latestPromptChunks,
++                    startIndex: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
++                  });
+             return await executeCliWithSession(
+               completionSessionId,
+-              buildClaudeSystemPromptCompletionPrompt({
+-                chunks: latestPromptChunks,
+-                startIndex: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
+-              }),
++              completionPrompt,
+               runParams.isSystemCall ?? false,
+               runParams.forceReloadSystemPromptFile ?? false,
+               "strict",
+diff --git a/src/agents/cli-runner/flags.ts b/src/agents/cli-runner/flags.ts
+new file mode 100644
+index 0000000000..4461a07a1f
+--- /dev/null
++++ b/src/agents/cli-runner/flags.ts
+@@ -0,0 +1,17 @@
++/**
++ * Shared feature flags for the Claude CLI runner.
++ *
++ * Kept in a standalone module so both `helpers.ts` (system prompt assembly)
++ * and `execute.ts` (loader + verification state machine) can consult the same
++ * toggle without a circular import.
++ */
++
++/**
++ * When true, the CLI runner uses the semantic prompt loader: workspace
++ * context files are referenced by their real on-disk paths, and a single
++ * per-session file holds the programmatically assembled content. Verification
++ * is Set-based and tolerates parallel out-of-order Read completions.
++ *
++ * When false, the legacy byte-chunked loader is used.
++ */
++export const ENABLE_SEMANTIC_PROMPT_LOADER = true;
+diff --git a/src/agents/cli-runner/helpers.ts b/src/agents/cli-runner/helpers.ts
+index 43a037181b..0a93cdae84 100644
+--- a/src/agents/cli-runner/helpers.ts
++++ b/src/agents/cli-runner/helpers.ts
+@@ -24,8 +24,9 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+ import { detectRuntimeShell } from "../shell-utils.js";
+ import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
+ import { buildSystemPromptParams } from "../system-prompt-params.js";
+-import { buildAgentSystemPrompt } from "../system-prompt.js";
++import { buildAgentSystemPrompt, buildAgentSystemPromptSplit } from "../system-prompt.js";
+ import { sanitizeImageBlocks } from "../tool-images.js";
++import { ENABLE_SEMANTIC_PROMPT_LOADER } from "./flags.js";
+ export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
+ 
+ type CliUsage = {
+@@ -100,7 +101,7 @@ export function buildSystemPrompt(params: {
+   });
+   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+-  return buildAgentSystemPrompt({
++  const agentPromptParams = {
+     workspaceDir: params.workspaceDir,
+     defaultThinkLevel: params.defaultThinkLevel,
+     extraSystemPrompt: params.extraSystemPrompt,
+@@ -121,7 +122,17 @@ export function buildSystemPrompt(params: {
+     contextFiles: params.contextFiles,
+     ttsHint,
+     memoryCitationsMode: params.config?.memory?.citations,
+-  });
++  };
++  if (ENABLE_SEMANTIC_PROMPT_LOADER) {
++    // Strip inlined workspace context file content from the assembled prompt;
++    // the semantic loader references those files by path so the agent reads
++    // them directly from source, avoiding duplication.
++    return buildAgentSystemPromptSplit({
++      ...agentPromptParams,
++      omitContextFileContent: true,
++    }).prompt;
++  }
++  return buildAgentSystemPrompt(agentPromptParams);
+ }
+ 
+ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
+diff --git a/src/agents/cli-runner/semantic-prompt.test.ts b/src/agents/cli-runner/semantic-prompt.test.ts
+new file mode 100644
+index 0000000000..33384535f4
+--- /dev/null
++++ b/src/agents/cli-runner/semantic-prompt.test.ts
+@@ -0,0 +1,231 @@
++import * as fs from "node:fs/promises";
++import * as os from "node:os";
++import * as path from "node:path";
++import { afterEach, describe, expect, it } from "vitest";
++import {
++  buildSemanticCompletionPrompt,
++  buildSemanticLoaderPrompt,
++  isExpectedSemanticPromptFile,
++  resolveSemanticExpectedFiles,
++  type SemanticPromptFiles,
++  writeSemanticSessionFile,
++} from "./semantic-prompt.js";
++
++const tmpDirs: string[] = [];
++
++async function makeTmpDir(): Promise<string> {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sem-prompt-test-"));
++  tmpDirs.push(dir);
++  return dir;
++}
++
++afterEach(async () => {
++  for (const dir of tmpDirs.splice(0)) {
++    await fs.rm(dir, { recursive: true, force: true });
++  }
++});
++
++// ---------------------------------------------------------------------------
++// writeSemanticSessionFile
++// ---------------------------------------------------------------------------
++
++describe("writeSemanticSessionFile", () => {
++  it("writes session file and returns non-empty hash", async () => {
++    const dir = await makeTmpDir();
++    const sessionFile = path.join(dir, "sess");
++    const content = "hello world\n";
++
++    const result = await writeSemanticSessionFile({
++      sessionFile,
++      sessionPromptContent: content,
++    });
++
++    const written = await fs.readFile(result.filePath, "utf-8");
++    expect(written).toBe(content);
++    expect(result.filePath).toBe(path.join(dir, "sess.system-prompt.txt"));
++    expect(typeof result.hash).toBe("string");
++    expect(result.hash.length).toBeGreaterThan(0);
++  });
++
++  it("skips write when content is unchanged", async () => {
++    const dir = await makeTmpDir();
++    const sessionFile = path.join(dir, "sess");
++    const content = "stable content\n";
++
++    const first = await writeSemanticSessionFile({
++      sessionFile,
++      sessionPromptContent: content,
++    });
++    const statBefore = await fs.stat(first.filePath);
++
++    // Small delay so mtime would differ if the file were rewritten.
++    await new Promise((r) => setTimeout(r, 50));
++
++    const second = await writeSemanticSessionFile({
++      sessionFile,
++      sessionPromptContent: content,
++    });
++
++    const statAfter = await fs.stat(second.filePath);
++    expect(second.hash).toBe(first.hash);
++    expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
++  });
++
++  it("appends newline if missing", async () => {
++    const dir = await makeTmpDir();
++    const sessionFile = path.join(dir, "sess");
++
++    await writeSemanticSessionFile({
++      sessionFile,
++      sessionPromptContent: "no trailing newline",
++    });
++
++    const written = await fs.readFile(path.join(dir, "sess.system-prompt.txt"), "utf-8");
++    expect(written.endsWith("\n")).toBe(true);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// buildSemanticLoaderPrompt
++// ---------------------------------------------------------------------------
++
++describe("buildSemanticLoaderPrompt", () => {
++  const files: SemanticPromptFiles = {
++    contextFiles: ["/a/AGENTS.md", "/a/SOUL.md"],
++    sessionFile: "/b/session.system-prompt.txt",
++    sessionHash: "abc123",
++  };
++
++  it("lists session file first, context files after", () => {
++    const out = buildSemanticLoaderPrompt({
++      files,
++      reason: "new-session",
++    });
++    expect(out).toContain("1. /b/session.system-prompt.txt");
++    expect(out).toContain("2. /a/AGENTS.md");
++    expect(out).toContain("3. /a/SOUL.md");
++  });
++
++  it("contains parallel instruction", () => {
++    const out = buildSemanticLoaderPrompt({
++      files,
++      reason: "new-session",
++    });
++    expect(out).toContain("any order and in parallel");
++  });
++
++  it("does NOT contain sequential instruction", () => {
++    const out = buildSemanticLoaderPrompt({
++      files,
++      reason: "new-session",
++    });
++    expect(out).not.toContain("exact order");
++    expect(out).not.toContain("sequentially");
++  });
++
++  it("prepends strict message when strict is true", () => {
++    const out = buildSemanticLoaderPrompt({
++      files,
++      reason: "new-session",
++      strict: true,
++    });
++    expect(out.startsWith("Your previous attempt")).toBe(true);
++  });
++
++  it("prepends compaction message when reason is compaction", () => {
++    const out = buildSemanticLoaderPrompt({
++      files,
++      reason: "compaction",
++    });
++    expect(out).toContain("compacted or summarized");
++  });
++});
++
++// ---------------------------------------------------------------------------
++// buildSemanticCompletionPrompt
++// ---------------------------------------------------------------------------
++
++describe("buildSemanticCompletionPrompt", () => {
++  const files: SemanticPromptFiles = {
++    contextFiles: ["/a/AGENTS.md", "/a/SOUL.md"],
++    sessionFile: "/b/session.system-prompt.txt",
++    sessionHash: "abc123",
++  };
++
++  it("lists only unverified paths", () => {
++    const out = buildSemanticCompletionPrompt({
++      files,
++      unverifiedPaths: ["/a/AGENTS.md"],
++    });
++    expect(out).toContain("1. /a/AGENTS.md");
++    expect(out).not.toContain("/a/SOUL.md");
++    expect(out).not.toContain("/b/session.system-prompt.txt");
++  });
++
++  it("contains mandatory instruction", () => {
++    const out = buildSemanticCompletionPrompt({
++      files,
++      unverifiedPaths: ["/a/AGENTS.md"],
++    });
++    expect(out).toContain("MANDATORY NEXT STEP");
++  });
++});
++
++// ---------------------------------------------------------------------------
++// isExpectedSemanticPromptFile
++// ---------------------------------------------------------------------------
++
++describe("isExpectedSemanticPromptFile", () => {
++  const files: SemanticPromptFiles = {
++    contextFiles: ["/a/AGENTS.md", "/a/SOUL.md"],
++    sessionFile: "/b/session.system-prompt.txt",
++    sessionHash: "abc123",
++  };
++
++  it("matches a context file", () => {
++    expect(isExpectedSemanticPromptFile(files, "/a/AGENTS.md")).toBe(true);
++  });
++
++  it("matches the session file", () => {
++    expect(isExpectedSemanticPromptFile(files, "/b/session.system-prompt.txt")).toBe(true);
++  });
++
++  it("rejects unknown file", () => {
++    expect(isExpectedSemanticPromptFile(files, "/c/other.md")).toBe(false);
++  });
++
++  it("resolves relative paths", () => {
++    const cwd = process.cwd();
++    const absFile = path.join(cwd, "relative.md");
++    const filesWithRelative: SemanticPromptFiles = {
++      contextFiles: [absFile],
++      sessionFile: "/b/session.system-prompt.txt",
++      sessionHash: "abc123",
++    };
++    expect(isExpectedSemanticPromptFile(filesWithRelative, "relative.md")).toBe(true);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// resolveSemanticExpectedFiles
++// ---------------------------------------------------------------------------
++
++describe("resolveSemanticExpectedFiles", () => {
++  const files: SemanticPromptFiles = {
++    contextFiles: ["/a/AGENTS.md", "/a/SOUL.md"],
++    sessionFile: "/b/session.system-prompt.txt",
++    sessionHash: "abc123",
++  };
++
++  it("returns all files resolved", () => {
++    const set = resolveSemanticExpectedFiles(files);
++    expect(set.has(path.resolve("/a/AGENTS.md"))).toBe(true);
++    expect(set.has(path.resolve("/a/SOUL.md"))).toBe(true);
++    expect(set.has(path.resolve("/b/session.system-prompt.txt"))).toBe(true);
++  });
++
++  it("has correct size", () => {
++    const set = resolveSemanticExpectedFiles(files);
++    expect(set.size).toBe(files.contextFiles.length + 1);
++  });
++});
+diff --git a/src/agents/cli-runner/semantic-prompt.ts b/src/agents/cli-runner/semantic-prompt.ts
+new file mode 100644
+index 0000000000..4ec3c1bb06
+--- /dev/null
++++ b/src/agents/cli-runner/semantic-prompt.ts
+@@ -0,0 +1,133 @@
++import * as fs from "node:fs/promises";
++import * as path from "node:path";
++import { hashCliSessionText } from "../cli-session.js";
++
++export type SemanticPromptFiles = {
++  contextFiles: string[];
++  sessionFile: string;
++  sessionHash: string;
++};
++
++export async function writeSemanticSessionFile(params: {
++  sessionFile: string;
++  sessionPromptContent: string;
++}): Promise<{ filePath: string; hash: string }> {
++  const resolved = path.resolve(params.sessionFile);
++  const dir = path.dirname(resolved);
++  const base = path.basename(resolved, path.extname(resolved));
++  const filePath = path.join(dir, `${base}.system-prompt.txt`);
++
++  let content = params.sessionPromptContent;
++  if (!content.endsWith("\n")) {
++    content += "\n";
++  }
++
++  const hash = hashCliSessionText(content) ?? "";
++
++  let existing: string | undefined;
++  try {
++    existing = await fs.readFile(filePath, "utf-8");
++  } catch {
++    // file does not exist yet
++  }
++
++  if (existing !== content) {
++    await fs.writeFile(filePath, content, { encoding: "utf-8", mode: 0o600 });
++  }
++
++  return { filePath, hash };
++}
++
++export function buildSemanticLoaderPrompt(params: {
++  files: SemanticPromptFiles;
++  reason: "new-session" | "prompt-changed" | "compaction";
++  strict?: boolean;
++}): string {
++  const lines: string[] = [];
++
++  if (params.strict) {
++    lines.push(
++      "Your previous attempt did not verify a successful read of the session prompt files. You must read them in this run before you answer.",
++      "",
++    );
++  }
++
++  if (params.reason === "compaction") {
++    lines.push(
++      "Session context may have been compacted or summarized. You must re-read every listed session prompt file now before continuing.",
++      "",
++    );
++  } else if (params.reason === "prompt-changed") {
++    lines.push(
++      "The session prompt files changed. You must re-read them completely before continuing.",
++      "",
++    );
++  }
++
++  lines.push(
++    "MANDATORY FIRST STEP: use the Read tool (or lowercase read tool) to read ALL of the following files before you do anything else.",
++    "These files can be read in any order and in parallel.",
++    "",
++  );
++
++  // Session file first — it is the core system prompt; workspace files come after.
++  const allPaths = [params.files.sessionFile, ...params.files.contextFiles];
++  for (let i = 0; i < allPaths.length; i++) {
++    lines.push(`${i + 1}. ${allPaths[i]}`);
++  }
++
++  lines.push(
++    "",
++    "Read each file with no offset and no limit.",
++    "If a file does not exist or Read returns an error, skip it and continue with the remaining files.",
++    "The combined contents of these files are the authoritative system prompt for this session and override any remembered summaries or stale context.",
++    "You must follow the combined contents of these files strictly for this turn and all subsequent turns in the session.",
++    "Do not answer the user, do not summarize from memory, and do not rely on prior turns until all listed files have been read in this run.",
++  );
++
++  return lines.join("\n");
++}
++
++export function buildSemanticCompletionPrompt(params: {
++  files: SemanticPromptFiles;
++  unverifiedPaths: string[];
++}): string {
++  const lines: string[] = [];
++
++  lines.push(
++    "You have not yet completed reading all session prompt files.",
++    "MANDATORY NEXT STEP: read the following files that were not verified.",
++    "",
++  );
++
++  for (let i = 0; i < params.unverifiedPaths.length; i++) {
++    lines.push(`${i + 1}. ${params.unverifiedPaths[i]}`);
++  }
++
++  lines.push(
++    "",
++    "Use the Read tool (or lowercase read tool) on each listed path with no offset and no limit.",
++    "If a file does not exist or Read returns an error, skip it and continue with the remaining files.",
++    "Do not read any other file first, do not answer the user yet, and do not continue until every listed file has been read or confirmed missing in this run.",
++  );
++
++  return lines.join("\n");
++}
++
++export function isExpectedSemanticPromptFile(
++  files: SemanticPromptFiles,
++  filePath: string,
++): boolean {
++  const resolved = path.resolve(filePath);
++  const expected = resolveSemanticExpectedFiles(files);
++  return expected.has(resolved);
++}
++
++export function resolveSemanticExpectedFiles(files: SemanticPromptFiles): Set<string> {
++  const set = new Set<string>();
++  for (const f of files.contextFiles) {
++    set.add(path.resolve(f));
++  }
++  set.add(path.resolve(files.sessionFile));
++  return set;
++}
+diff --git a/src/agents/cli-session.ts b/src/agents/cli-session.ts
+index 2ef6c2881b..370591f73e 100644
+--- a/src/agents/cli-session.ts
++++ b/src/agents/cli-session.ts
+@@ -42,6 +42,20 @@ export function getCliSessionBinding(
+         fromBindings.systemPromptCompactionCount >= 0
+           ? fromBindings.systemPromptCompactionCount
+           : undefined,
++      // Semantic prompt loader fields
++      semanticContextFiles:
++        Array.isArray(fromBindings?.semanticContextFiles) &&
++        fromBindings.semanticContextFiles.length > 0
++          ? fromBindings.semanticContextFiles
++          : undefined,
++      semanticSessionFile: trimOptional(fromBindings?.semanticSessionFile),
++      semanticSessionHash: trimOptional(fromBindings?.semanticSessionHash),
++      semanticCompactionCount:
++        typeof fromBindings?.semanticCompactionCount === "number" &&
++        Number.isFinite(fromBindings.semanticCompactionCount) &&
++        fromBindings.semanticCompactionCount >= 0
++          ? fromBindings.semanticCompactionCount
++          : undefined,
+     };
+   }
+   const fromMap = entry.cliSessionIds?.[normalized];
+@@ -105,6 +119,23 @@ export function setCliSessionBinding(
+             systemPromptCompactionCount: Math.floor(binding.systemPromptCompactionCount),
+           }
+         : {}),
++      // Semantic prompt loader fields
++      ...(Array.isArray(binding.semanticContextFiles) && binding.semanticContextFiles.length > 0
++        ? { semanticContextFiles: binding.semanticContextFiles }
++        : {}),
++      ...(trimOptional(binding.semanticSessionFile)
++        ? { semanticSessionFile: trimOptional(binding.semanticSessionFile) }
++        : {}),
++      ...(trimOptional(binding.semanticSessionHash)
++        ? { semanticSessionHash: trimOptional(binding.semanticSessionHash) }
++        : {}),
++      ...(typeof binding.semanticCompactionCount === "number" &&
++      Number.isFinite(binding.semanticCompactionCount) &&
++      binding.semanticCompactionCount >= 0
++        ? {
++            semanticCompactionCount: Math.floor(binding.semanticCompactionCount),
++          }
++        : {}),
+     },
+   };
+   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+index 23184cb727..2f651c05a9 100644
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -770,6 +770,57 @@ export function buildAgentSystemPrompt(params: {
+   return lines.filter(Boolean).join("\n");
+ }
+ 
++export function buildAgentSystemPromptSplit(
++  params: Parameters<typeof buildAgentSystemPrompt>[0] & {
++    omitContextFileContent?: boolean;
++  },
++): {
++  prompt: string;
++  contextFilePaths: string[];
++} {
++  const contextFiles = params.contextFiles ?? [];
++  const validContextFiles = contextFiles.filter(
++    (file) => typeof file.path === "string" && file.path.trim().length > 0,
++  );
++  const contextFilePaths = validContextFiles.map((file) => file.path);
++
++  if (!params.omitContextFileContent) {
++    return {
++      prompt: buildAgentSystemPrompt(params),
++      contextFilePaths,
++    };
++  }
++
++  const promptWithoutContext = buildAgentSystemPrompt({
++    ...params,
++    contextFiles: [],
++  });
++
++  // Replace the dangling "## Workspace Files (injected)" header with a
++  // version that references the files by path (they'll be read separately
++  // via the semantic loader prompt). Without this the section becomes a
++  // misleading header pointing to content that was stripped.
++  const danglingHeader =
++    "## Workspace Files (injected)\nThese user-editable files are loaded by OpenClaw and included below in Project Context.";
++  let replacedPrompt: string;
++  if (contextFilePaths.length > 0) {
++    const referenceBlock = [
++      "## Workspace Files",
++      "The following user-editable workspace files are part of the authoritative system prompt for this session. Read each one with the Read tool (they are also listed in the loader instructions):",
++      ...contextFilePaths.map((p) => `- ${p}`),
++    ].join("\n");
++    replacedPrompt = promptWithoutContext.replace(danglingHeader, referenceBlock);
++  } else {
++    // No context files at all — drop the dangling header entirely.
++    replacedPrompt = promptWithoutContext.replace(`${danglingHeader}\n`, "");
++  }
++
++  return {
++    prompt: replacedPrompt,
++    contextFilePaths,
++  };
++}
++
+ export function buildRuntimeLine(
+   runtimeInfo?: {
+     agentId?: string;
+diff --git a/src/config/sessions/types.ts b/src/config/sessions/types.ts
+index 7500207ef1..02775020eb 100644
+--- a/src/config/sessions/types.ts
++++ b/src/config/sessions/types.ts
+@@ -76,6 +76,11 @@ export type CliSessionBinding = {
+   systemPromptFile?: string;
+   systemPromptHash?: string;
+   systemPromptCompactionCount?: number;
++  // Semantic prompt loader fields (coexist with legacy chunk-based fields)
++  semanticContextFiles?: string[];
++  semanticSessionFile?: string;
++  semanticSessionHash?: string;
++  semanticCompactionCount?: number;
+ };
+ 
+ export type CliPromptLoadStatus = {
+-- 
+2.47.1
+

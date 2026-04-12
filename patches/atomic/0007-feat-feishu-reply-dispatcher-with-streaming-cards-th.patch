@@ -1,0 +1,3090 @@
+From f33c88a6470abfe87bf34d4f59704c4c7bd2e9c1 Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:07:00 +0800
+Subject: [PATCH 07/12] feat(feishu): reply dispatcher with streaming cards,
+ thinking panels, directive stripping
+
+---
+ .../feishu/src/reply-dispatcher.test.ts       |  256 ++++-
+ extensions/feishu/src/reply-dispatcher.ts     |  242 +++-
+ extensions/feishu/src/send.test.ts            |  485 +++++++-
+ extensions/feishu/src/send.ts                 |  239 +++-
+ extensions/feishu/src/streaming-card.test.ts  | 1009 ++++++++++++++++-
+ extensions/feishu/src/streaming-card.ts       |   64 +-
+ .../reply/agent-runner-execution.ts           |  154 ++-
+ src/auto-reply/types.ts                       |    2 +
+ 8 files changed, 2287 insertions(+), 164 deletions(-)
+
+diff --git a/extensions/feishu/src/reply-dispatcher.test.ts b/extensions/feishu/src/reply-dispatcher.test.ts
+index 1e1d26e06a..8c99465c63 100644
+--- a/extensions/feishu/src/reply-dispatcher.test.ts
++++ b/extensions/feishu/src/reply-dispatcher.test.ts
+@@ -389,9 +389,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+ 
+     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+     await options.onIdle?.();
+-    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
+-      note: "Agent: agent",
+-    });
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "第一段答案",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
+   });
+ 
+   it("uses streaming session for auto mode markdown payloads", async () => {
+@@ -429,9 +433,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     expect(streamingInstances).toHaveLength(1);
+     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```", {
+-      note: "Agent: agent",
+-    });
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "```md\npartial answer\n```",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
+   });
+ 
+   it("delivers distinct final payloads after streaming close", async () => {
+@@ -443,15 +451,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+ 
+     expect(streamingInstances).toHaveLength(2);
+     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```", {
+-      note: "Agent: agent",
+-    });
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "```md\n完整回复第一段\n```",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
+     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
+     expect(streamingInstances[1].close).toHaveBeenCalledWith(
+       "```md\n完整回复第一段 + 第二段\n```",
+-      {
++      expect.objectContaining({
+         note: "Agent: agent",
+-      },
++        dropThinkingPanel: true,
++      }),
+     );
+     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+@@ -466,9 +479,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+ 
+     expect(streamingInstances).toHaveLength(1);
+     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```", {
+-      note: "Agent: agent",
+-    });
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "```md\n同一条回复\n```",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
+     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+   });
+@@ -583,9 +600,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     await options.deliver({ text: "lo world" }, { kind: "block" });
+     await options.onIdle?.();
+     expect(streamingInstances).toHaveLength(1);
+-    expect(streamingInstances[0].close).toHaveBeenCalledWith("hello world", {
+-      note: "Agent: agent",
+-    });
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "hello world",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
+   });
+ 
+   it("shows accumulated reasoning and tool history while keeping streamed text separate", async () => {
+@@ -736,6 +757,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     });
+   });
+ 
++  it("renders the thinking panel as soon as assistant activity starts", async () => {
++    const { result, options } = createDispatcherHarness({
++      runtime: createRuntimeLogger(),
++    });
++
++    await options.onReplyStart?.();
++    result.replyOptions.onAssistantMessageStart?.();
++    await flushAsyncTasks();
++
++    expect(streamingInstances).toHaveLength(1);
++    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
++      expect.stringContaining("⏳ Thinking"),
++      { title: "💭 Thinking" },
++    );
++  });
++
++  it("keeps animating the thinking panel while streaming reply status is visible", async () => {
++    vi.useFakeTimers();
++    try {
++      const dispatcher = createFeishuReplyDispatcher({
++        cfg: {} as never,
++        agentId: "agent",
++        runtime: { log: vi.fn(), error: vi.fn() } as never,
++        chatId: "oc_chat",
++      });
++
++      await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
++      await flushAsyncTasks();
++
++      expect(streamingInstances).toHaveLength(1);
++      const updateThinking = streamingInstances[0].updateThinking;
++      const baselineCalls = updateThinking.mock.calls.length;
++
++      await vi.advanceTimersByTimeAsync(1_600);
++      await flushAsyncTasks();
++
++      expect(updateThinking.mock.calls.length).toBeGreaterThan(baselineCalls);
++      expect(updateThinking).toHaveBeenLastCalledWith(
++        expect.stringContaining("⏳ Streaming reply"),
++        { title: "💭 Thinking" },
++      );
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
+   it("groups repeated tool calls instead of listing each invocation separately", async () => {
+     resolveFeishuAccountMock.mockReturnValue({
+       accountId: "main",
+@@ -800,6 +867,76 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     });
+   });
+ 
++  it("counts tool calls from tool results when start events are missed", async () => {
++    resolveFeishuAccountMock.mockReturnValue({
++      accountId: "main",
++      appId: "app_id",
++      appSecret: "app_secret",
++      domain: "feishu",
++      config: {
++        renderMode: "card",
++        streaming: true,
++      },
++    });
++
++    const dispatcher = createFeishuReplyDispatcher({
++      cfg: {} as never,
++      agentId: "agent",
++      runtime: { log: vi.fn(), error: vi.fn() } as never,
++      chatId: "oc_chat",
++    });
++
++    await dispatcher.replyOptions.onAssistantMessageStart?.();
++    await flushAsyncTasks();
++    await dispatcher.replyOptions.onToolResult?.({
++      toolCallId: "toolu_1",
++      text: "README contents",
++    });
++    await flushAsyncTasks();
++
++    expect(streamingInstances).toHaveLength(1);
++    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
++      title: "🔧 Tool calls (1)",
++    });
++  });
++
++  it("tracks tool lifecycle from low-level agent events", async () => {
++    const { result, options } = createDispatcherHarness({
++      runtime: createRuntimeLogger(),
++    });
++
++    await options.onReplyStart?.();
++    await result.replyOptions.onAgentEvent?.({
++      stream: "tool",
++      data: {
++        phase: "start",
++        name: "Read",
++        toolUseId: "toolu_evt_1",
++      },
++    });
++    await flushAsyncTasks();
++
++    expect(streamingInstances).toHaveLength(1);
++    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
++      expect.stringContaining("⏳ Running Read..."),
++      { title: "🔧 Tool calls (1)" },
++    );
++
++    await result.replyOptions.onAgentEvent?.({
++      stream: "tool",
++      data: {
++        phase: "result",
++        toolUseId: "toolu_evt_1",
++        result: "README contents",
++      },
++    });
++    await flushAsyncTasks();
++
++    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
++      title: "🔧 Tool calls (1)",
++    });
++  });
++
+   it("clears running tool status as soon as assistant text starts streaming", async () => {
+     resolveFeishuAccountMock.mockReturnValue({
+       accountId: "main",
+@@ -1259,6 +1396,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     });
+   });
+ 
++  it("strips inline reply tags from live reasoning preview content", async () => {
++    const { result, options } = createDispatcherHarness({
++      runtime: createRuntimeLogger(),
++      allowReasoningPreview: true,
++    });
++
++    await options.onReplyStart?.();
++    result.replyOptions.onReasoningStream?.({
++      text: "Reasoning:\n[[reply_to_current]] 好，我去克隆下来扫一遍代码。",
++    });
++    result.replyOptions.onPartialReply?.({ text: "answer part" });
++    result.replyOptions.onReasoningEnd?.();
++    await options.deliver({ text: "answer part final" }, { kind: "final" });
++
++    expect(streamingInstances).toHaveLength(1);
++    const thinkingCalls = streamingInstances[0].updateThinking.mock.calls.map(
++      (call: unknown[]) => call[0] as string,
++    );
++    expect(thinkingCalls.at(-1)).toContain("好，我去克隆下来扫一遍代码。");
++    expect(thinkingCalls.at(-1)).not.toContain("[[reply_to_current]]");
++  });
++
+   it("accumulates fragmented reasoning payloads in the live thinking panel", async () => {
+     const { result, options } = createDispatcherHarness({
+       runtime: createRuntimeLogger(),
+@@ -1349,6 +1508,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     expect(closeArg).toBe("```ts\ncode\n```");
+   });
+ 
++  it("preserves raw partial text and only strips inline reply tags at final delivery", async () => {
++    const { result, options } = createDispatcherHarness({
++      runtime: createRuntimeLogger(),
++      allowReasoningPreview: false,
++    });
++
++    await options.onReplyStart?.();
++    result.replyOptions.onPartialReply?.({ text: "[[reply_to_current]] hello" });
++    await flushAsyncTasks();
++    await options.deliver({ text: "[[reply_to_current]] hello final" }, { kind: "final" });
++
++    expect(streamingInstances).toHaveLength(1);
++    // Partials are passed through unchanged so markdown formatting (tables,
++    // lists, fences) is never disturbed mid-stream.
++    expect(streamingInstances[0].update).toHaveBeenCalledWith("[[reply_to_current]] hello", {
++      replace: true,
++    });
++    // Final delivery still strips directive tags before sending.
++    expect(streamingInstances[0].close).toHaveBeenCalledWith(
++      "hello final",
++      expect.objectContaining({
++        note: "Agent: agent",
++        dropThinkingPanel: true,
++      }),
++    );
++  });
++
+   it("deduplicates final text by raw answer payload, not combined card text", async () => {
+     const { result, options } = createDispatcherHarness({
+       runtime: createRuntimeLogger(),
+@@ -1481,6 +1667,42 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
+     );
+   });
+ 
++  it("strips inline reply tags from non-streaming reasoning cards", async () => {
++    resolveFeishuAccountMock.mockReturnValue({
++      accountId: "main",
++      appId: "app_id",
++      appSecret: "app_secret",
++      domain: "feishu",
++      config: {
++        renderMode: "card",
++        streaming: false,
++      },
++    });
++
++    const { result, options } = createDispatcherHarness({
++      runtime: createRuntimeLogger(),
++      replyToMessageId: "om_msg",
++      replyInThread: false,
++      threadReply: true,
++      rootId: "om_root_topic",
++    });
++
++    await result.replyOptions.onReasoningStream?.({
++      text: "Reasoning:\n[[reply_to_current]] thinking step",
++    });
++    await result.replyOptions.onReasoningEnd?.();
++    await options.deliver({ text: "final answer" }, { kind: "final" });
++
++    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
++      expect.objectContaining({
++        text: "final answer",
++        thinkingTitle: "💭 Thinking",
++        thinkingText: "thinking step",
++        thinkingExpanded: false,
++      }),
++    );
++  });
++
+   it("deduplicates identical final card sends in non-streaming mode", async () => {
+     resolveFeishuAccountMock.mockReturnValue({
+       accountId: "main",
+diff --git a/extensions/feishu/src/reply-dispatcher.ts b/extensions/feishu/src/reply-dispatcher.ts
+index d67d3b27e7..6540b33e95 100644
+--- a/extensions/feishu/src/reply-dispatcher.ts
++++ b/extensions/feishu/src/reply-dispatcher.ts
+@@ -5,6 +5,10 @@ import {
+   resolveSendableOutboundReplyParts,
+   resolveTextChunksWithFallback,
+ } from "openclaw/plugin-sdk/reply-payload";
++import {
++  stripInlineDirectiveTagsForDelivery,
++  stripInlineDirectiveTagsForDisplay,
++} from "openclaw/plugin-sdk/text-runtime";
+ import { resolveFeishuRuntimeAccount } from "./accounts.js";
+ import { createFeishuClient } from "./client.js";
+ import { resolveMediaContentType } from "./media-types.js";
+@@ -373,7 +377,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+   let replaceNextPartialAfterTool = false;
+   let streamPhase: "idle" | "thinking" | "tool" | "streaming" = "idle";
+   const activeTools: Array<{ toolCallId?: string; name: string; startedAt: number }> = [];
++  const seenToolCallIds = new Set<string>();
+   let toolElapsedTimer: ReturnType<typeof setInterval> | null = null;
++  let streamingActivityTimer: ReturnType<typeof setInterval> | null = null;
+   let toolCallCount = 0;
+   let lastRenderedStreamContent = "";
+   let hasThinkingPrelude = false;
+@@ -505,6 +511,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+     }
+   };
+ 
++  const clearStreamingActivityTimer = (): void => {
++    if (streamingActivityTimer !== null) {
++      clearInterval(streamingActivityTimer);
++      streamingActivityTimer = null;
++    }
++  };
++
++  const ensureStreamingActivityTimer = (): void => {
++    if (streamingActivityTimer !== null) {
++      return;
++    }
++    streamingActivityTimer = setInterval(() => {
++      if (streamPhase !== "streaming" || !shouldRenderStreamingStatus()) {
++        clearStreamingActivityTimer();
++        return;
++      }
++      bumpThinkingActivity();
++      queueThinkingPanelUpdate();
++    }, 1_500);
++    streamingActivityTimer.unref?.();
++  };
++
+   const removeActiveTool = (toolCallId: string | undefined): void => {
+     if (activeTools.length === 0) {
+       return;
+@@ -529,6 +557,92 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+     }
+   };
+ 
++  const noteToolCallSeen = (
++    payload: { toolCallId?: string; name?: string },
++    options?: { allowUnnamed?: boolean },
++  ): boolean => {
++    const normalizedId = payload.toolCallId?.trim();
++    if (!normalizedId) {
++      return options?.allowUnnamed === true;
++    }
++    if (seenToolCallIds.has(normalizedId)) {
++      return false;
++    }
++    seenToolCallIds.add(normalizedId);
++    return true;
++  };
++
++  const handleToolStartLikeEvent = (
++    payload: {
++      name?: string;
++      phase?: string;
++      toolCallId?: string;
++    },
++    options?: { allowUnnamed?: boolean },
++  ) => {
++    const isStartPhase = !payload?.phase || payload.phase === "start" || payload.phase === "update";
++    if (isStartPhase) {
++      const isNewToolCall = noteToolCallSeen(payload, options);
++      if (isNewToolCall) {
++        const trackedName = resolveTrackedToolName(payload?.name);
++        activeTools.push({
++          name: trackedName,
++          toolCallId: payload.toolCallId?.trim() || undefined,
++          startedAt: Date.now(),
++        });
++        toolCallCount += 1;
++        replaceNextPartialAfterTool = Boolean(streamText);
++        if (toolElapsedTimer === null) {
++          toolElapsedTimer = setInterval(() => {
++            if (activeTools.length > 0) {
++              queueThinkingPanelUpdate();
++            }
++          }, 10_000);
++          toolElapsedTimer.unref?.();
++        }
++      }
++    }
++    queueThinkingPrelude();
++    streamPhase = "tool";
++    clearStreamingActivityTimer();
++    bumpThinkingActivity();
++    // Tool-only runs need to bootstrap the streaming card even in auto mode.
++    startStreaming();
++    queueThinkingPanelUpdate();
++  };
++
++  const handleToolResultLikeEvent = (payload: {
++    toolCallId?: string;
++    text?: string;
++    isError?: boolean;
++  }) => {
++    const synthesizedToolCall = payload.toolCallId
++      ? noteToolCallSeen({
++          toolCallId: payload.toolCallId,
++        })
++      : false;
++    if (synthesizedToolCall) {
++      activeTools.push({
++        name: "Tool",
++        toolCallId: payload.toolCallId?.trim() || undefined,
++        startedAt: Date.now(),
++      });
++      toolCallCount += 1;
++      queueThinkingPrelude();
++      streamPhase = "tool";
++      startStreaming();
++    }
++    removeActiveTool(payload.toolCallId);
++    if (activeTools.length === 0 && streamPhase === "tool") {
++      streamPhase = streamText ? "streaming" : "idle";
++    }
++    bumpThinkingActivity();
++    if (!shouldRenderStreamingStatus()) {
++      return;
++    }
++    queueThinkingPanelUpdate();
++  };
++
+   const hasReasoningText = (): boolean => reasoningText.trim().length > 0;
+ 
+   const normalizeReasoningDisplayText = (text: string | undefined): string => {
+@@ -666,6 +780,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+     return text.substring(0, lastAtIdx);
+   };
+ 
++  /** Strip a leading [[reply_to_current]] / [[reply_to:<id>]] directive tag
++   *  for render-only display. Only touches the prefix and its surrounding
++   *  whitespace — markdown structure in the middle of the body is preserved.
++   *  streamText itself is left untouched; this runs on the render-time copy. */
++  const stripLeadingReplyDirectiveForRender = (text: string): string =>
++    text.replace(/^\s*\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*/i, "");
++
+   /** Queue an update to the main content element only. */
+   const queueStreamingRender = () => {
+     partialUpdateQueue = partialUpdateQueue.then(async () => {
+@@ -676,7 +797,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+         return;
+       }
+       const safeRendered = stripIncompleteAtTag(streamText);
+-      const renderedForCard = normalizeMentionTagsForCard(safeRendered);
++      const displayRendered = stripLeadingReplyDirectiveForRender(safeRendered);
++      const renderedForCard = normalizeMentionTagsForCard(displayRendered);
+       if (!renderedForCard || renderedForCard === lastRenderedStreamContent) {
+         return;
+       }
+@@ -748,6 +870,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+       lastPartial = nextText;
+     }
+     streamPhase = "streaming";
++    ensureStreamingActivityTimer();
+     bumpThinkingActivity();
+     queueThinkingPanelUpdate();
+     // Collapse thinking panel when first assistant text arrives
+@@ -816,6 +939,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+       return;
+     }
+     closingInProgress = true;
++    // Switch to idle before draining the queue so any late-arriving
++    // queueThinkingPanelUpdate steps compose without the "Streaming reply..."
++    // activity line and can't overwrite the final panel.
++    streamPhase = "idle";
++    clearStreamingActivityTimer();
+     try {
+       if (streamingStartPromise) {
+         await streamingStartPromise;
+@@ -826,7 +954,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+         `closeStreaming called reason=${options?.reason ?? "none"} emitFinalText=${options?.emitFinalText ? "true" : "false"} active=${streaming?.isActive() ? "true" : "false"} streamMsgId=${streamMessageId ?? "none"} streamTextChars=${streamText.trim().length}`,
+       );
+       if (streaming?.isActive()) {
+-        const finalText = streamText;
++        // Strip directive tags that were preserved in raw partials — they must
++        // not leak into the closed card when onIdle fires without a final deliver.
++        const finalText = stripInlineDirectiveTagsForDelivery(streamText).text;
+         const finalThinking = composeThinkingContent({ final: true });
+         const hasFinalText = finalText.trim().length > 0;
+         const hasFinalThinking = finalThinking.text.trim().length > 0;
+@@ -867,7 +997,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+           }
+         } else {
+           logStreamingDecision("close", {
+-            action: "close-final-card",
++            action: hasFinalThinking
++              ? "close-final-card"
++              : "close-final-card-drop-status-only-panel",
+             finalText,
+             thinkingText: finalThinking.text,
+             emitFinalText: options?.emitFinalText,
+@@ -893,6 +1025,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+             : undefined;
+           await streaming.close(text, {
+             ...(finalNote !== undefined ? { note: finalNote } : {}),
++            ...(hasFinalThinking ? {} : { dropThinkingPanel: true }),
+           });
+           hasVisibleTextInReply = true;
+           deliveredFinalTexts.add(finalText);
+@@ -916,6 +1049,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+       thinkingActivityTick = 0;
+       activeTools.length = 0;
+       clearToolElapsedTimer();
++      clearStreamingActivityTimer();
++      seenToolCallIds.clear();
+     } finally {
+       closingInProgress = false;
+     }
+@@ -969,6 +1104,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+           streamPhase = "idle";
+           activeTools.length = 0;
+           clearToolElapsedTimer();
++          clearStreamingActivityTimer();
++          seenToolCallIds.clear();
+           toolCallCount = 0;
+           lastRenderedStreamContent = "";
+           replaceNextPartialAfterTool = false;
+@@ -1029,6 +1166,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+               ? hookResult.metadata
+               : undefined;
+         }
++        text = stripInlineDirectiveTagsForDelivery(text).text;
+         const hasText = text.trim().length > 0;
+         const hasMedia = originalReply.hasMedia;
+         const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+@@ -1248,22 +1386,53 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+     replyOptions: {
+       ...replyOptions,
+       onModelSelected: prefixContext.onModelSelected,
++      onAgentEvent: async (evt: { stream: string; data: Record<string, unknown> }) => {
++        if (evt.stream !== "tool") {
++          return;
++        }
++        const phase = typeof evt.data.phase === "string" ? evt.data.phase : undefined;
++        const toolCallId =
++          typeof evt.data.toolUseId === "string"
++            ? evt.data.toolUseId
++            : typeof evt.data.toolCallId === "string"
++              ? evt.data.toolCallId
++              : undefined;
++        const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
++        if (phase === "start" || phase === "update") {
++          handleToolStartLikeEvent({ name, phase, toolCallId });
++          return;
++        }
++        if (phase === "result") {
++          const text =
++            typeof evt.data.result === "string"
++              ? evt.data.result
++              : typeof evt.data.partialResult === "string"
++                ? evt.data.partialResult
++                : undefined;
++          const isError = evt.data.isError === true;
++          handleToolResultLikeEvent({ toolCallId, text, isError });
++        }
++      },
+       onAssistantMessageStart: streamingEnabled
+         ? () => {
+             queueThinkingPrelude();
+             startStreaming();
++            queueThinkingPanelUpdate();
+           }
+         : undefined,
+       onReasoningStream: reasoningEnabled
+         ? (payload?: { text?: string; mediaUrls?: string[]; isReasoning?: boolean }) => {
+             queueThinkingPrelude();
+             streamPhase = "thinking";
+-            if (payload?.text) {
++            const cleanedReasoningText = stripInlineDirectiveTagsForDisplay(
++              payload?.text ?? "",
++            ).text;
++            if (cleanedReasoningText) {
+               if (streamingEnabled) {
+                 startStreaming();
+-                queueReasoningUpdate(payload.text);
++                queueReasoningUpdate(cleanedReasoningText);
+               } else {
+-                reasoningText = mergeReasoningDisplayText(reasoningText, payload.text);
++                reasoningText = mergeReasoningDisplayText(reasoningText, cleanedReasoningText);
+               }
+             }
+           }
+@@ -1277,63 +1446,38 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
+           }
+         : undefined,
+       onToolStart: streamingEnabled
+-        ? (payload: { name?: string; phase?: string; toolCallId?: string }) => {
+-            const isStartPhase = !payload?.phase || payload.phase === "start";
+-            if (isStartPhase) {
+-              const trackedName = resolveTrackedToolName(payload?.name);
+-              activeTools.push({
+-                name: trackedName,
+-                toolCallId: payload.toolCallId?.trim() || undefined,
+-                startedAt: Date.now(),
+-              });
+-              toolCallCount += 1;
+-              replaceNextPartialAfterTool = Boolean(streamText);
+-              if (toolElapsedTimer === null) {
+-                toolElapsedTimer = setInterval(() => {
+-                  if (activeTools.length > 0) {
+-                    queueThinkingPanelUpdate();
+-                  }
+-                }, 10_000);
+-                toolElapsedTimer.unref?.();
+-              }
+-            }
+-            queueThinkingPrelude();
+-            streamPhase = "tool";
+-            bumpThinkingActivity();
+-            // Tool-only runs need to bootstrap the streaming card even in
+-            // auto mode; otherwise the first visible event is dropped and the
+-            // thinking panel stays blank until assistant text arrives.
+-            startStreaming();
+-            queueThinkingPanelUpdate();
+-          }
++        ? (payload: { name?: string; phase?: string; toolCallId?: string }) =>
++            handleToolStartLikeEvent(payload, { allowUnnamed: true })
+         : undefined,
+       onToolResult: streamingEnabled
+-        ? (payload: ReplyPayload) => {
+-            removeActiveTool(payload.toolCallId);
+-            if (activeTools.length === 0 && streamPhase === "tool") {
+-              streamPhase = streamText ? "streaming" : "idle";
+-            }
+-            bumpThinkingActivity();
+-            if (!shouldRenderStreamingStatus()) {
+-              return;
+-            }
+-            queueThinkingPanelUpdate();
+-          }
++        ? (payload: ReplyPayload) =>
++            handleToolResultLikeEvent({
++              toolCallId: payload.toolCallId,
++              text: payload.text,
++              isError: payload.isError,
++            })
+         : undefined,
+       onPartialReply: streamingEnabled
+         ? (payload: ReplyPayload) => {
+-            if (!payload.text) {
++            // Pass raw cumulative text through — directive tag stripping is
++            // deferred to final delivery (L1154) so streaming partials preserve
++            // all whitespace/newlines in markdown tables, lists, and fences.
++            // The `INLINE_DIRECTIVE_TAG_WITH_PADDING_RE` regex used by
++            // stripInlineDirectiveTagsForDelivery has `\s*` padding that eats
++            // newlines around directive tags, which collapses markdown rows.
++            const cleanedText = payload.text ?? "";
++            if (!cleanedText) {
+               return;
+             }
+             if (suppressAssistantTextStreaming) {
+               params.runtime.log?.(
+-                `feishu[${account.accountId}] streaming partial suppressed by message_sending hooks: textChars=${payload.text.trim().length}`,
++                `feishu[${account.accountId}] streaming partial suppressed by message_sending hooks: textChars=${cleanedText.trim().length}`,
+               );
+               return;
+             }
+             queueThinkingPrelude();
+             startStreaming();
+-            queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
++            queueStreamingUpdate(cleanedText, { dedupeWithLastPartial: true });
+           }
+         : undefined,
+     },
+diff --git a/extensions/feishu/src/send.test.ts b/extensions/feishu/src/send.test.ts
+index 6f7052c388..067ecd5b1f 100644
+--- a/extensions/feishu/src/send.test.ts
++++ b/extensions/feishu/src/send.test.ts
+@@ -1,6 +1,17 @@
+ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+ import type { ClawdbotConfig } from "../runtime-api.js";
+-import { buildMarkdownCard } from "./send.js";
++import {
++  buildMarkdownCard,
++  buildStructuredCard,
++  editMessageFeishu,
++  enrichMentionPlaceholders,
++  getMessageFeishu,
++  listFeishuThreadMessages,
++  resolveFeishuCardTemplate,
++  sendCardFeishu,
++  sendMessageFeishu,
++  shouldUseFeishuMarkdownCard,
++} from "./send.js";
+ 
+ const {
+   mockConvertMarkdownTables,
+@@ -30,6 +41,15 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+ 
+ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+   convertMarkdownTables: mockConvertMarkdownTables,
++  stripInlineDirectiveTagsForDelivery: vi.fn((text: string) => ({
++    text: text
++      .replace(
++        /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi,
++        " ",
++      )
++      .trim(),
++    changed: true,
++  })),
+ }));
+ 
+ vi.mock("./client.js", () => ({
+@@ -52,25 +72,7 @@ vi.mock("./runtime.js", () => ({
+   }),
+ }));
+ 
+-let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
+-let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+-let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
+-let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+-let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+-let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+-
+ describe("getMessageFeishu", () => {
+-  beforeAll(async () => {
+-    ({
+-      buildStructuredCard,
+-      editMessageFeishu,
+-      getMessageFeishu,
+-      listFeishuThreadMessages,
+-      resolveFeishuCardTemplate,
+-      sendMessageFeishu,
+-    } = await import("./send.js"));
+-  });
+-
+   beforeEach(() => {
+     vi.clearAllMocks();
+     mockResolveMarkdownTableMode.mockReturnValue("preserve");
+@@ -326,6 +328,172 @@ describe("getMessageFeishu", () => {
+   });
+ });
+ 
++describe("sendMessageFeishu", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    mockResolveFeishuAccount.mockImplementation(
++      ({ accountId }: { accountId?: string }) =>
++        ({
++          accountId: accountId ?? "default",
++          configured: true,
++          config: {},
++        }) as never,
++    );
++    mockCreateFeishuClient.mockReturnValue({
++      im: {
++        message: {
++          get: mockClientGet,
++          list: mockClientList,
++          patch: mockClientPatch,
++          create: vi.fn(),
++          reply: vi.fn(),
++        },
++      },
++    });
++  });
++
++  it("routes text sends through interactive cards when renderMode=card", async () => {
++    const create = vi.fn().mockResolvedValue({
++      code: 0,
++      data: { message_id: "om_card" },
++    });
++    mockCreateFeishuClient.mockReturnValue({
++      im: {
++        message: {
++          create,
++          reply: vi.fn(),
++        },
++      },
++    });
++    mockResolveFeishuAccount.mockImplementation(
++      ({ accountId }: { accountId?: string }) =>
++        ({
++          accountId: accountId ?? "default",
++          configured: true,
++          appId: "cli_main",
++          appSecret: "secret_main",
++          config: { renderMode: "card" },
++        }) as never,
++    );
++
++    const result = await sendMessageFeishu({
++      cfg: {
++        channels: {
++          feishu: {
++            renderMode: "card",
++          },
++        },
++      } as ClawdbotConfig,
++      to: "chat:oc_group_1",
++      text: "hello",
++    });
++
++    expect(create).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({
++          msg_type: "interactive",
++        }),
++      }),
++    );
++    expect(result).toEqual(expect.objectContaining({ messageId: "om_card" }));
++  });
++
++  it("strips inline reply tags before sending post text", async () => {
++    const create = vi.fn().mockResolvedValue({
++      code: 0,
++      data: { message_id: "om_post" },
++    });
++    mockCreateFeishuClient.mockReturnValue({
++      im: {
++        message: {
++          create,
++          reply: vi.fn(),
++        },
++      },
++    });
++
++    await sendMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      to: "chat:oc_group_1",
++      text: "[[reply_to_current]] hello",
++    });
++
++    expect(create).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({
++          content: JSON.stringify({
++            zh_cn: {
++              content: [[{ tag: "md", text: "hello" }]],
++            },
++          }),
++        }),
++      }),
++    );
++  });
++});
++
++describe("shouldUseFeishuMarkdownCard", () => {
++  it("detects fenced code blocks and tables", () => {
++    expect(shouldUseFeishuMarkdownCard("```ts\nconst x = 1\n```")).toBe(true);
++    expect(shouldUseFeishuMarkdownCard("| a | b |\n| - | - |")).toBe(true);
++    expect(shouldUseFeishuMarkdownCard("plain text")).toBe(false);
++  });
++});
++
++describe("sendCardFeishu", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    mockResolveFeishuAccount.mockReturnValue({
++      accountId: "default",
++      configured: true,
++      appId: "cli_main",
++      appSecret: "secret_main",
++      config: {},
++    });
++  });
++
++  it("normalizes text-style mentions in raw interactive card payloads before sending", async () => {
++    const create = vi.fn().mockResolvedValue({
++      code: 0,
++      data: { message_id: "om_card_raw" },
++    });
++    mockCreateFeishuClient.mockReturnValue({
++      im: {
++        message: {
++          create,
++          reply: vi.fn(),
++        },
++      },
++    });
++
++    const result = await sendCardFeishu({
++      cfg: {} as ClawdbotConfig,
++      to: "chat:oc_group_1",
++      card: {
++        schema: "2.0",
++        body: {
++          elements: [{ tag: "markdown", content: '<at user_id="ou_123">Emma</at> hello' }],
++        },
++      },
++    });
++
++    expect(create).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({
++          msg_type: "interactive",
++          content: JSON.stringify({
++            schema: "2.0",
++            body: {
++              elements: [{ tag: "markdown", content: "<at id=ou_123></at> hello" }],
++            },
++          }),
++        }),
++      }),
++    );
++    expect(result).toEqual(expect.objectContaining({ messageId: "om_card_raw" }));
++  });
++});
++
+ describe("editMessageFeishu", () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
+@@ -394,6 +562,155 @@ describe("editMessageFeishu", () => {
+     });
+     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+   });
++
++  it("normalizes text-style mentions in raw card edits before patching", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++
++    const result = await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_card_raw_mentions",
++      card: {
++        schema: "2.0",
++        body: {
++          elements: [{ tag: "markdown", content: '<at user_id="ou_123">Emma</at> hello' }],
++        },
++      },
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_card_raw_mentions" },
++      data: {
++        content: JSON.stringify({
++          schema: "2.0",
++          body: {
++            elements: [{ tag: "markdown", content: "<at id=ou_123></at> hello" }],
++          },
++        }),
++      },
++    });
++    expect(result).toEqual({ messageId: "om_card_raw_mentions", contentType: "interactive" });
++  });
++
++  it("patches interactive content for text edits when renderMode=card", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++    mockResolveFeishuAccount.mockReturnValue({
++      accountId: "default",
++      configured: true,
++      config: { renderMode: "card" },
++    });
++
++    const result = await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_edit_card",
++      text: "updated body",
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_edit_card" },
++      data: {
++        content: JSON.stringify({
++          schema: "2.0",
++          config: {
++            width_mode: "fill",
++          },
++          body: {
++            elements: [{ tag: "markdown", content: "updated body" }],
++          },
++        }),
++      },
++    });
++    expect(result).toEqual({ messageId: "om_edit_card", contentType: "interactive" });
++  });
++
++  it("normalizes text-style mentions before patching card markdown content", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++    mockResolveFeishuAccount.mockReturnValue({
++      accountId: "default",
++      configured: true,
++      config: { renderMode: "card" },
++    });
++
++    const result = await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_edit_card_mentions",
++      text: '<at user_id="ou_123">Emma</at> updated body',
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_edit_card_mentions" },
++      data: {
++        content: JSON.stringify({
++          schema: "2.0",
++          config: {
++            width_mode: "fill",
++          },
++          body: {
++            elements: [{ tag: "markdown", content: "<at id=ou_123></at> updated body" }],
++          },
++        }),
++      },
++    });
++    expect(result).toEqual({ messageId: "om_edit_card_mentions", contentType: "interactive" });
++  });
++
++  it("patches interactive content for text edits in auto mode when markdown needs cards", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++    mockResolveFeishuAccount.mockReturnValue({
++      accountId: "default",
++      configured: true,
++      config: { renderMode: "auto" },
++    });
++
++    const result = await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_edit_auto",
++      text: "| a | b |\n| - | - |",
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_edit_auto" },
++      data: {
++        content: JSON.stringify({
++          schema: "2.0",
++          config: {
++            width_mode: "fill",
++          },
++          body: {
++            elements: [{ tag: "markdown", content: "| a | b |\n| - | - |" }],
++          },
++        }),
++      },
++    });
++    expect(result).toEqual({ messageId: "om_edit_auto", contentType: "interactive" });
++  });
++
++  it("strips inline reply tags before patching text content", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++
++    await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_edit_strip_tag",
++      text: "[[reply_to_current]] updated body",
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_edit_strip_tag" },
++      data: {
++        content: JSON.stringify({
++          zh_cn: {
++            content: [
++              [
++                {
++                  tag: "md",
++                  text: "updated body",
++                },
++              ],
++            ],
++          },
++        }),
++      },
++    });
++  });
+ });
+ 
+ describe("resolveFeishuCardTemplate", () => {
+@@ -438,6 +755,122 @@ describe("buildStructuredCard", () => {
+       }),
+     );
+   });
++
++  it("normalizes text-style mentions in markdown body content", () => {
++    const card = buildStructuredCard('<at user_id="ou_123">Emma</at> hello');
++
++    expect(card).toEqual(
++      expect.objectContaining({
++        body: {
++          elements: [{ tag: "markdown", content: "<at id=ou_123></at> hello" }],
++        },
++      }),
++    );
++  });
++
++  it("strips inline reply tags from markdown body content", () => {
++    const card = buildStructuredCard("[[reply_to_current]] hello");
++
++    expect(card).toEqual(
++      expect.objectContaining({
++        body: {
++          elements: [{ tag: "markdown", content: "hello" }],
++        },
++      }),
++    );
++  });
++
++  it("renders thinking as a collapsible panel instead of blockquote markdown", () => {
++    const card = buildStructuredCard("final answer", {
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "first line\nsecond line",
++      thinkingExpanded: false,
++    });
++
++    expect(card).toEqual(
++      expect.objectContaining({
++        body: {
++          elements: [
++            expect.objectContaining({
++              tag: "collapsible_panel",
++              expanded: false,
++              header: {
++                title: { tag: "plain_text", content: "💭 Thinking" },
++              },
++              elements: [
++                {
++                  tag: "markdown",
++                  content: "first line\nsecond line",
++                  element_id: "thinking_content",
++                },
++              ],
++            }),
++            { tag: "markdown", content: "final answer" },
++          ],
++        },
++      }),
++    );
++  });
++});
++
++describe("buildMarkdownCard", () => {
++  it("normalizes text-style mentions before building markdown cards", () => {
++    const card = buildMarkdownCard('<at user_id="ou_123">Emma</at> hello');
++
++    expect(card).toEqual({
++      schema: "2.0",
++      config: {
++        width_mode: "fill",
++      },
++      body: {
++        elements: [{ tag: "markdown", content: "<at id=ou_123></at> hello" }],
++      },
++    });
++  });
++});
++
++describe("enrichMentionPlaceholders", () => {
++  it("replaces @_user_N placeholders with @name", () => {
++    const content = "@_user_1 登陆了，@_user_2 也来了";
++    const mentions = [
++      { key: "@_user_1", name: "张三" },
++      { key: "@_user_2", name: "李四" },
++    ];
++    expect(enrichMentionPlaceholders(content, mentions)).toBe("@张三 登陆了，@李四 也来了");
++  });
++
++  it("handles prefix collision: @_user_1 vs @_user_10", () => {
++    const content = "@_user_1 和 @_user_10 都在";
++    const mentions = [
++      { key: "@_user_1", name: "Alice" },
++      { key: "@_user_10", name: "Bob" },
++    ];
++    expect(enrichMentionPlaceholders(content, mentions)).toBe("@Alice 和 @Bob 都在");
++  });
++
++  it("returns content unchanged when mentions is empty or undefined", () => {
++    expect(enrichMentionPlaceholders("hello @_user_1", undefined)).toBe("hello @_user_1");
++    expect(enrichMentionPlaceholders("hello @_user_1", [])).toBe("hello @_user_1");
++  });
++
++  it("skips entries with missing key or name", () => {
++    const content = "@_user_1 和 @_user_2 在";
++    const mentions = [
++      { key: "@_user_1", name: "Alice" },
++      { key: "@_user_2", name: undefined },
++      { key: undefined, name: "Ghost" },
++    ] as Array<{ key?: string; name?: string }>;
++    expect(enrichMentionPlaceholders(content, mentions)).toBe("@Alice 和 @_user_2 在");
++  });
++
++  it("trims whitespace-only keys and names", () => {
++    const content = "@_user_1 hi";
++    const mentions = [
++      { key: "  ", name: "Alice" },
++      { key: "@_user_1", name: "  " },
++    ];
++    expect(enrichMentionPlaceholders(content, mentions)).toBe("@_user_1 hi");
++  });
+ });
+ 
+ describe("buildMarkdownCard", () => {
+@@ -454,4 +887,18 @@ describe("buildMarkdownCard", () => {
+     expect(card.config.enable_forward).toBeUndefined();
+     expect(card.config.wide_screen_mode).toBeUndefined();
+   });
++
++  it("strips inline reply tags before building markdown cards", () => {
++    const card = buildMarkdownCard("[[reply_to_current]] hello");
++
++    expect(card).toEqual({
++      schema: "2.0",
++      config: {
++        width_mode: "fill",
++      },
++      body: {
++        elements: [{ tag: "markdown", content: "hello" }],
++      },
++    });
++  });
+ });
+diff --git a/extensions/feishu/src/send.ts b/extensions/feishu/src/send.ts
+index 95b235b2d4..bb215554e8 100644
+--- a/extensions/feishu/src/send.ts
++++ b/extensions/feishu/src/send.ts
+@@ -1,10 +1,18 @@
+ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
++import {
++  convertMarkdownTables,
++  stripInlineDirectiveTagsForDelivery,
++} from "openclaw/plugin-sdk/text-runtime";
+ import type { ClawdbotConfig } from "../runtime-api.js";
+-import { resolveFeishuRuntimeAccount } from "./accounts.js";
++import { resolveFeishuAccount, resolveFeishuRuntimeAccount } from "./accounts.js";
+ import { createFeishuClient } from "./client.js";
+ import type { MentionTarget } from "./mention.js";
+-import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
++import {
++  buildMentionedMessage,
++  buildMentionedCardContent,
++  normalizeMentionTagsForCard,
++  normalizeMentionTagsForText,
++} from "./mention.js";
+ import { parsePostContent } from "./post.js";
+ import { getFeishuRuntime } from "./runtime.js";
+ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+@@ -28,6 +36,10 @@ const FEISHU_CARD_TEMPLATES = new Set([
+   "lime",
+ ]);
+ 
++function sanitizeFeishuTextForDelivery(text: string): string {
++  return stripInlineDirectiveTagsForDelivery(text).text;
++}
++
+ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
+   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+     return true;
+@@ -86,6 +98,11 @@ type FeishuMessageGetItem = {
+   msg_type?: string;
+   body?: { content?: string };
+   sender?: FeishuMessageSender;
++  mentions?: Array<{
++    key?: string;
++    name?: string;
++    id?: { open_id?: string; user_id?: string; union_id?: string };
++  }>;
+   create_time?: string;
+ };
+ 
+@@ -107,6 +124,7 @@ async function sendFallbackDirect(
+     msgType: string;
+   },
+   errorPrefix: string,
++  mentionMeta?: Record<string, unknown>,
+ ): Promise<FeishuSendResult> {
+   const response = await client.im.message.create({
+     params: { receive_id_type: params.receiveIdType },
+@@ -117,7 +135,10 @@ async function sendFallbackDirect(
+     },
+   });
+   assertFeishuMessageApiSuccess(response, errorPrefix);
+-  return toFeishuSendResult(response, params.receiveId);
++  return {
++    ...toFeishuSendResult(response, params.receiveId),
++    ...(mentionMeta ? { meta: mentionMeta } : {}),
++  };
+ }
+ 
+ async function sendReplyOrFallbackDirect(
+@@ -137,7 +158,11 @@ async function sendReplyOrFallbackDirect(
+     replyErrorPrefix: string;
+   },
+ ): Promise<FeishuSendResult> {
++  const runtimeLog = (getFeishuRuntime() as unknown as { log?: (message: string) => void }).log;
+   if (!params.replyToMessageId) {
++    runtimeLog?.(
++      `feishu send direct-create msgType=${params.msgType} receiveId=${params.directParams.receiveId} receiveIdType=${params.directParams.receiveIdType}`,
++    );
+     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+   }
+ 
+@@ -149,6 +174,9 @@ async function sendReplyOrFallbackDirect(
+ 
+   let response: { code?: number; msg?: string; data?: { message_id?: string } };
+   try {
++    runtimeLog?.(
++      `feishu send reply-attempt msgType=${params.msgType} replyTo=${params.replyToMessageId} replyInThread=${params.replyInThread ? "true" : "false"} receiveId=${params.directParams.receiveId}`,
++    );
+     response = await client.im.message.reply({
+       path: { message_id: params.replyToMessageId },
+       data: {
+@@ -161,18 +189,27 @@ async function sendReplyOrFallbackDirect(
+     if (!isWithdrawnReplyError(err)) {
+       throw err;
+     }
++    runtimeLog?.(
++      `feishu send reply-fallback-on-throw msgType=${params.msgType} replyTo=${params.replyToMessageId} replyInThread=${params.replyInThread ? "true" : "false"}`,
++    );
+     if (threadReplyFallbackError) {
+       throw threadReplyFallbackError;
+     }
+     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+   }
+   if (shouldFallbackFromReplyTarget(response)) {
++    runtimeLog?.(
++      `feishu send reply-fallback-on-response msgType=${params.msgType} replyTo=${params.replyToMessageId} replyInThread=${params.replyInThread ? "true" : "false"} code=${response.code ?? "unknown"}`,
++    );
+     if (threadReplyFallbackError) {
+       throw threadReplyFallbackError;
+     }
+     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+   }
+   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
++  runtimeLog?.(
++    `feishu send reply-ok msgType=${params.msgType} replyTo=${params.replyToMessageId} replyInThread=${params.replyInThread ? "true" : "false"} messageId=${response.data?.message_id ?? "unknown"}`,
++  );
+   return toFeishuSendResult(response, params.directParams.receiveId);
+ }
+ 
+@@ -271,13 +308,42 @@ function parseFeishuMessageItem(
+     senderId: item.sender?.id,
+     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+     senderType: item.sender?.sender_type,
+-    content: parseFeishuMessageContent(rawContent, msgType),
++    content: enrichMentionPlaceholders(
++      parseFeishuMessageContent(rawContent, msgType),
++      item.mentions,
++    ),
+     contentType: msgType,
+     createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+     threadId: item.thread_id || undefined,
+   };
+ }
+ 
++/**
++ * Replace `@_user_N` placeholders with `@name` using the mentions array
++ * returned by the Feishu message API.
++ */
++export function enrichMentionPlaceholders(
++  content: string,
++  mentions?: Array<{ key?: string; name?: string }>,
++): string {
++  if (!mentions || mentions.length === 0) return content;
++
++  const entries: Array<[string, string]> = [];
++  for (const m of mentions) {
++    const key = m.key?.trim();
++    const name = m.name?.trim();
++    if (key && name) entries.push([key, `@${name}`]);
++  }
++  if (entries.length === 0) return content;
++
++  // Sort by key length descending to prevent @_user_1 matching @_user_10
++  entries.sort((a, b) => b[0].length - a[0].length);
++
++  const pattern = entries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
++  const map = new Map(entries);
++  return content.replace(new RegExp(pattern, "g"), (match) => map.get(match) ?? match);
++}
++
+ /**
+  * Get a message by its ID.
+  * Useful for fetching quoted/replied message content.
+@@ -420,6 +486,57 @@ export type SendFeishuMessageParams = {
+   accountId?: string;
+ };
+ 
++function buildMentionMeta(
++  mentions?: MentionTarget[],
++): { mentions: Array<{ id: string; name?: string }> } | undefined {
++  if (!mentions || mentions.length === 0) {
++    return undefined;
++  }
++  return {
++    mentions: mentions.map((mention) => ({
++      id: mention.openId,
++      name: mention.name,
++    })),
++  };
++}
++
++function buildMentionDisplayNameMap(
++  mentions?: MentionTarget[],
++): Record<string, string> | undefined {
++  if (!mentions || mentions.length === 0) {
++    return undefined;
++  }
++  const map: Record<string, string> = {};
++  for (const mention of mentions) {
++    const openId = mention.openId?.trim();
++    if (!openId) {
++      continue;
++    }
++    const name = mention.name?.trim();
++    if (name) {
++      map[openId] = name;
++    }
++  }
++  return Object.keys(map).length > 0 ? map : undefined;
++}
++
++function normalizeCardMentionTags(value: unknown): unknown {
++  if (typeof value === "string") {
++    return normalizeMentionTagsForCard(value);
++  }
++  if (Array.isArray(value)) {
++    return value.map((item) => normalizeCardMentionTags(item));
++  }
++  if (value && typeof value === "object") {
++    const normalized: Record<string, unknown> = {};
++    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
++      normalized[key] = normalizeCardMentionTags(item);
++    }
++    return normalized;
++  }
++  return value;
++}
++
+ export function buildFeishuPostMessagePayload(params: { messageText: string }): {
+   content: string;
+   msgType: string;
+@@ -446,6 +563,20 @@ export async function sendMessageFeishu(
+   params: SendFeishuMessageParams,
+ ): Promise<FeishuSendResult> {
+   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
++  const account = resolveFeishuAccount({ cfg, accountId });
++  const renderMode = account.config?.renderMode ?? "auto";
++  if (renderMode === "card") {
++    return sendMarkdownCardFeishu({
++      cfg,
++      to,
++      text,
++      replyToMessageId,
++      replyInThread,
++      mentions,
++      accountId,
++    });
++  }
++  const mentionMeta = buildMentionMeta(mentions);
+   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+   const tableMode = resolveMarkdownTableMode({
+     cfg,
+@@ -453,10 +584,11 @@ export async function sendMessageFeishu(
+   });
+ 
+   // Build message content (with @mention support)
+-  let rawText = text ?? "";
++  let rawText = sanitizeFeishuTextForDelivery(text ?? "");
+   if (mentions && mentions.length > 0) {
+     rawText = buildMentionedMessage(mentions, rawText);
+   }
++  rawText = normalizeMentionTagsForText(rawText, buildMentionDisplayNameMap(mentions));
+   const messageText = convertMarkdownTables(rawText, tableMode);
+ 
+   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+@@ -480,13 +612,15 @@ export type SendFeishuCardParams = {
+   replyToMessageId?: string;
+   /** When true, reply creates a Feishu topic thread instead of an inline reply */
+   replyInThread?: boolean;
++  mentions?: MentionTarget[];
+   accountId?: string;
+ };
+ 
+ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
+-  const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
++  const { cfg, to, card, replyToMessageId, replyInThread, mentions, accountId } = params;
++  const mentionMeta = buildMentionMeta(mentions);
+   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+-  const content = JSON.stringify(card);
++  const content = JSON.stringify(normalizeCardMentionTags(card));
+ 
+   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
+   return sendReplyOrFallbackDirect(client, {
+@@ -522,7 +656,7 @@ export async function editMessageFeishu(params: {
+   const client = createFeishuClient(account);
+ 
+   if (card) {
+-    const content = JSON.stringify(card);
++    const content = JSON.stringify(normalizeCardMentionTags(card));
+     const response = await client.im.message.patch({
+       path: { message_id: messageId },
+       data: { content },
+@@ -535,11 +669,26 @@ export async function editMessageFeishu(params: {
+     return { messageId, contentType: "interactive" };
+   }
+ 
++  const renderMode = account.config?.renderMode ?? "auto";
++  if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text!))) {
++    const normalizedCardText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text!));
++    const response = await client.im.message.patch({
++      path: { message_id: messageId },
++      data: { content: JSON.stringify(buildMarkdownCard(normalizedCardText)) },
++    });
++
++    if (response.code !== 0) {
++      throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
++    }
++
++    return { messageId, contentType: "interactive" };
++  }
++
+   const tableMode = resolveMarkdownTableMode({
+     cfg,
+     channel: "feishu",
+   });
+-  const messageText = convertMarkdownTables(text!, tableMode);
++  const messageText = convertMarkdownTables(sanitizeFeishuTextForDelivery(text!), tableMode);
+   const payload = buildFeishuPostMessagePayload({ messageText });
+   const response = await client.im.message.patch({
+     path: { message_id: messageId },
+@@ -566,7 +715,7 @@ export async function updateCardFeishu(params: {
+   }
+ 
+   const client = createFeishuClient(account);
+-  const content = JSON.stringify(card);
++  const content = JSON.stringify(normalizeCardMentionTags(card));
+ 
+   const response = await client.im.message.patch({
+     path: { message_id: messageId },
+@@ -578,12 +727,17 @@ export async function updateCardFeishu(params: {
+   }
+ }
+ 
++export function shouldUseFeishuMarkdownCard(text: string): boolean {
++  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
++}
++
+ /**
+  * Build a Feishu interactive card with markdown content.
+  * Cards render markdown properly (code blocks, tables, links, etc.)
+  * Uses schema 2.0 format for proper markdown rendering.
+  */
+ export function buildMarkdownCard(text: string): Record<string, unknown> {
++  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
+   return {
+     schema: "2.0",
+     config: {
+@@ -593,7 +747,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
+       elements: [
+         {
+           tag: "markdown",
+-          content: text,
++          content: normalizedText,
+         },
+       ],
+     },
+@@ -625,9 +779,32 @@ export function buildStructuredCard(
+   options?: {
+     header?: CardHeaderConfig;
+     note?: string;
++    thinkingTitle?: string;
++    thinkingText?: string;
++    thinkingExpanded?: boolean;
+   },
+ ): Record<string, unknown> {
+-  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
++  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
++  const elements: Record<string, unknown>[] = [];
++  const thinkingText = options?.thinkingText?.trim();
++  if (thinkingText) {
++    elements.push({
++      tag: "collapsible_panel",
++      expanded: options?.thinkingExpanded ?? false,
++      element_id: "thinking",
++      header: {
++        title: {
++          tag: "plain_text",
++          content: options?.thinkingTitle?.trim() || "💭 Thinking",
++        },
++      },
++      border: { color: "grey" },
++      vertical_spacing: "2px",
++      padding: "4px 12px",
++      elements: [{ tag: "markdown", content: thinkingText, element_id: "thinking_content" }],
++    });
++  }
++  elements.push({ tag: "markdown", content: normalizedText });
+   if (options?.note) {
+     elements.push({ tag: "hr" });
+     elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+@@ -660,14 +837,35 @@ export async function sendStructuredCardFeishu(params: {
+   accountId?: string;
+   header?: CardHeaderConfig;
+   note?: string;
++  thinkingTitle?: string;
++  thinkingText?: string;
++  thinkingExpanded?: boolean;
+ }): Promise<FeishuSendResult> {
+-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId, header, note } =
+-    params;
+-  let cardText = text;
++  const {
++    cfg,
++    to,
++    text,
++    replyToMessageId,
++    replyInThread,
++    mentions,
++    accountId,
++    header,
++    note,
++    thinkingTitle,
++    thinkingText,
++    thinkingExpanded,
++  } = params;
++  let cardText = normalizeMentionTagsForCard(text);
+   if (mentions && mentions.length > 0) {
+-    cardText = buildMentionedCardContent(mentions, text);
+-  }
+-  const card = buildStructuredCard(cardText, { header, note });
++    cardText = buildMentionedCardContent(mentions, cardText);
++  }
++  const card = buildStructuredCard(cardText, {
++    header,
++    note,
++    thinkingTitle,
++    thinkingText,
++    thinkingExpanded,
++  });
+   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+ }
+ 
+@@ -691,6 +889,7 @@ export async function sendMarkdownCardFeishu(params: {
+   if (mentions && mentions.length > 0) {
+     cardText = buildMentionedCardContent(mentions, text);
+   }
++  cardText = normalizeMentionTagsForCard(cardText);
+   const card = buildMarkdownCard(cardText);
+-  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
++  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, mentions, accountId });
+ }
+diff --git a/extensions/feishu/src/streaming-card.test.ts b/extensions/feishu/src/streaming-card.test.ts
+index bb12feab61..e044e6bdd0 100644
+--- a/extensions/feishu/src/streaming-card.test.ts
++++ b/extensions/feishu/src/streaming-card.test.ts
+@@ -1,14 +1,72 @@
+-import { describe, expect, it } from "vitest";
+-import { mergeStreamingText, resolveStreamingCardSendMode } from "./streaming-card.js";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  FeishuStreamingSession,
++  mergeStreamingText,
++  resolveStreamingCardSendMode,
++} from "./streaming-card.js";
++
++function createClientMock() {
++  const messageDelete = vi.fn(async () => ({ code: 0, msg: "ok" }));
++  const messageCreate = vi.fn(async () => ({
++    code: 0,
++    msg: "ok",
++    data: { message_id: "message-id" },
++  }));
++  const messageReply = vi.fn(async () => ({
++    code: 0,
++    msg: "ok",
++    data: { message_id: "message-id" },
++  }));
++  const cardCreate = vi.fn(async () => ({ code: 0, msg: "ok", data: { card_id: "card-id" } }));
++  const cardSettings = vi.fn(async (_arg: { path?: unknown; data?: { settings?: string } }) => ({
++    code: 0,
++    msg: "ok",
++  }));
++  const cardUpdate = vi.fn(async () => ({ code: 0, msg: "ok" }));
++  const cardElementContent = vi.fn(async () => ({ code: 0, msg: "ok" }));
++
++  const client = {
++    im: {
++      message: {
++        delete: messageDelete,
++        create: messageCreate,
++        reply: messageReply,
++      },
++    },
++    cardkit: {
++      v1: {
++        card: {
++          create: cardCreate,
++          settings: cardSettings,
++          update: cardUpdate,
++        },
++        cardElement: {
++          content: cardElementContent,
++        },
++      },
++    },
++  };
++
++  return {
++    client: client as never,
++    messageDelete,
++    messageCreate,
++    messageReply,
++    cardCreate,
++    cardSettings,
++    cardUpdate,
++    cardElementContent,
++  };
++}
+ 
+ describe("mergeStreamingText", () => {
+   it("prefers the latest full text when it already includes prior text", () => {
+     expect(mergeStreamingText("hello", "hello world")).toBe("hello world");
+   });
+ 
+-  it("keeps previous text when the next partial is empty or redundant", () => {
++  it("keeps previous text when the next partial is empty or identical", () => {
+     expect(mergeStreamingText("hello", "")).toBe("hello");
+-    expect(mergeStreamingText("hello world", "hello")).toBe("hello world");
++    expect(mergeStreamingText("hello", "hello")).toBe("hello");
+   });
+ 
+   it("appends fragmented chunks without injecting newlines", () => {
+@@ -16,12 +74,22 @@ describe("mergeStreamingText", () => {
+     expect(mergeStreamingText("line1", "line2")).toBe("line1line2");
+   });
+ 
+-  it("merges overlap between adjacent partial snapshots", () => {
+-    expect(mergeStreamingText("好的，让我", "让我再读取一遍")).toBe("好的，让我再读取一遍");
+-    expect(mergeStreamingText("revision_id: 552", "2，一点变化都没有")).toBe(
+-      "revision_id: 552，一点变化都没有",
+-    );
+-    expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
++  it("treats overlapping delta chunks as plain appends to preserve markdown", () => {
++    // Delta streams from model-aware-runner emit token fragments that may
++    // share characters at chunk boundaries (e.g. `|` separators in markdown
++    // tables, or `l` in `install` + `lossless`).  A tail-head overlap collapse
++    // would eat real content — the simple append below is the correct
++    // behavior for genuine delta streams and preserves NO_REPLY-style token
++    // splits like "NO" + "_REPLY" → "NO_REPLY".
++    expect(mergeStreamingText("install", "lossless")).toBe("installlossless");
++    expect(mergeStreamingText("abc| |", "| |xyz")).toBe("abc| || |xyz");
++    expect(mergeStreamingText("NO", "_REPLY")).toBe("NO_REPLY");
++    // Delta tokens must never be swallowed even if they appear as substrings
++    // of accumulated text — single chars like "|", "\n", "-" repeat constantly
++    // in markdown tables.
++    expect(mergeStreamingText("| col1 | col2 |", "|")).toBe("| col1 | col2 ||");
++    expect(mergeStreamingText("line1\n", "\n")).toBe("line1\n\n");
++    expect(mergeStreamingText("a b c", " ")).toBe("a b c ");
+   });
+ });
+ 
+@@ -52,3 +120,924 @@ describe("resolveStreamingCardSendMode", () => {
+     ).toBe("create");
+   });
+ });
++
++describe("FeishuStreamingSession.update", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("supports replace mode to overwrite transient status text", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "💭 思考中...",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(undefined);
++
++    await session.update("🔧 正在使用Read工具...", { replace: true });
++
++    expect(updateCardContentSpy).toHaveBeenCalledWith(
++      "🔧 正在使用Read工具...",
++      expect.any(Function),
++    );
++    expect((session as any).state.currentText).toBe("🔧 正在使用Read工具...");
++  });
++
++  it("passes raw replace-mode content through unchanged to preserve markdown", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(undefined);
++
++    const markdown =
++      "当前共有 **28** 个 skills:\n\n| 类别 | 数量 |\n|------|------|\n| 开发工具 | 5 |";
++    await session.update(markdown, { replace: true });
++
++    expect(updateCardContentSpy).toHaveBeenCalledWith(markdown, expect.any(Function));
++    expect((session as any).state.currentText).toBe(markdown);
++  });
++
++  it("stores a custom thinking panel title for tool-only updates", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++      hasNote: false,
++      noteText: "",
++    };
++    const updateCardFullSpy = vi.spyOn(session as any, "updateCardFull").mockResolvedValue(true);
++
++    await session.updateThinking("1. Bash\n\n⏳ Running Bash...", {
++      title: "🔧 Tool calls (1)",
++    });
++
++    expect(updateCardFullSpy).toHaveBeenCalled();
++    expect((session as any).state.thinkingTitle).toBe("🔧 Tool calls (1)");
++  });
++
++  it("updates thinking content via element API after the panel is already rendered", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "first thought",
++      thinkingExpanded: true,
++      thinkingPanelRendered: true,
++    };
++    const updateCardFullSpy = vi.spyOn(session as any, "updateCardFull").mockResolvedValue(true);
++    const updateElementSpy = vi
++      .spyOn(session as any, "updateElementContent")
++      .mockResolvedValue(true);
++
++    await session.updateThinking("second thought", { title: "💭 Thinking" });
++
++    expect(updateCardFullSpy).not.toHaveBeenCalled();
++    expect(updateElementSpy).toHaveBeenCalledWith(
++      "thinking_content",
++      "second thought",
++      expect.any(Function),
++    );
++  });
++
++  it("passes thinking content through unchanged (directive stripping deferred to upstream)", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "first thought",
++      thinkingExpanded: true,
++      thinkingPanelRendered: true,
++    };
++    const updateElementSpy = vi
++      .spyOn(session as any, "updateElementContent")
++      .mockResolvedValue(true);
++
++    await session.updateThinking("[[reply_to_current]] 让我去扒一下这个项目。", {
++      title: "💭 Thinking",
++    });
++
++    // Raw text passes through — directive tags are stripped by the
++    // reply-dispatcher at final delivery, not inside the streaming session.
++    expect(updateElementSpy).toHaveBeenCalledWith(
++      "thinking_content",
++      "[[reply_to_current]] 让我去扒一下这个项目。",
++      expect.any(Function),
++    );
++    expect((session as any).state.thinkingText).toBe("[[reply_to_current]] 让我去扒一下这个项目。");
++  });
++
++  it("rolls back thinking state after a failed full-card update so identical retries are still allowed", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "old",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    const updateCardFullSpy = vi
++      .spyOn(session as any, "updateCardFull")
++      .mockResolvedValueOnce(false)
++      .mockResolvedValueOnce(true);
++
++    await session.updateThinking("new", { title: "🔧 Tool calls (1)" });
++    expect((session as any).state.thinkingText).toBe("old");
++    expect((session as any).state.thinkingTitle).toBe("💭 Thinking");
++
++    await session.updateThinking("new", { title: "🔧 Tool calls (1)" });
++    expect(updateCardFullSpy).toHaveBeenCalledTimes(2);
++    expect((session as any).state.thinkingText).toBe("new");
++    expect((session as any).state.thinkingTitle).toBe("🔧 Tool calls (1)");
++  });
++
++  it("rolls back thinking state after an element update failure so identical retries are still allowed", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "old",
++      thinkingExpanded: true,
++      thinkingPanelRendered: true,
++    };
++    const updateElementSpy = vi
++      .spyOn(session as any, "updateElementContent")
++      .mockResolvedValueOnce(false)
++      .mockResolvedValueOnce(true);
++
++    await session.updateThinking("new", { title: "💭 Thinking" });
++    expect((session as any).state.thinkingText).toBe("old");
++
++    await session.updateThinking("new", { title: "💭 Thinking" });
++    expect(updateElementSpy).toHaveBeenCalledTimes(2);
++    expect((session as any).state.thinkingText).toBe("new");
++  });
++
++  it("reopens streaming mode and retries once when text streaming times out", async () => {
++    const { client, cardElementContent, cardSettings } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 2,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    cardElementContent
++      .mockResolvedValueOnce({ code: 200850, msg: "Card streaming timeout" })
++      .mockResolvedValueOnce({ code: 0, msg: "ok" });
++
++    const ok = await (session as any).updateElementContent("content", "updated", vi.fn());
++
++    expect(ok).toBe(true);
++    expect(cardSettings).toHaveBeenCalledOnce();
++    expect(cardElementContent).toHaveBeenCalledTimes(2);
++    const reopenArg = cardSettings.mock.calls[0]?.[0] as {
++      data?: { settings?: string; sequence?: number };
++    };
++    const reopenSettings = JSON.parse(reopenArg.data?.settings ?? "{}") as {
++      config?: { streaming_mode?: boolean };
++    };
++    expect(reopenSettings.config?.streaming_mode).toBe(true);
++    expect(reopenArg.data?.sequence).toBe(3);
++    const retryCalls = cardElementContent.mock.calls as unknown as Array<[unknown]>;
++    const retryArg = retryCalls[1]?.[0] as unknown as {
++      data?: { sequence?: number };
++    };
++    expect(retryArg.data?.sequence).toBe(4);
++    expect((session as any).state.sequence).toBe(4);
++  });
++
++  it("reopens streaming mode when the sdk only exposes a closed-streaming error message", async () => {
++    const { client, cardElementContent, cardSettings } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 2,
++      currentText: "answer",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    cardElementContent
++      .mockRejectedValueOnce(new Error("ErrMsg: streaming mode is closed;"))
++      .mockResolvedValueOnce({ code: 0, msg: "ok" });
++
++    const ok = await (session as any).updateElementContent("content", "updated", vi.fn());
++
++    expect(ok).toBe(true);
++    expect(cardSettings).toHaveBeenCalledOnce();
++    expect(cardElementContent).toHaveBeenCalledTimes(2);
++    expect((session as any).state.sequence).toBe(4);
++  });
++});
++
++describe("FeishuStreamingSession.discard", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("deletes the interactive message instead of leaving an empty card", async () => {
++    const { client, messageDelete } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "💭 思考中...",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++
++    await session.discard();
++
++    expect(messageDelete).toHaveBeenCalledWith({
++      path: { message_id: "message-id" },
++    });
++  });
++});
++
++describe("FeishuStreamingSession.close", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("treats explicit empty final text as authoritative", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "💭 思考中...",
++      thinkingText: "",
++      thinkingExpanded: true,
++    };
++    (session as any).pendingText = "💭 思考中...";
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close("");
++
++    expect(updateCardContentSpy).toHaveBeenCalledWith("");
++  });
++
++  it("treats explicit non-empty final text as authoritative", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "**Checking SEO JSON-LD in PR #16**<at id=ou_luke></at> 加了。",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).pendingText =
++      "**Checking SEO JSON-LD in PR #16**<at id=ou_luke></at> 加了。\n我刚";
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close("<at id=ou_luke></at> 加了。\n我刚又确认了一遍");
++
++    expect(updateCardContentSpy).toHaveBeenCalled();
++    const calledText = updateCardContentSpy.mock.calls[0]?.[0] as string;
++    expect(calledText).toContain("又确认了一遍");
++  });
++
++  it("replaces stale streamed preview text instead of merging it into explicit final text", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "💭 思考中...\n\n原因就一个：\n- working tree clean",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close("能 review。\n\n原因就一个：\n- working tree clean");
++
++    expect(updateCardContentSpy).toHaveBeenCalledWith(
++      "能 review。\n\n原因就一个：\n- working tree clean",
++    );
++  });
++
++  it("passes final text through unchanged on close (directive stripping deferred to upstream)", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "旧内容",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close("[[reply_to_current]] 让我去扒一下这个项目。");
++
++    // Raw text passes through — directive tags are stripped by the
++    // reply-dispatcher at final delivery, not inside the streaming session.
++    expect(updateCardContentSpy).toHaveBeenCalledWith(
++      "[[reply_to_current]] 让我去扒一下这个项目。",
++    );
++  });
++
++  it("keeps pending merge behavior when final text is omitted", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "第一段",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).pendingText = "第一段\n第二段";
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close();
++
++    expect(updateCardContentSpy).toHaveBeenCalledWith("第一段\n第二段");
++  });
++
++  it("respects pending replace updates when final text is omitted", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "💭 思考中...",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    // pendingText is a plain string in the current code — mergeStreamingText
++    // will merge it with currentText producing the expected result.
++    (session as any).pendingText = "🔧 正在使用Read工具...";
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    const updateCardContentSpy = vi
++      .spyOn(session as any, "updateCardContent")
++      .mockResolvedValue(true);
++
++    await session.close();
++
++    // pendingMerged = mergeStreamingText("💭 思考中...", "🔧 正在使用Read工具...")
++    // Neither is a prefix of the other, no overlap → concatenation:
++    // "💭 思考中...🔧 正在使用Read工具..."
++    // text = pendingMerged (no finalText)
++    // text !== currentText → updateCardContent called
++    expect(updateCardContentSpy).toHaveBeenCalled();
++    const calledText = updateCardContentSpy.mock.calls[0]?.[0] as string;
++    expect(calledText).toContain("🔧 正在使用Read工具...");
++  });
++
++  it("falls back to full card update when streaming content update fails on close", async () => {
++    const { client, cardElementContent, cardUpdate } = createClientMock();
++    // Simulate streaming_mode expired — element content API rejects
++    cardElementContent.mockRejectedValueOnce(new Error("streaming timeout"));
++
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "旧内容",
++      header: { title: "Test", template: "blue" },
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    await session.close("最终内容");
++
++    // Streaming update was attempted and failed
++    expect(cardElementContent).toHaveBeenCalled();
++    // Fallback card.update was called with full card JSON
++    expect(cardUpdate).toHaveBeenCalledOnce();
++    const updateArg = (cardUpdate.mock.calls[0] as unknown[])?.[0] as {
++      path?: { card_id?: string };
++      data?: { card?: { data?: string } };
++    };
++    expect(updateArg.path?.card_id).toBe("card-id");
++    const cardJson = JSON.parse(updateArg.data?.card?.data ?? "{}") as {
++      body?: { elements?: Array<{ content?: string }> };
++      header?: { title?: { content?: string } };
++    };
++    expect(cardJson.body?.elements?.[0]?.content).toBe("最终内容");
++    expect(cardJson.header?.title?.content).toBe("Test");
++  });
++
++  it("drops a previously rendered thinking panel when close is asked to suppress tool-only UI", async () => {
++    const { client, cardUpdate } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "最终答案",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "🔧 Tool calls (2)",
++      thinkingText: "\u200B",
++      thinkingExpanded: true,
++      thinkingPanelRendered: true,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    await session.close("最终答案", { dropThinkingPanel: true });
++
++    expect(cardUpdate).toHaveBeenCalledOnce();
++    const updateArg = (cardUpdate.mock.calls[0] as unknown[])?.[0] as {
++      data?: { card?: { data?: string } };
++    };
++    const cardJson = JSON.parse(updateArg.data?.card?.data ?? "{}") as {
++      body?: { elements?: Array<{ tag?: string; content?: string }> };
++    };
++    expect(cardJson.body?.elements?.some((element) => element.tag === "collapsible_panel")).toBe(
++      false,
++    );
++    expect(cardJson.body?.elements?.find((element) => element.tag === "markdown")?.content).toBe(
++      "最终答案",
++    );
++  });
++
++  it("does not call full card update when streaming content update succeeds and no thinking", async () => {
++    const { client, cardUpdate } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "旧内容",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    await session.close("最终内容");
++
++    expect(cardUpdate).not.toHaveBeenCalled();
++  });
++
++  it("forces a final full card sync on close after an earlier streaming update failure", async () => {
++    const { client, cardUpdate } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "最终内容",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).requiresFullCardSync = true;
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    await session.close("最终内容");
++
++    expect(cardUpdate).toHaveBeenCalledOnce();
++  });
++
++  it("strips html tags when writing summary content on close", async () => {
++    const { client, cardSettings } = createClientMock();
++    const session = new FeishuStreamingSession(client, {
++      appId: "app",
++      appSecret: "secret",
++    });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    await session.close(
++      '<at user_id="ou_user_1">Lukin</at> 已完成 <b>发布</b><br/>请查看 <a href="https://example.com">链接</a>',
++    );
++
++    expect(cardSettings).toHaveBeenCalled();
++    // The close settings call is the last one; find it
++    const lastCallArg = cardSettings.mock.calls[cardSettings.mock.calls.length - 1]?.[0] as {
++      data?: { settings?: string };
++    };
++    const settingsPayload = JSON.parse(lastCallArg.data?.settings ?? "{}") as {
++      config?: { summary?: { content?: string } };
++    };
++    // truncateSummary uses stripHtmlTagsToText which converts <br/> to \n,
++    // then \s+ is collapsed to single space.
++    const summary = settingsPayload.config?.summary?.content ?? "";
++    expect(summary).toBe("Lukin 已完成 发布 请查看 链接");
++  });
++});
++
++describe("FeishuStreamingSession.renewStreamingMode", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    vi.useRealTimers();
++  });
++
++  function makeSession(client: ReturnType<typeof createClientMock>["client"]) {
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 2,
++      currentText: "text",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    return session;
++  }
++
++  it("does not renew when last renewal is within 8 minutes", async () => {
++    const { client, cardSettings } = createClientMock();
++    const session = makeSession(client);
++
++    await (session as any).renewStreamingMode();
++
++    expect(cardSettings).not.toHaveBeenCalled();
++    expect((session as any).state.sequence).toBe(2);
++  });
++
++  it("renews and advances sequence when 8 minutes have elapsed", async () => {
++    const { client, cardSettings } = createClientMock();
++    const session = makeSession(client);
++    (session as any).lastStreamingModeRenewAt = Date.now() - 8 * 60 * 1000 - 1;
++
++    await (session as any).renewStreamingMode();
++
++    expect(cardSettings).toHaveBeenCalledOnce();
++    const arg = cardSettings.mock.calls[0]?.[0] as {
++      data?: { settings?: string; sequence?: number };
++    };
++    const settings = JSON.parse(arg.data?.settings ?? "{}") as {
++      config?: { streaming_mode?: boolean };
++    };
++    expect(settings.config?.streaming_mode).toBe(true);
++    expect(arg.data?.sequence).toBe(3);
++    expect((session as any).state.sequence).toBe(3);
++  });
++
++  it("does not advance sequence when renewal API returns non-zero code", async () => {
++    const { client, cardSettings } = createClientMock();
++    cardSettings.mockResolvedValueOnce({ code: 200850, msg: "Card streaming timeout" });
++    const session = makeSession(client);
++    (session as any).lastStreamingModeRenewAt = Date.now() - 8 * 60 * 1000 - 1;
++
++    await (session as any).renewStreamingMode();
++
++    expect(cardSettings).toHaveBeenCalledOnce();
++    expect((session as any).state.sequence).toBe(2);
++  });
++
++  it("does not advance sequence when renewal API throws", async () => {
++    const { client, cardSettings } = createClientMock();
++    cardSettings.mockRejectedValueOnce(new Error("network error"));
++    const session = makeSession(client);
++    (session as any).lastStreamingModeRenewAt = Date.now() - 8 * 60 * 1000 - 1;
++
++    await (session as any).renewStreamingMode();
++
++    expect((session as any).state.sequence).toBe(2);
++  });
++
++  it("updates lastStreamingModeRenewAt only on success", async () => {
++    const { client, cardSettings } = createClientMock();
++    cardSettings.mockRejectedValueOnce(new Error("network error"));
++    const session = makeSession(client);
++    const renewedAt = Date.now() - 8 * 60 * 1000 - 1;
++    (session as any).lastStreamingModeRenewAt = renewedAt;
++
++    await (session as any).renewStreamingMode();
++
++    expect((session as any).lastStreamingModeRenewAt).toBe(renewedAt);
++  });
++
++  it("start() initialises lastStreamingModeRenewAt so first update does not trigger renewal", async () => {
++    const { client, cardSettings } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    await session.start("chat-id");
++
++    const before = cardSettings.mock.calls.length;
++    await (session as any).updateCardContent("hello");
++    expect(cardSettings.mock.calls.length).toBe(before);
++
++    // Clean up timer to avoid leaking
++    (session as any).stopRenewTimer();
++  });
++
++  it("start() sets up a proactive renew timer", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    await session.start("chat-id");
++
++    expect((session as any).renewTimer).not.toBeNull();
++
++    // Clean up
++    (session as any).stopRenewTimer();
++  });
++
++  it("close() stops the renew timer", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "text",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).lastStreamingModeRenewAt = Date.now();
++    (session as any).startRenewTimer();
++    expect((session as any).renewTimer).not.toBeNull();
++
++    await session.close("final");
++
++    expect((session as any).renewTimer).toBeNull();
++  });
++
++  it("discard() stops the renew timer", async () => {
++    const { client } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "text",
++      hasNote: false,
++      noteText: "",
++      thinkingTitle: "💭 Thinking",
++      thinkingText: "",
++      thinkingExpanded: true,
++      thinkingPanelRendered: false,
++    };
++    (session as any).startRenewTimer();
++    expect((session as any).renewTimer).not.toBeNull();
++
++    await session.discard();
++
++    expect((session as any).renewTimer).toBeNull();
++  });
++
++  it("proactive timer fires renewStreamingMode after interval elapses", async () => {
++    vi.useFakeTimers();
++    const { client, cardSettings } = createClientMock();
++    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
++    (session as any).state = {
++      cardId: "card-id",
++      messageId: "message-id",
++      sequence: 1,
++      currentText: "text",
++      thinkingText: "",
++      thinkingExpanded: true,
++    };
++    // Set lastStreamingModeRenewAt to long ago so renewal condition is met
++    (session as any).lastStreamingModeRenewAt = 0;
++    (session as any).startRenewTimer();
++
++    const before = cardSettings.mock.calls.length;
++
++    // Advance past the renewal interval
++    await vi.advanceTimersByTimeAsync(8 * 60 * 1000);
++
++    expect(cardSettings.mock.calls.length).toBeGreaterThan(before);
++    const arg = cardSettings.mock.calls[cardSettings.mock.calls.length - 1]?.[0] as {
++      data?: { settings?: string };
++    };
++    const settings = JSON.parse(arg.data?.settings ?? "{}") as {
++      config?: { streaming_mode?: boolean };
++    };
++    expect(settings.config?.streaming_mode).toBe(true);
++
++    (session as any).stopRenewTimer();
++    vi.useRealTimers();
++  });
++
++  it("serializes proactive renewal behind in-flight content updates", async () => {
++    let resolveContentUpdate = () => {};
++    const contentUpdateSettled = new Promise<void>((resolve) => {
++      resolveContentUpdate = () => resolve();
++    });
++    const { client, cardElementContent, cardSettings } = createClientMock();
++    cardElementContent.mockImplementationOnce(
++      async () =>
++        await contentUpdateSettled.then(() => ({
++          code: 0,
++          msg: "ok",
++        })),
++    );
++    const session = makeSession(client);
++    (session as any).lastStreamingModeRenewAt = Date.now();
++
++    const updatePromise = session.update("new text", { replace: true });
++    await Promise.resolve();
++
++    (session as any).lastStreamingModeRenewAt = 0;
++    (session as any).scheduleRenewStreamingMode();
++
++    await Promise.resolve();
++    expect(cardSettings).not.toHaveBeenCalled();
++
++    resolveContentUpdate();
++    await updatePromise;
++    await (session as any).queue;
++
++    expect(cardElementContent).toHaveBeenCalledOnce();
++    expect(cardSettings).toHaveBeenCalledOnce();
++    const contentCalls = cardElementContent.mock.calls as unknown as Array<[unknown]>;
++    const contentArg = contentCalls[0]?.[0] as unknown as {
++      data?: { sequence?: number };
++    };
++    const renewArg = cardSettings.mock.calls[0]?.[0] as {
++      data?: { sequence?: number };
++    };
++    expect(contentArg.data?.sequence).toBe(3);
++    expect(renewArg.data?.sequence).toBe(4);
++    expect((session as any).state.sequence).toBe(4);
++  });
++});
+diff --git a/extensions/feishu/src/streaming-card.ts b/extensions/feishu/src/streaming-card.ts
+index 6941d33ba9..e0adb833ab 100644
+--- a/extensions/feishu/src/streaming-card.ts
++++ b/extensions/feishu/src/streaming-card.ts
+@@ -4,7 +4,6 @@
+ 
+ import type { Client } from "@larksuiteoapi/node-sdk";
+ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+-import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-runtime";
+ import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
+ import type { FeishuDomain } from "./types.js";
+ 
+@@ -130,17 +129,6 @@ function stripHtmlTagsToText(text: string): string {
+     .replace(/&#39;/gi, "'");
+ }
+ 
+-function sanitizeVisibleCardText(text: string | undefined): string {
+-  if (!text) {
+-    return "";
+-  }
+-  const result = stripInlineDirectiveTagsForDisplay(text);
+-  // When directive tags are stripped, clean up residual leading/trailing
+-  // whitespace left behind by the removed tags — but preserve internal
+-  // indentation so markdown code blocks and nested lists render correctly.
+-  return result.changed ? result.text.trim() : result.text;
+-}
+-
+ export function mergeStreamingText(
+   previousText: string | undefined,
+   nextText: string | undefined,
+@@ -153,27 +141,26 @@ export function mergeStreamingText(
+   if (!previous || next === previous) {
+     return next;
+   }
++  // Cumulative snapshot: next contains the full text so far (pi-embedded-subscribe,
++  // or provider snapshot updates like "这" → "这是"). Replace.
+   if (next.startsWith(previous)) {
+     return next;
+   }
+-  if (previous.startsWith(next)) {
+-    return previous;
+-  }
+-  if (next.includes(previous)) {
+-    return next;
+-  }
+-  if (previous.includes(next)) {
+-    return previous;
+-  }
+-
+-  // Merge partial overlaps, e.g. "这" + "这是" => "这是".
+-  const maxOverlap = Math.min(previous.length, next.length);
+-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+-    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+-      return `${previous}${next.slice(overlap)}`;
+-    }
+-  }
+-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
++  // NOTE: Do NOT check `previous.startsWith(next)` or `previous.includes(next)`.
++  // Delta producers (model-aware-runner) emit single-character tokens like "|",
++  // "\n", " ", "-" that trivially match as substrings/prefixes of accumulated
++  // text. Those checks silently swallow every repeated character — catastrophic
++  // for markdown tables.
++  // Delta fragments (model-aware-runner emits token-level deltas like
++  // "NO" + "_REPLY"). Append as-is to preserve every character.
++  //
++  // NOTE: Do NOT try to detect "tail-of-previous matches head-of-next" overlap
++  // and collapse it — that breaks markdown tables where adjacent rows share
++  // repeating characters like `| `. For example:
++  //   previous="...abc| |", next="| |xyz..."
++  // An overlap collapse would produce "...abc| |xyz..." eating the `\n`
++  // between two table rows. The simple append below is correct for all
++  // genuine delta streams.
+   return `${previous}${next}`;
+ }
+ 
+@@ -236,7 +223,7 @@ export class FeishuStreamingSession {
+       config: {
+         streaming_mode: true,
+         summary: { content: "[Generating...]" },
+-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
++        streaming_config: { print_frequency_ms: { default: 30 }, print_step: { default: 50 } },
+       },
+       body: { elements },
+     };
+@@ -482,7 +469,6 @@ export class FeishuStreamingSession {
+   /** Build the full elements array for full card updates, including thinking panel. */
+   private buildFullElements(text: string, options?: { note?: string }): Record<string, unknown>[] {
+     const elements: Record<string, unknown>[] = [];
+-    const visibleText = sanitizeVisibleCardText(text);
+     // Include thinking panel if there's thinking content
+     if (this.state?.thinkingText) {
+       elements.push({
+@@ -500,7 +486,7 @@ export class FeishuStreamingSession {
+         ],
+       });
+     }
+-    elements.push({ tag: "markdown", content: visibleText, element_id: "content" });
++    elements.push({ tag: "markdown", content: text || "", element_id: "content" });
+     if (this.state?.hasNote) {
+       elements.push({ tag: "hr" });
+       const noteSource = options?.note ?? this.state.noteText;
+@@ -567,10 +553,9 @@ export class FeishuStreamingSession {
+     if (!this.state || this.closed) {
+       return;
+     }
+-    const visibleText = sanitizeVisibleCardText(text);
+     const resolvedInput = options?.replace
+-      ? visibleText
+-      : mergeStreamingText(this.pendingText ?? this.state.currentText, visibleText);
++      ? text
++      : mergeStreamingText(this.pendingText ?? this.state.currentText, text);
+     if (!resolvedInput || resolvedInput === this.state.currentText) {
+       return;
+     }
+@@ -632,7 +617,7 @@ export class FeishuStreamingSession {
+     if (!this.state || this.closed) {
+       return;
+     }
+-    const normalized = sanitizeVisibleCardText(text).trim();
++    const normalized = (text ?? "").trim();
+     const previousText = this.state.thinkingText;
+     const previousTitle = this.state.thinkingTitle;
+     const nextTitle = options?.title?.trim() || this.state.thinkingTitle || "💭 Thinking";
+@@ -732,10 +717,7 @@ export class FeishuStreamingSession {
+     // present, treat it as authoritative instead of merging it with the last
+     // streamed preview, otherwise stale status/preview text can be duplicated
+     // into the terminal card content.
+-    const text =
+-      finalText !== undefined
+-        ? sanitizeVisibleCardText(finalText)
+-        : sanitizeVisibleCardText(pendingMerged);
++    const text = finalText !== undefined ? (finalText ?? "") : (pendingMerged ?? "");
+ 
+     const hadThinkingPanel = this.state.thinkingPanelRendered || Boolean(this.state.thinkingText);
+     if (options?.dropThinkingPanel) {
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index 691cc08a0f..27734fea38 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -23,6 +23,7 @@ import {
+   sanitizeUserFacingText,
+ } from "../../agents/pi-embedded-helpers.js";
+ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
++import { formatReasoningMessage } from "../../agents/pi-embedded-utils.js";
+ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+ import {
+   resolveGroupSessionKey,
+@@ -639,14 +640,6 @@ export async function runAgentTurnWithFallback(params: {
+           }
+           return { skip: true };
+         }
+-        // Pure-whitespace deltas (single space, newline) are valid streaming
+-        // tokens — they preserve markdown spacing between words and bullet
+-        // markers. sanitizeUserFacingText would .trim() them to "" and drop
+-        // them entirely. They contain no patterns worth sanitizing, so pass
+-        // them through as-is.
+-        if (!text.trim()) {
+-          return { text, skip: false };
+-        }
+         const sanitized = sanitizeUserFacingText(text, {
+           errorContext: Boolean(payload.isError),
+         });
+@@ -750,6 +743,7 @@ export async function runAgentTurnWithFallback(params: {
+               // ensures markRunComplete() isn't called before streaming initialises.
+               let streamingChain: Promise<void> = Promise.resolve();
+               let cliReasoningOpen = false;
++              let assistantMessageStartQueued = false;
+               const queueStreamingStep = (step: () => Promise<void>) => {
+                 streamingChain = streamingChain.then(step).catch((err) => {
+                   defaultRuntime.error(
+@@ -757,6 +751,16 @@ export async function runAgentTurnWithFallback(params: {
+                   );
+                 });
+               };
++              const queueAssistantMessageStart = () => {
++                if (assistantMessageStartQueued) {
++                  return;
++                }
++                assistantMessageStartQueued = true;
++                queueStreamingStep(async () => {
++                  await params.typingSignals.signalMessageStart();
++                  await params.opts?.onAssistantMessageStart?.();
++                });
++              };
+               const queueReasoningEndIfNeeded = () => {
+                 if (!cliReasoningOpen) {
+                   return;
+@@ -794,6 +798,139 @@ export async function runAgentTurnWithFallback(params: {
+                   imageOrder: params.opts?.imageOrder,
+                   messageProvider: params.followupRun.run.messageProvider,
+                   agentAccountId: params.followupRun.run.agentAccountId,
++                  onSystemInit: ({ subtype }) => {
++                    if (subtype === "init") {
++                      queueAssistantMessageStart();
++                    }
++                  },
++                  onAssistantTurn: (text) => {
++                    queueAssistantMessageStart();
++                    queueReasoningEndIfNeeded();
++                    emitAgentEvent({
++                      runId,
++                      stream: "assistant",
++                      data: { text },
++                    });
++                    queueStreamingStep(async () => {
++                      const textForTyping = await handlePartialForTyping({ text });
++                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
++                        return;
++                      }
++                      await params.opts.onPartialReply({ text: textForTyping });
++                    });
++                  },
++                  onThinkingTurn: (payload) => {
++                    if (!payload.text.trim()) {
++                      return;
++                    }
++                    queueAssistantMessageStart();
++                    cliReasoningOpen = true;
++                    emitAgentEvent({
++                      runId,
++                      stream: "thinking",
++                      data: payload.delta
++                        ? { text: payload.text, delta: payload.delta }
++                        : { text: payload.text },
++                    });
++                    queueStreamingStep(async () => {
++                      await params.typingSignals.signalReasoningDelta();
++                      const formatted = formatReasoningMessage(payload.text);
++                      if (!formatted) {
++                        return;
++                      }
++                      await params.opts?.onReasoningStream?.({
++                        text: formatted,
++                        isReasoning: true,
++                      });
++                    });
++                  },
++                  onToolUseEvent: (payload) => {
++                    queueAssistantMessageStart();
++                    queueReasoningEndIfNeeded();
++                    emitAgentEvent({
++                      runId,
++                      stream: "tool",
++                      data: {
++                        phase: "start",
++                        name: payload.name,
++                        ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++                        ...(payload.input !== undefined ? { input: payload.input } : {}),
++                      },
++                    });
++                    queueStreamingStep(async () => {
++                      await params.opts?.onAgentEvent?.({
++                        stream: "tool",
++                        data: {
++                          phase: "start",
++                          name: payload.name,
++                          ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++                          ...(payload.input !== undefined ? { input: payload.input } : {}),
++                        },
++                      });
++                      await params.typingSignals.signalToolStart();
++                      await params.opts?.onToolStart?.({
++                        name: payload.name,
++                        phase: "start",
++                        toolCallId: payload.toolUseId,
++                      });
++                    });
++                  },
++                  onToolResult: onToolResult
++                    ? (() => {
++                        let toolResultChain: Promise<void> = Promise.resolve();
++                        return (payload) => {
++                          queueReasoningEndIfNeeded();
++                          const preview =
++                            typeof payload.text === "string" && payload.text.trim()
++                              ? payload.text.trim().slice(0, 1_200)
++                              : undefined;
++                          emitAgentEvent({
++                            runId,
++                            stream: "tool",
++                            data: {
++                              phase: "result",
++                              ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++                              ...(preview ? { partialResult: preview, result: preview } : {}),
++                              ...(payload.isError ? { isError: true } : {}),
++                            },
++                          });
++                          toolResultChain = toolResultChain
++                            .then(async () => {
++                              await params.opts?.onAgentEvent?.({
++                                stream: "tool",
++                                data: {
++                                  phase: "result",
++                                  ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
++                                  ...(preview ? { partialResult: preview, result: preview } : {}),
++                                  ...(payload.isError ? { isError: true } : {}),
++                                },
++                              });
++                              const { text, skip } = normalizeStreamingText({
++                                text: payload.text,
++                                ...(payload.isError ? { isError: true } : {}),
++                              });
++                              if (skip) {
++                                return;
++                              }
++                              if (text !== undefined) {
++                                await params.typingSignals.signalTextDelta(text);
++                              }
++                              await onToolResult({
++                                ...(payload.toolUseId ? { toolCallId: payload.toolUseId } : {}),
++                                ...(text !== undefined ? { text } : {}),
++                                ...(payload.isError ? { isError: true } : {}),
++                              });
++                            })
++                            .catch((err) => {
++                              logVerbose(`cli tool result delivery failed: ${String(err)}`);
++                            });
++                          const task = toolResultChain.finally(() => {
++                            params.pendingToolTasks.delete(task);
++                          });
++                          params.pendingToolTasks.add(task);
++                        };
++                      })()
++                    : undefined,
+                 });
+                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                   result.meta?.systemPromptReport,
+@@ -945,6 +1082,7 @@ export async function runAgentTurnWithFallback(params: {
+                     : undefined,
+                 onReasoningEnd: params.opts?.onReasoningEnd,
+                 onAgentEvent: async (evt) => {
++                  await params.opts?.onAgentEvent?.(evt);
+                   // Signal run start only after the embedded agent emits real activity.
+                   const hasLifecyclePhase =
+                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+diff --git a/src/auto-reply/types.ts b/src/auto-reply/types.ts
+index 15a9ebb3d4..bf2a00048f 100644
+--- a/src/auto-reply/types.ts
++++ b/src/auto-reply/types.ts
+@@ -73,6 +73,8 @@ export type GetReplyOptions = {
+     phase?: string;
+     toolCallId?: string;
+   }) => Promise<void> | void;
++  /** Called with low-level structured agent events (for channels that need lifecycle fidelity). */
++  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void> | void;
+   /** Called when a concrete work item starts, updates, or completes. */
+   onItemEvent?: (payload: {
+     itemId?: string;
+-- 
+2.47.1
+

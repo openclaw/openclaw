@@ -1,0 +1,2107 @@
+From 3be14735a12c5f050af885da6b97d450667393ba Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:07:02 +0800
+Subject: [PATCH 12/12] chore: plugin-sdk exports, guardrail tests, mattermost
+ fix
+
+---
+ .gitignore                                    |   3 +
+ extensions/diffs/src/language-hints.test.ts   |  13 +-
+ extensions/discord/src/draft-chunking.test.ts |  36 +-
+ extensions/discord/src/draft-chunking.ts      |  15 +-
+ extensions/feishu/src/send.test.ts            |  96 ++++
+ extensions/feishu/src/send.ts                 |  19 +-
+ extensions/google/test-api.ts                 |   1 +
+ extensions/mattermost/channel-plugin-api.ts   |   1 +
+ extensions/mattermost/index.ts                |   2 +-
+ extensions/mattermost/setup-entry.ts          |   2 +-
+ .../src/memory/manager.async-search.test.ts   |  40 +-
+ extensions/memory-wiki/src/gateway.ts         |  35 +-
+ extensions/memory-wiki/src/obsidian.test.ts   |  14 +-
+ extensions/msteams/src/sdk.ts                 |   6 +-
+ extensions/openai/test-api.ts                 |   1 +
+ .../telegram/src/bot-message-dispatch.test.ts |   7 +-
+ extensions/telegram/src/bot.helpers.test.ts   |  12 +-
+ extensions/telegram/src/draft-chunking.ts     |  15 +-
+ src/agents/cli-runner.test.ts                 | 149 ++++--
+ src/agents/cli-runner/execute.ts              |  44 +-
+ .../reply/agent-runner-execution.ts           |  13 +
+ src/auto-reply/reply/session.test.ts          |  14 +
+ src/auto-reply/status.cli-prompt-load.test.ts |  33 ++
+ src/auto-reply/status.test.ts                 |  75 +++
+ src/auto-reply/status.ts                      |  48 +-
+ src/auto-reply/tokens.test.ts                 |  15 +
+ src/auto-reply/tokens.ts                      |  28 +
+ .../doctor-legacy-config.migrations.test.ts   |   2 +-
+ .../channel-import-guardrails.test.ts         | 502 ++++++++++++++++++
+ src/plugin-sdk/feishu.ts                      |  11 +
+ src/plugin-sdk/index.ts                       |  53 +-
+ src/plugin-sdk/test-helpers.ts                |   3 +-
+ src/plugins/bundle-manifest.ts                |   2 +-
+ .../contracts/plugin-sdk-index.test.ts        |  20 +
+ test/helpers/plugins/plugin-runtime-mock.ts   |  13 +
+ 35 files changed, 1204 insertions(+), 139 deletions(-)
+ create mode 100644 extensions/mattermost/channel-plugin-api.ts
+ create mode 100644 src/plugin-sdk/channel-import-guardrails.test.ts
+
+diff --git a/.gitignore b/.gitignore
+index 5901f051b3..a2994411db 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -23,6 +23,9 @@ ui/test-results/
+ packages/dashboard-next/.next/
+ packages/dashboard-next/out/
+ 
++# Private skills
++skills/skillstore-plugin-publisher/
++
+ # Mise configuration files
+ mise.toml
+ 
+diff --git a/extensions/diffs/src/language-hints.test.ts b/extensions/diffs/src/language-hints.test.ts
+index bf12006ee7..c944e0f5b0 100644
+--- a/extensions/diffs/src/language-hints.test.ts
++++ b/extensions/diffs/src/language-hints.test.ts
+@@ -14,7 +14,9 @@ describe("filterSupportedLanguageHints", () => {
+   });
+ 
+   it("drops invalid languages and falls back to text", async () => {
+-    await expect(filterSupportedLanguageHints(["not-a-real-language"])).resolves.toEqual(["text"]);
++    await expect(
++      filterSupportedLanguageHints(["not-a-real-language"] as Iterable<string>),
++    ).resolves.toEqual(["text"]);
+   });
+ 
+   it("keeps valid languages when invalid hints are mixed in", async () => {
+@@ -43,7 +45,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
+           overflow: "wrap",
+           unsafeCSS: "",
+         },
+-        langs: ["not-a-real-language"],
++        langs: ["not-a-real-language" as unknown as NonNullable<FileDiffMetadata["lang"]>],
+         fileDiff: {
+           name: "foo.txt",
+           lang: "not-a-real-language" as never,
+@@ -75,7 +77,10 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
+           overflow: "scroll",
+           unsafeCSS: "",
+         },
+-        langs: ["typescript", "not-a-real-language"],
++        langs: [
++          "typescript",
++          "not-a-real-language" as unknown as NonNullable<FileDiffMetadata["lang"]>,
++        ],
+         oldFile: {
+           name: "before.unknown",
+           contents: "before",
+@@ -116,7 +121,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
+           overflow: "wrap",
+           unsafeCSS: "",
+         },
+-        langs: ["   "],
++        langs: ["   " as unknown as NonNullable<FileDiffMetadata["lang"]>],
+         oldFile: {
+           name: "before.unknown",
+           contents: "before",
+diff --git a/extensions/discord/src/draft-chunking.test.ts b/extensions/discord/src/draft-chunking.test.ts
+index b593fcd653..bec609490d 100644
+--- a/extensions/discord/src/draft-chunking.test.ts
++++ b/extensions/discord/src/draft-chunking.test.ts
+@@ -16,10 +16,14 @@ describe("resolveDiscordDraftStreamingChunking", () => {
+       channels: {
+         discord: {
+           textChunkLimit: 500,
+-          draftChunk: {
+-            minChars: 900,
+-            maxChars: 1200,
+-            breakPreference: "sentence",
++          streaming: {
++            preview: {
++              chunk: {
++                minChars: 900,
++                maxChars: 1200,
++                breakPreference: "sentence",
++              },
++            },
+           },
+         },
+       },
+@@ -36,17 +40,25 @@ describe("resolveDiscordDraftStreamingChunking", () => {
+     const cfg = {
+       channels: {
+         discord: {
+-          draftChunk: {
+-            minChars: 200,
+-            maxChars: 800,
+-            breakPreference: "paragraph",
++          streaming: {
++            preview: {
++              chunk: {
++                minChars: 200,
++                maxChars: 800,
++                breakPreference: "paragraph",
++              },
++            },
+           },
+           accounts: {
+             ops: {
+-              draftChunk: {
+-                minChars: 25,
+-                maxChars: 75,
+-                breakPreference: "newline",
++              streaming: {
++                preview: {
++                  chunk: {
++                    minChars: 25,
++                    maxChars: 75,
++                    breakPreference: "newline",
++                  },
++                },
+               },
+             },
+           },
+diff --git a/extensions/discord/src/draft-chunking.ts b/extensions/discord/src/draft-chunking.ts
+index f3205b46d1..98fc06449c 100644
+--- a/extensions/discord/src/draft-chunking.ts
++++ b/extensions/discord/src/draft-chunking.ts
+@@ -7,6 +7,11 @@ import { DISCORD_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+ 
+ const DEFAULT_DISCORD_DRAFT_STREAM_MIN = 200;
+ const DEFAULT_DISCORD_DRAFT_STREAM_MAX = 800;
++type DraftChunkConfig = {
++  minChars?: number;
++  maxChars?: number;
++  breakPreference?: "paragraph" | "newline" | "sentence";
++};
+ 
+ export function resolveDiscordDraftStreamingChunking(
+   cfg: OpenClawConfig | undefined,
+@@ -21,11 +26,13 @@ export function resolveDiscordDraftStreamingChunking(
+   });
+   const normalizedAccountId = normalizeAccountId(accountId);
+   const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
+-  const draftCfg =
+-    resolveChannelStreamingPreviewChunk(accountCfg) ??
++  const accountLegacyDraftChunk = (accountCfg as { draftChunk?: unknown } | undefined)?.draftChunk;
++  const channelLegacyDraftChunk = (cfg?.channels?.discord as { draftChunk?: unknown } | undefined)
++    ?.draftChunk;
++  const draftCfg = (resolveChannelStreamingPreviewChunk(accountCfg) ??
+     resolveChannelStreamingPreviewChunk(cfg?.channels?.discord) ??
+-    accountCfg?.draftChunk ??
+-    cfg?.channels?.discord?.draftChunk;
++    accountLegacyDraftChunk ??
++    channelLegacyDraftChunk) as DraftChunkConfig | undefined;
+ 
+   const maxRequested = Math.max(
+     1,
+diff --git a/extensions/feishu/src/send.test.ts b/extensions/feishu/src/send.test.ts
+index f43b18abc0..067ecd5b1f 100644
+--- a/extensions/feishu/src/send.test.ts
++++ b/extensions/feishu/src/send.test.ts
+@@ -41,6 +41,15 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+ 
+ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+   convertMarkdownTables: mockConvertMarkdownTables,
++  stripInlineDirectiveTagsForDelivery: vi.fn((text: string) => ({
++    text: text
++      .replace(
++        /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi,
++        " ",
++      )
++      .trim(),
++    changed: true,
++  })),
+ }));
+ 
+ vi.mock("./client.js", () => ({
+@@ -388,6 +397,39 @@ describe("sendMessageFeishu", () => {
+     );
+     expect(result).toEqual(expect.objectContaining({ messageId: "om_card" }));
+   });
++
++  it("strips inline reply tags before sending post text", async () => {
++    const create = vi.fn().mockResolvedValue({
++      code: 0,
++      data: { message_id: "om_post" },
++    });
++    mockCreateFeishuClient.mockReturnValue({
++      im: {
++        message: {
++          create,
++          reply: vi.fn(),
++        },
++      },
++    });
++
++    await sendMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      to: "chat:oc_group_1",
++      text: "[[reply_to_current]] hello",
++    });
++
++    expect(create).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({
++          content: JSON.stringify({
++            zh_cn: {
++              content: [[{ tag: "md", text: "hello" }]],
++            },
++          }),
++        }),
++      }),
++    );
++  });
+ });
+ 
+ describe("shouldUseFeishuMarkdownCard", () => {
+@@ -641,6 +683,34 @@ describe("editMessageFeishu", () => {
+     });
+     expect(result).toEqual({ messageId: "om_edit_auto", contentType: "interactive" });
+   });
++
++  it("strips inline reply tags before patching text content", async () => {
++    mockClientPatch.mockResolvedValueOnce({ code: 0 });
++
++    await editMessageFeishu({
++      cfg: {} as ClawdbotConfig,
++      messageId: "om_edit_strip_tag",
++      text: "[[reply_to_current]] updated body",
++    });
++
++    expect(mockClientPatch).toHaveBeenCalledWith({
++      path: { message_id: "om_edit_strip_tag" },
++      data: {
++        content: JSON.stringify({
++          zh_cn: {
++            content: [
++              [
++                {
++                  tag: "md",
++                  text: "updated body",
++                },
++              ],
++            ],
++          },
++        }),
++      },
++    });
++  });
+ });
+ 
+ describe("resolveFeishuCardTemplate", () => {
+@@ -698,6 +768,18 @@ describe("buildStructuredCard", () => {
+     );
+   });
+ 
++  it("strips inline reply tags from markdown body content", () => {
++    const card = buildStructuredCard("[[reply_to_current]] hello");
++
++    expect(card).toEqual(
++      expect.objectContaining({
++        body: {
++          elements: [{ tag: "markdown", content: "hello" }],
++        },
++      }),
++    );
++  });
++
+   it("renders thinking as a collapsible panel instead of blockquote markdown", () => {
+     const card = buildStructuredCard("final answer", {
+       thinkingTitle: "💭 Thinking",
+@@ -805,4 +887,18 @@ describe("buildMarkdownCard", () => {
+     expect(card.config.enable_forward).toBeUndefined();
+     expect(card.config.wide_screen_mode).toBeUndefined();
+   });
++
++  it("strips inline reply tags before building markdown cards", () => {
++    const card = buildMarkdownCard("[[reply_to_current]] hello");
++
++    expect(card).toEqual({
++      schema: "2.0",
++      config: {
++        width_mode: "fill",
++      },
++      body: {
++        elements: [{ tag: "markdown", content: "hello" }],
++      },
++    });
++  });
+ });
+diff --git a/extensions/feishu/src/send.ts b/extensions/feishu/src/send.ts
+index 529609de19..bb215554e8 100644
+--- a/extensions/feishu/src/send.ts
++++ b/extensions/feishu/src/send.ts
+@@ -1,5 +1,8 @@
+ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
++import {
++  convertMarkdownTables,
++  stripInlineDirectiveTagsForDelivery,
++} from "openclaw/plugin-sdk/text-runtime";
+ import type { ClawdbotConfig } from "../runtime-api.js";
+ import { resolveFeishuAccount, resolveFeishuRuntimeAccount } from "./accounts.js";
+ import { createFeishuClient } from "./client.js";
+@@ -33,6 +36,10 @@ const FEISHU_CARD_TEMPLATES = new Set([
+   "lime",
+ ]);
+ 
++function sanitizeFeishuTextForDelivery(text: string): string {
++  return stripInlineDirectiveTagsForDelivery(text).text;
++}
++
+ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
+   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+     return true;
+@@ -577,7 +584,7 @@ export async function sendMessageFeishu(
+   });
+ 
+   // Build message content (with @mention support)
+-  let rawText = text ?? "";
++  let rawText = sanitizeFeishuTextForDelivery(text ?? "");
+   if (mentions && mentions.length > 0) {
+     rawText = buildMentionedMessage(mentions, rawText);
+   }
+@@ -664,7 +671,7 @@ export async function editMessageFeishu(params: {
+ 
+   const renderMode = account.config?.renderMode ?? "auto";
+   if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text!))) {
+-    const normalizedCardText = normalizeMentionTagsForCard(text!);
++    const normalizedCardText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text!));
+     const response = await client.im.message.patch({
+       path: { message_id: messageId },
+       data: { content: JSON.stringify(buildMarkdownCard(normalizedCardText)) },
+@@ -681,7 +688,7 @@ export async function editMessageFeishu(params: {
+     cfg,
+     channel: "feishu",
+   });
+-  const messageText = convertMarkdownTables(text!, tableMode);
++  const messageText = convertMarkdownTables(sanitizeFeishuTextForDelivery(text!), tableMode);
+   const payload = buildFeishuPostMessagePayload({ messageText });
+   const response = await client.im.message.patch({
+     path: { message_id: messageId },
+@@ -730,7 +737,7 @@ export function shouldUseFeishuMarkdownCard(text: string): boolean {
+  * Uses schema 2.0 format for proper markdown rendering.
+  */
+ export function buildMarkdownCard(text: string): Record<string, unknown> {
+-  const normalizedText = normalizeMentionTagsForCard(text);
++  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
+   return {
+     schema: "2.0",
+     config: {
+@@ -777,7 +784,7 @@ export function buildStructuredCard(
+     thinkingExpanded?: boolean;
+   },
+ ): Record<string, unknown> {
+-  const normalizedText = normalizeMentionTagsForCard(text);
++  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
+   const elements: Record<string, unknown>[] = [];
+   const thinkingText = options?.thinkingText?.trim();
+   if (thinkingText) {
+diff --git a/extensions/google/test-api.ts b/extensions/google/test-api.ts
+index 3f6d92dc62..ed4c112079 100644
+--- a/extensions/google/test-api.ts
++++ b/extensions/google/test-api.ts
+@@ -1,2 +1,3 @@
+ export { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
++export { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+ export { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
+diff --git a/extensions/mattermost/channel-plugin-api.ts b/extensions/mattermost/channel-plugin-api.ts
+new file mode 100644
+index 0000000000..4968757a94
+--- /dev/null
++++ b/extensions/mattermost/channel-plugin-api.ts
+@@ -0,0 +1 @@
++export { mattermostPlugin } from "./src/channel.js";
+diff --git a/extensions/mattermost/index.ts b/extensions/mattermost/index.ts
+index 247e5082e3..4e97e7b2e0 100644
+--- a/extensions/mattermost/index.ts
++++ b/extensions/mattermost/index.ts
+@@ -18,7 +18,7 @@ export default defineBundledChannelEntry({
+   description: "Mattermost channel plugin",
+   importMetaUrl: import.meta.url,
+   plugin: {
+-    specifier: "./src/channel.js",
++    specifier: "./channel-plugin-api.js",
+     exportName: "mattermostPlugin",
+   },
+   runtime: {
+diff --git a/extensions/mattermost/setup-entry.ts b/extensions/mattermost/setup-entry.ts
+index c68ed581fb..20a6932f1a 100644
+--- a/extensions/mattermost/setup-entry.ts
++++ b/extensions/mattermost/setup-entry.ts
+@@ -3,7 +3,7 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
+ export default defineBundledChannelSetupEntry({
+   importMetaUrl: import.meta.url,
+   plugin: {
+-    specifier: "./src/channel.js",
++    specifier: "./channel-plugin-api.js",
+     exportName: "mattermostPlugin",
+   },
+ });
+diff --git a/extensions/memory-core/src/memory/manager.async-search.test.ts b/extensions/memory-core/src/memory/manager.async-search.test.ts
+index 3b32aa1661..3e1d78b949 100644
+--- a/extensions/memory-core/src/memory/manager.async-search.test.ts
++++ b/extensions/memory-core/src/memory/manager.async-search.test.ts
+@@ -3,21 +3,17 @@ import os from "node:os";
+ import path from "node:path";
+ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+-import type { MemoryIndexManager } from "./index.js";
+-import { closeAllMemorySearchManagers } from "./index.js";
++import { closeAllMemorySearchManagers as closeAllMemorySearchManagersImport } from "./index.js";
++import "./test-runtime-mocks.js";
+ import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
+-import { createMemoryManagerOrThrow } from "./test-manager.js";
++
++type MemoryIndexManager = import("./index.js").MemoryIndexManager;
++type MemoryIndexModule = typeof import("./index.js");
+ 
+ const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
+ const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
+-
+-vi.mock("./embeddings.js", () => ({
+-  createEmbeddingProvider: async (_options: unknown) =>
+-    createOpenAIEmbeddingProviderMock({
+-      embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
+-      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
+-    }),
+-}));
++let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
++let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+ 
+ describe("memory search async sync", () => {
+   let workspaceDir: string;
+@@ -43,7 +39,16 @@ describe("memory search async sync", () => {
+     }) as OpenClawConfig;
+ 
+   beforeEach(async () => {
+-    await closeAllMemorySearchManagers();
++    vi.resetModules();
++    vi.doMock("./embeddings.js", () => ({
++      createEmbeddingProvider: async (_options: unknown) =>
++        createOpenAIEmbeddingProviderMock({
++          embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
++          embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
++        }),
++    }));
++    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
++    await closeAllMemorySearchManagersImport();
+     embedBatch.mockClear();
+     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
+     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
+@@ -62,6 +67,17 @@ describe("memory search async sync", () => {
+     await fs.rm(workspaceDir, { recursive: true, force: true });
+   });
+ 
++  async function createMemoryManagerOrThrow(
++    cfg: OpenClawConfig,
++    agentId = "main",
++  ): Promise<MemoryIndexManager> {
++    const result = await getMemorySearchManager({ cfg, agentId });
++    if (!result.manager) {
++      throw new Error("manager missing");
++    }
++    return result.manager as unknown as MemoryIndexManager;
++  }
++
+   it("does not await sync when searching", async () => {
+     const cfg = buildConfig();
+     manager = await createMemoryManagerOrThrow(cfg);
+diff --git a/extensions/memory-wiki/src/gateway.ts b/extensions/memory-wiki/src/gateway.ts
+index e30059e4f3..61e8e0520b 100644
+--- a/extensions/memory-wiki/src/gateway.ts
++++ b/extensions/memory-wiki/src/gateway.ts
+@@ -67,16 +67,9 @@ function readEnumParam<T extends string>(
+   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
+ }
+ 
+-function respondError(
+-  respond: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1] extends (
+-    ctx: infer T,
+-  ) => unknown
+-    ? T["respond"]
+-    : never,
+-  error: unknown,
+-) {
++function respondError(respond: GatewayRespond, error: unknown) {
+   const message = error instanceof Error ? error.message : String(error);
+-  respond(false, undefined, { message });
++  respond(false, undefined, { code: "memory_wiki_error", message });
+ }
+ 
+ async function syncImportedSourcesIfNeeded(
+@@ -155,7 +148,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+           true,
+           await ingestMemoryWikiSource({
+             config,
+-            inputPath,
++            inputPath: inputPath!,
+             ...(title ? { title } : {}),
+           }),
+         );
+@@ -229,7 +222,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+           await searchMemoryWiki({
+             config,
+             appConfig,
+-            query,
++            query: query!,
+             maxResults,
+             searchBackend,
+             searchCorpus,
+@@ -276,7 +269,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+           await getMemoryWikiPage({
+             config,
+             appConfig,
+-            lookup,
++            lookup: lookup!,
+             fromLine,
+             lineCount,
+             searchBackend,
+@@ -307,7 +300,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+     async ({ params: requestParams, respond }) => {
+       try {
+         const query = readStringParam(requestParams, "query", { required: true });
+-        respond(true, await runObsidianSearch({ config, query }));
++        respond(true, await runObsidianSearch({ config, query: query! }));
+       } catch (error) {
+         respondError(respond, error);
+       }
+@@ -320,7 +313,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+     async ({ params: requestParams, respond }) => {
+       try {
+         const vaultPath = readStringParam(requestParams, "path", { required: true });
+-        respond(true, await runObsidianOpen({ config, vaultPath }));
++        respond(true, await runObsidianOpen({ config, vaultPath: vaultPath! }));
+       } catch (error) {
+         respondError(respond, error);
+       }
+@@ -333,7 +326,7 @@ export function registerMemoryWikiGatewayMethods(params: {
+     async ({ params: requestParams, respond }) => {
+       try {
+         const id = readStringParam(requestParams, "id", { required: true });
+-        respond(true, await runObsidianCommand({ config, id }));
++        respond(true, await runObsidianCommand({ config, id: id! }));
+       } catch (error) {
+         respondError(respond, error);
+       }
+@@ -353,3 +346,15 @@ export function registerMemoryWikiGatewayMethods(params: {
+     { scope: WRITE_SCOPE },
+   );
+ }
++type GatewayRespond = (
++  ok: boolean,
++  payload?: unknown,
++  error?: {
++    code: string;
++    message: string;
++    details?: unknown;
++    retryable?: boolean;
++    retryAfterMs?: number;
++  },
++  meta?: Record<string, unknown>,
++) => void;
+diff --git a/extensions/memory-wiki/src/obsidian.test.ts b/extensions/memory-wiki/src/obsidian.test.ts
+index 7ae346340e..59e8d11139 100644
+--- a/extensions/memory-wiki/src/obsidian.test.ts
++++ b/extensions/memory-wiki/src/obsidian.test.ts
+@@ -15,12 +15,16 @@ describe("runObsidianSearch", () => {
+       { homedir: "/Users/tester" },
+     );
+     const calls: Array<{ command: string; argv: string[] }> = [];
+-    const exec: NonNullable<
+-      NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]
+-    > = async (command, argv) => {
+-      calls.push({ command, argv: [...argv] });
++    const exec = (async (
++      ...args: Parameters<
++        NonNullable<NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]>
++      >
++    ) => {
++      const [command, argvOrOptions] = args;
++      const argv = Array.isArray(argvOrOptions) ? [...argvOrOptions] : [];
++      calls.push({ command, argv });
+       return { stdout: "search output\n", stderr: "" };
+-    };
++    }) as NonNullable<NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]>;
+ 
+     const result = await runObsidianSearch({
+       config,
+diff --git a/extensions/msteams/src/sdk.ts b/extensions/msteams/src/sdk.ts
+index 7e1aa0217e..3aae3cef0b 100644
+--- a/extensions/msteams/src/sdk.ts
++++ b/extensions/msteams/src/sdk.ts
+@@ -1,6 +1,3 @@
+-// IHttpServerAdapter is re-exported via the public barrel (`export * from './http'`)
+-// but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
+-import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
+ import { formatUnknownError } from "./errors.js";
+ import type { MSTeamsAdapter } from "./messenger.js";
+ import type { MSTeamsCredentials } from "./token.js";
+@@ -497,3 +494,6 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
+     },
+   };
+ }
++type IHttpServerAdapter = {
++  registerRoute: (...args: unknown[]) => void;
++};
+diff --git a/extensions/openai/test-api.ts b/extensions/openai/test-api.ts
+index f62d70c932..7949aaece6 100644
+--- a/extensions/openai/test-api.ts
++++ b/extensions/openai/test-api.ts
+@@ -1,4 +1,5 @@
+ export { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
++export { buildOpenAICodexCliBackend } from "./cli-backend.js";
+ export {
+   openaiCodexMediaUnderstandingProvider,
+   openaiMediaUnderstandingProvider,
+diff --git a/extensions/telegram/src/bot-message-dispatch.test.ts b/extensions/telegram/src/bot-message-dispatch.test.ts
+index 0b7ae188f1..2d82ec255e 100644
+--- a/extensions/telegram/src/bot-message-dispatch.test.ts
++++ b/extensions/telegram/src/bot-message-dispatch.test.ts
+@@ -405,7 +405,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
+ 
+     await dispatchWithContext({
+       context: createContext(),
+-      telegramCfg: { blockStreaming: true },
++      telegramCfg: { streaming: { block: { enabled: true } } },
+     });
+ 
+     expect(createTelegramDraftStream).not.toHaveBeenCalled();
+@@ -655,7 +655,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
+ 
+   it.each([
+     { label: "default account config", telegramCfg: {} },
+-    { label: "account blockStreaming override", telegramCfg: { blockStreaming: true } },
++    {
++      label: "account blockStreaming override",
++      telegramCfg: { streaming: { block: { enabled: true } } },
++    },
+   ])("disables block streaming when streamMode is off ($label)", async ({ telegramCfg }) => {
+     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+diff --git a/extensions/telegram/src/bot.helpers.test.ts b/extensions/telegram/src/bot.helpers.test.ts
+index 5d3cf129c8..88c3d63eb6 100644
+--- a/extensions/telegram/src/bot.helpers.test.ts
++++ b/extensions/telegram/src/bot.helpers.test.ts
+@@ -55,10 +55,14 @@ describe("resolveTelegramDraftStreamingChunking", () => {
+           accounts: {
+             default: {
+               allowFrom: ["*"],
+-              draftChunk: {
+-                minChars: 10,
+-                maxChars: 20,
+-                breakPreference: "sentence",
++              streaming: {
++                preview: {
++                  chunk: {
++                    minChars: 10,
++                    maxChars: 20,
++                    breakPreference: "sentence",
++                  },
++                },
+               },
+             },
+           },
+diff --git a/extensions/telegram/src/draft-chunking.ts b/extensions/telegram/src/draft-chunking.ts
+index ed297c4ee3..4b298b3bac 100644
+--- a/extensions/telegram/src/draft-chunking.ts
++++ b/extensions/telegram/src/draft-chunking.ts
+@@ -7,6 +7,11 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+ 
+ const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
+ const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
++type DraftChunkConfig = {
++  minChars?: number;
++  maxChars?: number;
++  breakPreference?: "paragraph" | "newline" | "sentence";
++};
+ 
+ export function resolveTelegramDraftStreamingChunking(
+   cfg: OpenClawConfig | undefined,
+@@ -21,11 +26,13 @@ export function resolveTelegramDraftStreamingChunking(
+   });
+   const normalizedAccountId = normalizeAccountId(accountId);
+   const accountCfg = resolveAccountEntry(cfg?.channels?.telegram?.accounts, normalizedAccountId);
+-  const draftCfg =
+-    resolveChannelStreamingPreviewChunk(accountCfg) ??
++  const accountLegacyDraftChunk = (accountCfg as { draftChunk?: unknown } | undefined)?.draftChunk;
++  const channelLegacyDraftChunk = (cfg?.channels?.telegram as { draftChunk?: unknown } | undefined)
++    ?.draftChunk;
++  const draftCfg = (resolveChannelStreamingPreviewChunk(accountCfg) ??
+     resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram) ??
+-    accountCfg?.draftChunk ??
+-    cfg?.channels?.telegram?.draftChunk;
++    accountLegacyDraftChunk ??
++    channelLegacyDraftChunk) as DraftChunkConfig | undefined;
+ 
+   const maxRequested = Math.max(
+     1,
+diff --git a/src/agents/cli-runner.test.ts b/src/agents/cli-runner.test.ts
+index 69869a53a8..18684ee363 100644
+--- a/src/agents/cli-runner.test.ts
++++ b/src/agents/cli-runner.test.ts
+@@ -1,3 +1,4 @@
++import fsSync from "node:fs";
+ import fs from "node:fs/promises";
+ import os from "node:os";
+ import path from "node:path";
+@@ -93,7 +94,7 @@ type MockRunExit = {
+   exitCode: number | null;
+   exitSignal: NodeJS.Signals | number | null;
+   durationMs: number;
+-  stdout: string;
++  stdout: string | (() => string);
+   stderr: string;
+   timedOut: boolean;
+   noOutputTimedOut: boolean;
+@@ -117,51 +118,94 @@ function resolveClaudePromptFilePath(sessionFile: string): string {
+   return path.join(path.dirname(sessionFile), `${base}.claude-system-prompt.txt`);
+ }
+ 
+-function createClaudeStreamSuccess(sessionFile: string, text = "ok", sessionId = "sid-1"): string {
+-  const promptFilePath = resolveClaudePromptFilePath(sessionFile);
+-  const toolUseId = "toolu_test_read";
+-  return [
+-    JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+-    JSON.stringify({
+-      type: "assistant",
+-      session_id: sessionId,
+-      message: {
+-        role: "assistant",
+-        content: [
+-          { type: "tool_use", id: toolUseId, name: "Read", input: { file_path: promptFilePath } },
+-        ],
+-      },
+-    }),
+-    JSON.stringify({
+-      type: "user",
+-      session_id: sessionId,
+-      message: {
+-        role: "user",
+-        content: [
+-          {
+-            type: "tool_result",
+-            tool_use_id: toolUseId,
+-            startLine: 1,
+-            numLines: 2,
+-            totalLines: 2,
+-            content: "prompt file",
++function listClaudePromptChunkPaths(sessionFile: string): string[] {
++  const resolvedPromptFile = resolveClaudePromptFilePath(sessionFile);
++  const dir = path.dirname(resolvedPromptFile);
++  const base = path.basename(sessionFile, path.extname(sessionFile));
++  const entries = fsSync.existsSync(dir) ? fsSync.readdirSync(dir) : [];
++  const promptFiles = entries
++    .filter(
++      (entry) =>
++        entry === `${base}.claude-system-prompt.txt` ||
++        /^.+\.part\d+\.claude-system-prompt\.txt$/.test(entry),
++    )
++    .filter((entry) => entry.startsWith(base))
++    .map((entry) => path.join(dir, entry))
++    .toSorted((a, b) => {
++      const aMatch = a.match(/\.part(\d+)\.claude-system-prompt\.txt$/);
++      const bMatch = b.match(/\.part(\d+)\.claude-system-prompt\.txt$/);
++      const aIndex = aMatch ? Number.parseInt(aMatch[1] ?? "0", 10) - 1 : 0;
++      const bIndex = bMatch ? Number.parseInt(bMatch[1] ?? "0", 10) - 1 : 0;
++      return aIndex - bIndex;
++    });
++  return promptFiles.length > 0 ? promptFiles : [resolvedPromptFile];
++}
++
++function createClaudeStreamSuccess(
++  sessionFile: string,
++  text = "ok",
++  sessionId = "sid-1",
++): () => string {
++  return () => {
++    const records = [JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })];
++    const promptPaths = listClaudePromptChunkPaths(sessionFile);
++    for (const [index, promptPath] of promptPaths.entries()) {
++      const toolUseId = `toolu_test_read_${index + 1}`;
++      records.push(
++        JSON.stringify({
++          type: "assistant",
++          session_id: sessionId,
++          message: {
++            role: "assistant",
++            content: [
++              {
++                type: "tool_use",
++                id: toolUseId,
++                name: "Read",
++                input: { file_path: promptPath },
++              },
++            ],
+           },
+-        ],
+-      },
+-    }),
+-    JSON.stringify({
+-      type: "assistant",
+-      session_id: sessionId,
+-      message: { role: "assistant", content: [{ type: "text", text }] },
+-    }),
+-    JSON.stringify({
+-      type: "result",
+-      subtype: "success",
+-      is_error: false,
+-      result: text,
+-      session_id: sessionId,
+-    }),
+-  ].join("\n");
++        }),
++      );
++      records.push(
++        JSON.stringify({
++          type: "user",
++          session_id: sessionId,
++          message: {
++            role: "user",
++            content: [
++              {
++                type: "tool_result",
++                tool_use_id: toolUseId,
++                startLine: 1,
++                numLines: 2,
++                totalLines: 2,
++                content: `prompt file ${index + 1}`,
++              },
++            ],
++          },
++        }),
++      );
++    }
++    records.push(
++      JSON.stringify({
++        type: "assistant",
++        session_id: sessionId,
++        message: { role: "assistant", content: [{ type: "text", text }] },
++      }),
++    );
++    records.push(
++      JSON.stringify({
++        type: "result",
++        subtype: "success",
++        is_error: false,
++        result: text,
++        session_id: sessionId,
++      }),
++    );
++    return records.join("\n");
++  };
+ }
+ 
+ describe("runCliAgent with process supervisor", () => {
+@@ -181,10 +225,17 @@ describe("runCliAgent with process supervisor", () => {
+         spawn: async (...args: unknown[]) => {
+           const input = args[0] as { onStdout?: (chunk: string) => void } | undefined;
+           const managedRun = (await supervisorSpawnMock(...args)) as
+-            | { __stdoutForStreaming?: string; wait?: () => Promise<{ stdout?: string }> }
++            | {
++                __stdoutForStreaming?: string | (() => string);
++                wait?: () => Promise<{ stdout?: string }>;
++              }
+             | undefined;
+-          if (input?.onStdout && typeof managedRun?.__stdoutForStreaming === "string") {
+-            input.onStdout(managedRun.__stdoutForStreaming);
++          const streamingOutput =
++            typeof managedRun?.__stdoutForStreaming === "function"
++              ? managedRun.__stdoutForStreaming()
++              : managedRun?.__stdoutForStreaming;
++          if (input?.onStdout && typeof streamingOutput === "string") {
++            input.onStdout(streamingOutput);
+           }
+           if (input?.onStdout && managedRun?.wait) {
+             const originalWait = managedRun.wait.bind(managedRun);
+@@ -1315,6 +1366,7 @@ describe("runCliAgent with process supervisor", () => {
+     const promptFile = resolveClaudePromptFilePath("/tmp/session.jsonl");
+     expect(systemPrompt).toContain(promptFile);
+     const fileContents = await fs.readFile(promptFile, "utf-8");
++    expect(fileContents).toContain("keep a short plan updated with `update_plan`.");
+     expect(fileContents).toContain("<available_skills>");
+     expect(fileContents).toContain("demo-skill");
+   });
+@@ -1362,6 +1414,7 @@ describe("runCliAgent with process supervisor", () => {
+     const promptFile = resolveClaudePromptFilePath("/tmp/session.jsonl");
+     expect(input.argv?.[systemPromptIndex + 1]).toContain(promptFile);
+     const fileContents = await fs.readFile(promptFile, "utf-8");
++    expect(fileContents).toContain("keep a short plan updated with `update_plan`.");
+     expect(fileContents).toContain("snapshot-skill");
+   });
+ 
+diff --git a/src/agents/cli-runner/execute.ts b/src/agents/cli-runner/execute.ts
+index 2501a509e8..292916c133 100644
+--- a/src/agents/cli-runner/execute.ts
++++ b/src/agents/cli-runner/execute.ts
+@@ -166,9 +166,30 @@ function looksLikePartialReadToolResult(text: string | undefined): boolean {
+   );
+ }
+ 
++// Claude CLI Read tool output formats lines as `<lineNum>→<content>` (or
++// `<lineNum>\t<content>`, depending on version). Capture the last emitted line
++// number so we can compare against the chunk's recorded total line count.
++const LAST_LINE_PREFIX_RE = /(?:^|\n)\s*(\d+)(?:→|\t)/g;
++
++function extractLastReadLineNumber(text: string | undefined): number | undefined {
++  if (!text) {
++    return undefined;
++  }
++  let match: RegExpExecArray | null = null;
++  let last: number | undefined;
++  LAST_LINE_PREFIX_RE.lastIndex = 0;
++  while ((match = LAST_LINE_PREFIX_RE.exec(text)) !== null) {
++    const value = Number.parseInt(match[1] ?? "", 10);
++    if (Number.isFinite(value)) {
++      last = value;
++    }
++  }
++  return last;
++}
++
+ function isCompletePromptFileRead(params: {
+   partialReadRequest: boolean;
+-  eofMarker: string;
++  expectedTotalLines: number;
+   startLine?: number;
+   numLines?: number;
+   totalLines?: number;
+@@ -177,9 +198,8 @@ function isCompletePromptFileRead(params: {
+   if (params.partialReadRequest) {
+     return false;
+   }
+-  if (params.text?.includes(params.eofMarker)) {
+-    return true;
+-  }
++  // Preferred path: OpenClaw MCP Read tool surfaces structured line metadata.
++  // Trust the tool's self-report when it claims to have read the whole file.
+   if (
+     typeof params.startLine === "number" &&
+     typeof params.numLines === "number" &&
+@@ -187,6 +207,15 @@ function isCompletePromptFileRead(params: {
+   ) {
+     return params.startLine === 1 && params.numLines === params.totalLines;
+   }
++  // Fallback path: Claude CLI's built-in Read tool emits `cat -n`-style output
++  // without structured metadata. Compare the highest emitted line number
++  // against the chunk's recorded total. We still guard on
++  // `looksLikePartialReadToolResult` in case the tool appended a truncation
++  // notice despite covering every line.
++  const lastLine = extractLastReadLineNumber(params.text);
++  if (typeof lastLine === "number") {
++    return lastLine >= params.expectedTotalLines && !looksLikePartialReadToolResult(params.text);
++  }
+   return !looksLikePartialReadToolResult(params.text);
+ }
+ 
+@@ -944,7 +973,7 @@ export async function executeWithOverflowProtection(
+                   if (
+                     !isCompletePromptFileRead({
+                       partialReadRequest: request.partialReadRequest,
+-                      eofMarker: chunk.eofMarker,
++                      expectedTotalLines: chunk.totalLines,
+                       startLine,
+                       numLines,
+                       totalLines,
+@@ -1043,7 +1072,7 @@ export async function executeWithOverflowProtection(
+               const stallNotice = [
+                 `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+                 "It may have been waiting for interactive input or an approval prompt.",
+-                "For Claude Code, prefer --permission-mode bypassPermissions --print.",
++                "For Claude Code, prefer --dangerously-skip-permissions --print.",
+               ].join(" ");
+               executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+               executeDeps.requestHeartbeatNow(
+@@ -1465,10 +1494,11 @@ export async function executeWithOverflowProtection(
+             config: params.config,
+             defaultThinkLevel: params.thinkLevel,
+             extraSystemPrompt: context.extraSystemPrompt,
++            skillsPrompt: context.skillsPrompt,
+             ownerNumbers: params.ownerNumbers,
+             heartbeatPrompt: context.heartbeatPrompt,
+             docsPath: context.docsPath,
+-            tools: [],
++            tools: context.promptTools,
+             contextFiles: minimalContextFiles,
+             modelDisplay: `${params.provider}/${context.modelId}`,
+             agentId: context.sessionAgentId,
+diff --git a/src/auto-reply/reply/agent-runner-execution.ts b/src/auto-reply/reply/agent-runner-execution.ts
+index 3ae04d5738..d1ba2d292b 100644
+--- a/src/auto-reply/reply/agent-runner-execution.ts
++++ b/src/auto-reply/reply/agent-runner-execution.ts
+@@ -48,6 +48,7 @@ import {
+   couldBeSilentTokenStart,
+   HEARTBEAT_TOKEN,
+   isSilentReplyPrefixText,
++  isSilentReplyTailFragmentText,
+   isSilentReplyText,
+   SILENT_REPLY_TOKEN,
+ } from "../tokens.js";
+@@ -627,6 +628,9 @@ export async function runAgentTurnWithFallback(params: {
+         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+           return { skip: true };
+         }
++        if (isSilentReplyTailFragmentText(text, SILENT_REPLY_TOKEN)) {
++          return { skip: true };
++        }
+         if (
+           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+@@ -640,6 +644,14 @@ export async function runAgentTurnWithFallback(params: {
+           }
+           return { skip: true };
+         }
++        // Pure-whitespace deltas (single space, newline) are valid streaming
++        // tokens — they preserve markdown spacing between words and bullet
++        // markers. sanitizeUserFacingText would .trim() them to "" and drop
++        // them entirely. They contain no patterns worth sanitizing, so pass
++        // them through as-is.
++        if (!text.trim()) {
++          return { text, skip: false };
++        }
+         const sanitized = sanitizeUserFacingText(text, {
+           errorContext: Boolean(payload.isError),
+         });
+@@ -785,6 +797,7 @@ export async function runAgentTurnWithFallback(params: {
+                   timeoutMs: params.followupRun.run.timeoutMs,
+                   runId,
+                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
++                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                   ownerNumbers: params.followupRun.run.ownerNumbers,
+                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                   cliSessionId,
+diff --git a/src/auto-reply/reply/session.test.ts b/src/auto-reply/reply/session.test.ts
+index 58cb706ea0..8fd555d3da 100644
+--- a/src/auto-reply/reply/session.test.ts
++++ b/src/auto-reply/reply/session.test.ts
+@@ -2277,8 +2277,15 @@ describe("persistSessionUsageUpdate", () => {
+       },
+       cliPromptLoad: {
+         sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
++        currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
++        sessionPromptFiles: [
++          "/tmp/session.claude-system-prompt.txt",
++          "/tmp/session.part002.claude-system-prompt.txt",
++        ],
+         loaderMode: "normal",
+         verifiedRead: true,
++        chunkCount: 2,
++        verifiedChunkCount: 2,
+       },
+     });
+ 
+@@ -2297,8 +2304,15 @@ describe("persistSessionUsageUpdate", () => {
+     });
+     expect(stored[sessionKey].cliPromptLoad).toEqual({
+       sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
++      currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
++      sessionPromptFiles: [
++        "/tmp/session.claude-system-prompt.txt",
++        "/tmp/session.part002.claude-system-prompt.txt",
++      ],
+       loaderMode: "normal",
+       verifiedRead: true,
++      chunkCount: 2,
++      verifiedChunkCount: 2,
+     });
+   });
+ });
+diff --git a/src/auto-reply/status.cli-prompt-load.test.ts b/src/auto-reply/status.cli-prompt-load.test.ts
+index 5f5107d5f7..5a277d63ba 100644
+--- a/src/auto-reply/status.cli-prompt-load.test.ts
++++ b/src/auto-reply/status.cli-prompt-load.test.ts
+@@ -27,4 +27,37 @@ describe("buildStatusMessage cli prompt load", () => {
+     expect(normalized).toContain("CLI prompt: file/strict");
+     expect(normalized).toContain("fallback=verification_retry");
+   });
++
++  it("renders chunk-aware cli prompt loader status when chunk metadata is present", () => {
++    const text = buildStatusMessage({
++      agent: {
++        model: "claude-cli/sonnet",
++      },
++      sessionEntry: {
++        sessionId: "abc",
++        updatedAt: 0,
++        cliPromptLoad: {
++          sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
++          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
++          sessionPromptFiles: [
++            "/tmp/abc.claude-system-prompt.txt",
++            "/tmp/abc.part002.claude-system-prompt.txt",
++            "/tmp/abc.part003.claude-system-prompt.txt",
++          ],
++          loaderMode: "strict",
++          verifiedRead: false,
++          chunkCount: 3,
++          verifiedChunkCount: 2,
++          fallbackReason: "verification_retry",
++        },
++      },
++      sessionKey: "agent:main:main",
++      sessionScope: "per-sender",
++      now: 10 * 60_000,
++    });
++
++    const normalized = normalizeTestText(text);
++    expect(normalized).toContain("CLI prompt: chunks/strict (2/3)");
++    expect(normalized).toContain("fallback=verification_retry");
++  });
+ });
+diff --git a/src/auto-reply/status.test.ts b/src/auto-reply/status.test.ts
+index 514b249a5a..9d745b9b3f 100644
+--- a/src/auto-reply/status.test.ts
++++ b/src/auto-reply/status.test.ts
+@@ -79,6 +79,7 @@ describe("buildStatusMessage", () => {
+ 
+     expect(normalized).toContain("OpenClaw");
+     expect(normalized).toContain("Model: anthropic/pi:opus");
++    expect(normalized).not.toContain("Last runtime:");
+     expect(normalized).toContain("api-key");
+     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
+     expect(normalized).toContain("Cost: $0.0020");
+@@ -103,6 +104,12 @@ describe("buildStatusMessage", () => {
+         updatedAt: 0,
+         cliPromptLoad: {
+           sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
++          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
++          sessionPromptFiles: [
++            "/tmp/abc.claude-system-prompt.txt",
++            "/tmp/abc.part002.claude-system-prompt.txt",
++            "/tmp/abc.part003.claude-system-prompt.txt",
++          ],
+           loaderMode: "strict",
+           verifiedRead: false,
+           fallbackReason: "verification_retry",
+@@ -117,6 +124,74 @@ describe("buildStatusMessage", () => {
+     expect(normalized).toContain("fallback=verification_retry");
+   });
+ 
++  it("shows chunk-aware cli prompt loader status when chunk metadata is present", () => {
++    const text = buildStatusMessage({
++      agent: {
++        model: "claude-cli/sonnet",
++      },
++      sessionEntry: {
++        sessionId: "abc",
++        updatedAt: 0,
++        cliPromptLoad: {
++          sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
++          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
++          sessionPromptFiles: [
++            "/tmp/abc.claude-system-prompt.txt",
++            "/tmp/abc.part002.claude-system-prompt.txt",
++            "/tmp/abc.part003.claude-system-prompt.txt",
++          ],
++          loaderMode: "strict",
++          verifiedRead: false,
++          chunkCount: 3,
++          verifiedChunkCount: 1,
++          fallbackReason: "verification_retry",
++        },
++      },
++      sessionKey: "agent:main:main",
++      sessionScope: "per-sender",
++      now: 10 * 60_000,
++    });
++    const normalized = normalizeTestText(text);
++    expect(normalized).toContain("CLI prompt: chunks/strict (1/3)");
++    expect(normalized).toContain("fallback=verification_retry");
++  });
++
++  it("distinguishes configured model from last runtime model", () => {
++    const text = buildStatusMessage({
++      agent: {
++        model: "minimax/minimax",
++      },
++      sessionEntry: {
++        sessionId: "runtime-diff",
++        updatedAt: 0,
++        modelProvider: "claude-cli",
++        model: "sonnet",
++        cliPromptLoad: {
++          sessionPromptFile: "/tmp/runtime-diff.claude-system-prompt.txt",
++          currentSessionPromptFile: "/tmp/runtime-diff.part003.claude-system-prompt.txt",
++          sessionPromptFiles: [
++            "/tmp/runtime-diff.claude-system-prompt.txt",
++            "/tmp/runtime-diff.part002.claude-system-prompt.txt",
++            "/tmp/runtime-diff.part003.claude-system-prompt.txt",
++          ],
++          loaderMode: "normal",
++          verifiedRead: true,
++          chunkCount: 3,
++          verifiedChunkCount: 3,
++        },
++      },
++      sessionKey: "agent:main:main",
++      sessionScope: "per-sender",
++      queue: { mode: "collect", depth: 0 },
++      now: 10 * 60_000,
++    });
++    const normalized = normalizeTestText(text);
++
++    expect(normalized).toContain("Model: minimax/minimax");
++    expect(normalized).toContain("Last runtime: claude-cli/sonnet");
++    expect(normalized).toContain("CLI prompt: chunks (3/3)");
++  });
++
+   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
+     const text = buildStatusMessage({
+       agent: {
+diff --git a/src/auto-reply/status.ts b/src/auto-reply/status.ts
+index 346b8513b8..04703d4f20 100644
+--- a/src/auto-reply/status.ts
++++ b/src/auto-reply/status.ts
+@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
+ import { resolveModelAuthMode } from "../agents/model-auth.js";
+ import {
+   buildModelAliasIndex,
++  isCliProvider,
+   resolveConfiguredModelRef,
+   resolveModelRefFromString,
+ } from "../agents/model-selection.js";
+@@ -441,15 +442,28 @@ const formatCliPromptLoadLine = (status?: CliPromptLoadStatus): string | null =>
+   if (!status) {
+     return null;
+   }
++  const usesChunks = (status.chunkCount ?? 0) > 1;
++  const progressValue =
++    status.verifiedChunkCount ??
++    (status.verifiedRead ? status.chunkCount : undefined) ??
++    (status.verifiedRead ? 1 : 0);
+   const modeLabel =
+     status.loaderMode === "disabled"
+       ? "direct"
+-      : status.loaderMode === "strict"
+-        ? "file/strict"
+-        : "file";
++      : usesChunks
++        ? status.loaderMode === "strict"
++          ? "chunks/strict"
++          : "chunks"
++        : status.loaderMode === "strict"
++          ? "file/strict"
++          : "file";
++  const progressLabel =
++    usesChunks && typeof status.chunkCount === "number"
++      ? ` (${Math.min(progressValue, status.chunkCount)}/${status.chunkCount})`
++      : "";
+   const stateLabel = status.verifiedRead ? "verified" : "unverified";
+   const fallbackLabel = status.fallbackReason ? ` · fallback=${status.fallbackReason}` : "";
+-  return `📄 CLI prompt: ${modeLabel} · ${stateLabel}${fallbackLabel}`;
++  return `📄 CLI prompt: ${modeLabel}${progressLabel} · ${stateLabel}${fallbackLabel}`;
+ };
+ 
+ export function buildStatusMessage(args: StatusArgs): string {
+@@ -828,6 +842,23 @@ export function buildStatusMessage(args: StatusArgs): string {
+   })();
+   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
+   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
++  const runtimeModelPresent = Boolean(
++    runtimeModelRaw || runtimeProviderRaw || fallbackState.active,
++  );
++  const lastRuntimeAuthLabel =
++    activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue
++      ? ` · 🔑 ${activeAuthLabelValue}`
++      : "";
++  const lastRuntimeReason =
++    fallbackState.active && fallbackState.reason
++      ? ` (fallback: ${fallbackState.reason})`
++      : fallbackState.active
++        ? " (fallback)"
++        : "";
++  const lastRuntimeLine =
++    runtimeModelPresent && (activeProvider !== selectedProvider || activeModel !== selectedModel)
++      ? `↪️ Last runtime: ${activeModelLabel}${lastRuntimeAuthLabel}${lastRuntimeReason}`
++      : null;
+   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
+   const fallbackLine = fallbackState.active
+     ? `↪️ Fallback: ${activeModelLabel}${
+@@ -843,13 +874,18 @@ export function buildStatusMessage(args: StatusArgs): string {
+     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
+   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
+   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+-  const cliPromptLoadLine = formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad);
++  const cliPromptLoadLine =
++    args.sessionEntry?.cliPromptLoad &&
++    (isCliProvider(selectedProvider, args.config) || isCliProvider(activeProvider, args.config))
++      ? formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad)
++      : null;
+ 
+   return [
+     versionLine,
+     args.timeLine,
+     modelLine,
+-    fallbackLine,
++    lastRuntimeLine,
++    lastRuntimeLine ? null : fallbackLine,
+     usageCostLine,
+     cacheLine,
+     `📚 ${contextLine}`,
+diff --git a/src/auto-reply/tokens.test.ts b/src/auto-reply/tokens.test.ts
+index d0507e063b..286f766f21 100644
+--- a/src/auto-reply/tokens.test.ts
++++ b/src/auto-reply/tokens.test.ts
+@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
+ import {
+   couldBeSilentTokenStart,
+   isSilentReplyPrefixText,
++  isSilentReplyTailFragmentText,
+   isSilentReplyText,
+   stripSilentToken,
+ } from "./tokens.js";
+@@ -153,3 +154,17 @@ describe("couldBeSilentTokenStart", () => {
+     expect(couldBeSilentTokenStart("")).toBe(false);
+   });
+ });
++
++describe("isSilentReplyTailFragmentText", () => {
++  it("matches standalone silent-token tail fragments", () => {
++    expect(isSilentReplyTailFragmentText("_REPLY")).toBe(true);
++    expect(isSilentReplyTailFragmentText("  _REPLY  ")).toBe(true);
++  });
++
++  it("rejects full tokens and regular text", () => {
++    expect(isSilentReplyTailFragmentText("NO_REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("x_REPLY")).toBe(false);
++    expect(isSilentReplyTailFragmentText("_REPLY done")).toBe(false);
++  });
++});
+diff --git a/src/auto-reply/tokens.ts b/src/auto-reply/tokens.ts
+index c3a9eeb952..5fc256557f 100644
+--- a/src/auto-reply/tokens.ts
++++ b/src/auto-reply/tokens.ts
+@@ -113,6 +113,34 @@ export function couldBeSilentTokenStart(
+   return trimmed.length < upper.length && upper.startsWith(trimmed);
+ }
+ 
++export function isSilentReplyTailFragmentText(
++  text: string | undefined,
++  token: string = SILENT_REPLY_TOKEN,
++): boolean {
++  if (!text) {
++    return false;
++  }
++  const trimmed = text.trim();
++  if (!trimmed) {
++    return false;
++  }
++  if (trimmed !== trimmed.toUpperCase()) {
++    return false;
++  }
++  const normalized = trimmed.toUpperCase();
++  if (!normalized.startsWith("_")) {
++    return false;
++  }
++  const tokenUpper = token.toUpperCase();
++  if (normalized.length >= tokenUpper.length) {
++    return false;
++  }
++  if (TOKEN_CHARS_ONLY.test(normalized)) {
++    return false;
++  }
++  return tokenUpper.endsWith(normalized);
++}
++
+ export function isSilentReplyPrefixText(
+   text: string | undefined,
+   token: string = SILENT_REPLY_TOKEN,
+diff --git a/src/commands/doctor-legacy-config.migrations.test.ts b/src/commands/doctor-legacy-config.migrations.test.ts
+index 4c922d0f3f..f5e2d0d986 100644
+--- a/src/commands/doctor-legacy-config.migrations.test.ts
++++ b/src/commands/doctor-legacy-config.migrations.test.ts
+@@ -384,7 +384,7 @@ describe("normalizeCompatibilityConfigValues", () => {
+           dmPolicy: "allowlist",
+           allowFrom: ["123"],
+           groupPolicy: "allowlist",
+-          streaming: "partial",
++          streaming: { mode: "partial" },
+           accounts: {
+             alerts: {
+               enabled: true,
+diff --git a/src/plugin-sdk/channel-import-guardrails.test.ts b/src/plugin-sdk/channel-import-guardrails.test.ts
+new file mode 100644
+index 0000000000..ea1ba2ca3c
+--- /dev/null
++++ b/src/plugin-sdk/channel-import-guardrails.test.ts
+@@ -0,0 +1,502 @@
++import { existsSync, readdirSync, readFileSync } from "node:fs";
++import { dirname, resolve } from "node:path";
++import { fileURLToPath } from "node:url";
++import { describe, expect, it } from "vitest";
++
++const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
++const REPO_ROOT = resolve(ROOT_DIR, "..");
++const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
++  "action-runtime.runtime.js",
++  "action-runtime-api.js",
++  "allow-from.js",
++  "api.js",
++  "auth-presence.js",
++  "index.js",
++  "light-runtime-api.js",
++  "login-qr-api.js",
++  "onboard.js",
++  "openai-codex-catalog.js",
++  "provider-catalog.js",
++  "runtime-api.js",
++  "session-key-api.js",
++  "setup-api.js",
++  "setup-entry.js",
++  "timeouts.js",
++]);
++const GUARDED_CHANNEL_EXTENSIONS = new Set([
++  "bluebubbles",
++  "discord",
++  "feishu",
++  "googlechat",
++  "imessage",
++  "irc",
++  "line",
++  "matrix",
++  "mattermost",
++  "msteams",
++  "nostr",
++  "nextcloud-talk",
++  "signal",
++  "slack",
++  "synology-chat",
++  "telegram",
++  "tlon",
++  "twitch",
++  "whatsapp",
++  "zalo",
++  "zalouser",
++]);
++
++type GuardedSource = {
++  path: string;
++  forbiddenPatterns: RegExp[];
++};
++
++const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
++  {
++    path: "extensions/discord/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/discord["']/, /plugin-sdk-internal\/discord/],
++  },
++  {
++    path: "extensions/slack/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/slack["']/, /plugin-sdk-internal\/slack/],
++  },
++  {
++    path: "extensions/telegram/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
++  },
++  {
++    path: "extensions/imessage/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
++  },
++  {
++    path: "extensions/whatsapp/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/whatsapp["']/, /plugin-sdk-internal\/whatsapp/],
++  },
++  {
++    path: "extensions/signal/src/shared.ts",
++    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
++  },
++];
++
++const SETUP_BARREL_GUARDS: GuardedSource[] = [
++  {
++    path: "extensions/signal/src/setup-core.ts",
++    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/signal/src/setup-surface.ts",
++    forbiddenPatterns: [
++      /\bdetectBinary\b/,
++      /\binstallSignalCli\b/,
++      /\bformatCliCommand\b/,
++      /\bformatDocsLink\b/,
++    ],
++  },
++  {
++    path: "extensions/slack/src/setup-core.ts",
++    forbiddenPatterns: [/\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/slack/src/setup-surface.ts",
++    forbiddenPatterns: [/\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/discord/src/setup-core.ts",
++    forbiddenPatterns: [/\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/discord/src/setup-surface.ts",
++    forbiddenPatterns: [/\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/imessage/src/setup-core.ts",
++    forbiddenPatterns: [/\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/imessage/src/setup-surface.ts",
++    forbiddenPatterns: [/\bdetectBinary\b/, /\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/telegram/src/setup-core.ts",
++    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
++  },
++  {
++    path: "extensions/whatsapp/src/setup-surface.ts",
++    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
++  },
++];
++
++const LOCAL_EXTENSION_API_BARREL_GUARDS = [
++  "acpx",
++  "bluebubbles",
++  "device-pair",
++  "diagnostics-otel",
++  "discord",
++  "diffs",
++  "feishu",
++  "google",
++  "irc",
++  "llm-task",
++  "line",
++  "lobster",
++  "matrix",
++  "mattermost",
++  "memory-lancedb",
++  "msteams",
++  "nextcloud-talk",
++  "nostr",
++  "open-prose",
++  "phone-control",
++  "copilot-proxy",
++  "zai",
++  "qwen-portal-auth",
++  "signal",
++  "synology-chat",
++  "talk-voice",
++  "telegram",
++  "thread-ownership",
++  "tlon",
++  "voice-call",
++  "whatsapp",
++  "twitch",
++  "zalo",
++  "zalouser",
++] as const;
++
++const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
++  // Direct import avoids a circular init path:
++  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
++  "extensions/matrix/src/matrix/accounts.ts",
++  // These feishu extension files import types/helpers directly from the SDK barrel
++  "extensions/feishu/src/quoted-message.ts",
++  "extensions/feishu/src/thread-bindings.manager.ts",
++  // Test support uses the external surface intentionally to exercise contract drift.
++  "extensions/bluebubbles/src/test-support/monitor-test-support.ts",
++] as const;
++
++const sourceTextCache = new Map<string, string>();
++let extensionSourceFilesCache: string[] | null = null;
++let coreSourceFilesCache: string[] | null = null;
++const extensionFilesCache = new Map<string, string[]>();
++
++function readSource(path: string): string {
++  const fullPath = resolve(REPO_ROOT, path);
++  const cached = sourceTextCache.get(fullPath);
++  if (cached !== undefined) {
++    return cached;
++  }
++  const text = readFileSync(fullPath, "utf8");
++  sourceTextCache.set(fullPath, text);
++  return text;
++}
++
++function normalizePath(path: string): string {
++  return path.replaceAll("\\", "/");
++}
++
++function readSetupBarrelImportBlock(path: string): string {
++  const lines = readSource(path).split("\n");
++  const targetLineIndex = lines.findIndex((line) =>
++    /from\s*"[^"]*plugin-sdk(?:-internal)?\/setup(?:\.js)?";/.test(line),
++  );
++  if (targetLineIndex === -1) {
++    return "";
++  }
++  let startLineIndex = targetLineIndex;
++  while (startLineIndex >= 0 && !lines[startLineIndex].includes("import")) {
++    startLineIndex -= 1;
++  }
++  return lines.slice(startLineIndex, targetLineIndex + 1).join("\n");
++}
++
++function collectExtensionSourceFiles(): string[] {
++  if (extensionSourceFilesCache) {
++    return extensionSourceFilesCache;
++  }
++  const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
++  const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
++  const files: string[] = [];
++  const stack = [resolve(ROOT_DIR, "..", "extensions")];
++  while (stack.length > 0) {
++    const current = stack.pop();
++    if (!current) {
++      continue;
++    }
++    for (const entry of readdirSync(current, { withFileTypes: true })) {
++      const fullPath = resolve(current, entry.name);
++      const normalizedFullPath = normalizePath(fullPath);
++      if (entry.isDirectory()) {
++        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
++          continue;
++        }
++        stack.push(fullPath);
++        continue;
++      }
++      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
++        continue;
++      }
++      if (entry.name.endsWith(".d.ts") || normalizedFullPath.includes(sharedExtensionsDir)) {
++        continue;
++      }
++      if (normalizedFullPath.includes(`${extensionsDir}/shared/`)) {
++        continue;
++      }
++      if (
++        normalizedFullPath.includes(".test.") ||
++        normalizedFullPath.includes(".test-") ||
++        normalizedFullPath.includes(".fixture.") ||
++        normalizedFullPath.includes(".snap") ||
++        normalizedFullPath.includes("test-support") ||
++        entry.name === "api.ts" ||
++        entry.name === "runtime-api.ts"
++      ) {
++        continue;
++      }
++      files.push(fullPath);
++    }
++  }
++  extensionSourceFilesCache = files;
++  return files;
++}
++
++function collectCoreSourceFiles(): string[] {
++  if (coreSourceFilesCache) {
++    return coreSourceFilesCache;
++  }
++  const srcDir = resolve(ROOT_DIR, "..", "src");
++  const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
++  const files: string[] = [];
++  const stack = [srcDir];
++  while (stack.length > 0) {
++    const current = stack.pop();
++    if (!current) {
++      continue;
++    }
++    for (const entry of readdirSync(current, { withFileTypes: true })) {
++      const fullPath = resolve(current, entry.name);
++      const normalizedFullPath = normalizePath(fullPath);
++      if (entry.isDirectory()) {
++        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
++          continue;
++        }
++        stack.push(fullPath);
++        continue;
++      }
++      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
++        continue;
++      }
++      if (entry.name.endsWith(".d.ts")) {
++        continue;
++      }
++      if (
++        normalizedFullPath.includes(".test.") ||
++        normalizedFullPath.includes(".mock-harness.") ||
++        normalizedFullPath.includes(".spec.") ||
++        normalizedFullPath.includes(".fixture.") ||
++        normalizedFullPath.includes(".snap") ||
++        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
++        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
++        normalizedFullPath.includes(`${normalizedPluginSdkDir}/`)
++      ) {
++        continue;
++      }
++      files.push(fullPath);
++    }
++  }
++  coreSourceFilesCache = files;
++  return files;
++}
++
++function collectExtensionFiles(extensionId: string): string[] {
++  const cached = extensionFilesCache.get(extensionId);
++  if (cached) {
++    return cached;
++  }
++  const extensionDir = resolve(ROOT_DIR, "..", "extensions", extensionId);
++  if (!existsSync(extensionDir)) {
++    extensionFilesCache.set(extensionId, []);
++    return [];
++  }
++  const files: string[] = [];
++  const stack = [extensionDir];
++  while (stack.length > 0) {
++    const current = stack.pop();
++    if (!current) {
++      continue;
++    }
++    for (const entry of readdirSync(current, { withFileTypes: true })) {
++      const fullPath = resolve(current, entry.name);
++      const normalizedFullPath = normalizePath(fullPath);
++      if (entry.isDirectory()) {
++        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
++          continue;
++        }
++        stack.push(fullPath);
++        continue;
++      }
++      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
++        continue;
++      }
++      if (entry.name.endsWith(".d.ts")) {
++        continue;
++      }
++      if (
++        normalizedFullPath.includes(".test.") ||
++        normalizedFullPath.includes(".test-") ||
++        normalizedFullPath.includes(".spec.") ||
++        normalizedFullPath.includes(".fixture.") ||
++        normalizedFullPath.includes(".snap") ||
++        entry.name === "runtime-api.ts"
++      ) {
++        continue;
++      }
++      files.push(fullPath);
++    }
++  }
++  extensionFilesCache.set(extensionId, files);
++  return files;
++}
++
++function collectExtensionImports(text: string): string[] {
++  return [...text.matchAll(/["']([^"']*extensions\/[^"']+\.(?:[cm]?[jt]sx?))["']/g)].map(
++    (match) => match[1] ?? "",
++  );
++}
++
++function collectImportSpecifiers(text: string): string[] {
++  return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
++}
++
++function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
++  for (const specifier of imports) {
++    const normalized = specifier.replaceAll("\\", "/");
++    const resolved = specifier.startsWith(".")
++      ? resolve(dirname(file), specifier).replaceAll("\\", "/")
++      : normalized;
++    const extensionId = resolved.match(/extensions\/([^/]+)\//)?.[1] ?? null;
++    if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
++      continue;
++    }
++    const basename = resolved.split("/").at(-1) ?? "";
++    expect(
++      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
++      `${file} should only import approved extension surfaces, got ${specifier}`,
++    ).toBe(true);
++  }
++}
++
++function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
++  const normalizedFile = file.replaceAll("\\", "/");
++  const currentExtensionId = normalizedFile.match(/\/extensions\/([^/]+)\//)?.[1] ?? null;
++  if (!currentExtensionId) {
++    return;
++  }
++  for (const specifier of imports) {
++    if (!specifier.startsWith(".")) {
++      continue;
++    }
++    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
++    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
++    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
++      continue;
++    }
++    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
++  }
++}
++
++describe("channel import guardrails", () => {
++  it("keeps channel helper modules off their own SDK barrels", () => {
++    for (const source of SAME_CHANNEL_SDK_GUARDS) {
++      const text = readSource(source.path);
++      for (const pattern of source.forbiddenPatterns) {
++        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
++      }
++    }
++  });
++
++  it("keeps setup barrels limited to setup primitives", () => {
++    for (const source of SETUP_BARREL_GUARDS) {
++      const importBlock = readSetupBarrelImportBlock(source.path);
++      for (const pattern of source.forbiddenPatterns) {
++        expect(importBlock, `${source.path} setup import should not match ${pattern}`).not.toMatch(
++          pattern,
++        );
++      }
++    }
++  });
++
++  it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
++    for (const file of collectExtensionSourceFiles()) {
++      const text = readSource(file);
++      expect(text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
++        /["']openclaw\/plugin-sdk["']/,
++      );
++      expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
++        /["']openclaw\/plugin-sdk\/compat["']/,
++      );
++    }
++  });
++
++  it("keeps bundled extension source files off legacy core send-deps src imports", () => {
++    const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
++    for (const file of collectExtensionSourceFiles()) {
++      const text = readSource(file);
++      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
++        legacyCoreSendDepsImport,
++      );
++    }
++  });
++
++  it("keeps core production files off extension private src imports", () => {
++    for (const file of collectCoreSourceFiles()) {
++      const text = readSource(file);
++      expect(text, `${file} should not import extensions/*/src`).not.toMatch(
++        /["'][^"']*extensions\/[^/"']+\/src\//,
++      );
++    }
++  });
++
++  it("keeps extension production files off other extensions' private src imports", () => {
++    for (const file of collectExtensionSourceFiles()) {
++      const text = readSource(file);
++      expectNoSiblingExtensionPrivateSrcImports(file, collectImportSpecifiers(text));
++    }
++  });
++
++  it("keeps core extension imports limited to approved public surfaces", () => {
++    for (const file of collectCoreSourceFiles()) {
++      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readSource(file)));
++    }
++  });
++
++  it("keeps extension-to-extension imports limited to approved public surfaces", () => {
++    for (const file of collectExtensionSourceFiles()) {
++      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readSource(file)));
++    }
++  });
++
++  it("keeps internalized extension helper surfaces behind local api barrels", () => {
++    for (const extensionId of LOCAL_EXTENSION_API_BARREL_GUARDS) {
++      for (const file of collectExtensionFiles(extensionId)) {
++        const normalized = file.replaceAll("\\", "/");
++        if (
++          LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
++          normalized.endsWith("/api.ts") ||
++          normalized.endsWith("/test-runtime.ts") ||
++          normalized.includes(".test.") ||
++          normalized.includes(".spec.") ||
++          normalized.includes(".fixture.") ||
++          normalized.includes(".snap")
++        ) {
++          continue;
++        }
++        const text = readSource(file);
++        expect(
++          text,
++          `${normalized} should import ${extensionId} helpers via the local api barrel`,
++        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}["']`, "u"));
++      }
++    }
++  });
++});
+diff --git a/src/plugin-sdk/feishu.ts b/src/plugin-sdk/feishu.ts
+index 47898c4096..067094377f 100644
+--- a/src/plugin-sdk/feishu.ts
++++ b/src/plugin-sdk/feishu.ts
+@@ -68,6 +68,17 @@ export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+ export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+ export type { OutboundIdentity } from "../infra/outbound/identity.js";
+ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
++export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
++export { getLiveSessionTranscriptEntries } from "../agents/pi-embedded-runner/live-session-registry.js";
++export {
++  appendAssistantMessageToSessionTranscript,
++  loadSessionStore,
++  resolveSessionFilePath,
++  resolveSessionFilePathOptions,
++} from "../config/sessions.js";
++export type { SessionEntry, SessionTranscriptMessageMeta } from "../config/sessions.js";
++export { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
++export { resolveUserPath } from "../utils.js";
+ export type { PluginRuntime } from "../plugins/runtime/types.js";
+ export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
+ export { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+diff --git a/src/plugin-sdk/index.ts b/src/plugin-sdk/index.ts
+index b2703cf309..b44b4a79a4 100644
+--- a/src/plugin-sdk/index.ts
++++ b/src/plugin-sdk/index.ts
+@@ -85,7 +85,57 @@ export type { HookEntry } from "../hooks/types.js";
+ export type { ReplyPayload } from "../auto-reply/types.js";
+ export type { WizardPrompter } from "../wizard/prompts.js";
+ export type { ContextEngineFactory } from "../context-engine/registry.js";
+-export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
++export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
++export { stripAnsi } from "../terminal/ansi.js";
++export { missingTargetError } from "../infra/outbound/target-errors.js";
++export {
++  getSessionBindingService,
++  registerSessionBindingAdapter,
++  unregisterSessionBindingAdapter,
++  SessionBindingError,
++  isSessionBindingError,
++} from "../infra/outbound/session-binding-service.js";
++export type {
++  BindingTargetKind,
++  BindingStatus,
++  ConversationRef,
++  SessionBindingAdapter,
++  SessionBindingAdapterCapabilities,
++  SessionBindingBindInput,
++  SessionBindingCapabilities,
++  SessionBindingErrorCode,
++  SessionBindingPlacement,
++  SessionBindingRecord,
++  SessionBindingService,
++  SessionBindingUnbindInput,
++} from "../infra/outbound/session-binding-service.js";
++export { registerLogTransport } from "../logging/logger.js";
++export type { LogTransport, LogTransportRecord } from "../logging/logger.js";
++export {
++  emitDiagnosticEvent,
++  isDiagnosticsEnabled,
++  onDiagnosticEvent,
++} from "../infra/diagnostic-events.js";
++export type {
++  DiagnosticEventPayload,
++  DiagnosticHeartbeatEvent,
++  DiagnosticLaneDequeueEvent,
++  DiagnosticLaneEnqueueEvent,
++  DiagnosticMessageProcessedEvent,
++  DiagnosticMessageQueuedEvent,
++  DiagnosticRunAttemptEvent,
++  DiagnosticSessionState,
++  DiagnosticSessionStateEvent,
++  DiagnosticSessionStuckEvent,
++  DiagnosticUsageEvent,
++  DiagnosticWebhookErrorEvent,
++  DiagnosticWebhookProcessedEvent,
++  DiagnosticWebhookReceivedEvent,
++} from "../infra/diagnostic-events.js";
++export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
++export { extractOriginalFilename } from "../media/store.js";
++export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
++export type { SkillCommandSpec } from "../agents/skills.js";
+ export type {
+   AssembleResult,
+   BootstrapResult,
+@@ -106,4 +156,3 @@ export type {
+ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+ export { registerContextEngine } from "../context-engine/registry.js";
+ export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+-export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+diff --git a/src/plugin-sdk/test-helpers.ts b/src/plugin-sdk/test-helpers.ts
+index cc5be2071d..a4c5475cc0 100644
+--- a/src/plugin-sdk/test-helpers.ts
++++ b/src/plugin-sdk/test-helpers.ts
+@@ -1,5 +1,6 @@
+ import { mkdtempSync } from "node:fs";
+-import { mkdtemp, rm, type RmOptions } from "node:fs/promises";
++import type { RmOptions } from "node:fs";
++import { mkdtemp, rm } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import path from "node:path";
+ import { afterEach } from "vitest";
+diff --git a/src/plugins/bundle-manifest.ts b/src/plugins/bundle-manifest.ts
+index c77791db79..0e90dcda90 100644
+--- a/src/plugins/bundle-manifest.ts
++++ b/src/plugins/bundle-manifest.ts
+@@ -118,7 +118,7 @@ function loadBundleManifestFile(params: {
+     });
+   }
+   try {
+-    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
++    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
+     if (!isRecord(raw)) {
+       return { ok: false, error: "plugin manifest must be an object", manifestPath };
+     }
+diff --git a/src/plugins/contracts/plugin-sdk-index.test.ts b/src/plugins/contracts/plugin-sdk-index.test.ts
+index 7e03728eb7..b426bb6fd3 100644
+--- a/src/plugins/contracts/plugin-sdk-index.test.ts
++++ b/src/plugins/contracts/plugin-sdk-index.test.ts
+@@ -96,10 +96,30 @@ describe("plugin-sdk exports", () => {
+   it("keeps the root runtime surface intentionally small", async () => {
+     const runtimeExports = await readIndexRuntimeExports();
+     expect([...runtimeExports].toSorted()).toEqual([
++      "SessionBindingError",
++      "clamp",
+       "delegateCompactionToRuntime",
++      "detectMime",
++      "emitDiagnosticEvent",
+       "emptyPluginConfigSchema",
++      "escapeRegExp",
++      "extensionForMime",
++      "extractOriginalFilename",
++      "getFileExtension",
++      "getSessionBindingService",
++      "isDiagnosticsEnabled",
++      "isSessionBindingError",
++      "listSkillCommandsForAgents",
++      "missingTargetError",
++      "normalizeE164",
+       "onDiagnosticEvent",
+       "registerContextEngine",
++      "registerLogTransport",
++      "registerSessionBindingAdapter",
++      "safeParseJson",
++      "sleep",
++      "stripAnsi",
++      "unregisterSessionBindingAdapter",
+     ]);
+   });
+ 
+diff --git a/test/helpers/plugins/plugin-runtime-mock.ts b/test/helpers/plugins/plugin-runtime-mock.ts
+index b08330ad1e..e3b291e07e 100644
+--- a/test/helpers/plugins/plugin-runtime-mock.ts
++++ b/test/helpers/plugins/plugin-runtime-mock.ts
+@@ -73,6 +73,19 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> =
+   };
+   const base: PluginRuntime = {
+     version: "1.0.0-test",
++    agents: {
++      runEmbeddedPiAgent: vi.fn() as unknown as PluginRuntime["agents"]["runEmbeddedPiAgent"],
++      runModelAwareAgent: vi.fn() as unknown as PluginRuntime["agents"]["runModelAwareAgent"],
++    },
++    hooks: {
++      hasMessageSendingHooks: vi.fn(
++        () => false,
++      ) as unknown as PluginRuntime["hooks"]["hasMessageSendingHooks"],
++      runMessageSending: vi.fn(
++        async () => undefined,
++      ) as unknown as PluginRuntime["hooks"]["runMessageSending"],
++      emitMessageSent: vi.fn() as unknown as PluginRuntime["hooks"]["emitMessageSent"],
++    },
+     config: {
+       loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
+       writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
+-- 
+2.47.1
+

@@ -1,0 +1,3299 @@
+From 32871bec7e2569fd5ffb7b75982ececa3fa6679d Mon Sep 17 00:00:00 2001
+From: Lukin <mylukin@gmail.com>
+Date: Mon, 6 Apr 2026 21:06:46 +0800
+Subject: [PATCH 01/12] feat(core): carry channelData through dispatch, enrich
+ hooks, and harden plugin infrastructure
+
+---
+ src/channels/plugins/registry.ts              |  22 +-
+ .../plugins/setup-wizard-helpers.test.ts      |   2 +-
+ src/config/config-misc.test.ts                |   3 +-
+ ...etection.rejects-routing-allowfrom.test.ts |   6 +-
+ src/config/schema.base.generated.ts           | 361 ++++++++++++++++++
+ src/config/schema.help.ts                     |  17 +
+ src/config/schema.labels.ts                   |   8 +
+ src/config/sessions/artifacts.ts              |  14 +
+ src/config/sessions/disk-budget.test.ts       |  42 ++
+ src/config/sessions/disk-budget.ts            |  90 ++++-
+ src/config/sessions/sessions.test.ts          | 246 ++++++++++++
+ src/config/sessions/transcript.ts             | 181 ++++++++-
+ src/config/sessions/types.ts                  |  26 ++
+ src/config/types.agent-defaults.ts            |  88 +++++
+ src/config/types.gateway.ts                   |  12 +
+ src/config/types.skills.ts                    |   8 +
+ src/config/types.tools.ts                     |   9 +
+ src/config/zod-schema.agent-defaults.ts       |   6 +-
+ src/config/zod-schema.agent-runtime.ts        |   1 +
+ src/config/zod-schema.core.ts                 |  20 +-
+ src/config/zod-schema.ts                      |  12 +
+ src/hooks/bundled/session-memory/HOOK.md      |  12 +-
+ .../bundled/session-memory/handler.test.ts    |  27 ++
+ .../bundled/session-memory/transcript.ts      |   5 +
+ src/hooks/llm-slug-generator.test.ts          | 149 ++++++++
+ src/hooks/llm-slug-generator.ts               |  85 ++++-
+ src/hooks/message-hook-mappers.test.ts        |   1 +
+ src/hooks/message-hook-mappers.ts             |  10 +
+ src/infra/outbound/channel-resolution.ts      |  23 +-
+ src/infra/outbound/channel-selection.ts       |  10 +-
+ src/infra/outbound/conversation-id.test.ts    |   5 +
+ src/infra/outbound/conversation-id.ts         |   2 +-
+ .../outbound/current-conversation-bindings.ts |   4 +-
+ src/infra/outbound/deliver.test.ts            |  63 ++-
+ src/infra/outbound/deliver.ts                 | 137 ++++++-
+ .../outbound/outbound-send-service.test.ts    |  25 +-
+ src/infra/outbound/outbound-send-service.ts   |  16 +-
+ src/plugins/hook-runner-global.test.ts        |  31 ++
+ src/plugins/hook-runner-global.ts             |  42 +-
+ src/plugins/hooks.ts                          |  76 ++++
+ src/plugins/manifest-registry.ts              |  29 ++
+ src/plugins/schema-validator.ts               |   9 +-
+ src/security/audit-extra.sync.ts              | 163 ++++++--
+ src/security/audit.test.ts                    | 119 ++++++
+ 44 files changed, 2096 insertions(+), 121 deletions(-)
+ create mode 100644 src/hooks/llm-slug-generator.test.ts
+
+diff --git a/src/channels/plugins/registry.ts b/src/channels/plugins/registry.ts
+index 1f91236e87..e02e55c1cb 100644
+--- a/src/channels/plugins/registry.ts
++++ b/src/channels/plugins/registry.ts
+@@ -1,6 +1,6 @@
+ import {
+-  getActivePluginChannelRegistryVersion,
+-  requireActivePluginChannelRegistry,
++  getActivePluginRegistryVersion,
++  requireActivePluginRegistry,
+ } from "../../plugins/runtime.js";
+ import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
+ import type { ChannelId, ChannelPlugin } from "./types.js";
+@@ -21,23 +21,34 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
+ 
+ type CachedChannelPlugins = {
+   registryVersion: number;
++  sourceSignature: string;
+   sorted: ChannelPlugin[];
+   byId: Map<string, ChannelPlugin>;
+ };
+ 
+ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
+   registryVersion: -1,
++  sourceSignature: "",
+   sorted: [],
+   byId: new Map(),
+ };
+ 
+ let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
+ 
++function buildChannelPluginSourceSignature(
++  registry: ReturnType<typeof requireActivePluginRegistry>,
++) {
++  return registry.channels
++    .map((entry) => `${String(entry.plugin.id).trim()}:${entry.plugin.meta.order ?? ""}`)
++    .join("\u0000");
++}
++
+ function resolveCachedChannelPlugins(): CachedChannelPlugins {
+-  const registry = requireActivePluginChannelRegistry();
+-  const registryVersion = getActivePluginChannelRegistryVersion();
++  const registry = requireActivePluginRegistry();
++  const registryVersion = getActivePluginRegistryVersion();
++  const sourceSignature = buildChannelPluginSourceSignature(registry);
+   const cached = cachedChannelPlugins;
+-  if (cached.registryVersion === registryVersion) {
++  if (cached.registryVersion === registryVersion && cached.sourceSignature === sourceSignature) {
+     return cached;
+   }
+ 
+@@ -67,6 +78,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
+ 
+   const next: CachedChannelPlugins = {
+     registryVersion,
++    sourceSignature,
+     sorted,
+     byId,
+   };
+diff --git a/src/channels/plugins/setup-wizard-helpers.test.ts b/src/channels/plugins/setup-wizard-helpers.test.ts
+index ccd84b17dc..03f89507de 100644
+--- a/src/channels/plugins/setup-wizard-helpers.test.ts
++++ b/src/channels/plugins/setup-wizard-helpers.test.ts
+@@ -981,7 +981,7 @@ describe("patchChannelConfigForAccount", () => {
+           botToken: "legacy-token",
+           allowFrom: ["100"],
+           groupPolicy: "allowlist",
+-          streaming: "partial",
++          streaming: { mode: "partial" },
+         },
+       },
+     };
+diff --git a/src/config/config-misc.test.ts b/src/config/config-misc.test.ts
+index 3055e6777b..2dcdf34698 100644
+--- a/src/config/config-misc.test.ts
++++ b/src/config/config-misc.test.ts
+@@ -6,7 +6,8 @@ import {
+   unsetConfigValueAtPath,
+ } from "./config-paths.js";
+ import { validateConfigObject } from "./config.js";
+-import { buildWebSearchProviderConfig } from "./test-helpers.js";
++import { readConfigFileSnapshot } from "./io.js";
++import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+ import { OpenClawSchema } from "./zod-schema.js";
+ 
+ describe("$schema key in config (#14998)", () => {
+diff --git a/src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts b/src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts
+index d6d80b3088..c41ad49791 100644
+--- a/src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts
++++ b/src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts
+@@ -1,4 +1,6 @@
+ import { describe, expect, it } from "vitest";
++import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
++import type { OpenClawConfig } from "./config.js";
+ import { validateConfigObject } from "./validation.js";
+ 
+ function getChannelConfig(config: unknown, provider: string) {
+@@ -234,7 +236,9 @@ describe("legacy config detection", () => {
+     {
+       name: "streamMode with streaming boolean",
+       input: { channels: { discord: { streaming: false, streamMode: "block" } } },
+-      expectedChanges: ["Moved channels.discord.streamMode → channels.discord.streaming.mode (block)."],
++      expectedChanges: [
++        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
++      ],
+       expectedStreaming: "block",
+     },
+   ] as const)(
+diff --git a/src/config/schema.base.generated.ts b/src/config/schema.base.generated.ts
+index 7b10cd93d7..2e2f3820f6 100644
+--- a/src/config/schema.base.generated.ts
++++ b/src/config/schema.base.generated.ts
+@@ -3280,6 +3280,289 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 exclusiveMinimum: 0,
+                 maximum: 9007199254740991,
+               },
++              cliBackends: {
++                type: "object",
++                propertyNames: {
++                  type: "string",
++                },
++                additionalProperties: {
++                  type: "object",
++                  properties: {
++                    command: {
++                      type: "string",
++                    },
++                    args: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    output: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "json",
++                        },
++                        {
++                          type: "string",
++                          const: "text",
++                        },
++                        {
++                          type: "string",
++                          const: "jsonl",
++                        },
++                        {
++                          type: "string",
++                          const: "stream-json",
++                        },
++                      ],
++                    },
++                    resumeOutput: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "json",
++                        },
++                        {
++                          type: "string",
++                          const: "text",
++                        },
++                        {
++                          type: "string",
++                          const: "jsonl",
++                        },
++                        {
++                          type: "string",
++                          const: "stream-json",
++                        },
++                      ],
++                    },
++                    input: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "arg",
++                        },
++                        {
++                          type: "string",
++                          const: "stdin",
++                        },
++                      ],
++                    },
++                    maxPromptArgChars: {
++                      type: "integer",
++                      exclusiveMinimum: 0,
++                      maximum: 9007199254740991,
++                    },
++                    env: {
++                      type: "object",
++                      propertyNames: {
++                        type: "string",
++                      },
++                      additionalProperties: {
++                        type: "string",
++                      },
++                    },
++                    clearEnv: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    modelArg: {
++                      type: "string",
++                    },
++                    modelAliases: {
++                      type: "object",
++                      propertyNames: {
++                        type: "string",
++                      },
++                      additionalProperties: {
++                        type: "string",
++                      },
++                    },
++                    sessionArg: {
++                      type: "string",
++                    },
++                    sessionArgs: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    resumeArgs: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    sessionMode: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "always",
++                        },
++                        {
++                          type: "string",
++                          const: "existing",
++                        },
++                        {
++                          type: "string",
++                          const: "none",
++                        },
++                      ],
++                    },
++                    sessionIdFields: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    systemPromptArg: {
++                      type: "string",
++                    },
++                    systemPromptMode: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "append",
++                        },
++                        {
++                          type: "string",
++                          const: "replace",
++                        },
++                      ],
++                    },
++                    systemPromptWhen: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "first",
++                        },
++                        {
++                          type: "string",
++                          const: "always",
++                        },
++                        {
++                          type: "string",
++                          const: "never",
++                        },
++                      ],
++                    },
++                    imageArg: {
++                      type: "string",
++                    },
++                    imageMode: {
++                      anyOf: [
++                        {
++                          type: "string",
++                          const: "repeat",
++                        },
++                        {
++                          type: "string",
++                          const: "list",
++                        },
++                      ],
++                    },
++                    serialize: {
++                      type: "boolean",
++                    },
++                    reliability: {
++                      type: "object",
++                      properties: {
++                        watchdog: {
++                          type: "object",
++                          properties: {
++                            fresh: {
++                              type: "object",
++                              properties: {
++                                noOutputTimeoutMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                                noOutputTimeoutRatio: {
++                                  type: "number",
++                                  minimum: 0.05,
++                                  maximum: 0.95,
++                                },
++                                minMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                                maxMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                              },
++                              additionalProperties: false,
++                            },
++                            resume: {
++                              type: "object",
++                              properties: {
++                                noOutputTimeoutMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                                noOutputTimeoutRatio: {
++                                  type: "number",
++                                  minimum: 0.05,
++                                  maximum: 0.95,
++                                },
++                                minMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                                maxMs: {
++                                  type: "integer",
++                                  minimum: 1000,
++                                  maximum: 9007199254740991,
++                                },
++                              },
++                              additionalProperties: false,
++                            },
++                          },
++                          additionalProperties: false,
++                        },
++                      },
++                      additionalProperties: false,
++                    },
++                    mcp: {
++                      type: "object",
++                      properties: {
++                        enabled: {
++                          type: "boolean",
++                        },
++                        strict: {
++                          type: "boolean",
++                        },
++                        configPath: {
++                          type: "string",
++                        },
++                        mergeConfigPath: {
++                          type: "string",
++                        },
++                        servers: {
++                          type: "object",
++                          propertyNames: {
++                            type: "string",
++                          },
++                          additionalProperties: {},
++                        },
++                      },
++                      additionalProperties: false,
++                    },
++                  },
++                  required: ["command"],
++                  additionalProperties: false,
++                },
++                title: "CLI Backends",
++                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
++              },
+               memorySearch: {
+                 type: "object",
+                 properties: {
+@@ -3951,6 +4234,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+               compaction: {
+                 type: "object",
+                 properties: {
++                  timeoutMs: {
++                    type: "integer",
++                    exclusiveMinimum: 0,
++                    maximum: 9007199254740991,
++                  },
+                   mode: {
+                     anyOf: [
+                       {
+@@ -6560,6 +6848,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                         workspaceOnly: {
+                           type: "boolean",
+                         },
++                        allowReadOutsideWorkspace: {
++                          type: "boolean",
++                        },
+                       },
+                       additionalProperties: false,
+                     },
+@@ -16776,6 +17067,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 description:
+                   "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+               },
++              allowReadOutsideWorkspace: {
++                type: "boolean",
++              },
+             },
+             additionalProperties: false,
+           },
+@@ -21131,6 +21425,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 description:
+                   "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
+               },
++              overrides: {
++                type: "object",
++                propertyNames: {
++                  type: "string",
++                },
++                additionalProperties: {
++                  type: "object",
++                  properties: {
++                    allowCommands: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                    denyCommands: {
++                      type: "array",
++                      items: {
++                        type: "string",
++                      },
++                    },
++                  },
++                  additionalProperties: false,
++                },
++              },
+             },
+             additionalProperties: false,
+           },
+@@ -21592,6 +21910,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+                 description:
+                   "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
+               },
++              allowSymlinksOutsideRoot: {
++                type: "boolean",
++              },
+             },
+             additionalProperties: false,
+           },
+@@ -23733,6 +24054,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+       help: "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
+       tags: ["access", "network"],
+     },
++    "gateway.nodes.overrides": {
++      label: "Per-Node Command Overrides",
++      help: "Per-node command policy overrides, keyed by node displayName, nodeId, or nodeId prefix. Each entry may specify allowCommands and denyCommands that merge with the global lists. Match precedence is nodeId exact, then displayName exact, then longest nodeId prefix.",
++      tags: ["network"],
++    },
+     "gateway.webchat.chatHistoryMaxChars": {
+       label: "WebChat History Max Chars",
+       help: "Max characters per text field in chat.history responses before truncation (default: 12000).",
+@@ -24785,6 +25111,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
+       help: "Maximum delay in ms for custom humanDelay (default: 2500).",
+       tags: ["performance"],
+     },
++    "agents.defaults.cliBackends": {
++      label: "CLI Backends",
++      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
++      tags: ["advanced"],
++    },
++    "agents.defaults.cliBackends.*.mcp": {
++      label: "CLI Backend MCP",
++      help: "MCP wiring options for CLI backends. Useful for merging custom MCP servers with OpenClaw's built-in MCP server in claude-cli sessions.",
++      tags: ["advanced"],
++    },
++    "agents.defaults.cliBackends.*.mcp.enabled": {
++      label: "CLI Backend MCP Enabled",
++      help: "Enables MCP config injection for this CLI backend (default on for claude-cli). Disable to run without MCP tools.",
++      tags: ["advanced"],
++    },
++    "agents.defaults.cliBackends.*.mcp.strict": {
++      label: "CLI Backend MCP Strict Mode",
++      help: "When true, passes --strict-mcp-config to the CLI. Set false only when you intentionally allow unknown MCP config references.",
++      tags: ["advanced"],
++    },
++    "agents.defaults.cliBackends.*.mcp.configPath": {
++      label: "CLI Backend MCP Config Path",
++      help: "Optional primary MCP config path. When set for claude-cli, OpenClaw merges this config with its own MCP server entry.",
++      tags: ["storage"],
++    },
++    "agents.defaults.cliBackends.*.mcp.mergeConfigPath": {
++      label: "CLI Backend MCP Merge Config Path",
++      help: "Optional additional MCP config path merged on top of the primary config for this backend.",
++      tags: ["storage"],
++    },
++    "agents.defaults.cliBackends.*.mcp.servers": {
++      label: "CLI Backend MCP Inline Servers",
++      help: "Inline MCP servers merged into the effective backend MCP config (map of server name to server config object).",
++      tags: ["advanced"],
++    },
+     "agents.defaults.compaction": {
+       label: "Compaction",
+       help: "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+diff --git a/src/config/schema.help.ts b/src/config/schema.help.ts
+index 32e594ce59..9dc9e44288 100644
+--- a/src/config/schema.help.ts
++++ b/src/config/schema.help.ts
+@@ -428,6 +428,10 @@ export const FIELD_HELP: Record<string, string> = {
+     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
+   "gateway.nodes.denyCommands":
+     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
++  "gateway.nodes.overrides":
++    "Per-node command policy overrides, keyed by node displayName, nodeId, or nodeId prefix. " +
++    "Each entry may specify allowCommands and denyCommands that merge with the global lists. " +
++    "Match precedence is nodeId exact, then displayName exact, then longest nodeId prefix.",
+   "gateway.webchat.chatHistoryMaxChars":
+     "Max characters per text field in chat.history responses before truncation (default: 12000).",
+   nodeHost:
+@@ -1106,6 +1110,19 @@ export const FIELD_HELP: Record<string, string> = {
+     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+   "agents.defaults.imageMaxDimensionPx":
+     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
++  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
++  "agents.defaults.cliBackends.*.mcp":
++    "MCP wiring options for CLI backends. Useful for merging custom MCP servers with OpenClaw's built-in MCP server in claude-cli sessions.",
++  "agents.defaults.cliBackends.*.mcp.enabled":
++    "Enables MCP config injection for this CLI backend (default on for claude-cli). Disable to run without MCP tools.",
++  "agents.defaults.cliBackends.*.mcp.strict":
++    "When true, passes --strict-mcp-config to the CLI. Set false only when you intentionally allow unknown MCP config references.",
++  "agents.defaults.cliBackends.*.mcp.configPath":
++    "Optional primary MCP config path. When set for claude-cli, OpenClaw merges this config with its own MCP server entry.",
++  "agents.defaults.cliBackends.*.mcp.mergeConfigPath":
++    "Optional additional MCP config path merged on top of the primary config for this backend.",
++  "agents.defaults.cliBackends.*.mcp.servers":
++    "Inline MCP servers merged into the effective backend MCP config (map of server name to server config object).",
+   "agents.defaults.compaction":
+     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+   "agents.defaults.compaction.mode":
+diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
+index 29c56302cc..c7cf0511eb 100644
+--- a/src/config/schema.labels.ts
++++ b/src/config/schema.labels.ts
+@@ -291,6 +291,7 @@ export const FIELD_LABELS: Record<string, string> = {
+   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
+   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
+   "gateway.nodes.denyCommands": "Gateway Node Denylist",
++  "gateway.nodes.overrides": "Per-Node Command Overrides",
+   "gateway.webchat.chatHistoryMaxChars": "WebChat History Max Chars",
+   nodeHost: "Node Host",
+   "nodeHost.browserProxy": "Node Browser Proxy",
+@@ -508,6 +509,13 @@ export const FIELD_LABELS: Record<string, string> = {
+   "agents.defaults.humanDelay.mode": "Human Delay Mode",
+   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
+   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
++  "agents.defaults.cliBackends": "CLI Backends",
++  "agents.defaults.cliBackends.*.mcp": "CLI Backend MCP",
++  "agents.defaults.cliBackends.*.mcp.enabled": "CLI Backend MCP Enabled",
++  "agents.defaults.cliBackends.*.mcp.strict": "CLI Backend MCP Strict Mode",
++  "agents.defaults.cliBackends.*.mcp.configPath": "CLI Backend MCP Config Path",
++  "agents.defaults.cliBackends.*.mcp.mergeConfigPath": "CLI Backend MCP Merge Config Path",
++  "agents.defaults.cliBackends.*.mcp.servers": "CLI Backend MCP Inline Servers",
+   "agents.defaults.compaction": "Compaction",
+   "agents.defaults.compaction.mode": "Compaction Mode",
+   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
+diff --git a/src/config/sessions/artifacts.ts b/src/config/sessions/artifacts.ts
+index 14edb495d1..71ede6a902 100644
+--- a/src/config/sessions/artifacts.ts
++++ b/src/config/sessions/artifacts.ts
+@@ -2,6 +2,7 @@ export type SessionArchiveReason = "bak" | "reset" | "deleted";
+ 
+ const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+ const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
++const SESSION_PROMPT_FILE_SUFFIX = ".claude-system-prompt.txt";
+ 
+ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+   const marker = `.${reason}.`;
+@@ -34,6 +35,19 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
+   return !isSessionArchiveArtifactName(fileName);
+ }
+ 
++export function isPrimarySessionPromptFileName(fileName: string): boolean {
++  return fileName.endsWith(SESSION_PROMPT_FILE_SUFFIX);
++}
++
++export function resolveSessionPromptFileNameFromTranscriptFileName(
++  fileName: string,
++): string | null {
++  if (!isPrimarySessionTranscriptFileName(fileName)) {
++    return null;
++  }
++  return `${fileName.slice(0, -".jsonl".length)}${SESSION_PROMPT_FILE_SUFFIX}`;
++}
++
+ export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
+   if (isPrimarySessionTranscriptFileName(fileName)) {
+     return true;
+diff --git a/src/config/sessions/disk-budget.test.ts b/src/config/sessions/disk-budget.test.ts
+index 47363d35d9..806b380d0b 100644
+--- a/src/config/sessions/disk-budget.test.ts
++++ b/src/config/sessions/disk-budget.test.ts
+@@ -92,4 +92,46 @@ describe("enforceSessionDiskBudget", () => {
+       }),
+     );
+   });
++
++  it("removes orphaned session prompt files alongside transcript cleanup", async () => {
++    const dir = await createCaseDir("openclaw-disk-budget-");
++    const storePath = path.join(dir, "sessions.json");
++    const activeSessionId = "keep";
++    const staleSessionId = "stale";
++    const activeTranscriptPath = path.join(dir, `${activeSessionId}.jsonl`);
++    const activePromptPath = path.join(dir, `${activeSessionId}.claude-system-prompt.txt`);
++    const staleTranscriptPath = path.join(dir, `${staleSessionId}.jsonl`);
++    const stalePromptPath = path.join(dir, `${staleSessionId}.claude-system-prompt.txt`);
++    const store: Record<string, SessionEntry> = {
++      "agent:main:main": {
++        sessionId: activeSessionId,
++        updatedAt: Date.now(),
++      },
++    };
++    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
++    await fs.writeFile(activeTranscriptPath, "keep".repeat(8), "utf-8");
++    await fs.writeFile(activePromptPath, "prompt".repeat(6), "utf-8");
++    await fs.writeFile(staleTranscriptPath, "stale".repeat(120), "utf-8");
++    await fs.writeFile(stalePromptPath, "prompt".repeat(120), "utf-8");
++
++    const result = await enforceSessionDiskBudget({
++      store,
++      storePath,
++      maintenance: {
++        maxDiskBytes: 900,
++        highWaterBytes: 500,
++      },
++      warnOnly: false,
++    });
++
++    await expect(fs.stat(activeTranscriptPath)).resolves.toBeDefined();
++    await expect(fs.stat(activePromptPath)).resolves.toBeDefined();
++    await expect(fs.stat(staleTranscriptPath)).rejects.toThrow();
++    await expect(fs.stat(stalePromptPath)).rejects.toThrow();
++    expect(result).toEqual(
++      expect.objectContaining({
++        removedFiles: 2,
++      }),
++    );
++  });
+ });
+diff --git a/src/config/sessions/disk-budget.ts b/src/config/sessions/disk-budget.ts
+index 078acd904b..d3ecf514df 100644
+--- a/src/config/sessions/disk-budget.ts
++++ b/src/config/sessions/disk-budget.ts
+@@ -1,6 +1,11 @@
+ import fs from "node:fs";
+ import path from "node:path";
+-import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
++import {
++  isPrimarySessionPromptFileName,
++  isPrimarySessionTranscriptFileName,
++  isSessionArchiveArtifactName,
++  resolveSessionPromptFileNameFromTranscriptFileName,
++} from "./artifacts.js";
+ import { resolveSessionFilePath } from "./paths.js";
+ import type { SessionEntry } from "./types.js";
+ 
+@@ -128,6 +133,45 @@ function resolveReferencedSessionTranscriptPaths(params: {
+   return referenced;
+ }
+ 
++function resolveReferencedSessionPromptPaths(params: {
++  sessionsDir: string;
++  store: Record<string, SessionEntry>;
++}): Set<string> {
++  const referenced = new Set<string>();
++  const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
++  for (const entry of Object.values(params.store)) {
++    const transcriptPath = resolveSessionTranscriptPathForEntry({
++      sessionsDir: params.sessionsDir,
++      entry,
++    });
++    if (transcriptPath) {
++      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(
++        path.basename(transcriptPath),
++      );
++      if (promptFileName) {
++        referenced.add(
++          canonicalizePathForComparison(path.join(params.sessionsDir, promptFileName)),
++        );
++      }
++    }
++    const promptPath = entry.cliSessionBindings
++      ? Object.values(entry.cliSessionBindings)
++          .map((binding) => binding.systemPromptFile?.trim())
++          .find(Boolean)
++      : undefined;
++    if (!promptPath) {
++      continue;
++    }
++    const canonicalPath = canonicalizePathForComparison(promptPath);
++    const relative = path.relative(resolvedSessionsDir, canonicalPath);
++    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
++      continue;
++    }
++    referenced.add(canonicalPath);
++  }
++  return referenced;
++}
++
+ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
+   const dirEntries = await fs.promises
+     .readdir(sessionsDir, { withFileTypes: true })
+@@ -251,11 +295,18 @@ export async function enforceSessionDiskBudget(params: {
+     sessionsDir,
+     store: params.store,
+   });
++  const referencedPromptPaths = resolveReferencedSessionPromptPaths({
++    sessionsDir,
++    store: params.store,
++  });
+   const removableFileQueue = files
+     .filter(
+       (file) =>
+         isSessionArchiveArtifactName(file.name) ||
+-        (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
++        (isPrimarySessionTranscriptFileName(file.name) &&
++          !referencedPaths.has(file.canonicalPath)) ||
++        (isPrimarySessionPromptFileName(file.name) &&
++          !referencedPromptPaths.has(file.canonicalPath)),
+     )
+     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+   for (const file of removableFileQueue) {
+@@ -275,6 +326,23 @@ export async function enforceSessionDiskBudget(params: {
+     total -= deletedBytes;
+     freedBytes += deletedBytes;
+     removedFiles += 1;
++    if (isPrimarySessionTranscriptFileName(file.name)) {
++      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(file.name);
++      if (promptFileName) {
++        const promptPath = path.join(sessionsDir, promptFileName);
++        const promptDeletedBytes = await removeFileForBudget({
++          filePath: promptPath,
++          dryRun,
++          fileSizesByPath,
++          simulatedRemovedPaths,
++        });
++        if (promptDeletedBytes > 0) {
++          total -= promptDeletedBytes;
++          freedBytes += promptDeletedBytes;
++          removedFiles += 1;
++        }
++      }
++    }
+   }
+ 
+   if (total > highWaterBytes) {
+@@ -336,6 +404,24 @@ export async function enforceSessionDiskBudget(params: {
+       total -= deletedBytes;
+       freedBytes += deletedBytes;
+       removedFiles += 1;
++      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(
++        path.basename(transcriptPath),
++      );
++      if (!promptFileName) {
++        continue;
++      }
++      const promptDeletedBytes = await removeFileForBudget({
++        filePath: path.join(sessionsDir, promptFileName),
++        dryRun,
++        fileSizesByPath,
++        simulatedRemovedPaths,
++      });
++      if (promptDeletedBytes <= 0) {
++        continue;
++      }
++      total -= promptDeletedBytes;
++      freedBytes += promptDeletedBytes;
++      removedFiles += 1;
+     }
+   }
+ 
+diff --git a/src/config/sessions/sessions.test.ts b/src/config/sessions/sessions.test.ts
+index 7b6b85a38f..081dd842f4 100644
+--- a/src/config/sessions/sessions.test.ts
++++ b/src/config/sessions/sessions.test.ts
+@@ -16,6 +16,10 @@ import {
+ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+ import { resolveAndPersistSessionFile } from "./session-file.js";
+ import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
++import {
++  appendAssistantMessageToSessionTranscript,
++  appendCliTurnToSessionTranscript,
++} from "./transcript.js";
+ import { mergeSessionEntry, type SessionEntry } from "./types.js";
+ 
+ function useTempSessionsFixture(prefix: string) {
+@@ -372,6 +376,248 @@ describe("session store lock (Promise chain mutex)", () => {
+   });
+ });
+ 
++describe("appendAssistantMessageToSessionTranscript", () => {
++  const fixture = useTempSessionsFixture("transcript-test-");
++  const sessionId = "test-session-id";
++  const sessionKey = "test-session";
++
++  function writeTranscriptStore() {
++    fs.writeFileSync(
++      fixture.storePath(),
++      JSON.stringify({
++        [sessionKey]: {
++          sessionId,
++          chatType: "direct",
++          channel: "discord",
++        },
++      }),
++      "utf-8",
++    );
++  }
++
++  it("creates transcript file and appends message for valid session", async () => {
++    writeTranscriptStore();
++
++    const result = await appendAssistantMessageToSessionTranscript({
++      sessionKey,
++      text: "Hello from delivery mirror!",
++      messageMeta: {
++        channel: "feishu",
++        accountId: "default",
++        chatId: "oc_dm_1",
++        chatType: "direct",
++        providerMessageId: "om_reply_1",
++        providerMessageIds: ["om_reply_1"],
++      },
++      storePath: fixture.storePath(),
++    });
++
++    expect(result.ok).toBe(true);
++    if (result.ok) {
++      expect(fs.existsSync(result.sessionFile)).toBe(true);
++      const sessionFileMode = fs.statSync(result.sessionFile).mode & 0o777;
++      if (process.platform !== "win32") {
++        expect(sessionFileMode).toBe(0o600);
++      }
++
++      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
++      expect(lines.length).toBe(2);
++
++      const header = JSON.parse(lines[0]);
++      expect(header.type).toBe("session");
++      expect(header.id).toBe(sessionId);
++
++      const messageLine = JSON.parse(lines[1]);
++      expect(messageLine.type).toBe("message");
++      expect(messageLine.message.role).toBe("assistant");
++      expect(messageLine.message.content[0].type).toBe("text");
++      expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
++      expect(messageLine.message.openclawMessageMeta).toEqual({
++        channel: "feishu",
++        accountId: "default",
++        chatId: "oc_dm_1",
++        chatType: "direct",
++        providerMessageId: "om_reply_1",
++        providerMessageIds: ["om_reply_1"],
++      });
++    }
++  });
++
++  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
++    writeTranscriptStore();
++
++    await appendAssistantMessageToSessionTranscript({
++      sessionKey,
++      text: "Hello from delivery mirror!",
++      idempotencyKey: "mirror:test-source-message",
++      storePath: fixture.storePath(),
++    });
++    await appendAssistantMessageToSessionTranscript({
++      sessionKey,
++      text: "Hello from delivery mirror!",
++      idempotencyKey: "mirror:test-source-message",
++      storePath: fixture.storePath(),
++    });
++
++    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
++    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
++    expect(lines.length).toBe(2);
++
++    const messageLine = JSON.parse(lines[1]);
++    expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
++    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
++  });
++
++  it("finds session entry using normalized (lowercased) key", async () => {
++    const sessionId = "test-session-normalized";
++    // Store key is lowercase (as written by updateSessionStore/normalizeStoreSessionKey)
++    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
++    const store = {
++      [storeKey]: {
++        sessionId,
++        chatType: "direct",
++        channel: "bluebubbles",
++      },
++    };
++    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
++
++    // Pass a mixed-case key — append should still find the entry via normalization
++    const result = await appendAssistantMessageToSessionTranscript({
++      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
++      text: "Hello normalized!",
++      storePath: fixture.storePath(),
++    });
++
++    expect(result.ok).toBe(true);
++  });
++
++  it("finds Slack session entry using normalized (lowercased) key", async () => {
++    const sessionId = "test-slack-session";
++    // Slack session keys include channel type and target ID; store key is lowercase
++    const storeKey = "agent:main:slack:direct:u12345abc";
++    const store = {
++      [storeKey]: {
++        sessionId,
++        chatType: "direct",
++        channel: "slack",
++      },
++    };
++    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
++
++    // Pass a mixed-case key (as resolveSlackSession might produce) — normalization should match
++    const result = await appendAssistantMessageToSessionTranscript({
++      sessionKey: "agent:main:slack:direct:U12345ABC",
++      text: "Hello Slack user!",
++      storePath: fixture.storePath(),
++    });
++
++    expect(result.ok).toBe(true);
++  });
++
++  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
++    writeTranscriptStore();
++
++    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
++    fs.writeFileSync(
++      sessionFile,
++      [
++        JSON.stringify({
++          type: "session",
++          version: 1,
++          id: sessionId,
++          timestamp: new Date().toISOString(),
++          cwd: process.cwd(),
++        }),
++        "{not-json",
++        JSON.stringify({
++          type: "message",
++          message: {
++            role: "assistant",
++            idempotencyKey: "mirror:test-source-message",
++            content: [{ type: "text", text: "Hello from delivery mirror!" }],
++          },
++        }),
++      ].join("\n") + "\n",
++      "utf-8",
++    );
++
++    const result = await appendAssistantMessageToSessionTranscript({
++      sessionKey,
++      text: "Hello from delivery mirror!",
++      idempotencyKey: "mirror:test-source-message",
++      storePath: fixture.storePath(),
++    });
++
++    expect(result.ok).toBe(true);
++    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
++    expect(lines.length).toBe(4);
++  });
++});
++
++describe("appendCliTurnToSessionTranscript", () => {
++  const fixture = useTempSessionsFixture("transcript-cli-test-");
++
++  it("appends user+assistant turns to a session transcript", async () => {
++    const sessionFile = path.join(fixture.sessionsDir(), "cli-session.jsonl");
++
++    const result = await appendCliTurnToSessionTranscript({
++      sessionFile,
++      sessionId: "cli-session",
++      userText: "Summarize yesterday notes",
++      assistantText: "Done.",
++      provider: "claude-cli",
++      model: "sonnet",
++      usage: {
++        input: 12,
++        output: 8,
++      },
++    });
++
++    expect(result.ok).toBe(true);
++    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
++    const entries = lines.map((line) => JSON.parse(line));
++    const header = entries.find((entry) => entry.type === "session");
++    expect(header.type).toBe("session");
++    expect(header.id).toBe("cli-session");
++
++    const messages = entries.filter((entry) => entry.type === "message");
++    expect(messages.length).toBe(2);
++
++    const userLine = messages[0];
++    expect(userLine.type).toBe("message");
++    expect(userLine.message.role).toBe("user");
++    expect(userLine.message.content[0].text).toBe("Summarize yesterday notes");
++
++    const assistantLine = messages[1];
++    expect(assistantLine.type).toBe("message");
++    expect(assistantLine.message.role).toBe("assistant");
++    expect(assistantLine.message.provider).toBe("claude-cli");
++    expect(assistantLine.message.model).toBe("sonnet");
++    expect(assistantLine.message.usage.totalTokens).toBe(20);
++  });
++
++  it("uses zero usage when cli output does not include usage", async () => {
++    const sessionFile = path.join(fixture.sessionsDir(), "cli-session-no-usage.jsonl");
++
++    const result = await appendCliTurnToSessionTranscript({
++      sessionFile,
++      sessionId: "cli-session-no-usage",
++      userText: "ping",
++      assistantText: "pong",
++      provider: "claude-cli",
++      model: "sonnet",
++    });
++
++    expect(result.ok).toBe(true);
++    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
++    const entries = lines.map((line) => JSON.parse(line));
++    const messages = entries.filter((entry) => entry.type === "message");
++    const assistantLine = messages[1];
++    expect(assistantLine.message.role).toBe("assistant");
++    expect(assistantLine.message.usage.totalTokens).toBe(0);
++  });
++});
++
+ describe("resolveAndPersistSessionFile", () => {
+   const fixture = useTempSessionsFixture("session-file-test-");
+ 
+diff --git a/src/config/sessions/transcript.ts b/src/config/sessions/transcript.ts
+index c478c850bc..5f9f9aa280 100644
+--- a/src/config/sessions/transcript.ts
++++ b/src/config/sessions/transcript.ts
+@@ -80,12 +80,148 @@ export async function resolveSessionTranscriptFile(params: {
+   };
+ }
+ 
++type CliTurnUsage = {
++  input?: number;
++  output?: number;
++  cacheRead?: number;
++  cacheWrite?: number;
++  total?: number;
++};
++
++const ZERO_USAGE = Object.freeze({
++  input: 0,
++  output: 0,
++  cacheRead: 0,
++  cacheWrite: 0,
++  totalTokens: 0,
++  cost: Object.freeze({
++    input: 0,
++    output: 0,
++    cacheRead: 0,
++    cacheWrite: 0,
++    total: 0,
++  }),
++});
++
++export type SessionTranscriptMessageMeta = {
++  channel?: string;
++  accountId?: string;
++  chatId?: string;
++  chatType?: "direct" | "group";
++  providerMessageId?: string;
++  providerMessageIds?: string[];
++  parentId?: string;
++  threadId?: string | number;
++};
++
++function normalizeNonNegativeNumber(value: unknown): number | undefined {
++  if (typeof value !== "number" || !Number.isFinite(value)) {
++    return undefined;
++  }
++  const normalized = Math.max(0, Math.floor(value));
++  return normalized;
++}
++
++function buildCliUsage(usage?: CliTurnUsage): {
++  input: number;
++  output: number;
++  cacheRead: number;
++  cacheWrite: number;
++  totalTokens: number;
++  cost: {
++    input: number;
++    output: number;
++    cacheRead: number;
++    cacheWrite: number;
++    total: number;
++  };
++} | null {
++  if (!usage) {
++    return null;
++  }
++  const input = normalizeNonNegativeNumber(usage.input) ?? 0;
++  const output = normalizeNonNegativeNumber(usage.output) ?? 0;
++  const cacheRead = normalizeNonNegativeNumber(usage.cacheRead) ?? 0;
++  const cacheWrite = normalizeNonNegativeNumber(usage.cacheWrite) ?? 0;
++  const totalTokens =
++    normalizeNonNegativeNumber(usage.total) ?? input + output + cacheRead + cacheWrite;
++  const hasUsage = totalTokens > 0 || input > 0 || output > 0 || cacheRead > 0 || cacheWrite > 0;
++  if (!hasUsage) {
++    return null;
++  }
++  return {
++    input,
++    output,
++    cacheRead,
++    cacheWrite,
++    totalTokens,
++    cost: {
++      input: 0,
++      output: 0,
++      cacheRead: 0,
++      cacheWrite: 0,
++      total: 0,
++    },
++  };
++}
++
++export async function appendCliTurnToSessionTranscript(params: {
++  sessionFile: string;
++  sessionId: string;
++  userText?: string;
++  assistantText?: string;
++  provider: string;
++  model: string;
++  usage?: CliTurnUsage;
++}): Promise<{ ok: true } | { ok: false; reason: string }> {
++  const sessionFile = params.sessionFile.trim();
++  if (!sessionFile) {
++    return { ok: false, reason: "missing sessionFile" };
++  }
++  const sessionId = params.sessionId.trim();
++  if (!sessionId) {
++    return { ok: false, reason: "missing sessionId" };
++  }
++  const userText = params.userText?.trim() ?? "";
++  const assistantText = params.assistantText?.trim() ?? "";
++  if (!userText && !assistantText) {
++    return { ok: false, reason: "empty turn" };
++  }
++
++  await ensureSessionHeader({ sessionFile, sessionId });
++
++  const sessionManager = SessionManager.open(sessionFile);
++  if (userText) {
++    sessionManager.appendMessage({
++      role: "user",
++      content: [{ type: "text", text: userText }],
++      timestamp: Date.now(),
++    });
++  }
++  if (assistantText) {
++    const usage = buildCliUsage(params.usage) ?? ZERO_USAGE;
++    sessionManager.appendMessage({
++      role: "assistant",
++      content: [{ type: "text", text: assistantText }],
++      api: "cli",
++      provider: params.provider,
++      model: params.model,
++      usage,
++      stopReason: "stop",
++      timestamp: Date.now(),
++    });
++  }
++  emitSessionTranscriptUpdate(sessionFile);
++  return { ok: true };
++}
++
+ export async function appendAssistantMessageToSessionTranscript(params: {
+   agentId?: string;
+   sessionKey: string;
+   text?: string;
+   mediaUrls?: string[];
+   idempotencyKey?: string;
++  messageMeta?: SessionTranscriptMessageMeta;
+   /** Optional override for store path (mostly for tests). */
+   storePath?: string;
+ }): Promise<{ ok: true; sessionFile: string; messageId: string } | { ok: false; reason: string }> {
+@@ -138,8 +274,12 @@ export async function appendAssistantMessageToSessionTranscript(params: {
+     return { ok: true, sessionFile, messageId: existingMessageId };
+   }
+ 
+-  const message = {
+-    role: "assistant" as const,
++  const sessionManager = SessionManager.open(sessionFile);
++  // Save current leafId before appending delivery-mirror
++  // This prevents delivery-mirror from affecting the main chain (leafId)
++  const savedLeafId = sessionManager.getLeafId();
++  sessionManager.appendMessage({
++    role: "assistant",
+     content: [{ type: "text", text: mirrorText }],
+     api: "openai-responses",
+     provider: "openclaw",
+@@ -161,20 +301,36 @@ export async function appendAssistantMessageToSessionTranscript(params: {
+     stopReason: "stop" as const,
+     timestamp: Date.now(),
+     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+-  } as Parameters<SessionManager["appendMessage"]>[0];
+-  const sessionManager = SessionManager.open(sessionFile);
+-  const messageId = sessionManager.appendMessage(message);
++    ...(params.messageMeta ? { openclawMessageMeta: params.messageMeta } : {}),
++  });
++  // Restore leafId so delivery-mirror doesn't affect the main chain.
++  // branch() only updates in-memory leafId; on next SessionManager.open(),
++  // _buildIndex() would set leafId to the delivery-mirror entry (last in JSONL).
++  // branchWithSummary() persists a branch_summary entry to JSONL, so _buildIndex()
++  // picks it up as leafId. buildSessionContext() walks from its parentId (savedLeafId),
++  // skipping delivery-mirror. Empty summary is filtered by the "entry.summary" guard.
++  if (savedLeafId !== null) {
++    sessionManager.branchWithSummary(savedLeafId, "", undefined, false);
++  }
++  const messageId = sessionManager.getLeafId() ?? "";
+ 
+-  emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
++  emitSessionTranscriptUpdate({ sessionFile, sessionKey, message: mirrorText, messageId });
+   return { ok: true, sessionFile, messageId };
+ }
+ 
+-async function transcriptHasIdempotencyKey(
++/**
++ * Synchronously scan a transcript JSONL file for a message entry with the given
++ * idempotency key. Returns the entry id when found, undefined otherwise.
++ *
++ * This is the canonical implementation — callers such as chat.ts import this
++ * instead of maintaining a separate copy.
++ */
++export function transcriptFindIdempotencyKey(
+   transcriptPath: string,
+   idempotencyKey: string,
+-): Promise<string | undefined> {
++): string | undefined {
+   try {
+-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
++    const raw = fs.readFileSync(transcriptPath, "utf-8");
+     for (const line of raw.split(/\r?\n/)) {
+       if (!line.trim()) {
+         continue;
+@@ -200,3 +356,10 @@ async function transcriptHasIdempotencyKey(
+   }
+   return undefined;
+ }
++
++async function transcriptHasIdempotencyKey(
++  transcriptPath: string,
++  idempotencyKey: string,
++): Promise<string | undefined> {
++  return transcriptFindIdempotencyKey(transcriptPath, idempotencyKey);
++}
+diff --git a/src/config/sessions/types.ts b/src/config/sessions/types.ts
+index fa325a3a07..de0b5fa6d5 100644
+--- a/src/config/sessions/types.ts
++++ b/src/config/sessions/types.ts
+@@ -67,6 +67,28 @@ export type AcpSessionRuntimeOptions = {
+   backendExtras?: Record<string, string>;
+ };
+ 
++export type CliSessionBinding = {
++  sessionId: string;
++  authProfileId?: string;
++  authEpoch?: string;
++  extraSystemPromptHash?: string;
++  mcpConfigHash?: string;
++  systemPromptFile?: string;
++  systemPromptHash?: string;
++  systemPromptCompactionCount?: number;
++};
++
++export type CliPromptLoadStatus = {
++  sessionPromptFile?: string;
++  loaderMode: "normal" | "strict" | "disabled";
++  verifiedRead: boolean;
++  fallbackReason?:
++    | "write_failed"
++    | "verification_retry"
++    | "direct_injection_fallback"
++    | "direct_fallback_disabled";
++};
++
+ export type SessionEntry = {
+   /**
+    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
+@@ -177,6 +199,10 @@ export type SessionEntry = {
+   memoryFlushAt?: number;
+   memoryFlushCompactionCount?: number;
+   memoryFlushContextHash?: string;
++  cliSessionBindings?: Record<string, CliSessionBinding>;
++  cliSessionIds?: Record<string, string>;
++  claudeCliSessionId?: string;
++  cliPromptLoad?: CliPromptLoadStatus;
+   label?: string;
+   displayName?: string;
+   channel?: string;
+diff --git a/src/config/types.agent-defaults.ts b/src/config/types.agent-defaults.ts
+index afeb4d3592..81e9af3605 100644
+--- a/src/config/types.agent-defaults.ts
++++ b/src/config/types.agent-defaults.ts
+@@ -46,6 +46,92 @@ export type AgentContextPruningConfig = {
+   };
+ };
+ 
++export type CliBackendConfig = {
++  /** CLI command to execute (absolute path or on PATH). */
++  command: string;
++  /** Base args applied to every invocation. */
++  args?: string[];
++  /** Output parsing mode (default: json). */
++  output?: "json" | "text" | "jsonl" | "stream-json";
++  /** Output parsing mode when resuming a CLI session. */
++  resumeOutput?: "json" | "text" | "jsonl" | "stream-json";
++  /** Prompt input mode (default: arg). */
++  input?: "arg" | "stdin";
++  /** Max prompt length for arg mode (if exceeded, stdin is used). */
++  maxPromptArgChars?: number;
++  /** Extra env vars injected for this CLI. */
++  env?: Record<string, string>;
++  /** Env vars to remove before launching this CLI. */
++  clearEnv?: string[];
++  /** Flag used to pass model id (e.g. --model). */
++  modelArg?: string;
++  /** Model aliases mapping (config model id → CLI model id). */
++  modelAliases?: Record<string, string>;
++  /** Flag used to pass session id (e.g. --session-id). */
++  sessionArg?: string;
++  /** Extra args used when resuming a session (use {sessionId} placeholder). */
++  sessionArgs?: string[];
++  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
++  resumeArgs?: string[];
++  /** When to pass session ids. */
++  sessionMode?: "always" | "existing" | "none";
++  /** JSON fields to read session id from (in order). */
++  sessionIdFields?: string[];
++  /** Flag used to pass system prompt. */
++  systemPromptArg?: string;
++  /** System prompt behavior (append vs replace). */
++  systemPromptMode?: "append" | "replace";
++  /** When to send system prompt. */
++  systemPromptWhen?: "first" | "always" | "never";
++  /** Flag used to pass image paths. */
++  imageArg?: string;
++  /** How to pass multiple images. */
++  imageMode?: "repeat" | "list";
++  /** Serialize runs for this CLI. */
++  serialize?: boolean;
++  /** Runtime reliability tuning for this backend's process lifecycle. */
++  reliability?: {
++    /** No-output watchdog tuning (fresh vs resumed runs). */
++    watchdog?: {
++      /** Fresh/new sessions (non-resume). */
++      fresh?: {
++        /** Fixed watchdog timeout in ms (overrides ratio when set). */
++        noOutputTimeoutMs?: number;
++        /** Fraction of overall timeout used when fixed timeout is not set. */
++        noOutputTimeoutRatio?: number;
++        /** Lower bound for computed watchdog timeout. */
++        minMs?: number;
++        /** Upper bound for computed watchdog timeout. */
++        maxMs?: number;
++      };
++      /** Resume sessions. */
++      resume?: {
++        /** Fixed watchdog timeout in ms (overrides ratio when set). */
++        noOutputTimeoutMs?: number;
++        /** Fraction of overall timeout used when fixed timeout is not set. */
++        noOutputTimeoutRatio?: number;
++        /** Lower bound for computed watchdog timeout. */
++        minMs?: number;
++        /** Upper bound for computed watchdog timeout. */
++        maxMs?: number;
++      };
++    };
++  };
++  /** MCP wiring controls (primarily for Claude CLI backends). */
++  mcp?: {
++    /** Enable MCP config injection for this backend (default: true for claude-cli). */
++    enabled?: boolean;
++    /** Add `--strict-mcp-config` when true (default: true). */
++    strict?: boolean;
++    /** Optional primary MCP config path (merged with OpenClaw MCP server when provided). */
++    configPath?: string;
++    /** Optional extra MCP config path whose servers are merged into the effective config. */
++    mergeConfigPath?: string;
++    /** Optional inline MCP servers merged into the effective config. */
++    servers?: Record<string, unknown>;
++  };
++};
++
+ export type AgentDefaultsConfig = {
+   /** Global default provider params applied to all models before per-model and per-agent overrides. */
+   params?: Record<string, unknown>;
+@@ -118,6 +204,8 @@ export type AgentDefaultsConfig = {
+   llm?: AgentLlmConfig;
+   /** Compaction tuning and pre-compaction memory flush behavior. */
+   compaction?: AgentCompactionConfig;
++  /** Per-CLI-backend configuration overrides keyed by provider id. */
++  cliBackends?: Record<string, CliBackendConfig>;
+   /** Embedded Pi runner hardening and compatibility controls. */
+   embeddedPi?: {
+     /**
+diff --git a/src/config/types.gateway.ts b/src/config/types.gateway.ts
+index d65d89c9f7..ea34ba37d5 100644
+--- a/src/config/types.gateway.ts
++++ b/src/config/types.gateway.ts
+@@ -351,6 +351,13 @@ export type GatewayPushConfig = {
+   apns?: GatewayPushApnsConfig;
+ };
+ 
++export type GatewayNodeOverrideConfig = {
++  /** Additional node.invoke commands to allow for this specific node. */
++  allowCommands?: string[];
++  /** Commands to deny for this specific node (merged with global denyCommands). */
++  denyCommands?: string[];
++};
++
+ export type GatewayNodesConfig = {
+   /** Browser routing policy for node-hosted browser proxies. */
+   browser?: {
+@@ -363,6 +370,11 @@ export type GatewayNodesConfig = {
+   allowCommands?: string[];
+   /** Commands to deny even if they appear in the defaults or node claims. */
+   denyCommands?: string[];
++  /**
++   * Per-node overrides keyed by node displayName, nodeId, or nodeId prefix.
++   * Match precedence: nodeId exact, then displayName exact, then longest nodeId prefix.
++   */
++  overrides?: Record<string, GatewayNodeOverrideConfig>;
+ };
+ 
+ export type GatewayToolsConfig = {
+diff --git a/src/config/types.skills.ts b/src/config/types.skills.ts
+index c09523ba45..6df6512313 100644
+--- a/src/config/types.skills.ts
++++ b/src/config/types.skills.ts
+@@ -17,6 +17,14 @@ export type SkillsLoadConfig = {
+   watch?: boolean;
+   /** Debounce for the skills watcher (ms). */
+   watchDebounceMs?: number;
++  /**
++   * Allow symlinks inside skill directories to point outside the configured
++   * skill root. By default, skill paths that resolve (via symlink) to a
++   * location outside their root are skipped as a safety measure. Set this
++   * to `true` if you intentionally use cross-root symlinks (e.g. a shared
++   * skills library linked into multiple workspace skill dirs).
++   */
++  allowSymlinksOutsideRoot?: boolean;
+ };
+ 
+ export type SkillsInstallConfig = {
+diff --git a/src/config/types.tools.ts b/src/config/types.tools.ts
+index 3587d54c0c..f0f63c29f5 100644
+--- a/src/config/types.tools.ts
++++ b/src/config/types.tools.ts
+@@ -296,6 +296,15 @@ export type FsToolsConfig = {
+    * Default: false (unrestricted, matches legacy behavior).
+    */
+   workspaceOnly?: boolean;
++  /**
++   * Allow the read tool to access files outside the agent workspace directory when using
++   * direct API backends (non-claude-cli). By default, relative paths resolve against
++   * workspaceDir and the workspace-root guard blocks paths that escape it. Set to `true`
++   * when agents need to read shared files outside their workspace (e.g. ~/AgentData/shared/).
++   * Has no effect when workspaceOnly is true (workspaceOnly takes precedence).
++   * Has no effect when a container sandbox is active (sandbox boundary takes precedence).
++   */
++  allowReadOutsideWorkspace?: boolean;
+ };
+ 
+ export type AgentToolsConfig = {
+diff --git a/src/config/zod-schema.agent-defaults.ts b/src/config/zod-schema.agent-defaults.ts
+index cf046bcc01..40986c65ff 100644
+--- a/src/config/zod-schema.agent-defaults.ts
++++ b/src/config/zod-schema.agent-defaults.ts
+@@ -104,6 +104,10 @@ export const AgentDefaultsSchema = z
+       .optional(),
+     compaction: z
+       .object({
++        /** Model for bootstrap compaction (e.g. "anthropic/claude-haiku-4-5-20251001"). Inherits agent default when unset. */
++        model: z.string().optional(),
++        /** Bootstrap compaction LLM call timeout in ms. Default 30_000. */
++        timeoutMs: z.number().int().positive().optional(),
+         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+         reserveTokens: z.number().int().nonnegative().optional(),
+         keepRecentTokens: z.number().int().positive().optional(),
+@@ -124,8 +128,6 @@ export const AgentDefaultsSchema = z
+           .optional(),
+         postIndexSync: z.enum(["off", "async", "await"]).optional(),
+         postCompactionSections: z.array(z.string()).optional(),
+-        model: z.string().optional(),
+-        timeoutSeconds: z.number().int().positive().optional(),
+         memoryFlush: z
+           .object({
+             enabled: z.boolean().optional(),
+diff --git a/src/config/zod-schema.agent-runtime.ts b/src/config/zod-schema.agent-runtime.ts
+index 823aba2786..2b20d72e59 100644
+--- a/src/config/zod-schema.agent-runtime.ts
++++ b/src/config/zod-schema.agent-runtime.ts
+@@ -455,6 +455,7 @@ const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
+ const ToolFsSchema = z
+   .object({
+     workspaceOnly: z.boolean().optional(),
++    allowReadOutsideWorkspace: z.boolean().optional(),
+   })
+   .strict()
+   .optional();
+diff --git a/src/config/zod-schema.core.ts b/src/config/zod-schema.core.ts
+index c1cf4d6daf..ac3c085bd2 100644
+--- a/src/config/zod-schema.core.ts
++++ b/src/config/zod-schema.core.ts
+@@ -513,12 +513,27 @@ const CliBackendWatchdogModeSchema = z
+   .strict()
+   .optional();
+ 
++const CliBackendMcpSchema = z
++  .object({
++    enabled: z.boolean().optional(),
++    strict: z.boolean().optional(),
++    configPath: z.string().optional(),
++    mergeConfigPath: z.string().optional(),
++    servers: z.record(z.string(), z.unknown()).optional(),
++  })
++  .strict()
++  .optional();
++
+ export const CliBackendSchema = z
+   .object({
+     command: z.string(),
+     args: z.array(z.string()).optional(),
+-    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+-    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
++    output: z
++      .union([z.literal("json"), z.literal("text"), z.literal("jsonl"), z.literal("stream-json")])
++      .optional(),
++    resumeOutput: z
++      .union([z.literal("json"), z.literal("text"), z.literal("jsonl"), z.literal("stream-json")])
++      .optional(),
+     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
+     maxPromptArgChars: z.number().int().positive().optional(),
+     env: z.record(z.string(), z.string()).optional(),
+@@ -552,6 +567,7 @@ export const CliBackendSchema = z
+       })
+       .strict()
+       .optional(),
++    mcp: CliBackendMcpSchema,
+   })
+   .strict();
+ 
+diff --git a/src/config/zod-schema.ts b/src/config/zod-schema.ts
+index ccdac3cf4c..f5295829e2 100644
+--- a/src/config/zod-schema.ts
++++ b/src/config/zod-schema.ts
+@@ -863,6 +863,17 @@ export const OpenClawSchema = z
+               .optional(),
+             allowCommands: z.array(z.string()).optional(),
+             denyCommands: z.array(z.string()).optional(),
++            overrides: z
++              .record(
++                z.string(),
++                z
++                  .object({
++                    allowCommands: z.array(z.string()).optional(),
++                    denyCommands: z.array(z.string()).optional(),
++                  })
++                  .strict(),
++              )
++              .optional(),
+           })
+           .strict()
+           .optional(),
+@@ -894,6 +905,7 @@ export const OpenClawSchema = z
+             extraDirs: z.array(z.string()).optional(),
+             watch: z.boolean().optional(),
+             watchDebounceMs: z.number().int().min(0).optional(),
++            allowSymlinksOutsideRoot: z.boolean().optional(),
+           })
+           .strict()
+           .optional(),
+diff --git a/src/hooks/bundled/session-memory/HOOK.md b/src/hooks/bundled/session-memory/HOOK.md
+index b087e8fe16..63a20047fc 100644
+--- a/src/hooks/bundled/session-memory/HOOK.md
++++ b/src/hooks/bundled/session-memory/HOOK.md
+@@ -58,9 +58,11 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
+ 
+ The hook supports optional configuration:
+ 
+-| Option     | Type   | Default | Description                                                     |
+-| ---------- | ------ | ------- | --------------------------------------------------------------- |
+-| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
++| Option             | Type    | Default | Description                                                               |
++| ------------------ | ------- | ------- | ------------------------------------------------------------------------- |
++| `messages`         | number  | 15      | Number of user/assistant messages to include in the memory file           |
++| `llmSlug`          | boolean | true    | Enable/disable LLM slug generation (when false, filenames use time only)  |
++| `llmSlugTimeoutMs` | number  | 45000   | Timeout for slug LLM generation in milliseconds (clamped to 5000..300000) |
+ 
+ Example configuration:
+ 
+@@ -71,7 +73,9 @@ Example configuration:
+       "entries": {
+         "session-memory": {
+           "enabled": true,
+-          "messages": 25
++          "messages": 25,
++          "llmSlug": true,
++          "llmSlugTimeoutMs": 60000
+         }
+       }
+     }
+diff --git a/src/hooks/bundled/session-memory/handler.test.ts b/src/hooks/bundled/session-memory/handler.test.ts
+index 13ca735601..00974fb4d0 100644
+--- a/src/hooks/bundled/session-memory/handler.test.ts
++++ b/src/hooks/bundled/session-memory/handler.test.ts
+@@ -329,6 +329,33 @@ describe("session-memory hook", () => {
+     expect(memoryContent).toContain("user: External follow-up");
+   });
+ 
++  it("filters out delivery-mirror assistant entries to avoid duplicate summaries", async () => {
++    const sessionContent = [
++      JSON.stringify({
++        type: "message",
++        message: { role: "user", content: "Real user turn" },
++      }),
++      JSON.stringify({
++        type: "message",
++        message: {
++          role: "assistant",
++          content: "Mirrored outbound message",
++          provider: "openclaw",
++          model: "delivery-mirror",
++        },
++      }),
++      JSON.stringify({
++        type: "message",
++        message: { role: "assistant", content: "Real model answer", provider: "anthropic" },
++      }),
++    ].join("\n");
++    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
++
++    expect(memoryContent).toContain("user: Real user turn");
++    expect(memoryContent).not.toContain("Mirrored outbound message");
++    expect(memoryContent).toContain("assistant: Real model answer");
++  });
++
+   it("filters out command messages starting with /", async () => {
+     const sessionContent = createMockSessionContent([
+       { role: "user", content: "/help" },
+diff --git a/src/hooks/bundled/session-memory/transcript.ts b/src/hooks/bundled/session-memory/transcript.ts
+index f3be21d795..774ba7e22f 100644
+--- a/src/hooks/bundled/session-memory/transcript.ts
++++ b/src/hooks/bundled/session-memory/transcript.ts
+@@ -21,6 +21,11 @@ export async function getRecentSessionContent(
+             if (role === "user" && hasInterSessionUserProvenance(msg)) {
+               continue;
+             }
++            const provider = typeof msg.provider === "string" ? msg.provider : "";
++            const model = typeof msg.model === "string" ? msg.model : "";
++            if (role === "assistant" && provider === "openclaw" && model === "delivery-mirror") {
++              continue;
++            }
+             const text = Array.isArray(msg.content)
+               ? // oxlint-disable-next-line typescript/no-explicit-any
+                 msg.content.find((c: any) => c.type === "text")?.text
+diff --git a/src/hooks/llm-slug-generator.test.ts b/src/hooks/llm-slug-generator.test.ts
+new file mode 100644
+index 0000000000..488c43f7e2
+--- /dev/null
++++ b/src/hooks/llm-slug-generator.test.ts
+@@ -0,0 +1,149 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
++import type { OpenClawConfig } from "../config/config.js";
++
++const {
++  mockResolveDefaultAgentId,
++  mockResolveAgentWorkspaceDir,
++  mockResolveAgentDir,
++  mockResolveAgentEffectiveModelPrimary,
++  mockBuildModelAliasIndex,
++  mockResolveModelRefFromString,
++  mockIsCliProvider,
++  mockRunEmbeddedPiAgent,
++} = vi.hoisted(() => ({
++  mockResolveDefaultAgentId: vi.fn(),
++  mockResolveAgentWorkspaceDir: vi.fn(),
++  mockResolveAgentDir: vi.fn(),
++  mockResolveAgentEffectiveModelPrimary: vi.fn(),
++  mockBuildModelAliasIndex: vi.fn(),
++  mockResolveModelRefFromString: vi.fn(),
++  mockIsCliProvider: vi.fn(),
++  mockRunEmbeddedPiAgent: vi.fn(),
++}));
++
++vi.mock("../agents/agent-scope.js", () => ({
++  resolveDefaultAgentId: mockResolveDefaultAgentId,
++  resolveAgentWorkspaceDir: mockResolveAgentWorkspaceDir,
++  resolveAgentDir: mockResolveAgentDir,
++  resolveAgentEffectiveModelPrimary: mockResolveAgentEffectiveModelPrimary,
++}));
++
++vi.mock("../agents/model-selection.js", async (importOriginal) => {
++  const orig = await importOriginal<typeof import("../agents/model-selection.js")>();
++  return {
++    ...orig,
++    buildModelAliasIndex: mockBuildModelAliasIndex,
++    resolveModelRefFromString: mockResolveModelRefFromString,
++    isCliProvider: mockIsCliProvider,
++  };
++});
++
++vi.mock("../agents/pi-embedded.js", () => ({
++  runEmbeddedPiAgent: mockRunEmbeddedPiAgent,
++}));
++
++import { generateSlugViaLLM } from "./llm-slug-generator.js";
++
++describe("generateSlugViaLLM", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    mockResolveDefaultAgentId.mockReturnValue("chief");
++    mockResolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
++    mockResolveAgentDir.mockReturnValue("/tmp/openclaw-agent");
++    mockResolveAgentEffectiveModelPrimary.mockReturnValue("minimax");
++    mockBuildModelAliasIndex.mockReturnValue({});
++    mockResolveModelRefFromString.mockReturnValue({
++      ref: { provider: "minimax", model: "minimax" },
++    });
++    mockIsCliProvider.mockReturnValue(false);
++    mockRunEmbeddedPiAgent.mockResolvedValue({ payloads: [{ text: "Vendor Pitch" }] });
++  });
++
++  it("uses lightweight slug generation defaults", async () => {
++    const slug = await generateSlugViaLLM({
++      sessionContent: "Conversation body",
++      cfg: {} as OpenClawConfig,
++    });
++
++    expect(slug).toBe("vendor-pitch");
++    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledTimes(1);
++    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
++      expect.objectContaining({
++        trigger: "memory",
++        thinkLevel: "minimal",
++        disableTools: true,
++        timeoutMs: 45_000,
++      }),
++    );
++  });
++
++  it("reads llmSlugTimeoutMs from session-memory hook config", async () => {
++    const cfg = {
++      hooks: {
++        internal: {
++          entries: {
++            "session-memory": {
++              llmSlugTimeoutMs: 90_000,
++            },
++          },
++        },
++      },
++    } as OpenClawConfig;
++
++    await generateSlugViaLLM({
++      sessionContent: "Conversation body",
++      cfg,
++    });
++
++    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
++      expect.objectContaining({
++        timeoutMs: 90_000,
++      }),
++    );
++  });
++
++  it("clamps llmSlugTimeoutMs to safe bounds", async () => {
++    const cfg = {
++      hooks: {
++        internal: {
++          entries: {
++            "session-memory": {
++              llmSlugTimeoutMs: 1_000,
++            },
++          },
++        },
++      },
++    } as OpenClawConfig;
++
++    await generateSlugViaLLM({
++      sessionContent: "Conversation body",
++      cfg,
++    });
++
++    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
++      expect.objectContaining({
++        timeoutMs: 5_000,
++      }),
++    );
++  });
++
++  it("falls back to default embedded provider when primary model is CLI backend", async () => {
++    mockResolveModelRefFromString.mockReturnValue({
++      ref: { provider: "claude-cli", model: "sonnet" },
++    });
++    mockIsCliProvider.mockReturnValue(true);
++
++    await generateSlugViaLLM({
++      sessionContent: "Conversation body",
++      cfg: {} as OpenClawConfig,
++    });
++
++    expect(mockRunEmbeddedPiAgent).toHaveBeenCalledWith(
++      expect.objectContaining({
++        provider: DEFAULT_PROVIDER,
++        model: DEFAULT_MODEL,
++      }),
++    );
++  });
++});
+diff --git a/src/hooks/llm-slug-generator.ts b/src/hooks/llm-slug-generator.ts
+index eb355fc328..754a12dd10 100644
+--- a/src/hooks/llm-slug-generator.ts
++++ b/src/hooks/llm-slug-generator.ts
+@@ -12,12 +12,43 @@ import {
+   resolveAgentEffectiveModelPrimary,
+ } from "../agents/agent-scope.js";
+ import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
+-import { parseModelRef } from "../agents/model-selection.js";
++import {
++  buildModelAliasIndex,
++  isCliProvider,
++  resolveModelRefFromString,
++} from "../agents/model-selection.js";
+ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+ import type { OpenClawConfig } from "../config/config.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
+ 
+ const log = createSubsystemLogger("llm-slug-generator");
++const DEFAULT_LLM_SLUG_TIMEOUT_MS = 45_000;
++const MIN_LLM_SLUG_TIMEOUT_MS = 5_000;
++const MAX_LLM_SLUG_TIMEOUT_MS = 300_000;
++
++function clampNumber(value: number, min: number, max: number): number {
++  return Math.max(min, Math.min(max, value));
++}
++
++function resolveSlugTimeoutMs(cfg: OpenClawConfig): number {
++  const hookEntry = cfg.hooks?.internal?.entries?.["session-memory"];
++  const raw =
++    hookEntry && typeof hookEntry === "object"
++      ? (hookEntry as Record<string, unknown>).llmSlugTimeoutMs
++      : undefined;
++  const parsed =
++    typeof raw === "number"
++      ? Number.isFinite(raw)
++        ? Math.floor(raw)
++        : undefined
++      : typeof raw === "string"
++        ? Number.parseInt(raw, 10)
++        : undefined;
++  if (typeof parsed !== "number" || Number.isNaN(parsed) || parsed <= 0) {
++    return DEFAULT_LLM_SLUG_TIMEOUT_MS;
++  }
++  return clampNumber(parsed, MIN_LLM_SLUG_TIMEOUT_MS, MAX_LLM_SLUG_TIMEOUT_MS);
++}
+ 
+ /**
+  * Generate a short 1-2 word filename slug from session content using LLM
+@@ -44,11 +75,48 @@ ${params.sessionContent.slice(0, 2000)}
+ 
+ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
+ 
+-    // Resolve model from agent config instead of using hardcoded defaults
+-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
+-    const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
+-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
+-    const model = parsed?.model ?? DEFAULT_MODEL;
++    const aliasIndex = buildModelAliasIndex({ cfg: params.cfg, defaultProvider: DEFAULT_PROVIDER });
++
++    // Hook-level model override: hooks.internal.entries.session-memory.model
++    const hookEntry = params.cfg.hooks?.internal?.entries?.["session-memory"];
++    const hookModelRaw =
++      hookEntry && typeof hookEntry === "object"
++        ? (hookEntry as Record<string, unknown>).model
++        : undefined;
++    const hookResolved =
++      typeof hookModelRaw === "string" && hookModelRaw
++        ? resolveModelRefFromString({
++            raw: hookModelRaw,
++            defaultProvider: DEFAULT_PROVIDER,
++            aliasIndex,
++          })
++        : null;
++
++    let provider: string;
++    let model: string;
++
++    if (hookResolved && !isCliProvider(hookResolved.ref.provider, params.cfg)) {
++      // Use explicitly configured hook model
++      provider = hookResolved.ref.provider;
++      model = hookResolved.ref.model;
++    } else {
++      // Fall back to agent's effective model
++      const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
++      const resolved = modelRef
++        ? resolveModelRefFromString({
++            raw: modelRef,
++            defaultProvider: DEFAULT_PROVIDER,
++            aliasIndex,
++          })
++        : null;
++      const rawProvider = resolved?.ref.provider ?? DEFAULT_PROVIDER;
++      const rawModel = resolved?.ref.model ?? DEFAULT_MODEL;
++      // Slug generation is a lightweight embedded LLM call — CLI backends are not supported.
++      const isCli = isCliProvider(rawProvider, params.cfg);
++      provider = isCli ? DEFAULT_PROVIDER : rawProvider;
++      model = isCli ? DEFAULT_MODEL : rawModel;
++    }
++    const timeoutMs = resolveSlugTimeoutMs(params.cfg);
+ 
+     const result = await runEmbeddedPiAgent({
+       sessionId: `slug-generator-${Date.now()}`,
+@@ -61,7 +129,10 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design",
+       prompt,
+       provider,
+       model,
+-      timeoutMs: 15_000, // 15 second timeout
++      trigger: "memory",
++      thinkLevel: "minimal",
++      disableTools: true,
++      timeoutMs,
+       runId: `slug-gen-${Date.now()}`,
+     });
+ 
+diff --git a/src/hooks/message-hook-mappers.test.ts b/src/hooks/message-hook-mappers.test.ts
+index d4cf8f5ebf..64cc56e296 100644
+--- a/src/hooks/message-hook-mappers.test.ts
++++ b/src/hooks/message-hook-mappers.test.ts
+@@ -248,6 +248,7 @@ describe("message hook mappers", () => {
+       to: "demo-chat:chat:456",
+       content: "reply",
+       success: false,
++      messageId: "out-1",
+       error: "network error",
+     });
+     expect(toInternalMessageSentContext(canonical)).toEqual({
+diff --git a/src/hooks/message-hook-mappers.ts b/src/hooks/message-hook-mappers.ts
+index e178474e8e..1c63432f59 100644
+--- a/src/hooks/message-hook-mappers.ts
++++ b/src/hooks/message-hook-mappers.ts
+@@ -42,6 +42,7 @@ export type CanonicalInboundMessageHookContext = {
+   originatingTo?: string;
+   guildId?: string;
+   channelName?: string;
++  channelData?: Record<string, unknown>;
+   isGroup: boolean;
+   groupId?: string;
+ };
+@@ -55,6 +56,7 @@ export type CanonicalSentMessageHookContext = {
+   accountId?: string;
+   conversationId?: string;
+   messageId?: string;
++  metadata?: Record<string, unknown>;
+   isGroup?: boolean;
+   groupId?: string;
+ };
+@@ -123,6 +125,7 @@ export function deriveInboundMessageHookContext(
+     originatingTo: ctx.OriginatingTo,
+     guildId: ctx.GroupSpace,
+     channelName: ctx.GroupChannel,
++    channelData: ctx.ChannelData,
+     isGroup,
+     groupId: isGroup ? conversationId : undefined,
+   };
+@@ -137,6 +140,7 @@ export function buildCanonicalSentMessageHookContext(params: {
+   accountId?: string;
+   conversationId?: string;
+   messageId?: string;
++  metadata?: Record<string, unknown>;
+   isGroup?: boolean;
+   groupId?: string;
+ }): CanonicalSentMessageHookContext {
+@@ -149,6 +153,7 @@ export function buildCanonicalSentMessageHookContext(params: {
+     accountId: params.accountId,
+     conversationId: params.conversationId ?? params.to,
+     messageId: params.messageId,
++    metadata: params.metadata,
+     isGroup: params.isGroup,
+     groupId: params.groupId,
+   };
+@@ -279,6 +284,7 @@ export function toPluginMessageReceivedEvent(
+       originatingChannel: canonical.originatingChannel,
+       originatingTo: canonical.originatingTo,
+       messageId: canonical.messageId,
++      channelData: canonical.channelData,
+       senderId: canonical.senderId,
+       senderName: canonical.senderName,
+       senderUsername: canonical.senderUsername,
+@@ -296,6 +302,10 @@ export function toPluginMessageSentEvent(
+     to: canonical.to,
+     content: canonical.content,
+     success: canonical.success,
++    ...(canonical.messageId ? { messageId: canonical.messageId } : {}),
++    ...(canonical.metadata && Object.keys(canonical.metadata).length > 0
++      ? { metadata: canonical.metadata }
++      : {}),
+     ...(canonical.error ? { error: canonical.error } : {}),
+   };
+ }
+diff --git a/src/infra/outbound/channel-resolution.ts b/src/infra/outbound/channel-resolution.ts
+index cda507f225..010c8658c9 100644
+--- a/src/infra/outbound/channel-resolution.ts
++++ b/src/infra/outbound/channel-resolution.ts
+@@ -1,7 +1,6 @@
+ import { getChannelPlugin } from "../../channels/plugins/index.js";
+ import type { ChannelPlugin } from "../../channels/plugins/types.js";
+ import type { OpenClawConfig } from "../../config/config.js";
+-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+ import {
+   isDeliverableMessageChannel,
+   normalizeMessageChannel,
+@@ -33,22 +32,6 @@ function maybeBootstrapChannelPlugin(params: {
+   bootstrapOutboundChannelPlugin(params);
+ }
+ 
+-function resolveDirectFromActiveRegistry(
+-  channel: DeliverableMessageChannel,
+-): ChannelPlugin | undefined {
+-  const activeRegistry = getActivePluginRegistry();
+-  if (!activeRegistry) {
+-    return undefined;
+-  }
+-  for (const entry of activeRegistry.channels) {
+-    const plugin = entry?.plugin;
+-    if (plugin?.id === channel) {
+-      return plugin;
+-    }
+-  }
+-  return undefined;
+-}
+-
+ export function resolveOutboundChannelPlugin(params: {
+   channel: string;
+   cfg?: OpenClawConfig;
+@@ -63,11 +46,7 @@ export function resolveOutboundChannelPlugin(params: {
+   if (current) {
+     return current;
+   }
+-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+-  if (directCurrent) {
+-    return directCurrent;
+-  }
+ 
+   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+-  return resolve() ?? resolveDirectFromActiveRegistry(normalized);
++  return resolve();
+ }
+diff --git a/src/infra/outbound/channel-selection.ts b/src/infra/outbound/channel-selection.ts
+index 569ea343c5..89d44efa6c 100644
+--- a/src/infra/outbound/channel-selection.ts
++++ b/src/infra/outbound/channel-selection.ts
+@@ -158,10 +158,7 @@ export async function resolveMessageChannelSelection(params: {
+       value: normalized,
+     });
+     if (!availableExplicit) {
+-      const fallback = resolveAvailableKnownChannel({
+-        cfg: params.cfg,
+-        value: params.fallbackChannel,
+-      });
++      const fallback = resolveKnownChannel(params.fallbackChannel);
+       if (fallback) {
+         return {
+           channel: fallback,
+@@ -181,10 +178,7 @@ export async function resolveMessageChannelSelection(params: {
+     };
+   }
+ 
+-  const fallback = resolveAvailableKnownChannel({
+-    cfg: params.cfg,
+-    value: params.fallbackChannel,
+-  });
++  const fallback = resolveKnownChannel(params.fallbackChannel);
+   if (fallback) {
+     return {
+       channel: fallback,
+diff --git a/src/infra/outbound/conversation-id.test.ts b/src/infra/outbound/conversation-id.test.ts
+index d359c2b21e..dc89cf4a84 100644
+--- a/src/infra/outbound/conversation-id.test.ts
++++ b/src/infra/outbound/conversation-id.test.ts
+@@ -63,6 +63,11 @@ describe("resolveConversationIdFromTargets", () => {
+       targets: ["1475250310120214812"],
+       expected: "1475250310120214812",
+     },
++    {
++      name: "extracts chat ids from chat: targets (Feishu format)",
++      targets: ["chat:oc_abc123def456"],
++      expected: "oc_abc123def456",
++    },
+     {
+       name: "returns undefined for non-channel targets",
+       targets: ["user:alice", "general"],
+diff --git a/src/infra/outbound/conversation-id.ts b/src/infra/outbound/conversation-id.ts
+index 6b9050346a..e90d5098c8 100644
+--- a/src/infra/outbound/conversation-id.ts
++++ b/src/infra/outbound/conversation-id.ts
+@@ -7,7 +7,7 @@ function normalizeConversationId(value: unknown): string | undefined {
+ }
+ 
+ function resolveExplicitConversationTargetId(target: string): string | undefined {
+-  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
++  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:", "chat:"]) {
+     if (target.toLowerCase().startsWith(prefix)) {
+       return normalizeConversationId(target.slice(prefix.length));
+     }
+diff --git a/src/infra/outbound/current-conversation-bindings.ts b/src/infra/outbound/current-conversation-bindings.ts
+index 03418c5075..9b2099e943 100644
+--- a/src/infra/outbound/current-conversation-bindings.ts
++++ b/src/infra/outbound/current-conversation-bindings.ts
+@@ -76,9 +76,7 @@ function loadBindingsIntoMemory(): void {
+   }
+   bindingsLoaded = true;
+   bindingsByConversationKey.clear();
+-  const parsed = loadJsonFile(resolveBindingsFilePath()) as
+-    | PersistedCurrentConversationBindingsFile
+-    | undefined;
++  const parsed = loadJsonFile<PersistedCurrentConversationBindingsFile>(resolveBindingsFilePath());
+   const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
+   for (const record of bindings ?? []) {
+     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
+diff --git a/src/infra/outbound/deliver.test.ts b/src/infra/outbound/deliver.test.ts
+index 1e863746ba..5276f56a0b 100644
+--- a/src/infra/outbound/deliver.test.ts
++++ b/src/infra/outbound/deliver.test.ts
+@@ -775,6 +775,37 @@ describe("deliverOutboundPayloads", () => {
+       expect.objectContaining({
+         text: "report.pdf",
+         idempotencyKey: "idem-deliver-1",
++        messageMeta: {
++          channel: "line",
++          accountId: undefined,
++          chatId: undefined,
++          chatType: "direct",
++          providerMessageId: "caption",
++          providerMessageIds: ["caption"],
++        },
++      }),
++    );
++  });
++
++  it("stores every provider message id in transcript mirror metadata for chunked replies", async () => {
++    mocks.appendAssistantMessageToSessionTranscript.mockClear();
++
++    await runChunkedWhatsAppDelivery({
++      mirror: {
++        sessionKey: "agent:main:main",
++      },
++    });
++
++    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
++      expect.objectContaining({
++        messageMeta: {
++          channel: "whatsapp",
++          accountId: undefined,
++          chatId: undefined,
++          chatType: "direct",
++          providerMessageId: "w2",
++          providerMessageIds: ["w1", "w2"],
++        },
+       }),
+     );
+   });
+@@ -791,10 +822,12 @@ describe("deliverOutboundPayloads", () => {
+       deps: { whatsapp: sendWhatsApp },
+     });
+ 
+-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+-      expect.objectContaining({ to: "+1555", content: "hello", success: true }),
+-      expect.objectContaining({ channelId: "whatsapp" }),
+-    );
++    await vi.waitFor(() => {
++      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
++        expect.objectContaining({ to: "+1555", content: "hello", success: true, messageId: "w1" }),
++        expect.objectContaining({ channelId: "whatsapp", conversationId: "+1555" }),
++      );
++    });
+   });
+ 
+   it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {
+@@ -841,7 +874,11 @@ describe("deliverOutboundPayloads", () => {
+ 
+   it("emits message_sent success for sendPayload deliveries", async () => {
+     hookMocks.runner.hasHooks.mockReturnValue(true);
+-    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
++    const sendPayload = vi.fn().mockResolvedValue({
++      channel: "matrix",
++      messageId: "mx-1",
++      meta: { mentions: [{ id: "ou_bot_beta", name: "Bot Beta" }] },
++    });
+     const sendText = vi.fn();
+     const sendMedia = vi.fn();
+     setActivePluginRegistry(
+@@ -864,10 +901,18 @@ describe("deliverOutboundPayloads", () => {
+       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
+     });
+ 
+-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+-      expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
+-      expect.objectContaining({ channelId: "matrix" }),
+-    );
++    await vi.waitFor(() => {
++      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
++        expect.objectContaining({
++          to: "!room:1",
++          content: "payload text",
++          success: true,
++          messageId: "mx-1",
++          metadata: { mentions: [{ id: "ou_bot_beta", name: "Bot Beta" }] },
++        }),
++        expect.objectContaining({ channelId: "matrix", conversationId: "!room:1" }),
++      );
++    });
+   });
+ 
+   it("preserves channelData-only payloads with empty text for non-WhatsApp sendPayload channels", async () => {
+diff --git a/src/infra/outbound/deliver.ts b/src/infra/outbound/deliver.ts
+index 069cdd4b18..0166178961 100644
+--- a/src/infra/outbound/deliver.ts
++++ b/src/infra/outbound/deliver.ts
+@@ -16,6 +16,7 @@ import type {
+ } from "../../channels/plugins/types.js";
+ import type { OpenClawConfig } from "../../config/config.js";
+ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
++import type { SessionTranscriptMessageMeta } from "../../config/sessions/transcript.js";
+ import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+ import {
+@@ -318,12 +319,99 @@ type MessageSentEvent = {
+   content: string;
+   error?: string;
+   messageId?: string;
++  metadata?: Record<string, unknown>;
+ };
+ 
++function buildMirrorMessageMeta(params: {
++  channel: Exclude<OutboundChannel, "none">;
++  accountId?: string;
++  replyToId?: string | null;
++  threadId?: string | number | null;
++  mirror?: DeliverOutboundPayloadsCoreParams["mirror"];
++  results: OutboundDeliveryResult[];
++}): SessionTranscriptMessageMeta | undefined {
++  const providerMessageIds = [
++    ...new Set(
++      params.results
++        .map((result) => result.messageId)
++        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
++    ),
++  ];
++  const chatIds = [
++    ...new Set(
++      params.results
++        .map((result) => result.chatId)
++        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
++    ),
++  ];
++  const providerMessageId = providerMessageIds.at(-1);
++  const chatId = chatIds.length === 1 ? chatIds[0] : undefined;
++
++  if (
++    !providerMessageId &&
++    providerMessageIds.length === 0 &&
++    !chatId &&
++    !params.accountId &&
++    !params.replyToId &&
++    params.threadId == null
++  ) {
++    return undefined;
++  }
++
++  return {
++    channel: params.channel,
++    accountId: params.accountId,
++    chatId,
++    chatType: params.mirror?.isGroup ? "group" : "direct",
++    providerMessageId,
++    ...(providerMessageIds.length > 0 ? { providerMessageIds } : {}),
++    ...(params.replyToId ? { parentId: params.replyToId } : {}),
++    ...(params.threadId != null ? { threadId: params.threadId } : {}),
++  };
++}
++
++/**
++ * Extract channel-specific fields from a delivery result into hook metadata.
++ * This ensures fields like chatId (returned by the channel API but not in `to`)
++ * are available to message_sent hook consumers — critical for channels where the
++ * outbound `to` address differs from the resolved chat identifier (e.g. feishu DMs
++ * addressed by open_id but resolved to a chat_id by the API).
++ */
++function buildDeliveryResultMetadata(
++  result: OutboundDeliveryResult | undefined,
++): Record<string, unknown> | undefined {
++  if (!result) {
++    return undefined;
++  }
++  const meta: Record<string, unknown> = {};
++  // Spread adapter meta first, then set known fields so they cannot be
++  // overwritten by an adapter accidentally returning a colliding key.
++  if (result.meta) {
++    Object.assign(meta, result.meta);
++  }
++  if (result.chatId) {
++    meta.chatId = result.chatId;
++  }
++  if (result.channelId) {
++    meta.channelId = result.channelId;
++  }
++  return Object.keys(meta).length > 0 ? meta : undefined;
++}
++
++function hasMediaPayload(payload: ReplyPayload): boolean {
++  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
++}
++
++function hasChannelDataPayload(payload: ReplyPayload): boolean {
++  return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
++}
++
+ function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
++  const hasMedia = hasMediaPayload(payload);
++  const hasChannelData = hasChannelDataPayload(payload);
+   const text = typeof payload.text === "string" ? payload.text : "";
+   if (!text.trim()) {
+-    if (!hasReplyPayloadContent({ ...payload, text })) {
++    if (!hasReplyPayloadContent({ ...payload, text }) && !hasMedia && !hasChannelData) {
+       return null;
+     }
+     if (text) {
+@@ -375,6 +463,25 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
+   };
+ }
+ 
++function resolveMirrorFallbackContent(payloads: ReplyPayload[]): {
++  text?: string;
++  mediaUrls?: string[];
++} {
++  if (payloads.length === 0) {
++    return {};
++  }
++  const summaries = payloads.map((payload) => buildPayloadSummary(payload));
++  const text = summaries
++    .map((summary) => summary.text)
++    .filter((value) => value.trim().length > 0)
++    .join("\n");
++  const mediaUrls = summaries.flatMap((summary) => summary.mediaUrls);
++  return {
++    ...(text ? { text } : {}),
++    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
++  };
++}
++
+ function createMessageSentEmitter(params: {
+   hookRunner: ReturnType<typeof getGlobalHookRunner>;
+   channel: Exclude<OutboundChannel, "none">;
+@@ -399,6 +506,7 @@ function createMessageSentEmitter(params: {
+       accountId: params.accountId ?? undefined,
+       conversationId: params.to,
+       messageId: event.messageId,
++      metadata: event.metadata,
+       isGroup: params.mirrorIsGroup,
+       groupId: params.mirrorGroupId,
+     });
+@@ -443,6 +551,8 @@ async function applyMessageSendingHook(params: {
+   to: string;
+   channel: Exclude<OutboundChannel, "none">;
+   accountId?: string;
++  replyToId?: string | null;
++  threadId?: string | number | null;
+ }): Promise<{
+   cancelled: boolean;
+   payload: ReplyPayload;
+@@ -464,6 +574,8 @@ async function applyMessageSendingHook(params: {
+           channel: params.channel,
+           accountId: params.accountId,
+           mediaUrls: params.payloadSummary.mediaUrls,
++          replyToId: params.payload.replyToId ?? params.replyToId,
++          ...(params.threadId != null ? { threadId: params.threadId } : {}),
+         },
+       },
+       {
+@@ -650,6 +762,7 @@ async function deliverOutboundPayloadsCore(
+     }
+   };
+   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, handler);
++  const mirrorFallback = resolveMirrorFallbackContent(normalizedPayloads);
+   const hookRunner = getGlobalHookRunner();
+   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+   const mirrorIsGroup = params.mirror?.isGroup;
+@@ -688,6 +801,8 @@ async function deliverOutboundPayloadsCore(
+         to,
+         channel,
+         accountId,
++        replyToId: params.replyToId,
++        threadId: params.threadId,
+       });
+       if (hookResult.cancelled) {
+         continue;
+@@ -715,6 +830,7 @@ async function deliverOutboundPayloadsCore(
+           success: true,
+           content: payloadSummary.text,
+           messageId: delivery.messageId,
++          metadata: buildDeliveryResultMetadata(delivery),
+         });
+         continue;
+       }
+@@ -725,11 +841,12 @@ async function deliverOutboundPayloadsCore(
+         } else {
+           await sendTextChunks(payloadSummary.text, sendOverrides);
+         }
+-        const messageId = results.at(-1)?.messageId;
++        const lastResult = results.at(-1);
+         emitMessageSent({
+           success: results.length > beforeCount,
+           content: payloadSummary.text,
+-          messageId,
++          messageId: lastResult?.messageId,
++          metadata: buildDeliveryResultMetadata(lastResult),
+         });
+         continue;
+       }
+@@ -756,6 +873,7 @@ async function deliverOutboundPayloadsCore(
+           success: results.length > beforeCount,
+           content: payloadSummary.text,
+           messageId,
++          metadata: buildDeliveryResultMetadata(results.at(-1)),
+         });
+         continue;
+       }
+@@ -785,6 +903,7 @@ async function deliverOutboundPayloadsCore(
+         success: true,
+         content: payloadSummary.text,
+         messageId: lastMessageId,
++        metadata: buildDeliveryResultMetadata(results.at(-1)),
+       });
+     } catch (err) {
+       emitMessageSent({
+@@ -800,8 +919,8 @@ async function deliverOutboundPayloadsCore(
+   }
+   if (params.mirror && results.length > 0) {
+     const mirrorText = resolveMirroredTranscriptText({
+-      text: params.mirror.text,
+-      mediaUrls: params.mirror.mediaUrls,
++      text: params.mirror.text ?? mirrorFallback.text,
++      mediaUrls: params.mirror.mediaUrls ?? mirrorFallback.mediaUrls,
+     });
+     if (mirrorText) {
+       const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+@@ -810,6 +929,14 @@ async function deliverOutboundPayloadsCore(
+         sessionKey: params.mirror.sessionKey,
+         text: mirrorText,
+         idempotencyKey: params.mirror.idempotencyKey,
++        messageMeta: buildMirrorMessageMeta({
++          channel,
++          accountId,
++          replyToId: params.replyToId,
++          threadId: params.threadId,
++          mirror: params.mirror,
++          results,
++        }),
+       });
+     }
+   }
+diff --git a/src/infra/outbound/outbound-send-service.test.ts b/src/infra/outbound/outbound-send-service.test.ts
+index e330530374..b257629112 100644
+--- a/src/infra/outbound/outbound-send-service.test.ts
++++ b/src/infra/outbound/outbound-send-service.test.ts
+@@ -83,9 +83,10 @@ let executePollAction: OutboundSendServiceModule["executePollAction"];
+ let executeSendAction: OutboundSendServiceModule["executeSendAction"];
+ 
+ describe("executeSendAction", () => {
+-  function pluginActionResult(messageId: string) {
++  function pluginActionResult(messageId: string, details?: Record<string, unknown>) {
+     return {
+       ok: true,
++      ...(details ? { details } : {}),
+       value: { messageId },
+       continuePrompt: "",
+       output: "",
+@@ -297,6 +298,28 @@ describe("executeSendAction", () => {
+     });
+   });
+ 
++  it("does not mirror cancelled plugin-handled sends", async () => {
++    mocks.dispatchChannelMessageAction.mockResolvedValue(
++      pluginActionResult("msg-plugin-cancelled", { ok: true, cancelled: true }),
++    );
++
++    await executeSendAction({
++      ctx: {
++        cfg: {},
++        channel: "discord",
++        params: { to: "channel:123", message: "hello" },
++        dryRun: false,
++        mirror: {
++          sessionKey: "agent:main:discord:channel:123",
++        },
++      },
++      to: "channel:123",
++      message: "hello",
++    });
++
++    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
++  });
++
+   it("falls back to message and media params for plugin-handled mirror writes", async () => {
+     await executePluginMirroredSend({
+       mirror: {
+diff --git a/src/infra/outbound/outbound-send-service.ts b/src/infra/outbound/outbound-send-service.ts
+index 9024a9caae..c42916b15e 100644
+--- a/src/infra/outbound/outbound-send-service.ts
++++ b/src/infra/outbound/outbound-send-service.ts
+@@ -57,6 +57,15 @@ function collectActionMediaSources(params: Record<string, unknown>): string[] {
+   return sources;
+ }
+ 
++function isCancelledPluginActionPayload(payload: unknown): boolean {
++  return Boolean(
++    payload &&
++    typeof payload === "object" &&
++    "cancelled" in payload &&
++    (payload as { cancelled?: unknown }).cancelled === true,
++  );
++}
++
+ async function tryHandleWithPluginAction(params: {
+   ctx: OutboundSendContext;
+   action: "send" | "poll";
+@@ -88,10 +97,13 @@ async function tryHandleWithPluginAction(params: {
+   if (!handled) {
+     return null;
+   }
+-  await params.onHandled?.();
++  const payload = extractToolPayload(handled);
++  if (!isCancelledPluginActionPayload(payload)) {
++    await params.onHandled?.();
++  }
+   return {
+     handledBy: "plugin",
+-    payload: extractToolPayload(handled),
++    payload,
+     toolResult: handled,
+   };
+ }
+diff --git a/src/plugins/hook-runner-global.test.ts b/src/plugins/hook-runner-global.test.ts
+index 826fd6f4a0..1fd78349be 100644
+--- a/src/plugins/hook-runner-global.test.ts
++++ b/src/plugins/hook-runner-global.test.ts
+@@ -52,4 +52,35 @@ describe("hook-runner-global", () => {
+ 
+     await expectGlobalRunnerState({ hasRunner: false });
+   });
++
++  it("carries forward hooks from the previous registry when the new one lacks them", async () => {
++    const mod = await importHookRunnerGlobalModule();
++    const handler = vi.fn();
++    const oldRegistry = createMockPluginRegistry([{ hookName: "message_received", handler }]);
++    mod.initializeGlobalHookRunner(oldRegistry);
++    expect(mod.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
++
++    // Simulate a late plugin reload that produces a registry without the hook.
++    const newRegistry = createMockPluginRegistry([]);
++    // Give the new registry a different plugin id so it's clearly distinct.
++    newRegistry.plugins = [{ ...newRegistry.plugins[0], id: "other-plugin" }];
++    newRegistry.typedHooks = [];
++    mod.initializeGlobalHookRunner(newRegistry);
++
++    // The message_received hook from the old registry must survive.
++    expect(mod.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
++  });
++
++  it("does not duplicate hooks when the new registry already contains the same plugin", async () => {
++    const mod = await importHookRunnerGlobalModule();
++    const handler = vi.fn();
++    const registry1 = createMockPluginRegistry([{ hookName: "message_received", handler }]);
++    mod.initializeGlobalHookRunner(registry1);
++
++    // Re-initialize with a registry that has the same plugin id's hooks.
++    const registry2 = createMockPluginRegistry([{ hookName: "message_received", handler }]);
++    mod.initializeGlobalHookRunner(registry2);
++
++    expect(mod.getGlobalHookRunner()?.getHookCount("message_received")).toBe(1);
++  });
+ });
+diff --git a/src/plugins/hook-runner-global.ts b/src/plugins/hook-runner-global.ts
+index 22da96b7f1..f2bb23c96c 100644
+--- a/src/plugins/hook-runner-global.ts
++++ b/src/plugins/hook-runner-global.ts
+@@ -27,11 +27,49 @@ const getLog = () => createSubsystemLogger("plugins");
+ 
+ /**
+  * Initialize the global hook runner with a plugin registry.
+- * Called once when plugins are loaded during gateway startup.
++ * Called when plugins are loaded during gateway startup and potentially
++ * again by runtime provider registries or channel bootstrap paths.
++ *
++ * When the new registry lacks plugin hooks that were present in the
++ * previous registry, those hooks are carried forward so that late
++ * plugin reloads (e.g. provider resolution, channel bootstrap) do not
++ * silently drop hooks registered during gateway startup.
+  */
+ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+   const state = getState();
+   const log = getLog();
++  const prev = state.registry;
++  if (prev && prev !== registry && prev.typedHooks.length > 0) {
++    const newPluginIds = new Set(registry.typedHooks.map((h) => h.pluginId));
++    const missingPluginIds = new Set<string>();
++    for (const hook of prev.typedHooks) {
++      if (!newPluginIds.has(hook.pluginId)) {
++        missingPluginIds.add(hook.pluginId);
++      }
++    }
++    if (missingPluginIds.size > 0) {
++      // Build a merged registry instead of mutating the (potentially cached)
++      // new registry in place.  This avoids polluting the plugin-loader cache.
++      const mergedTypedHooks = [
++        ...registry.typedHooks,
++        ...prev.typedHooks.filter((h) => missingPluginIds.has(h.pluginId)),
++      ];
++      const existingPluginIds = new Set(registry.plugins.map((p) => p.id));
++      const mergedPlugins = [
++        ...registry.plugins,
++        ...prev.plugins.filter((p) => missingPluginIds.has(p.id) && !existingPluginIds.has(p.id)),
++      ];
++      registry = {
++        ...registry,
++        typedHooks: mergedTypedHooks,
++        plugins: mergedPlugins,
++      };
++      log.info(
++        `hook runner: carried forward hooks from ${missingPluginIds.size} plugin(s) missing in the new registry: ${[...missingPluginIds].join(", ")}`,
++      );
++    }
++  }
++
+   state.registry = registry;
+   state.hookRunner = createHookRunner(registry, {
+     logger: {
+@@ -45,7 +83,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+     },
+   });
+ 
+-  const hookCount = registry.hooks.length;
++  const hookCount = registry.typedHooks.length;
+   if (hookCount > 0) {
+     log.debug(`hook runner initialized with ${hookCount} registered hooks`);
+   }
+diff --git a/src/plugins/hooks.ts b/src/plugins/hooks.ts
+index 442da6451c..3bbae19a65 100644
+--- a/src/plugins/hooks.ts
++++ b/src/plugins/hooks.ts
+@@ -30,6 +30,8 @@ import type {
+   PluginHookInboundClaimContext,
+   PluginHookInboundClaimEvent,
+   PluginHookInboundClaimResult,
++  PluginHookChatMemberBotEvent,
++  PluginHookChatMemberUserEvent,
+   PluginHookLlmInputEvent,
+   PluginHookLlmOutputEvent,
+   PluginHookBeforeResetEvent,
+@@ -92,6 +94,8 @@ export type {
+   PluginHookInboundClaimEvent,
+   PluginHookInboundClaimResult,
+   PluginHookAfterCompactionEvent,
++  PluginHookChatMemberBotEvent,
++  PluginHookChatMemberUserEvent,
+   PluginHookMessageContext,
+   PluginHookMessageReceivedEvent,
+   PluginHookMessageSendingEvent,
+@@ -721,6 +725,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
+           return {
+             content: lastDefined(acc?.content, next.content),
+             cancel: stickyTrue(acc?.cancel, next.cancel),
++            metadata:
++              next.metadata || acc?.metadata
++                ? {
++                    ...acc?.metadata,
++                    ...next.metadata,
++                  }
++                : undefined,
+           };
+         },
+         shouldStop: (result) => result.cancel === true,
+@@ -740,6 +751,65 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
+     return runVoidHook("message_sent", event, ctx);
+   }
+ 
++  // =========================================================================
++  // Chat Member Hooks
++  // =========================================================================
++
++  /**
++   * Run chat_member_user_added hook.
++   * Runs in parallel (fire-and-forget).
++   */
++  async function runChatMemberUserAdded(
++    event: PluginHookChatMemberUserEvent,
++    ctx: PluginHookMessageContext,
++  ): Promise<void> {
++    return runVoidHook("chat_member_user_added", event, ctx);
++  }
++
++  /**
++   * Run chat_member_user_deleted hook.
++   * Runs in parallel (fire-and-forget).
++   */
++  async function runChatMemberUserDeleted(
++    event: PluginHookChatMemberUserEvent,
++    ctx: PluginHookMessageContext,
++  ): Promise<void> {
++    return runVoidHook("chat_member_user_deleted", event, ctx);
++  }
++
++  /**
++   * Run chat_member_user_withdrawn hook.
++   * Runs in parallel (fire-and-forget).
++   */
++  async function runChatMemberUserWithdrawn(
++    event: PluginHookChatMemberUserEvent,
++    ctx: PluginHookMessageContext,
++  ): Promise<void> {
++    return runVoidHook("chat_member_user_withdrawn", event, ctx);
++  }
++
++  /**
++   * Run chat_member_bot_added hook.
++   * Runs in parallel (fire-and-forget).
++   */
++  async function runChatMemberBotAdded(
++    event: PluginHookChatMemberBotEvent,
++    ctx: PluginHookMessageContext,
++  ): Promise<void> {
++    return runVoidHook("chat_member_bot_added", event, ctx);
++  }
++
++  /**
++   * Run chat_member_bot_deleted hook.
++   * Runs in parallel (fire-and-forget).
++   */
++  async function runChatMemberBotDeleted(
++    event: PluginHookChatMemberBotEvent,
++    ctx: PluginHookMessageContext,
++  ): Promise<void> {
++    return runVoidHook("chat_member_bot_deleted", event, ctx);
++  }
++
+   // =========================================================================
+   // Tool Hooks
+   // =========================================================================
+@@ -1111,6 +1181,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
+     runReplyDispatch,
+     runMessageSending,
+     runMessageSent,
++    // Chat member hooks
++    runChatMemberUserAdded,
++    runChatMemberUserDeleted,
++    runChatMemberUserWithdrawn,
++    runChatMemberBotAdded,
++    runChatMemberBotDeleted,
+     // Tool hooks
+     runBeforeToolCall,
+     runAfterToolCall,
+diff --git a/src/plugins/manifest-registry.ts b/src/plugins/manifest-registry.ts
+index 072692e763..9584ba8947 100644
+--- a/src/plugins/manifest-registry.ts
++++ b/src/plugins/manifest-registry.ts
+@@ -69,6 +69,7 @@ export type PluginManifestRecord = {
+   kind?: PluginKind | PluginKind[];
+   channels: string[];
+   providers: string[];
++  cliBackends?: string[];
+   modelSupport?: PluginManifestModelSupport;
+   providerAuthEnvVars?: Record<string, string[]>;
+   providerAuthChoices?: PluginManifest["providerAuthChoices"];
+@@ -598,6 +599,34 @@ export function loadPluginManifestRegistry(
+     );
+   }
+ 
++  // Inject embedded plugins from Bun compiled binary so they are visible
++  // to both the config validator and the plugin loader.
++  const embeddedPlugins = (globalThis as Record<string, unknown>).__OPENCLAW_EMBEDDED_PLUGINS__ as
++    | Array<{ id: string; manifest: Record<string, unknown> }>
++    | undefined;
++  if (Array.isArray(embeddedPlugins)) {
++    for (const ep of embeddedPlugins) {
++      const rootDir = `__embedded__:${ep.id}`;
++      records.push({
++        id: ep.manifest.id as string,
++        rootDir,
++        source: rootDir,
++        manifestPath: `${rootDir}/openclaw.plugin.json`,
++        origin: "bundled",
++        configSchema: ep.manifest.configSchema as Record<string, unknown> | undefined,
++        kind: ep.manifest.kind as PluginKind | undefined,
++        channels: (ep.manifest.channels as string[]) ?? [],
++        providers: (ep.manifest.providers as string[]) ?? [],
++        cliBackends: (ep.manifest.cliBackends as string[]) ?? [],
++        skills: [],
++        hooks: [],
++        name: ep.manifest.name as string | undefined,
++        description: ep.manifest.description as string | undefined,
++        version: ep.manifest.version as string | undefined,
++      });
++    }
++  }
++
+   const registry = { plugins: records, diagnostics };
+   if (cacheEnabled) {
+     const ttl = resolveManifestCacheMs(env);
+diff --git a/src/plugins/schema-validator.ts b/src/plugins/schema-validator.ts
+index 4f84ad6a57..eba3ea5cc7 100644
+--- a/src/plugins/schema-validator.ts
++++ b/src/plugins/schema-validator.ts
+@@ -1,9 +1,8 @@
+-import { createRequire } from "node:module";
++import Ajv from "ajv";
+ import type { ErrorObject, ValidateFunction } from "ajv";
+ import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+ import { sanitizeTerminalText } from "../terminal/safe-text.js";
+ 
+-const require = createRequire(import.meta.url);
+ type AjvLike = {
+   addFormat: (
+     name: string,
+@@ -23,11 +22,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
+   if (cached) {
+     return cached;
+   }
+-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
+-  const AjvCtor =
+-    typeof ajvModule.default === "function"
+-      ? ajvModule.default
+-      : (ajvModule as unknown as new (opts?: object) => AjvLike);
++  const AjvCtor = Ajv as unknown as new (opts?: object) => AjvLike;
+   const instance = new AjvCtor({
+     allErrors: true,
+     strict: false,
+diff --git a/src/security/audit-extra.sync.ts b/src/security/audit-extra.sync.ts
+index 7458e70a94..0a55cc872e 100644
+--- a/src/security/audit-extra.sync.ts
++++ b/src/security/audit-extra.sync.ts
+@@ -197,6 +197,89 @@ function normalizeNodeCommand(value: unknown): string {
+   return typeof value === "string" ? value.trim() : "";
+ }
+ 
++type NodeCommandConfigEntry = {
++  path: string;
++  values: string[];
++  overrideKey?: string;
++};
++
++function formatNodeOverrideConfigPath(
++  key: string,
++  field: "allowCommands" | "denyCommands",
++): string {
++  return `gateway.nodes.overrides[${JSON.stringify(key)}].${field}`;
++}
++
++function listConfiguredNodeAllowCommandEntries(cfg: OpenClawConfig): NodeCommandConfigEntry[] {
++  const out: NodeCommandConfigEntry[] = [];
++  const globalAllow = cfg.gateway?.nodes?.allowCommands;
++  if (Array.isArray(globalAllow)) {
++    const values = globalAllow.map(normalizeNodeCommand).filter(Boolean);
++    if (values.length > 0) {
++      out.push({ path: "gateway.nodes.allowCommands", values });
++    }
++  }
++
++  const overrides = cfg.gateway?.nodes?.overrides;
++  if (!overrides) {
++    return out;
++  }
++  for (const [key, override] of Object.entries(overrides)) {
++    if (!override) {
++      continue;
++    }
++    const allow = override.allowCommands;
++    if (!Array.isArray(allow)) {
++      continue;
++    }
++    const values = allow.map(normalizeNodeCommand).filter(Boolean);
++    if (values.length === 0) {
++      continue;
++    }
++    out.push({
++      path: formatNodeOverrideConfigPath(key, "allowCommands"),
++      values,
++      overrideKey: key,
++    });
++  }
++  return out;
++}
++
++function listConfiguredNodeDenyCommandEntries(cfg: OpenClawConfig): NodeCommandConfigEntry[] {
++  const out: NodeCommandConfigEntry[] = [];
++  const globalDeny = cfg.gateway?.nodes?.denyCommands;
++  if (Array.isArray(globalDeny)) {
++    const values = globalDeny.map(normalizeNodeCommand).filter(Boolean);
++    if (values.length > 0) {
++      out.push({ path: "gateway.nodes.denyCommands", values });
++    }
++  }
++
++  const overrides = cfg.gateway?.nodes?.overrides;
++  if (!overrides) {
++    return out;
++  }
++  for (const [key, override] of Object.entries(overrides)) {
++    if (!override) {
++      continue;
++    }
++    const deny = override.denyCommands;
++    if (!Array.isArray(deny)) {
++      continue;
++    }
++    const values = deny.map(normalizeNodeCommand).filter(Boolean);
++    if (values.length === 0) {
++      continue;
++    }
++    out.push({
++      path: formatNodeOverrideConfigPath(key, "denyCommands"),
++      values,
++      overrideKey: key,
++    });
++  }
++  return out;
++}
++
+ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
+   const baseCfg: OpenClawConfig = {
+     ...cfg,
+@@ -981,21 +1064,31 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
+ 
+ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+   const findings: SecurityAuditFinding[] = [];
+-  const denyListRaw = cfg.gateway?.nodes?.denyCommands;
+-  if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
++  const denyEntries = listConfiguredNodeDenyCommandEntries(cfg);
++  if (denyEntries.length === 0) {
+     return findings;
+   }
+ 
+-  const denyList = denyListRaw.map(normalizeNodeCommand).filter(Boolean);
+-  if (denyList.length === 0) {
+-    return findings;
++  const knownCommands = listKnownNodeCommands(cfg);
++  for (const entry of listConfiguredNodeAllowCommandEntries(cfg)) {
++    for (const value of entry.values) {
++      knownCommands.add(value);
++    }
+   }
+ 
+-  const knownCommands = listKnownNodeCommands(cfg);
+-  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
+-  const unknownExact = denyList.filter(
+-    (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
+-  );
++  const patternLike: string[] = [];
++  const unknownExact: string[] = [];
++  for (const entry of denyEntries) {
++    for (const value of entry.values) {
++      if (looksLikeNodeCommandPattern(value)) {
++        patternLike.push(`${entry.path}: ${value}`);
++        continue;
++      }
++      if (!knownCommands.has(value)) {
++        unknownExact.push(`${entry.path}: ${value}`);
++      }
++    }
++  }
+   if (patternLike.length === 0 && unknownExact.length === 0) {
+     return findings;
+   }
+@@ -1009,7 +1102,10 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
+   if (unknownExact.length > 0) {
+     const unknownDetails = unknownExact
+       .map((entry) => {
+-        const suggestions = suggestKnownNodeCommands(entry, knownCommands);
++        // entry may be "path: commandName"; extract the command name for fuzzy matching.
++        const colonIdx = entry.lastIndexOf(": ");
++        const cmdName = colonIdx >= 0 ? entry.slice(colonIdx + 2) : entry;
++        const suggestions = suggestKnownNodeCommands(cmdName, knownCommands);
+         if (suggestions.length === 0) {
+           return entry;
+         }
+@@ -1024,9 +1120,9 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
+   findings.push({
+     checkId: "gateway.nodes.deny_commands_ineffective",
+     severity: "warn",
+-    title: "Some gateway.nodes.denyCommands entries are ineffective",
++    title: "Some node denyCommands entries are ineffective",
+     detail:
+-      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
++      "gateway.nodes.denyCommands uses exact node command-name matching only (global and per-node overrides, for example `system.run`), not shell-text filtering inside a command payload.\n" +
+       detailParts.map((entry) => `- ${entry}`).join("\n"),
+     remediation:
+       `Use exact command names (for example: ${examples.join(", ")}). ` +
+@@ -1040,21 +1136,33 @@ export function collectNodeDangerousAllowCommandFindings(
+   cfg: OpenClawConfig,
+ ): SecurityAuditFinding[] {
+   const findings: SecurityAuditFinding[] = [];
+-  const allowRaw = cfg.gateway?.nodes?.allowCommands;
+-  if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
++  const allowEntries = listConfiguredNodeAllowCommandEntries(cfg);
++  if (allowEntries.length === 0) {
+     return findings;
+   }
+ 
+-  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
+-  if (allow.size === 0) {
+-    return findings;
++  const globalDeny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
++  const dangerousEntries: string[] = [];
++  for (const entry of allowEntries) {
++    const allowSet = new Set(entry.values);
++    const denySet = new Set(globalDeny);
++    if (entry.overrideKey) {
++      const overrideDeny = cfg.gateway?.nodes?.overrides?.[entry.overrideKey]?.denyCommands;
++      if (Array.isArray(overrideDeny)) {
++        for (const cmd of overrideDeny.map(normalizeNodeCommand).filter(Boolean)) {
++          denySet.add(cmd);
++        }
++      }
++    }
++    const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
++      (cmd) => allowSet.has(cmd) && !denySet.has(cmd),
++    );
++    if (dangerousAllowed.length === 0) {
++      continue;
++    }
++    dangerousEntries.push(`${entry.path}: ${dangerousAllowed.join(", ")}`);
+   }
+-
+-  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+-  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
+-    (cmd) => allow.has(cmd) && !deny.has(cmd),
+-  );
+-  if (dangerousAllowed.length === 0) {
++  if (dangerousEntries.length === 0) {
+     return findings;
+   }
+ 
+@@ -1063,10 +1171,11 @@ export function collectNodeDangerousAllowCommandFindings(
+     severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
+     title: "Dangerous node commands explicitly enabled",
+     detail:
+-      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
+-      "These commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
++      "Dangerous node commands are enabled by these settings:\n" +
++      dangerousEntries.map((entry) => `- ${entry}`).join("\n") +
++      "\nThese commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
+     remediation:
+-      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
++      "Remove these entries from gateway.nodes.allowCommands / gateway.nodes.overrides.*.allowCommands (recommended). " +
+       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
+   });
+ 
+diff --git a/src/security/audit.test.ts b/src/security/audit.test.ts
+index e407ecd339..c5efc70160 100644
+--- a/src/security/audit.test.ts
++++ b/src/security/audit.test.ts
+@@ -1676,6 +1676,68 @@ describe("security audit", () => {
+     });
+   });
+ 
++  it("suggests prefix-matching commands for unknown denyCommands entries", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        nodes: {
++          denyCommands: ["system.run.prep"],
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++    const finding = res.findings.find(
++      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
++    );
++    expect(finding?.severity).toBe("warn");
++    expect(finding?.detail).toContain("system.run.prep");
++    expect(finding?.detail).toContain("did you mean");
++    expect(finding?.detail).toContain("system.run.prepare");
++  });
++
++  it("keeps unknown denyCommands entries without suggestions when no close command exists", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        nodes: {
++          denyCommands: ["zzzzzzzzzzzzzz"],
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++    const finding = res.findings.find(
++      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
++    );
++    expect(finding?.severity).toBe("warn");
++    expect(finding?.detail).toContain("zzzzzzzzzzzzzz");
++    expect(finding?.detail).not.toContain("did you mean");
++  });
++
++  it("flags ineffective gateway.nodes.overrides.*.denyCommands entries", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        nodes: {
++          overrides: {
++            "node-a": {
++              denyCommands: ["camera.*", "camera.snapx"],
++            },
++          },
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++
++    const finding = res.findings.find(
++      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
++    );
++    expect(finding?.severity).toBe("warn");
++    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].denyCommands: camera.*');
++    expect(finding?.detail).toContain(
++      'gateway.nodes.overrides["node-a"].denyCommands: camera.snapx',
++    );
++  });
++
+   it("evaluates dangerous gateway.nodes.allowCommands findings", async () => {
+     const cases = [
+       {
+@@ -1735,6 +1797,63 @@ describe("security audit", () => {
+     });
+   });
+ 
++  it("flags dangerous gateway.nodes.overrides.*.allowCommands entries", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        bind: "loopback",
++        nodes: {
++          overrides: {
++            "node-a": {
++              allowCommands: ["camera.snap", "screen.record"],
++            },
++          },
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++    const finding = res.findings.find(
++      (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
++    );
++    expect(finding?.severity).toBe("warn");
++    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].allowCommands');
++    expect(finding?.detail).toContain("camera.snap");
++    expect(finding?.detail).toContain("screen.record");
++  });
++
++  it("does not flag dangerous allowCommands entries when denied again", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        nodes: {
++          allowCommands: ["camera.snap", "screen.record"],
++          denyCommands: ["camera.snap", "screen.record"],
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
++  });
++
++  it("does not flag dangerous overrides allowCommands entries when denied again", async () => {
++    const cfg: OpenClawConfig = {
++      gateway: {
++        nodes: {
++          denyCommands: ["camera.snap"],
++          overrides: {
++            "node-a": {
++              allowCommands: ["camera.snap", "screen.record"],
++              denyCommands: ["screen.record"],
++            },
++          },
++        },
++      },
++    };
++
++    const res = await audit(cfg);
++    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
++  });
++
+   it("flags agent profile overrides when global tools.profile is minimal", async () => {
+     const cfg: OpenClawConfig = {
+       tools: {
+-- 
+2.47.1
+
