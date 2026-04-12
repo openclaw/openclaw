@@ -760,7 +760,6 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
   }
 
   return !(
-    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" &&
     runSpecs.length === 1 &&
     runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
     runSpecs[0]?.watchMode === false &&
