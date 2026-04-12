@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
@@ -9,6 +10,28 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
+
+const mocks = vi.hoisted(() => ({
+  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp/openclaw", wrote: false }),
+  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+  readFile: vi.fn(),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  readFile: mocks.readFile,
+}));
+
+vi.mock("./models-config.js", () => ({
+  ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
+}));
+
+vi.mock("./agent-paths.js", () => ({
+  resolveOpenClawAgentDir: () => "/tmp/openclaw",
+}));
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: mocks.augmentModelCatalogWithProviderPlugins,
+}));
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -57,40 +80,31 @@ function mockSingleOpenAiCatalogModel() {
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
-    vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
-    }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw",
-    }));
-    vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
-      augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
-    }));
-
     ({
       __setModelCatalogImportForTest,
       findModelInCatalog,
       loadModelCatalog,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
-    const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
-    augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
+    augmentCatalogMock = mocks.augmentModelCatalogWithProviderPlugins;
   });
 
   beforeEach(() => {
+    mocks.ensureOpenClawModelsJson.mockReset();
+    mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/openclaw", wrote: false });
+    mocks.augmentModelCatalogWithProviderPlugins.mockReset();
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+    mocks.readFile.mockReset();
+    mocks.readFile.mockRejectedValue(new Error("missing models.json"));
     resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
   });
 
   afterEach(() => {
     __setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
-  });
-
-  afterAll(() => {
-    vi.doUnmock("./models-config.js");
-    vi.doUnmock("./agent-paths.js");
-    vi.doUnmock("../plugins/provider-runtime.runtime.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {
@@ -375,6 +389,141 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("filters phantom native providers shadowed by aggregator-qualified model ids", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gemini-3-flash-preview",
+        provider: "google",
+        name: "Gemini 3 Flash Preview",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        provider: "openrouter",
+        name: "Gemini 3 Flash Preview",
+      },
+    ]);
+
+    mocks.readFile.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          openrouter: {},
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {},
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(result).toEqual([
+      {
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "openrouter",
+      },
+    ]);
+  });
+
+  it("keeps direct providers that are explicitly configured alongside aggregators", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gemini-3-flash-preview",
+        provider: "google",
+        name: "Gemini 3 Flash Preview",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        provider: "openrouter",
+        name: "Gemini 3 Flash Preview",
+      },
+    ]);
+
+    mocks.readFile.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          google: {},
+          openrouter: {},
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            google: {},
+            openrouter: {},
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(result).toEqual([
+      {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "google",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "openrouter",
+      },
+    ]);
+  });
+
+  it("keeps direct providers that are enabled implicitly alongside aggregators", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gemini-3-flash-preview",
+        provider: "google",
+        name: "Gemini 3 Flash Preview",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        provider: "openrouter",
+        name: "Gemini 3 Flash Preview",
+      },
+    ]);
+    mocks.readFile.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          google: {},
+          openrouter: {},
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {},
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(result).toEqual([
+      {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "google",
+      },
+      {
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        provider: "openrouter",
+      },
+    ]);
   });
 
   it("matches models across canonical provider aliases", () => {
