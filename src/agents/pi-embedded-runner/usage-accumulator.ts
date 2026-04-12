@@ -65,11 +65,11 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     return undefined;
   }
   return {
-    input: usage.input || undefined,
-    output: usage.output || undefined,
-    cacheRead: usage.cacheRead || undefined,
-    cacheWrite: usage.cacheWrite || undefined,
-    total: usage.total || undefined,
+    input: usage.input ?? undefined,
+    output: usage.output ?? undefined,
+    cacheRead: usage.cacheRead ?? undefined,
+    cacheWrite: usage.cacheWrite ?? undefined,
+    total: usage.total ?? undefined,
   };
 };
 
@@ -84,11 +84,11 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
     return undefined;
   }
   return {
-    input: usage.lastInput || undefined,
-    output: usage.lastOutput || undefined,
-    cacheRead: usage.lastCacheRead || undefined,
-    cacheWrite: usage.lastCacheWrite || undefined,
-    total: usage.lastTotal || undefined,
+    input: usage.lastInput ?? undefined,
+    output: usage.lastOutput ?? undefined,
+    cacheRead: usage.lastCacheRead ?? undefined,
+    cacheWrite: usage.lastCacheWrite ?? undefined,
+    total: usage.lastTotal ?? undefined,
   };
 };
 

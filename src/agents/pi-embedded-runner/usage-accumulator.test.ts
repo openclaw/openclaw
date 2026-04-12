@@ -125,8 +125,8 @@ describe("usage-accumulator", () => {
       expect(toNormalizedUsage(acc)).toEqual({
         input: 100,
         output: 50,
-        cacheRead: undefined,
-        cacheWrite: undefined,
+        cacheRead: 0,
+        cacheWrite: 0,
         total: 150,
       });
     });
@@ -155,7 +155,7 @@ describe("usage-accumulator", () => {
         input: 150,
         output: 40,
         cacheRead: 84_000,
-        cacheWrite: undefined,
+        cacheWrite: 0,
         total: 84_190,
       });
     });
@@ -210,7 +210,7 @@ describe("usage-accumulator", () => {
         input: 150,
         output: 40,
         cacheRead: 84_000,
-        cacheWrite: undefined,
+        cacheWrite: 0,
         total: 84_190,
       });
     });
@@ -229,7 +229,7 @@ describe("usage-accumulator", () => {
         input: 150,
         output: 40,
         cacheRead: 84_000,
-        cacheWrite: undefined,
+        cacheWrite: 0,
         total: 84_190,
       });
     });

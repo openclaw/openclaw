@@ -362,10 +362,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const derivedTotal =
       usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
     return {
-      input: usageTotals.input || undefined,
-      output: usageTotals.output || undefined,
-      cacheRead: usageTotals.cacheRead || undefined,
-      cacheWrite: usageTotals.cacheWrite || undefined,
+      input: usageTotals.input ?? undefined,
+      output: usageTotals.output ?? undefined,
+      cacheRead: usageTotals.cacheRead ?? undefined,
+      cacheWrite: usageTotals.cacheWrite ?? undefined,
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
