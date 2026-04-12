@@ -134,31 +134,42 @@ gh api repos/openclaw/openclaw/contents/<FILE_PATH> | jq -r '.content' | base64 
 All secrets MUST be replaced with this format:
 
 ```
-[REDACTED <secret_type>: <prefix>...<suffix>]
+[REDACTED <secret_type>]
 ```
+
+Do NOT include any portion of the actual secret value in the redaction marker. No prefix, no suffix, no character count. Even a few characters can help an attacker confirm or narrow down the full value.
 
 Examples:
 
-- `[REDACTED discord_bot_token: MTQ4...Aacg]`
-- `[REDACTED feishu_app_secret: HOd***]`
-- `[REDACTED github_pat: ghp_...x7Qz]`
-
-Preserve 3-4 chars from prefix and suffix for identification. **Never include more than 30% of the original secret.**
+- `[REDACTED discord_bot_token]`
+- `[REDACTED feishu_app_secret]`
+- `[REDACTED github_pat]`
+- `[REDACTED google_oauth_client_id]`
 
 One comment/body may contain **multiple different secrets**. Scan the entire content and redact ALL of them.
 
 ### For issue_comment
 
+Always use a temp file with heredoc to avoid shell quoting issues:
+
 ```bash
+cat > /tmp/redacted_comment.md <<'BODY'
+<redacted content>
+BODY
 gh api repos/openclaw/openclaw/issues/comments/<COMMENT_ID> \
-  -X PATCH -f body='<redacted content>'
+  -X PATCH -F body=@/tmp/redacted_comment.md
 ```
 
 ### For issue_body
 
+Always use a temp file with heredoc to avoid shell quoting issues:
+
 ```bash
+cat > /tmp/redacted_issue.md <<'BODY'
+<redacted content>
+BODY
 gh api repos/openclaw/openclaw/issues/<NUMBER> \
-  -X PATCH -f body='<redacted content>'
+  -X PATCH -F body=@/tmp/redacted_issue.md
 ```
 
 ### For pull_request_body
@@ -243,19 +254,26 @@ If the PR is not merged, consider deleting the branch or force-pushing a cleaned
 
 Post a notification comment on the same issue/PR. **All comments MUST be in English.**
 
+> **Security:** Do NOT include any portion of the secret value or the alert URL in public comments. The alert URL is only accessible to repo admins and reveals internal tracking info. Only reference the secret by its type name.
+
+Use a temp file with heredoc to avoid shell quoting issues:
+
 ```bash
-gh api repos/openclaw/openclaw/issues/<ISSUE_NUMBER>/comments \
-  -X POST -f body='@<AUTHOR> :warning: **Security Notice: Secret Leakage Detected**
+cat > /tmp/notify_comment.md <<'BODY'
+@<AUTHOR> :warning: **Security Notice: Secret Leakage Detected**
 
-Your comment contained the following exposed secrets detected by GitHub Secret Scanning:
+GitHub Secret Scanning detected the following exposed secret types in your content:
 
-1. **<Secret Type Display Name>**: `<redacted_preview>` (alert [#<N>](https://github.com/openclaw/openclaw/security/secret-scanning/<N>))
+1. **<Secret Type Display Name>**
 
-The original comment has been removed and replaced with a redacted version.
+The affected content has been redacted.
 
 **Please rotate these credentials immediately.**
 
-These secrets were publicly exposed and should be considered compromised.'
+These secrets were publicly exposed and should be considered compromised.
+BODY
+gh api repos/openclaw/openclaw/issues/<ISSUE_NUMBER>/comments \
+  -X POST -F body=@/tmp/notify_comment.md
 ```
 
 Adjust the rotation guidance based on secret type when possible (e.g., link to Discord developer portal for Discord tokens).
@@ -339,9 +357,12 @@ Please update the skill to define handling for these types:
 - **Always read the content before editing.** Never blindly patch.
 - **Preserve the original message intent.** Only redact secrets, keep all other content intact.
 - **Check for multiple secrets** in a single comment/body — alerts may only flag one, but there could be more.
-- **Do not expose full secrets** in notification comments — use the redacted format.
+- **Never include any portion of a secret** in public comments, redaction markers, or terminal output. Use type-only redaction: `[REDACTED <type>]`.
+- **Never include secret scanning alert URLs** in public comments — they are admin-only and leak internal info.
 - **Ask for confirmation** before deleting any comment or issue.
 - **One alert at a time** unless the user explicitly requests batch processing.
 - **Always print the summary** after processing, with all alert/issue/PR links for verification.
 - **All comments and notifications MUST be written in English.**
 - **Skip unsupported location types.** If a location type is not defined in this skill (e.g., not `issue_comment`, `issue_body`, `pull_request_body`, or `commit`), do not process it. Report it in the summary and note that the skill needs to be updated.
+- **Use temp files with heredoc** for all `gh api` calls that set body content. Never inline body text with `-f body='...'` — it is vulnerable to shell quoting issues and command injection via copy/paste.
+- **Never print raw API response bodies to stdout.** When fetching alert details or comment content for analysis, pipe through `jq` to extract only the fields you need (e.g., `jq '{number, state, secret_type}'`). Avoid printing `.secret` or `.body` fields that contain plaintext secrets.
