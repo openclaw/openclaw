@@ -10,7 +10,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import { CRITICAL_THRESHOLD, WARNING_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -206,39 +206,38 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("keeps generic repeated calls warn-only below global breaker", async () => {
+  it("blocks generic repeated calls at critical threshold", async () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
-    }
-  });
-
-  it("blocks generic repeated no-progress calls at global breaker threshold", async () => {
-    const { tool, params } = createGenericReadRepeatFixture();
-
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
 
     await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("global circuit breaker");
+      tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+    ).rejects.toThrow("CRITICAL");
   });
 
-  it("coalesces repeated generic warning events into threshold buckets", async () => {
+  it("emits warning then critical diagnostic events for generic repeats", async () => {
     await withToolLoopEvents(
       async (emitted) => {
         const { tool, params } = createGenericReadRepeatFixture();
 
-        for (let i = 0; i < 21; i += 1) {
+        for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
           await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
         }
 
-        const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
-        expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
+        await expect(
+          tool.execute(`read-bucket-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+        ).rejects.toThrow("CRITICAL");
+
+        const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
+        expect(genericEvents.map((evt) => [evt.level, evt.count, evt.action])).toEqual([
+          ["warning", WARNING_THRESHOLD, "warn"],
+          ["critical", CRITICAL_THRESHOLD, "block"],
+        ]);
       },
-      (evt) => evt.level === "warning",
+      (evt) => evt.detector === "generic_repeat",
     );
   });
 
