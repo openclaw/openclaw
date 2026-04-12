@@ -45,7 +45,11 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
-type CommandPaletteHost = AppViewState;
+type CommandPaletteHost = Pick<
+  AppViewState,
+  "paletteOpen" | "paletteQuery" | "paletteActiveIndex" | "sessionKey"
+> &
+  Parameters<typeof loadChatCommandCatalog>[0];
 
 export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "settings" | "password">,
