@@ -12,8 +12,12 @@ import {
 } from "@mariozechner/pi-ai";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  applyAnthropicServerCompactionToParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
+  resolveAnthropicRequiredBetaFeatures,
+  shouldEnableAnthropicServerCompaction,
+  type AnthropicServerCompactionConfig,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
@@ -58,7 +62,12 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> & {
+    anthropicServerCompaction?: boolean;
+    anthropicCompactThreshold?: number;
+    anthropicCompactPauseAfter?: boolean;
+    anthropicCompactInstructions?: string;
+  };
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -76,7 +85,8 @@ type TransportContentBlock =
       arguments: unknown;
       partialJson?: string;
       index?: number;
-    };
+    }
+  | { type: "compaction"; content: string | null; index?: number };
 
 type MutableAssistantOutput = {
   role: "assistant";
@@ -311,6 +321,17 @@ function convertAnthropicMessages(
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
             input: coerceTransportToolCallArguments(block.arguments),
           });
+          continue;
+        }
+        const maybeCompactionBlock = block as { type?: string; content?: string | null };
+        if (maybeCompactionBlock.type === "compaction") {
+          blocks.push({
+            type: "compaction",
+            content:
+              typeof maybeCompactionBlock.content === "string"
+                ? sanitizeTransportPayloadText(maybeCompactionBlock.content)
+                : null,
+          });
         }
       }
       if (blocks.length > 0) {
@@ -373,6 +394,7 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
 function mapStopReason(reason: string | undefined): string {
   switch (reason) {
     case "end_turn":
+    case "compaction":
       return "stop";
     case "max_tokens":
       return "length";
@@ -390,6 +412,80 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
+function hasCompactionBlocks(messages: Context["messages"]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      Array.isArray(message.content) &&
+      message.content.some(
+        (block) =>
+          block && typeof block === "object" && (block as { type?: string }).type === "compaction",
+      ),
+  );
+}
+
+function resolveAnthropicCompactionThreshold(
+  model: Pick<AnthropicTransportModel, "contextWindow">,
+  requested: number | undefined,
+): number | undefined {
+  if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
+    return Math.floor(requested);
+  }
+  const contextWindow =
+    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+      ? model.contextWindow
+      : undefined;
+  if (!contextWindow || contextWindow <= 0) {
+    return 150_000;
+  }
+  return Math.max(1, Math.min(150_000, Math.floor(contextWindow * 0.75)));
+}
+
+function resolveAnthropicServerCompactionConfig(params: {
+  model: AnthropicTransportModel;
+  options: AnthropicTransportOptions | undefined;
+}): AnthropicServerCompactionConfig | undefined {
+  const enabled = shouldEnableAnthropicServerCompaction(
+    params.model.provider,
+    params.model.baseUrl,
+    params.options?.anthropicServerCompaction,
+  );
+  if (!enabled) {
+    return undefined;
+  }
+  return {
+    compactThreshold: resolveAnthropicCompactionThreshold(
+      params.model,
+      params.options?.anthropicCompactThreshold,
+    ),
+    pauseAfterCompaction: params.options?.anthropicCompactPauseAfter,
+    instructions: params.options?.anthropicCompactInstructions,
+  };
+}
+
+function applyAnthropicUsageSnapshot(
+  usageTarget: MutableAssistantOutput["usage"],
+  usage: Record<string, unknown> | undefined,
+): void {
+  if (!usage) {
+    return;
+  }
+  if (typeof usage.input_tokens === "number") {
+    usageTarget.input = usage.input_tokens;
+  }
+  if (typeof usage.output_tokens === "number") {
+    usageTarget.output = usage.output_tokens;
+  }
+  if (typeof usage.cache_read_input_tokens === "number") {
+    usageTarget.cacheRead = usage.cache_read_input_tokens;
+  }
+  if (typeof usage.cache_creation_input_tokens === "number") {
+    usageTarget.cacheWrite = usage.cache_creation_input_tokens;
+  }
+  usageTarget.totalTokens =
+    usageTarget.input + usageTarget.output + usageTarget.cacheRead + usageTarget.cacheWrite;
+}
+
 function createAnthropicTransportClient(params: {
   model: AnthropicTransportModel;
   context: Context;
@@ -399,9 +495,24 @@ function createAnthropicTransportClient(params: {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
+  const anthropicCompactionEnabled = shouldEnableAnthropicServerCompaction(
+    model.provider,
+    model.baseUrl,
+    options?.anthropicServerCompaction,
+  );
+  const betaFeatures = [
+    "fine-grained-tool-streaming-2025-05-14",
+    ...resolveAnthropicRequiredBetaFeatures({
+      enableServerCompaction: anthropicCompactionEnabled,
+      hasCompactionBlocks: hasCompactionBlocks(context.messages),
+    }),
+  ];
+  if (needsInterleavedBeta) {
+    betaFeatures.push("interleaved-thinking-2025-05-14");
+  }
   const fetch = buildGuardedModelFetch(model);
   if (model.provider === "github-copilot") {
-    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
+    const copilotBetas = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: new Anthropic({
         apiKey: null,
@@ -412,7 +523,7 @@ function createAnthropicTransportClient(params: {
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+            ...(copilotBetas.length > 0 ? { "anthropic-beta": copilotBetas.join(",") } : {}),
           },
           model.headers,
           buildCopilotDynamicHeaders({
@@ -425,10 +536,6 @@ function createAnthropicTransportClient(params: {
       }),
       isOAuthToken: false,
     };
-  }
-  const betaFeatures = ["fine-grained-tool-streaming-2025-05-14"];
-  if (needsInterleavedBeta) {
-    betaFeatures.push("interleaved-thinking-2025-05-14");
   }
   if (isAnthropicOAuthToken(apiKey)) {
     return {
@@ -479,6 +586,7 @@ function buildAnthropicParams(
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
 ) {
+  const serverCompaction = resolveAnthropicServerCompactionConfig({ model, options });
   const payloadPolicy = resolveAnthropicPayloadPolicy({
     provider: model.provider,
     api: model.api,
@@ -547,6 +655,7 @@ function buildAnthropicParams(
       typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
+  applyAnthropicServerCompactionToParams(params, serverCompaction);
   return params;
 }
 
@@ -571,6 +680,10 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning: options?.reasoning,
+    anthropicServerCompaction: options?.anthropicServerCompaction,
+    anthropicCompactThreshold: options?.anthropicCompactThreshold,
+    anthropicCompactPauseAfter: options?.anthropicCompactPauseAfter,
+    anthropicCompactInstructions: options?.anthropicCompactInstructions,
   };
   if (!options?.reasoning) {
     resolved.thinkingEnabled = false;
@@ -637,21 +750,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const message = event.message as
               | { id?: string; usage?: Record<string, unknown> }
               | undefined;
-            const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
-            output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-            output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-            output.usage.cacheRead =
-              typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
-            output.usage.cacheWrite =
-              typeof usage.cache_creation_input_tokens === "number"
-                ? usage.cache_creation_input_tokens
-                : 0;
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
+            applyAnthropicUsageSnapshot(output.usage, message?.usage);
             calculateCost(model, output.usage);
             continue;
           }
@@ -694,6 +794,20 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.content.push(block);
               stream.push({
                 type: "thinking_start",
+                contentIndex: output.content.length - 1,
+                partial: output as never,
+              });
+              continue;
+            }
+            if (contentBlock?.type === "compaction") {
+              const block: TransportContentBlock = {
+                type: "compaction",
+                content: typeof contentBlock.content === "string" ? contentBlock.content : "",
+                index,
+              };
+              output.content.push(block);
+              stream.push({
+                type: "text_start",
                 contentIndex: output.content.length - 1,
                 partial: output as never,
               });
@@ -778,6 +892,22 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               typeof delta.signature === "string"
             ) {
               block.thinkingSignature = `${block.thinkingSignature ?? ""}${delta.signature}`;
+              continue;
+            }
+            if (block?.type === "compaction" && delta?.type === "compaction_delta") {
+              if (delta.content === null) {
+                block.content = null;
+                continue;
+              }
+              if (typeof delta.content === "string") {
+                block.content = `${block.content ?? ""}${delta.content}`;
+                stream.push({
+                  type: "text_delta",
+                  contentIndex: index,
+                  delta: delta.content,
+                  partial: output as never,
+                });
+              }
             }
             continue;
           }
@@ -817,6 +947,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 toolCall: block as never,
                 partial: output as never,
               });
+              continue;
+            }
+            if (block.type === "compaction") {
+              stream.push({
+                type: "text_end",
+                contentIndex: index,
+                content: block.content ?? "",
+                partial: output as never,
+              });
             }
             continue;
           }
@@ -826,23 +965,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             if (delta?.stop_reason) {
               output.stopReason = mapStopReason(delta.stop_reason);
             }
-            if (typeof usage?.input_tokens === "number") {
-              output.usage.input = usage.input_tokens;
-            }
-            if (typeof usage?.output_tokens === "number") {
-              output.usage.output = usage.output_tokens;
-            }
-            if (typeof usage?.cache_read_input_tokens === "number") {
-              output.usage.cacheRead = usage.cache_read_input_tokens;
-            }
-            if (typeof usage?.cache_creation_input_tokens === "number") {
-              output.usage.cacheWrite = usage.cache_creation_input_tokens;
-            }
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
+            applyAnthropicUsageSnapshot(output.usage, usage);
             calculateCost(model, output.usage);
           }
         }

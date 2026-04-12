@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAnthropicServerCompactionToParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
+  resolveAnthropicRequiredBetaFeatures,
 } from "./anthropic-payload-policy.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
@@ -68,7 +70,7 @@ describe("anthropic payload policy", () => {
           type: "tool_result",
           tool_use_id: "tool_1",
           content: "done",
-          cache_control: { type: "ephemeral", ttl: "1h" },
+          cache_control: { type: "ephemeral" },
         },
       ],
     });
@@ -169,7 +171,7 @@ describe("anthropic payload policy", () => {
     ]);
     expect(payload.messages[0]).toEqual({
       role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
     });
   });
 
@@ -223,5 +225,46 @@ describe("anthropic payload policy", () => {
         text: "Stable prefix\nDynamic lab suffix",
       },
     ]);
+  });
+
+  it("injects Anthropic server compaction edits without replacing existing edits", () => {
+    const payload: Record<string, unknown> = {
+      context_management: {
+        edits: [{ type: "clear_tool_uses_20250919" }],
+      },
+    };
+
+    applyAnthropicServerCompactionToParams(payload, {
+      compactThreshold: 123_456,
+      pauseAfterCompaction: true,
+      instructions: "Preserve code decisions.",
+    });
+
+    expect(payload.context_management).toEqual({
+      edits: [
+        { type: "clear_tool_uses_20250919" },
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: 123_456 },
+          pause_after_compaction: true,
+          instructions: "Preserve code decisions.",
+        },
+      ],
+    });
+  });
+
+  it("adds Anthropic compaction beta features when compaction is enabled or blocks are present", () => {
+    expect(
+      resolveAnthropicRequiredBetaFeatures({
+        enableServerCompaction: true,
+        hasCompactionBlocks: false,
+      }),
+    ).toEqual(["context-management-2025-06-27", "compact-2026-01-12"]);
+    expect(
+      resolveAnthropicRequiredBetaFeatures({
+        enableServerCompaction: false,
+        hasCompactionBlocks: true,
+      }),
+    ).toEqual(["context-management-2025-06-27", "compact-2026-01-12"]);
   });
 });

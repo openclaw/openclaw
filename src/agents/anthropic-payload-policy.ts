@@ -11,6 +11,12 @@ export type AnthropicEphemeralCacheControl = {
   ttl?: "1h";
 };
 
+export type AnthropicServerCompactionConfig = {
+  compactThreshold?: number;
+  instructions?: string;
+  pauseAfterCompaction?: boolean;
+};
+
 type AnthropicPayloadPolicyInput = {
   api?: string;
   baseUrl?: string;
@@ -22,7 +28,8 @@ type AnthropicPayloadPolicyInput = {
 
 export type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
-  cacheControl: AnthropicEphemeralCacheControl | undefined;
+  systemCacheControl: AnthropicEphemeralCacheControl | undefined;
+  messageCacheControl: AnthropicEphemeralCacheControl | undefined;
   serviceTier: AnthropicServiceTier | undefined;
 };
 
@@ -60,6 +67,17 @@ function resolveAnthropicEphemeralCacheControl(
   }
   const ttl = retention === "long" && isLongTtlEligibleEndpoint(baseUrl) ? "1h" : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
+}
+
+function resolveAnthropicMessageCacheControl(
+  cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
+): AnthropicEphemeralCacheControl | undefined {
+  const retention =
+    cacheRetention ?? (process.env.PI_CACHE_RETENTION === "long" ? "long" : "short");
+  if (retention === "none") {
+    return undefined;
+  }
+  return { type: "ephemeral" };
 }
 
 function applyAnthropicCacheControlToSystem(
@@ -184,9 +202,13 @@ export function resolveAnthropicPayloadPolicy(
 
   return {
     allowsServiceTier: capabilities.allowsAnthropicServiceTier,
-    cacheControl:
+    systemCacheControl:
       input.enableCacheControl === true
         ? resolveAnthropicEphemeralCacheControl(input.baseUrl, input.cacheRetention)
+        : undefined,
+    messageCacheControl:
+      input.enableCacheControl === true
+        ? resolveAnthropicMessageCacheControl(input.cacheRetention)
         : undefined,
     serviceTier: input.serviceTier,
   };
@@ -204,18 +226,101 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.service_tier = policy.serviceTier;
   }
 
-  if (policy.cacheControl) {
-    applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
+  if (policy.systemCacheControl) {
+    applyAnthropicCacheControlToSystem(payloadObj.system, policy.systemCacheControl);
   } else {
     stripAnthropicSystemPromptBoundary(payloadObj.system);
   }
 
-  if (!policy.cacheControl) {
+  if (!policy.messageCacheControl) {
     return;
   }
 
   // Preserve Anthropic cache-write scope by only tagging the trailing user turn.
-  applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
+  applyAnthropicCacheControlToMessages(payloadObj.messages, policy.messageCacheControl);
+}
+
+function hasCompactionEdit(edits: unknown): boolean {
+  return Array.isArray(edits)
+    ? edits.some(
+        (edit) =>
+          edit &&
+          typeof edit === "object" &&
+          (edit as Record<string, unknown>).type === "compact_20260112",
+      )
+    : false;
+}
+
+export function applyAnthropicServerCompactionToParams(
+  payloadObj: Record<string, unknown>,
+  config: AnthropicServerCompactionConfig | undefined,
+): void {
+  if (!config) {
+    return;
+  }
+
+  const edit: Record<string, unknown> = {
+    type: "compact_20260112",
+  };
+  if (typeof config.compactThreshold === "number" && Number.isFinite(config.compactThreshold)) {
+    edit.trigger = {
+      type: "input_tokens",
+      value: Math.max(1, Math.floor(config.compactThreshold)),
+    };
+  }
+  if (typeof config.pauseAfterCompaction === "boolean") {
+    edit.pause_after_compaction = config.pauseAfterCompaction;
+  }
+  if (typeof config.instructions === "string" && config.instructions.trim().length > 0) {
+    edit.instructions = config.instructions.trim();
+  }
+
+  const current = payloadObj.context_management;
+  if (current === undefined) {
+    payloadObj.context_management = { edits: [edit] };
+    return;
+  }
+  if (!current || typeof current !== "object" || Array.isArray(current)) {
+    return;
+  }
+
+  const record = current as Record<string, unknown>;
+  if (hasCompactionEdit(record.edits)) {
+    return;
+  }
+
+  if (record.edits === undefined) {
+    record.edits = [edit];
+    return;
+  }
+  if (Array.isArray(record.edits)) {
+    record.edits = [...record.edits, edit];
+  }
+}
+
+export function shouldEnableAnthropicServerCompaction(
+  provider: string | undefined,
+  baseUrl: string | undefined,
+  explicit: boolean | undefined,
+): boolean {
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  if (provider !== "anthropic") {
+    return false;
+  }
+  return isLongTtlEligibleEndpoint(baseUrl);
+}
+
+export function resolveAnthropicRequiredBetaFeatures(params: {
+  enableServerCompaction?: boolean;
+  hasCompactionBlocks?: boolean;
+}): string[] {
+  const features: string[] = [];
+  if (params.enableServerCompaction || params.hasCompactionBlocks) {
+    features.push("context-management-2025-06-27", "compact-2026-01-12");
+  }
+  return features;
 }
 
 export function applyAnthropicEphemeralCacheControlMarkers(

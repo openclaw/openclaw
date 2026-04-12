@@ -110,6 +110,10 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   openaiWsWarmup?: boolean;
+  anthropicServerCompaction?: boolean;
+  anthropicCompactThreshold?: number;
+  anthropicCompactPauseAfter?: boolean;
+  anthropicCompactInstructions?: string;
 };
 type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
 
@@ -259,6 +263,24 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  if (typeof extraParams.anthropicServerCompaction === "boolean") {
+    streamParams.anthropicServerCompaction = extraParams.anthropicServerCompaction;
+  }
+  if (
+    typeof extraParams.anthropicCompactThreshold === "number" &&
+    Number.isFinite(extraParams.anthropicCompactThreshold)
+  ) {
+    streamParams.anthropicCompactThreshold = extraParams.anthropicCompactThreshold;
+  }
+  if (typeof extraParams.anthropicCompactPauseAfter === "boolean") {
+    streamParams.anthropicCompactPauseAfter = extraParams.anthropicCompactPauseAfter;
+  }
+  if (
+    typeof extraParams.anthropicCompactInstructions === "string" &&
+    extraParams.anthropicCompactInstructions.trim()
+  ) {
+    streamParams.anthropicCompactInstructions = extraParams.anthropicCompactInstructions.trim();
   }
   const cachedContent =
     typeof extraParams.cachedContent === "string"

@@ -336,4 +336,190 @@ describe("anthropic transport stream", () => {
       undefined,
     );
   });
+
+  it("uses mixed Anthropic cache TTLs and injects native compaction edits when enabled", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          systemPrompt: "Follow policy.",
+          messages: [{ role: "user", content: "Keep coding." }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          cacheRetention: "long",
+          anthropicServerCompaction: true,
+          anthropicCompactThreshold: 123_456,
+          anthropicCompactPauseAfter: true,
+          anthropicCompactInstructions: "Preserve important code decisions.",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicCtorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultHeaders: expect.objectContaining({
+          "anthropic-beta": expect.stringContaining("context-management-2025-06-27"),
+        }),
+      }),
+    );
+    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(firstCallParams.system).toEqual([
+      {
+        type: "text",
+        text: "Follow policy.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+    expect(firstCallParams.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Keep coding.", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+    expect(firstCallParams.context_management).toEqual({
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: 123_456 },
+          pause_after_compaction: true,
+          instructions: "Preserve important code decisions.",
+        },
+      ],
+    });
+  });
+
+  it("round-trips Anthropic compaction blocks in requests and streamed responses", async () => {
+    anthropicMessagesStreamMock.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "message_start",
+          message: { id: "msg_compact", usage: { input_tokens: 25, output_tokens: 0 } },
+        };
+        yield {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "compaction", content: "" },
+        };
+        yield {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "compaction_delta", content: "Summarized old context." },
+        };
+        yield {
+          type: "content_block_stop",
+          index: 0,
+        };
+        yield {
+          type: "message_delta",
+          delta: { stop_reason: "compaction" },
+          usage: { input_tokens: 25, output_tokens: 10 },
+        };
+      })(),
+    );
+
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              content: [{ type: "compaction", content: "Earlier compacted summary." }],
+            },
+            { role: "user", content: "Continue." },
+          ],
+        } as never,
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(anthropicCtorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultHeaders: expect.objectContaining({
+          "anthropic-beta": expect.stringContaining("compact-2026-01-12"),
+        }),
+      }),
+    );
+    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(firstCallParams.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "compaction",
+              content: "Earlier compacted summary.",
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "compaction",
+          content: "Summarized old context.",
+        }),
+      ]),
+    );
+  });
 });

@@ -1800,6 +1800,38 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBe("long");
   });
 
+  it("passes through Anthropic native compaction options for direct Anthropic models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-6", {
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: 111_000,
+      anthropicCompactPauseAfter: true,
+      anthropicCompactInstructions: "Keep code decisions.",
+      cacheRetention: "long",
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com/v1",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+    expect(calls[0]).toMatchObject({
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: 111_000,
+      anthropicCompactPauseAfter: true,
+      anthropicCompactInstructions: "Keep code decisions.",
+    });
+  });
+
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
