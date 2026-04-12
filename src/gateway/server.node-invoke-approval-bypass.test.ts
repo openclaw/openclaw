@@ -7,6 +7,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -211,6 +212,15 @@ describe("node.invoke approval bypass", () => {
     });
 
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
+    const initialApproval = await requestNodePairing({
+      nodeId: resolvedDeviceIdentity.deviceId,
+      platform: "linux",
+      commands,
+    });
+    await approveNodePairing(initialApproval.request.requestId, {
+      callerScopes: ["operator.pairing", "operator.admin"],
+    });
+
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
