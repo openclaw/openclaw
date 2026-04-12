@@ -32,6 +32,7 @@
       "model": {
         "primary": "openrouter/minimax/minimax-m2.5"
       },
+      "thinkingDefault": "minimal",
       "models": {
         "openrouter/auto": {
           "alias": "OpenRouter"
