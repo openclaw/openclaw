@@ -52,6 +52,10 @@ export async function resolveCommandsSystemPromptBundle(
         agentId: sessionAgentId,
         eligibility: {
           remote: getRemoteSkillEligibility({
+            cfg: params.cfg,
+            sessionEntry: targetSessionEntry,
+            sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
             advertiseExecNode: canExecRequestNode({
               cfg: params.cfg,
               sessionEntry: targetSessionEntry,

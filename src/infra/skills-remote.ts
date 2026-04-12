@@ -1,7 +1,9 @@
+import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills/types.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,6 +26,14 @@ type RemoteNodeRecord = {
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteRegistry: NodeRegistry | null = null;
+
+type RemoteSkillEligibilityOptions = {
+  advertiseExecNode?: boolean;
+  cfg?: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+  sessionKey?: string;
+};
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -99,6 +109,44 @@ function supportsSystemRun(commands?: string[]): boolean {
 
 function supportsSystemWhich(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.which");
+}
+
+function matchesConfiguredNode(
+  node: { nodeId: string; displayName?: string },
+  configuredNode: string,
+): boolean {
+  const configured = normalizeLowercaseStringOrEmpty(configuredNode);
+  if (!configured) {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(node.nodeId) === configured ||
+    normalizeLowercaseStringOrEmpty(node.displayName) === configured
+  );
+}
+
+function filterNodesByConfiguredExecNode<T extends { nodeId: string; displayName?: string }>(
+  nodes: T[],
+  configuredNode?: string,
+): T[] {
+  const normalized = normalizeOptionalString(configuredNode);
+  if (!normalized) {
+    return nodes;
+  }
+  return nodes.filter((node) => matchesConfiguredNode(node, normalized));
+}
+
+function resolveConfiguredExecNode(
+  params?: Omit<RemoteSkillEligibilityOptions, "advertiseExecNode">,
+) {
+  return normalizeOptionalString(
+    resolveExecDefaults({
+      cfg: params?.cfg,
+      sessionEntry: params?.sessionEntry,
+      agentId: params?.agentId,
+      sessionKey: params?.sessionKey,
+    }).node,
+  );
 }
 
 function upsertNode(record: {
@@ -265,6 +313,10 @@ export async function refreshRemoteNodeBins(params: {
   if (!canWhich && !canRun) {
     return;
   }
+  const configuredExecNode = resolveConfiguredExecNode({ cfg: params.cfg });
+  if (configuredExecNode && !matchesConfiguredNode({ nodeId: params.nodeId }, configuredExecNode)) {
+    return;
+  }
 
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
@@ -316,11 +368,15 @@ export async function refreshRemoteNodeBins(params: {
   }
 }
 
-export function getRemoteSkillEligibility(options?: {
-  advertiseExecNode?: boolean;
-}): SkillEligibilityContext["remote"] | undefined {
-  const macNodes = [...remoteNodes.values()].filter(
-    (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
+export function getRemoteSkillEligibility(
+  options?: RemoteSkillEligibilityOptions,
+): SkillEligibilityContext["remote"] | undefined {
+  const configuredExecNode = resolveConfiguredExecNode(options);
+  const macNodes = filterNodesByConfiguredExecNode(
+    [...remoteNodes.values()].filter(
+      (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
+    ),
+    configuredExecNode,
   );
   if (macNodes.length === 0) {
     return undefined;
@@ -350,7 +406,11 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
   if (!remoteRegistry) {
     return;
   }
-  const connected = remoteRegistry.listConnected();
+  const configuredExecNode = resolveConfiguredExecNode({ cfg });
+  const connected = filterNodesByConfiguredExecNode(
+    remoteRegistry.listConnected(),
+    configuredExecNode,
+  );
   for (const node of connected) {
     await refreshRemoteNodeBins({
       nodeId: node.nodeId,

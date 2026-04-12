@@ -135,6 +135,10 @@ export async function ensureSkillSnapshot(params: {
   let systemSent = sessionEntry?.systemSent ?? false;
   const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const remoteEligibility = getRemoteSkillEligibility({
+    cfg,
+    sessionEntry,
+    sessionKey,
+    agentId: sessionAgentId,
     advertiseExecNode: canExecRequestNode({
       cfg,
       sessionEntry,

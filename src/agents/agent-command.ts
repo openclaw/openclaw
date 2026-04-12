@@ -527,6 +527,10 @@ async function agentCommandInternal(
           config: cfg,
           eligibility: {
             remote: getRemoteSkillEligibility({
+              cfg,
+              sessionEntry,
+              sessionKey,
+              agentId: sessionAgentId,
               advertiseExecNode: canExecRequestNode({
                 cfg,
                 sessionEntry,

@@ -31,6 +31,8 @@ export function listSkillCommandsForWorkspace(params: {
     skillFilter: params.skillFilter,
     eligibility: {
       remote: getRemoteSkillEligibility({
+        cfg: params.cfg,
+        agentId: params.agentId,
         advertiseExecNode: canExecRequestNode({
           cfg: params.cfg,
           agentId: params.agentId,
@@ -114,6 +116,7 @@ export function listSkillCommandsForAgents(params: {
       skillFilter,
       eligibility: {
         remote: getRemoteSkillEligibility({
+          cfg: params.cfg,
           advertiseExecNode: canExecRequestNode({
             cfg: params.cfg,
           }),
