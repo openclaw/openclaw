@@ -172,9 +172,10 @@ COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
-# Copy start script for Render deployment
+# Copy start scripts for Render and Railway deployments
 COPY --chown=node:node render-start.sh /app/render-start.sh
-RUN chmod +x /app/render-start.sh
+COPY --chown=node:node railway-start.sh /app/railway-start.sh
+RUN chmod +x /app/render-start.sh /app/railway-start.sh
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
