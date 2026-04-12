@@ -20,6 +20,40 @@ async function writeDockerStub(binDir: string, logPath: string) {
 set -euo pipefail
 log="$DOCKER_STUB_LOG"
 fail_match="\${DOCKER_STUB_FAIL_MATCH:-}"
+sync_exec_approvals() {
+  local approvals_path="$OPENCLAW_CONFIG_DIR/exec-approvals.json"
+  local security="$1"
+  local ask="$2"
+  local ask_fallback="$3"
+
+  node - "$approvals_path" "$security" "$ask" "$ask_fallback" <<'NODE'
+const fs = require("node:fs");
+const [approvalsPath, security, ask, askFallback] = process.argv.slice(2);
+
+let data = {};
+if (fs.existsSync(approvalsPath)) {
+  data = JSON.parse(fs.readFileSync(approvalsPath, "utf8"));
+}
+
+if (!data || typeof data !== "object" || Array.isArray(data)) {
+  throw new Error(\`Failed to parse \${approvalsPath}: expected a JSON object\`);
+}
+
+data.version ??= 1;
+data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {};
+data.agents = data.agents && typeof data.agents === "object" ? data.agents : {};
+data.agents.main =
+  data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {};
+
+for (const target of [data.defaults, data.agents.main]) {
+  if (security) target.security = security;
+  if (ask) target.ask = ask;
+  if (askFallback) target.askFallback = askFallback;
+}
+
+fs.writeFileSync(approvalsPath, \`\${JSON.stringify(data, null, 2)}\\n\`, "utf8");
+NODE
+}
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
@@ -35,6 +69,17 @@ if [[ "\${1:-}" == "compose" ]]; then
   if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
     echo "compose-fail $*" >>"$log"
     exit 1
+  fi
+  if [[ "$*" == *"--entrypoint node openclaw-gateway -e"* && "$*" == *"/home/node/.openclaw/exec-approvals.json"* ]]; then
+    args=("$@")
+    approvals_path_index=$((\${#args[@]} - 4))
+    security_index=$((\${#args[@]} - 3))
+    ask_index=$((\${#args[@]} - 2))
+    ask_fallback_index=$((\${#args[@]} - 1))
+    sync_exec_approvals \
+      "\${args[$security_index]}" \
+      "\${args[$ask_index]}" \
+      "\${args[$ask_fallback_index]}"
   fi
   echo "compose $*" >>"$log"
   exit 0
@@ -410,6 +455,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).toContain(
       "run --rm --no-deps --user node --entrypoint node openclaw-gateway dist/index.js config set tools.exec.ask off",
     );
+    expect(log).toContain("run --rm --no-deps --user node --entrypoint node openclaw-gateway -e");
 
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_SECURITY=full");

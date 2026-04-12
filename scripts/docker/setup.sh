@@ -214,96 +214,17 @@ validate_exec_ask_value() {
 }
 
 write_exec_approvals_policy() {
-  local approvals_path="$OPENCLAW_CONFIG_DIR/exec-approvals.json"
+  local approvals_path="/home/node/.openclaw/exec-approvals.json"
+  local update_script='const fs=require("node:fs"); const [approvalsPath, security, ask, askFallback]=process.argv.slice(1); let data={}; if (fs.existsSync(approvalsPath)) { try { data=JSON.parse(fs.readFileSync(approvalsPath, "utf8")); } catch (error) { const message=error instanceof Error ? error.message : String(error); console.error(`Failed to parse ${approvalsPath}: ${message}`); process.exit(1); } } if (!data || typeof data !== "object" || Array.isArray(data)) { console.error(`Failed to parse ${approvalsPath}: expected a JSON object`); process.exit(1); } data.version ??= 1; data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {}; data.agents = data.agents && typeof data.agents === "object" ? data.agents : {}; data.agents.main = data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {}; for (const target of [data.defaults, data.agents.main]) { if (security) target.security = security; if (ask) target.ask = ask; if (askFallback) target.askFallback = askFallback; } fs.writeFileSync(approvalsPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");'
 
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$approvals_path" "$DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK_FALLBACK" <<'PY'
-import json
-import os
-import sys
-
-path, security, ask, ask_fallback = sys.argv[1:5]
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as exc:
-        raise SystemExit(f"Failed to parse {path}: {exc}")
-
-if not isinstance(data, dict):
-    raise SystemExit(f"Failed to parse {path}: expected a JSON object")
-
-data.setdefault("version", 1)
-defaults = data.get("defaults")
-if not isinstance(defaults, dict):
-    defaults = {}
-    data["defaults"] = defaults
-
-agents = data.get("agents")
-if not isinstance(agents, dict):
-    agents = {}
-    data["agents"] = agents
-
-main = agents.get("main")
-if not isinstance(main, dict):
-    main = {}
-    agents["main"] = main
-
-for target in (defaults, main):
-    if security:
-        target["security"] = security
-    if ask:
-        target["ask"] = ask
-    if ask_fallback:
-        target["askFallback"] = ask_fallback
-
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-    return 0
-  fi
-
-  if command -v node >/dev/null 2>&1; then
-    node - "$approvals_path" "$DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK_FALLBACK" <<'NODE'
-const fs = require("node:fs");
-const [approvalsPath, security, ask, askFallback] = process.argv.slice(2);
-
-let data = {};
-if (fs.existsSync(approvalsPath)) {
-  try {
-    data = JSON.parse(fs.readFileSync(approvalsPath, "utf8"));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to parse ${approvalsPath}: ${message}`);
-    process.exit(1);
-  }
-}
-
-if (!data || typeof data !== "object" || Array.isArray(data)) {
-  console.error(`Failed to parse ${approvalsPath}: expected a JSON object`);
-  process.exit(1);
-}
-
-data.version ??= 1;
-data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {};
-data.agents = data.agents && typeof data.agents === "object" ? data.agents : {};
-data.agents.main =
-  data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {};
-
-for (const target of [data.defaults, data.agents.main]) {
-  if (security) target.security = security;
-  if (ask) target.ask = ask;
-  if (askFallback) target.askFallback = askFallback;
-}
-
-fs.writeFileSync(approvalsPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-NODE
-    return 0
-  fi
-
-  fail "Need python3 or node to update exec approvals policy."
+  # Keep approvals writes inside the container mount so reruns do not depend
+  # on the host uid matching the image's node user.
+  run_prestart_gateway --user node --entrypoint node openclaw-gateway \
+    -e "$update_script" \
+    "$approvals_path" \
+    "$DOCKER_EXEC_SECURITY" \
+    "$DOCKER_EXEC_ASK" \
+    "$DOCKER_EXEC_ASK_FALLBACK" >/dev/null
 }
 
 configure_docker_exec_policy() {
