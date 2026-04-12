@@ -291,6 +291,41 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
+  it("invalidates the command catalog when the active client closes", () => {
+    const host = createHost();
+    host.chatCommandCatalogLoading = true;
+    host.chatCommandCatalogLoadingAgentId = "main";
+    host.chatCommandCatalogAgentId = "main";
+    host.chatCommandCatalogRequestId = 11;
+    host.chatCommandCatalogError = "stale";
+    host.chatCommandCatalogResult = {
+      commands: [
+        {
+          name: "office_hours",
+          textAliases: ["/office_hours"],
+          description: "Run office hours workflow.",
+          acceptsArgs: true,
+          source: "skill",
+          scope: "both",
+          category: "tools",
+        },
+      ],
+    } as never;
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({ code: 1005 });
+
+    expect(host.chatCommandCatalogLoading).toBe(false);
+    expect(host.chatCommandCatalogLoadingAgentId).toBeNull();
+    expect(host.chatCommandCatalogAgentId).toBeNull();
+    expect(host.chatCommandCatalogRequestId).toBe(13);
+    expect(host.chatCommandCatalogError).toBeNull();
+    expect(host.chatCommandCatalogResult).toBeNull();
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [

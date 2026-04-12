@@ -131,6 +131,15 @@ type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
 
+function invalidateChatCommandCatalog(host: GatewayHost) {
+  host.chatCommandCatalogLoading = false;
+  host.chatCommandCatalogLoadingAgentId = null;
+  host.chatCommandCatalogAgentId = null;
+  host.chatCommandCatalogRequestId += 1;
+  host.chatCommandCatalogError = null;
+  host.chatCommandCatalogResult = null;
+}
+
 export function resolveControlUiClientVersion(params: {
   gatewayUrl: string;
   serverVersion: string | null;
@@ -219,12 +228,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
-  host.chatCommandCatalogLoading = false;
-  host.chatCommandCatalogLoadingAgentId = null;
-  host.chatCommandCatalogAgentId = null;
-  host.chatCommandCatalogRequestId += 1;
-  host.chatCommandCatalogError = null;
-  host.chatCommandCatalogResult = null;
+  invalidateChatCommandCatalog(host);
   if (reconnectReason === "seq-gap") {
     host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
     clearPendingQueueItemsForRun(
@@ -288,6 +292,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      invalidateChatCommandCatalog(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
