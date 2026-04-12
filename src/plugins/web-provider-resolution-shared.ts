@@ -6,6 +6,11 @@ import {
   resolveManifestContractPluginIds,
   type PluginManifestRecord,
 } from "./manifest-registry.js";
+import {
+  createPluginIdScopeSet,
+  normalizePluginIdScope,
+  serializePluginIdScope,
+} from "./plugin-scope.js";
 
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 export type WebProviderConfigKey = "webSearch" | "webFetch";
@@ -160,13 +165,12 @@ export function buildWebProviderSnapshotCacheKey(params: {
     typeof params.envKey === "string"
       ? params.envKey
       : Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right));
+  const onlyPluginIds = normalizePluginIdScope(params.onlyPluginIds);
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
     bundledAllowlistCompat: params.bundledAllowlistCompat === true,
     origin: params.origin ?? "",
-    onlyPluginIds: [...new Set(params.onlyPluginIds ?? [])].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
+    onlyPluginIds: serializePluginIdScope(onlyPluginIds),
     env: envKey,
   });
 }
@@ -181,8 +185,7 @@ export function mapRegistryProviders<
     providers: Array<TProvider & { pluginId: string }>,
   ) => Array<TProvider & { pluginId: string }>;
 }): Array<TProvider & { pluginId: string }> {
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
   return params.sortProviders(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))

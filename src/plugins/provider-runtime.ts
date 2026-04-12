@@ -8,6 +8,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { serializePluginIdScope } from "./plugin-scope.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
@@ -123,7 +124,7 @@ function buildHookProviderCacheKey(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}::${JSON.stringify(params.providerRefs ?? [])}`;
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${serializePluginIdScope(params.onlyPluginIds)}::${JSON.stringify(params.providerRefs ?? [])}`;
 }
 
 export function clearProviderRuntimeHookCache(): void {

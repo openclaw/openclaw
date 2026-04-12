@@ -57,6 +57,12 @@ import {
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
+import {
+  createPluginIdScopeSet,
+  hasExplicitPluginIdScope,
+  normalizePluginIdScope,
+  serializePluginIdScope,
+} from "./plugin-scope.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import {
@@ -358,8 +364,7 @@ function buildCacheKey(params: {
       },
     ]),
   );
-  const scopeKey =
-    params.onlyPluginIds === undefined ? "__unscoped__" : JSON.stringify(params.onlyPluginIds);
+  const scopeKey = serializePluginIdScope(params.onlyPluginIds);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
@@ -372,14 +377,6 @@ function buildCacheKey(params: {
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
   })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
-}
-
-function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
-  if (!ids) {
-    return undefined;
-  }
-  const normalized = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean))).toSorted();
-  return normalized;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -449,7 +446,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.autoEnabledReasons !== undefined ||
     options.workspaceDir !== undefined ||
     options.env !== undefined ||
-    options.onlyPluginIds !== undefined ||
+    hasExplicitPluginIdScope(options.onlyPluginIds) ||
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
@@ -467,7 +464,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const activationSource = createPluginActivationSource({
     config: activationSourceConfig,
   });
-  const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
+  const onlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
@@ -1095,7 +1092,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
-  const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
@@ -1829,7 +1826,7 @@ export async function loadOpenClawPluginCliRegistry(
       cache: false,
     });
   const logger = options.logger ?? defaultLogger();
-  const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const getJiti = createPluginJitiLoader(options);
   const { registry, registerCli } = createPluginRegistry({
     logger,

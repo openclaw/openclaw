@@ -23,6 +23,7 @@ let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOw
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
+let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 let setActivePluginRegistry: SetActivePluginRegistry;
@@ -143,7 +144,7 @@ function expectLastRuntimeRegistryLoad(params?: {
       cache: false,
       activate: false,
       ...(params?.env ? { env: params.env } : {}),
-      ...(params?.onlyPluginIds ? { onlyPluginIds: params.onlyPluginIds } : {}),
+      ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
     }),
   );
 }
@@ -157,7 +158,7 @@ function expectLastSetupRegistryLoad(params?: {
       cache: false,
       activate: false,
       ...(params?.env ? { env: params.env } : {}),
-      ...(params?.onlyPluginIds ? { onlyPluginIds: params.onlyPluginIds } : {}),
+      ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
     }),
   );
 }
@@ -194,7 +195,7 @@ function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly 
       },
     },
     bundledProviderAllowlistCompat: true,
-    ...(params?.onlyPluginIds ? { onlyPluginIds: params.onlyPluginIds } : {}),
+    ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
   };
 }
 
@@ -290,6 +291,7 @@ describe("resolvePluginProviders", () => {
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForModelRef,
       resolveEnabledProviderPluginIds,
+      resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
@@ -383,6 +385,23 @@ describe("resolvePluginProviders", () => {
       "kilocode",
       "moonshot",
     ]);
+  });
+
+  it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
+    expect(
+      resolveEnabledProviderPluginIds({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        onlyPluginIds: [],
+      }),
+    ).toEqual([]);
+    expect(
+      resolveDiscoveredProviderPluginIds({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        onlyPluginIds: [],
+      }),
+    ).toEqual([]);
   });
 
   it.each([
