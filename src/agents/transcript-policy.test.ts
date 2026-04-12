@@ -16,6 +16,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           "amazon-bedrock",
           "anthropic",
           "google",
+          "github-copilot",
           "kilocode",
           "kimi",
           "kimi-code",
@@ -109,6 +110,12 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                 validateAnthropicTurns: false,
                 allowSyntheticToolResults: true,
               };
+            case "github-copilot":
+              return modelId.includes("claude")
+                ? {
+                    dropThinkingBlocks: true,
+                  }
+                : {};
             case "mistral":
               return {
                 sanitizeToolCallIds: true,
@@ -441,6 +448,34 @@ describe("resolveTranscriptPolicy", () => {
         policy,
       }),
     ).toBe(true);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4",
+      modelApi: "anthropic-messages",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "anthropic-messages",
+        policy,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for openrouter models on openai replay", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      modelApi: "openai-completions",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "openai-completions",
+        policy,
+      }),
+    ).toBe(false);
   });
 
   it("does not allow immutable provider-owned thinking replay for strict openai-compatible replay", () => {
