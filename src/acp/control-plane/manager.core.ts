@@ -1781,9 +1781,9 @@ export class AcpSessionManager {
     });
     if (!updated) {
       logVerbose(
-        `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
+        `acp-manager: no persisted runtime resume state to clear for ${params.sessionKey}`,
       );
-      return false;
+      return true;
     }
     return true;
   }

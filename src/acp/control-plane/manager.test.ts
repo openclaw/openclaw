@@ -1610,6 +1610,95 @@ describe("AcpSessionManager", () => {
     expect(entry.acp?.identity).not.toHaveProperty("agentSessionId");
   });
 
+  it("allows retry when identity entry is missing in clearPersistedRuntimeResumeState", async () => {
+    const runtimeState = createRuntime();
+    const sessionKey = "agent:claude:acp:binding:here:default:test123";
+
+    let callCount = 0;
+    // Simulate runtime error for missing session on first call, succeed on second
+    runtimeState.runTurn.mockImplementation(async function* () {
+      callCount++;
+      if (callCount === 1) {
+        yield {
+          type: "error" as const,
+          code: "ACP_SESSION_INIT_FAILED",
+          message:
+            "Persistent ACP session agent:claude:acp:binding:here:default:test123 could not be resumed: resource not found",
+        };
+        return;
+      }
+      yield { type: "done" as const };
+    });
+
+    // Mock ensureSession to return session info
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey,
+      backend: "acpx",
+      runtimeSessionName: "runtime-fresh",
+      acpxRecordId: sessionKey,
+      backendSessionId: "acpx-session-fresh",
+    });
+
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    // Mock session entry WITHOUT identity (common for --bind here after restart)
+    let currentMeta: SessionAcpMeta = readySessionMeta({
+      agent: "claude",
+      mode: "persistent",
+      // No identity field - this is the key scenario
+    });
+
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: currentMeta,
+    }));
+
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return next
+        ? {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            acp: currentMeta,
+          }
+        : null;
+    });
+
+    const manager = new AcpSessionManager();
+
+    // Should succeed after retry (not block on missing identity)
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey,
+        text: "test message",
+        mode: "prompt",
+        requestId: "r-retry-test",
+      }),
+    ).resolves.toBeUndefined();
+
+    // Verify prepareFreshSession was called for retry
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey,
+    });
+
+    // Verify runTurn was called twice (initial + retry)
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {
     vi.useFakeTimers();
     try {
