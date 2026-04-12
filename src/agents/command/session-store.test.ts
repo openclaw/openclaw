@@ -80,4 +80,137 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
     expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
   });
+
+  it("clears reset CLI import suppression when a new CLI binding is persisted", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-codex-cli";
+    const sessionId = "test-openclaw-session";
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        suppressCliHistoryImport: true,
+        cliSessionBindings: {
+          "codex-cli": {
+            sessionId: "stale-session",
+          },
+        },
+        cliSessionIds: {
+          "codex-cli": "stale-session",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    const result: EmbeddedPiRunResult = {
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session-456",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          cliSessionBinding: {
+            sessionId: "cli-session-456",
+          },
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      result,
+    });
+
+    expect(sessionStore[sessionKey]?.suppressCliHistoryImport).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "cli-session-456",
+    });
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.suppressCliHistoryImport).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "cli-session-456",
+    });
+  });
+
+  it("keeps reset CLI import suppression when the preserved CLI session is reused", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-codex-cli-reuse";
+    const sessionId = "test-openclaw-session";
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 1,
+        suppressCliHistoryImport: true,
+        cliSessionBindings: {
+          "codex-cli": {
+            sessionId: "preserved-session",
+          },
+        },
+        cliSessionIds: {
+          "codex-cli": "preserved-session",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    const result: EmbeddedPiRunResult = {
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "preserved-session",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          cliSessionBinding: {
+            sessionId: "preserved-session",
+          },
+        },
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      result,
+    });
+
+    expect(sessionStore[sessionKey]?.suppressCliHistoryImport).toBe(true);
+
+    const persisted = loadSessionStore(storePath);
+    expect(persisted[sessionKey]?.suppressCliHistoryImport).toBe(true);
+    expect(persisted[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "preserved-session",
+    });
+  });
 });

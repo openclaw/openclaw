@@ -53,6 +53,71 @@ export function getCliSessionId(
   return getCliSessionBinding(entry, provider)?.sessionId;
 }
 
+export function resolveBoundCliSessionProviders(
+  entry:
+    | Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">
+    | undefined,
+): string[] {
+  const providers = new Set<string>();
+  if (entry?.cliSessionBindings) {
+    for (const [provider, binding] of Object.entries(entry.cliSessionBindings)) {
+      if (normalizeOptionalString(binding?.sessionId)) {
+        providers.add(normalizeProviderId(provider));
+      }
+    }
+  }
+  if (entry?.cliSessionIds) {
+    for (const [provider, sessionId] of Object.entries(entry.cliSessionIds)) {
+      if (normalizeOptionalString(sessionId)) {
+        providers.add(normalizeProviderId(provider));
+      }
+    }
+  }
+  if (normalizeOptionalString(entry?.claudeCliSessionId)) {
+    providers.add(CLAUDE_CLI_BACKEND_ID);
+  }
+  return [...providers];
+}
+
+export function resolveSuppressedCliHistoryImportProviders(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "suppressCliHistoryImport"
+        | "suppressCliHistoryImportProviders"
+        | "cliSessionBindings"
+        | "cliSessionIds"
+        | "claudeCliSessionId"
+      >
+    | undefined,
+): string[] {
+  const explicitProviders = Array.isArray(entry?.suppressCliHistoryImportProviders)
+    ? entry.suppressCliHistoryImportProviders
+        .map((provider) => normalizeOptionalString(provider))
+        .filter((provider): provider is string => Boolean(provider))
+        .map((provider) => normalizeProviderId(provider))
+    : [];
+  if (explicitProviders.length > 0) {
+    return [...new Set(explicitProviders)];
+  }
+  if (entry?.suppressCliHistoryImport) {
+    return resolveBoundCliSessionProviders(entry);
+  }
+  return [];
+}
+
+function setSuppressedCliHistoryImportProviders(
+  entry: SessionEntry,
+  providers: Iterable<string>,
+): void {
+  const normalizedProviders = [
+    ...new Set([...providers].map((provider) => normalizeProviderId(provider))),
+  ];
+  entry.suppressCliHistoryImportProviders =
+    normalizedProviders.length > 0 ? normalizedProviders : undefined;
+  entry.suppressCliHistoryImport = normalizedProviders.length > 0 ? true : undefined;
+}
+
 export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
   setCliSessionBinding(entry, provider, { sessionId });
 }
@@ -67,6 +132,7 @@ export function setCliSessionBinding(
   if (!trimmed) {
     return;
   }
+  const previousSessionId = getCliSessionBinding(entry, normalized)?.sessionId;
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
     [normalized]: {
@@ -89,6 +155,11 @@ export function setCliSessionBinding(
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = trimmed;
   }
+  if (previousSessionId !== trimmed) {
+    const remainingSuppressedProviders = new Set(resolveSuppressedCliHistoryImportProviders(entry));
+    remainingSuppressedProviders.delete(normalized);
+    setSuppressedCliHistoryImportProviders(entry, remainingSuppressedProviders);
+  }
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
@@ -106,9 +177,13 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     delete entry.claudeCliSessionId;
   }
+  setSuppressedCliHistoryImportProviders(entry, resolveSuppressedCliHistoryImportProviders(entry));
+  // Reset-created sessions should keep CLI import suppression until a fresh
+  // CLI binding is written back to the session entry.
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
+  setSuppressedCliHistoryImportProviders(entry, []);
   delete entry.cliSessionBindings;
   delete entry.cliSessionIds;
   delete entry.claudeCliSessionId;
