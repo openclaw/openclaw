@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
@@ -755,55 +756,8 @@ raise SystemExit(completed.returncode)
 PY
 }
 
-resolve_macos_desktop_user() {
-  local user
-  user="$(prlctl exec "$MACOS_VM" /usr/bin/stat -f '%Su' /dev/console 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
-  if [[ "$user" =~ ^[A-Za-z0-9._-]+$ && "$user" != "root" && "$user" != "loginwindow" ]]; then
-    printf '%s\n' "$user"
-    return 0
-  fi
-  prlctl exec "$MACOS_VM" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
-    | tr -d '\r' \
-    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
-}
-
-resolve_macos_desktop_home() {
-  local user="$1"
-  local home
-  home="$(
-    prlctl exec "$MACOS_VM" /usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null \
-      | tr -d '\r' \
-      | awk '/NFSHomeDirectory:/ { print $2; exit }'
-  )"
-  if [[ -n "$home" ]]; then
-    printf '%s\n' "$home"
-  else
-    printf '/Users/%s\n' "$user"
-  fi
-}
-
-macos_current_user_available() {
-  prlctl exec "$MACOS_VM" --current-user /usr/bin/whoami >/dev/null 2>&1
-}
-
 macos_desktop_user_exec() {
-  if macos_current_user_available; then
-    prlctl exec "$MACOS_VM" --current-user /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" "$@"
-    return
-  fi
-
-  local user home
-  user="$(resolve_macos_desktop_user)"
-  [[ -n "$user" ]] || die "unable to resolve macOS desktop user for sudo fallback"
-  home="$(resolve_macos_desktop_home "$user")"
-  warn "macOS --current-user unavailable; using root sudo fallback for $user"
-  prlctl exec "$MACOS_VM" /usr/bin/sudo -u "$user" /usr/bin/env \
-    "HOME=$home" \
-    "USER=$user" \
-    "LOGNAME=$user" \
-    "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$API_KEY_ENV=$API_KEY_VALUE" \
-    "$@"
+  parallels_macos_desktop_user_exec "$MACOS_VM" "$API_KEY_ENV" "$API_KEY_VALUE" "$@"
 }
 
 guest_powershell_poll() {

@@ -17,6 +17,7 @@ describe("buildStatusCommandReportData", () => {
             ...baseParams.summary.sessions,
             recent: [
               {
+                ...baseParams.summary.sessions.recent[0],
                 key: "session-key",
                 kind: "direct",
                 updatedAt: 1,
