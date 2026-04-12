@@ -120,8 +120,8 @@ steps:
           message:
             expr: "`expected write tool call during repo contract followthrough, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
       - assert:
-          expr: "!env.mock || (() => { const firstRead = followthroughDebugRequests.findIndex((request) => request.plannedToolName === 'read'); const firstWrite = followthroughDebugRequests.findIndex((request) => request.plannedToolName === 'write'); return firstRead >= 0 && firstWrite > firstRead; })()"
+          expr: "!env.mock || (() => { const readIndices = followthroughDebugRequests.map((r, i) => r.plannedToolName === 'read' ? i : -1).filter(i => i >= 0); const firstWrite = followthroughDebugRequests.findIndex((r) => r.plannedToolName === 'write'); return readIndices.length >= 3 && firstWrite >= 0 && readIndices[2] < firstWrite; })()"
           message:
-            expr: "`expected read-before-write ordering during repo contract followthrough, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
+            expr: "`expected all 3 reads before any write during repo contract followthrough, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
     detailsExpr: outbound.text
 ```

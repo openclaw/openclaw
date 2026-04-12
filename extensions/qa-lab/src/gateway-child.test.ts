@@ -325,12 +325,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(parsed.profiles["qa-mock-openai"]).toMatchObject({
         type: "api_key",
         provider: "openai",
-        key: "sk-qa-mock",
+        key: "qa-mock-not-a-real-key",
       });
       expect(parsed.profiles["qa-mock-anthropic"]).toMatchObject({
         type: "api_key",
         provider: "anthropic",
-        key: "sk-qa-mock",
+        key: "qa-mock-not-a-real-key",
       });
     }
   });

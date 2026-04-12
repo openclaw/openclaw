@@ -157,9 +157,10 @@ steps:
             # assertion, a prose reply that just mentions a MEDIA path
             # could satisfy the scenario, so strengthen it by requiring
             # the mock to have recorded `plannedToolName: "image_generate"`
-            # against a post-restart request. Scoped to `!env.mock` so
-            # live-frontier runs (which don't expose `/debug/requests`)
-            # still pass the rest of the scenario.
+            # against a post-restart request. The `!env.mock || ...`
+            # guard means this check only runs in mock mode (where
+            # `/debug/requests` is available); live-frontier runs skip
+            # it and still pass the rest of the scenario.
             - assert:
                 expr: "!env.mock || [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].some((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check') && request.plannedToolName === 'image_generate')"
                 message:

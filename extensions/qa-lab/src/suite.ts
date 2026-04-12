@@ -66,7 +66,7 @@ type QaSuiteStep = {
   run: () => Promise<string | void>;
 };
 
-type QaSuiteScenarioResult = {
+export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail";
   steps: QaReportCheck[];

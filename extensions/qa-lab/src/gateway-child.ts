@@ -421,9 +421,10 @@ export function buildQaMockProfileId(provider: string): string {
  * runs) and returns a config with matching `auth.profiles` entries so the
  * runtime accepts the profile on the first lookup.
  *
- * The placeholder value `sk-qa-mock` is intentionally not a real API key
- * shape. It has to be non-empty to pass the credential serializer; anything
- * beyond that is ignored by the mock.
+ * The placeholder value `qa-mock-not-a-real-key` is intentionally not
+ * shaped like a real API key (no `sk-` prefix that would trip secret
+ * scanners). It only needs to be non-empty to pass the credential
+ * serializer; anything beyond that is ignored by the mock.
  */
 export async function stageQaMockAuthProfiles(params: {
   cfg: OpenClawConfig;
@@ -444,7 +445,7 @@ export async function stageQaMockAuthProfiles(params: {
         credential: {
           type: "api_key",
           provider,
-          key: "sk-qa-mock",
+          key: "qa-mock-not-a-real-key",
           displayName: `QA mock ${provider} credential`,
         },
         agentDir,
