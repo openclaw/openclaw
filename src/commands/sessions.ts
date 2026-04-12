@@ -103,6 +103,7 @@ export async function sessionsCommand(
     agent?: string;
     allAgents?: boolean;
     explain?: string;
+    tool?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -186,6 +187,13 @@ export async function sessionsCommand(
         entry.chatType ?? entry.origin?.chatType,
       ),
     });
+    const normalizedRequestedTool = opts.tool?.trim().toLowerCase() || null;
+    const allEffectiveToolIds = effectiveTools.groups.flatMap((group) => group.tools.map((tool) => tool.id));
+    const matchedGroup = normalizedRequestedTool
+      ? effectiveTools.groups.find((group) =>
+          group.tools.some((tool) => tool.id.toLowerCase() === normalizedRequestedTool),
+        )
+      : undefined;
     const payload = {
       key: target.canonicalKey,
       agentId: target.agentId,
@@ -228,6 +236,23 @@ export async function sessionsCommand(
           ...(effectiveToolPolicy.providerProfile ? ["provider-profile-policy"] : []),
         ],
       },
+      toolCheck: normalizedRequestedTool
+        ? {
+            requested: normalizedRequestedTool,
+            available: allEffectiveToolIds.some((id) => id.toLowerCase() === normalizedRequestedTool),
+            matchedGroup: matchedGroup?.id ?? null,
+            reasonChain: [
+              "runtime-effective-tool-inventory",
+              `tool-profile:${effectiveTools.profile}`,
+              ...(effectiveToolPolicy.globalPolicy ? ["global-tools-policy"] : []),
+              ...(effectiveToolPolicy.globalProviderPolicy ? ["global-provider-policy"] : []),
+              ...(effectiveToolPolicy.agentPolicy ? ["agent-tools-policy"] : []),
+              ...(effectiveToolPolicy.agentProviderPolicy ? ["agent-provider-policy"] : []),
+              ...(effectiveToolPolicy.profile ? ["profile-policy"] : []),
+              ...(effectiveToolPolicy.providerProfile ? ["provider-profile-policy"] : []),
+            ],
+          }
+        : null,
       tools: {
         profile: effectiveTools.profile,
         policyProfile: effectiveToolPolicy.profile ?? null,
@@ -339,6 +364,17 @@ export async function sessionsCommand(
     runtime.log(
       `${label("Subagent control")}${muted(": ")}${infoLabel(payload.capabilities.subagent.controlScope)}`,
     );
+    if (payload.toolCheck) {
+      runtime.log(
+        `${label("Tool check")}${muted(": ")}${payload.toolCheck.available ? success("available") : theme.warn("not available")} ${infoLabel(payload.toolCheck.requested)}`,
+      );
+      runtime.log(
+        `${label("Tool group")}${muted(": ")}${infoLabel(payload.toolCheck.matchedGroup ?? "-")}`,
+      );
+      runtime.log(
+        `${label("Tool reasons")}${muted(": ")}${infoLabel(payload.toolCheck.reasonChain.join(" -> "))}`,
+      );
+    }
     for (const group of payload.tools.groups) {
       runtime.log(
         `${label(`Tools ${group.id}`)}${muted(": ")}${infoLabel(`${group.count} [${group.tools.join(", ")}]`)}`,

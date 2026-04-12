@@ -210,6 +210,7 @@ describe("sessionsCommand", () => {
         groups: Array<{ id: string; count: number; tools: string[] }>;
       };
       capabilities: { subagent: { role: string; controlScope: string } };
+      toolCheck: null | { requested: string; available: boolean; matchedGroup: string | null; reasonChain: string[] };
     }>(sessionsCommand, store, { explain: "agent:main:main" });
 
     expect(payload.key).toBe("agent:main:main");
@@ -234,7 +235,29 @@ describe("sessionsCommand", () => {
     expect(payload.tools.policyPipeline.some((step) => step.label.includes("tools.profile"))).toBe(true);
     expect(payload.capabilities.subagent.role).toBe("main");
     expect(payload.capabilities.subagent.controlScope).toBe("children");
+    expect(payload.toolCheck).toBeNull();
     expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
+  });
+
+  it("can explain whether a specific tool is effectively available", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-explain-tool",
+    );
+
+    const payload = await runSessionsJson<{
+      toolCheck: { requested: string; available: boolean; matchedGroup: string | null; reasonChain: string[] };
+    }>(sessionsCommand, store, { explain: "agent:main:main", tool: "exec" });
+
+    expect(payload.toolCheck.requested).toBe("exec");
+    expect(payload.toolCheck.available).toBe(true);
+    expect(payload.toolCheck.matchedGroup).toBe("core");
+    expect(payload.toolCheck.reasonChain).toContain("runtime-effective-tool-inventory");
   });
 
   it("renders a readable text explanation for one session", async () => {
