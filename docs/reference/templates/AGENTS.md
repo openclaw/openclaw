@@ -157,6 +157,19 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 
 **Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
 
+### Pending-Review Anti-Loop Policy (Template)
+
+Use this policy to avoid false idle detection on long-running delegated tasks.
+
+- If user intent is ambiguous or a restart happened mid-flow, set workflow state to `pending-review`.
+- Record this minimum state: `lastConfirmedIntent`, `lastSuccessfulStage`, `blockedStage`, `expectedDuration`, and `nextReversibleAction`.
+- Before any recovery re-dispatch, compute an `intentHash` (same stage + same objective + same expected output).
+- If the same `intentHash` is already in-flight, mark `active-longrun` and do not re-dispatch.
+- Long tasks are active while any progress signal exists in the stall window: token growth, session `updatedAt`, artifact timestamp change, or task `lastEventAt`.
+- Recommended stall windows by task class: quick >= 10m, analytical >= 30m, heavy >= 90m.
+- Allow at most one recovery re-dispatch per `intentHash` per cooldown window (default 6h).
+- If recovery still returns timeout/no actionable output, stop auto-retries and ask user with fixed options: continue waiting, revise scope, or terminate branch.
+
 **Things to check (rotate through these, 2-4 times per day):**
 
 - **Emails** - Any urgent unread messages?
