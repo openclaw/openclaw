@@ -118,17 +118,8 @@ export function resolveMissingPluginCommandMessage(
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
-    // If there's no plugin entry for this command in the config and no manifest
-    // alias was found, it's likely a built-in chat command (e.g. "commands",
-    // "help") that doesn't require plugin allow-listing.  Return null so the
-    // command can proceed to its normal handler.
-    const hasPluginEntry =
-      config?.plugins?.entries?.[normalizedPluginId] !== undefined;
-    if (!hasPluginEntry && !commandAlias) {
-      return null;
-    }
     return (
-      `The \`${normalizedPluginId}\` command is unavailable because ` +
+      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
       `\`plugins.allow\` if you want that bundled plugin CLI surface.`
     );
