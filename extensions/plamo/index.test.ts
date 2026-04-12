@@ -1566,6 +1566,33 @@ describe("plamo provider plugin", () => {
         },
       ],
     });
+
+    const toolUseInputMessage = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [
+        { type: "text", text: `Checking...${inlineToolMarkup}` },
+        {
+          type: "toolUse",
+          id: "existing_tool_use_input",
+          name: "write",
+          input: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    };
+    normalizePlamoToolMarkupInMessage(toolUseInputMessage);
+    expect(toolUseInputMessage).toMatchObject({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "Checking..." },
+        {
+          type: "toolUse",
+          id: "existing_tool_use_input",
+          name: "write",
+          input: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    });
   });
 
   it("preserves multiple text blocks around non-text blocks when normalizing inline tool markup", () => {

@@ -311,7 +311,9 @@ function resolveToolCallBlockSignature(block: unknown): string | null {
     return null;
   }
   const name = (block as { name?: unknown }).name;
-  const args = (block as { arguments?: unknown }).arguments;
+  const args =
+    (block as { arguments?: unknown }).arguments ??
+    (block as { input?: unknown }).input;
   if (typeof name !== "string" || !args || typeof args !== "object" || Array.isArray(args)) {
     return null;
   }
