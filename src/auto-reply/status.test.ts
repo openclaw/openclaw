@@ -331,6 +331,31 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
+  it("shows 1M context for anthropic claude-sonnet-4-6 without context1m params", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-sonnet-4-6",
+      },
+      sessionEntry: {
+        sessionId: "sonnet-46-default-1m",
+        updatedAt: 0,
+        totalTokens: 300_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 300k/1.0m");
+  });
+
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
     const sessionEntry = {
       sessionId: "switch-back",

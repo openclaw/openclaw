@@ -64,6 +64,10 @@ import {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
+import {
+  resolveSingleAccountKeysToMove,
+  resolveSingleAccountPromotionTarget,
+} from "./setup-promotion-helpers.js";
 
 const matrixSingleAccountKeysToMove = [
   "allowBots",
@@ -1048,6 +1052,61 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(next.channels?.telegram?.streaming).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
+  });
+
+  it("telegram: does not move dmPolicy or allowFrom from root when named accounts exist", () => {
+    const keys = resolveSingleAccountKeysToMove({
+      channelKey: "telegram",
+      channel: {
+        dmPolicy: "disabled",
+        allowFrom: ["123"],
+        botToken: "legacy",
+        accounts: { alerts: { botToken: "tok" } },
+      },
+    });
+    expect(keys).not.toContain("dmPolicy");
+    expect(keys).not.toContain("allowFrom");
+    expect(keys).toContain("botToken");
+  });
+
+  it("telegram: resolves promotion target from defaultAccount", () => {
+    expect(
+      resolveSingleAccountPromotionTarget({
+        channelKey: "telegram",
+        channel: {
+          defaultAccount: "alerts",
+          accounts: { alerts: { botToken: "tok" } },
+        },
+      }),
+    ).toBe("alerts");
+  });
+
+  it("telegram: preserves root dmPolicy when patching defaultAccount-scoped dm policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "alerts",
+          dmPolicy: "disabled",
+          allowFrom: ["123"],
+          accounts: {
+            alerts: {
+              dmPolicy: "allowlist",
+              botToken: "tok",
+            },
+          },
+        },
+      },
+    };
+
+    const next = patchChannelConfigForAccount({
+      cfg,
+      channel: "telegram",
+      accountId: "alerts",
+      patch: { dmPolicy: "open" },
+    });
+
+    expect(next.channels?.telegram?.dmPolicy).toBe("disabled");
+    expect(next.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
   });
 
   it("supports imessage/signal account-scoped channel patches", () => {

@@ -7,6 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
@@ -221,65 +222,75 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
 async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
-  const response = await fetch(apiUrl, {
-    headers: {
-      "User-Agent": "openclaw",
-      Accept: "application/vnd.github+json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: apiUrl,
+    init: {
+      headers: {
+        "User-Agent": "openclaw",
+        Accept: "application/vnd.github+json",
+      },
     },
+    timeoutMs: 15_000,
+    auditContext: "extensions/signal installSignalCliFromRelease",
   });
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: `Failed to fetch release info (${response.status})`,
-    };
-  }
-
-  const payload = (await response.json()) as ReleaseResponse;
-  const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
-  const assets = payload.assets ?? [];
-  const asset = pickAsset(assets, process.platform, process.arch);
-
-  if (!asset) {
-    return {
-      ok: false,
-      error: "No compatible release asset found for this platform.",
-    };
-  }
-
-  const tmpDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-signal-"));
-  const archivePath = path.join(tmpDir, asset.name);
-
-  runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
-  await downloadToFile(asset.browser_download_url, archivePath);
-
-  const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
-  await fs.mkdir(installRoot, { recursive: true });
-
-  if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-    return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-  }
   try {
-    await extractSignalCliArchive(archivePath, installRoot, 60_000);
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    return {
-      ok: false,
-      error: `Failed to extract ${asset.name}: ${message}`,
-    };
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Failed to fetch release info (${response.status})`,
+      };
+    }
+
+    const payload = (await response.json()) as ReleaseResponse;
+    const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
+    const assets = payload.assets ?? [];
+    const asset = pickAsset(assets, process.platform, process.arch);
+
+    if (!asset) {
+      return {
+        ok: false,
+        error: "No compatible release asset found for this platform.",
+      };
+    }
+
+    const tmpDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-signal-"),
+    );
+    const archivePath = path.join(tmpDir, asset.name);
+
+    runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
+    await downloadToFile(asset.browser_download_url, archivePath);
+
+    const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
+    await fs.mkdir(installRoot, { recursive: true });
+
+    if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
+      return { ok: false, error: `Unsupported archive type: ${asset.name}` };
+    }
+    try {
+      await extractSignalCliArchive(archivePath, installRoot, 60_000);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      return {
+        ok: false,
+        error: `Failed to extract ${asset.name}: ${message}`,
+      };
+    }
+
+    const cliPath = await findSignalCliBinary(installRoot);
+    if (!cliPath) {
+      return {
+        ok: false,
+        error: `signal-cli binary not found after extracting ${asset.name}`,
+      };
+    }
+
+    await fs.chmod(cliPath, 0o755).catch(() => {});
+
+    return { ok: true, cliPath, version };
+  } finally {
+    await release();
   }
-
-  const cliPath = await findSignalCliBinary(installRoot);
-  if (!cliPath) {
-    return {
-      ok: false,
-      error: `signal-cli binary not found after extracting ${asset.name}`,
-    };
-  }
-
-  await fs.chmod(cliPath, 0o755).catch(() => {});
-
-  return { ok: true, cliPath, version };
 }
 
 // ---------------------------------------------------------------------------

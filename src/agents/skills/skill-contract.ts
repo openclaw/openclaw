@@ -1,4 +1,4 @@
-import type { Skill as CanonicalSkill, SourceInfo } from "@mariozechner/pi-coding-agent";
+import type { Skill as CanonicalSkill } from "@mariozechner/pi-coding-agent";
 
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";
@@ -8,17 +8,26 @@ export type Skill = CanonicalSkill & {
   source?: string;
 };
 
+/** Shape we attach for newer pi-coding-agent builds that require `sourceInfo` on `Skill`. */
+export type SyntheticSkillSourceInfo = {
+  path: string;
+  source: string;
+  scope: SourceScope;
+  origin: SourceOrigin;
+  baseDir?: string;
+};
+
 export function createSyntheticSourceInfo(
-  path: string,
+  filePath: string,
   options: {
     source: string;
     scope?: SourceScope;
     origin?: SourceOrigin;
     baseDir?: string;
   },
-): SourceInfo {
+): SyntheticSkillSourceInfo {
   return {
-    path,
+    path: filePath,
     source: options.source,
     scope: options.scope ?? "temporary",
     origin: options.origin ?? "top-level",

@@ -184,32 +184,32 @@ async function fetchHttpJson<T>(
   }
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
-  let release: (() => Promise<void>) | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    const { response: res, release } = await fetchWithSsrFGuard({
       url,
-      init,
-      signal: ctrl.signal,
+      init: { ...init, signal: ctrl.signal },
+      timeoutMs,
       policy: { allowPrivateNetwork: true },
       auditContext: "browser-control-client",
     });
-    release = guarded.release;
-    const res = guarded.response;
-    if (!res.ok) {
-      if (isRateLimitStatus(res.status)) {
-        // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        await discardResponseBody(res);
-        throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
-        );
+    try {
+      if (!res.ok) {
+        if (isRateLimitStatus(res.status)) {
+          // Do not reflect upstream response text into the error surface (log/agent injection risk)
+          await discardResponseBody(res);
+          throw new BrowserServiceError(
+            `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          );
+        }
+        const text = await res.text().catch(() => "");
+        throw new BrowserServiceError(text || `HTTP ${res.status}`);
       }
-      const text = await res.text().catch(() => "");
-      throw new BrowserServiceError(text || `HTTP ${res.status}`);
+      return (await res.json()) as T;
+    } finally {
+      await release();
     }
-    return (await res.json()) as T;
   } finally {
     clearTimeout(t);
-    await release?.();
     if (upstreamSignal && upstreamAbortListener) {
       upstreamSignal.removeEventListener("abort", upstreamAbortListener);
     }

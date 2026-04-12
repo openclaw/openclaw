@@ -81,7 +81,7 @@ function loadSingleSkillDirectory(params: {
       origin: "top-level",
     }),
     disableModelInvocation: invocation.disableModelInvocation,
-  };
+  } as Skill;
 }
 
 function listCandidateSkillDirs(dir: string): string[] {

@@ -174,7 +174,6 @@ afterEach(() => {
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
 });
-
 describe("runReplyAgent auto-compaction token update", () => {
   async function seedSessionStore(params: {
     storePath: string;
@@ -706,7 +705,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        config: { agents: { defaults: { cliBackends: { "claude-cli": { command: "claude" } } } } },
         skillsSnapshot: {},
         provider: "claude-cli",
         model: "opus-4.5",

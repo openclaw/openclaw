@@ -25,7 +25,11 @@ import {
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
+import {
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  singleAccountKeysToMove,
+} from "./setup-contract.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -222,8 +226,9 @@ export function createTelegramPluginBase(params: {
     },
     setup: {
       ...params.setup,
-      namedAccountPromotionKeys,
       singleAccountKeysToMove,
+      namedAccountPromotionKeys,
+      resolveSingleAccountPromotionTarget,
     },
   });
   return {

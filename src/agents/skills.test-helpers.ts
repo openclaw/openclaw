@@ -44,5 +44,5 @@ export function createCanonicalFixtureSkill(params: {
       origin: "top-level",
     }),
     disableModelInvocation: params.disableModelInvocation ?? false,
-  };
+  } as Skill;
 }

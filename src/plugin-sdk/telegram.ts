@@ -22,6 +22,15 @@ export const parseTelegramTopicConversation: FacadeModule["parseTelegramTopicCon
 export const singleAccountKeysToMove: FacadeModule["singleAccountKeysToMove"] =
   createLazyFacadeArrayValue(() => loadFacadeModule().singleAccountKeysToMove);
 
+export const namedAccountPromotionKeys: FacadeModule["namedAccountPromotionKeys"] =
+  loadFacadeModule().namedAccountPromotionKeys;
+
+export const resolveSingleAccountPromotionTarget: FacadeModule["resolveSingleAccountPromotionTarget"] =
+  ((...args) =>
+    loadFacadeModule().resolveSingleAccountPromotionTarget(
+      ...args,
+    )) as FacadeModule["resolveSingleAccountPromotionTarget"];
+
 export const collectTelegramSecurityAuditFindings: FacadeModule["collectTelegramSecurityAuditFindings"] =
   ((...args) =>
     loadFacadeModule().collectTelegramSecurityAuditFindings(

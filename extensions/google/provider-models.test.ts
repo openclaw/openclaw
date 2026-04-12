@@ -119,10 +119,15 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-pro-preview",
         models: [
-          createTemplateModel("google-gemini-cli", "gemini-3-pro-preview", {
+          createTemplateModel("google-gemini-cli", "gemini-3.1-pro-preview", {
             api: "google-gemini-cli",
             baseUrl: "https://cloudcode-pa.googleapis.com",
             contextWindow: 1_048_576,
+          }),
+          createTemplateModel("google-gemini-cli", "gemini-3-pro-preview", {
+            api: "google-gemini-cli",
+            baseUrl: "https://cloudcode-pa.googleapis.com",
+            contextWindow: 200_000,
           }),
           createTemplateModel("google", "gemini-3-pro-preview", {
             api: "google-generative-ai",

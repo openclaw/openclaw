@@ -53,7 +53,7 @@ export function getHomeDir(): string {
     return envHome;
   }
 
-  // Final fallback.
+  // Final fallback (OpenClaw-scoped tmp root).
   return resolvePreferredOpenClawTmpDir();
 }
 
