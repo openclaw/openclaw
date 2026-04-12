@@ -52,6 +52,7 @@ type RuntimeModel = Parameters<StreamFn>[0];
 type RuntimeContext = Parameters<StreamFn>[1];
 type RuntimeOptions = Parameters<StreamFn>[2];
 type ResolvedPlamoCompat = Required<OpenAICompletionsCompat>;
+type TextRange = readonly [start: number, end: number];
 
 const PLAMO_PAYLOAD_DUMP_PATH = process.env.OPENCLAW_PLAMO_PAYLOAD_DUMP_PATH?.trim() || "";
 
@@ -285,8 +286,8 @@ function normalizeToolCallSignatureValue(value: unknown): unknown {
     return value;
   }
   const normalized: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>).toSorted(
-    ([a], [b]) => a.localeCompare(b),
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
+    a.localeCompare(b),
   )) {
     normalized[key] = normalizeToolCallSignatureValue(entry);
   }
@@ -311,9 +312,7 @@ function resolveToolCallBlockSignature(block: unknown): string | null {
     return null;
   }
   const name = (block as { name?: unknown }).name;
-  const args =
-    (block as { arguments?: unknown }).arguments ??
-    (block as { input?: unknown }).input;
+  const args = (block as { arguments?: unknown }).arguments ?? (block as { input?: unknown }).input;
   if (typeof name !== "string" || !args || typeof args !== "object" || Array.isArray(args)) {
     return null;
   }
@@ -707,7 +706,9 @@ function parseStreamingChunk(raw: string): OpenAIStyleChunk | null {
 }
 
 function resolveToolCallChunkIndex(toolCall: OpenAIStyleToolCall): number | null {
-  return typeof toolCall.index === "number" && Number.isInteger(toolCall.index) ? toolCall.index : null;
+  return typeof toolCall.index === "number" && Number.isInteger(toolCall.index)
+    ? toolCall.index
+    : null;
 }
 
 function extractStreamingReasoning(delta: OpenAIStyleChunkDelta): string {
@@ -1023,10 +1024,81 @@ function createNativePlamoStream(
 }
 
 export function stripPlamoToolMarkup(text: string): string {
-  return text
-    .replace(PLAMO_TOOL_REQUESTS_BLOCK_RE, "")
-    .replace(PLAMO_TOOL_REQUEST_BLOCK_RE, "")
-    .trim();
+  return removePlamoToolMarkupRanges(text, 0, collectPlamoToolMarkupRanges(text)).trim();
+}
+
+function collectRegexMatchRanges(text: string, regex: RegExp): TextRange[] {
+  const ranges: TextRange[] = [];
+  for (const match of text.matchAll(regex)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    ranges.push([match.index, match.index + match[0].length] as const);
+  }
+  return ranges;
+}
+
+function collectPlamoToolMarkupRanges(text: string): TextRange[] {
+  const ranges = [
+    ...collectRegexMatchRanges(text, PLAMO_TOOL_REQUESTS_BLOCK_RE),
+    ...collectRegexMatchRanges(text, PLAMO_TOOL_REQUEST_BLOCK_RE),
+  ].toSorted((left, right) => left[0] - right[0] || left[1] - right[1]);
+
+  if (ranges.length === 0) {
+    return [];
+  }
+
+  const mergedRanges: Array<[number, number]> = [];
+  for (const [start, end] of ranges) {
+    const previousRange = mergedRanges.at(-1);
+    if (!previousRange || start > previousRange[1]) {
+      mergedRanges.push([start, end]);
+      continue;
+    }
+    previousRange[1] = Math.max(previousRange[1], end);
+  }
+
+  return mergedRanges;
+}
+
+function removePlamoToolMarkupRanges(
+  text: string,
+  blockStart: number,
+  ranges: TextRange[],
+): string {
+  if (text.length === 0 || ranges.length === 0) {
+    return text;
+  }
+
+  const blockEnd = blockStart + text.length;
+  const segments: string[] = [];
+  let cursor = blockStart;
+
+  for (const [start, end] of ranges) {
+    if (end <= cursor) {
+      continue;
+    }
+    if (start >= blockEnd) {
+      break;
+    }
+
+    const overlapStart = Math.max(start, cursor);
+    const overlapEnd = Math.min(end, blockEnd);
+
+    if (overlapStart > cursor) {
+      segments.push(text.slice(cursor - blockStart, overlapStart - blockStart));
+    }
+    cursor = Math.max(cursor, overlapEnd);
+    if (cursor >= blockEnd) {
+      break;
+    }
+  }
+
+  if (cursor < blockEnd) {
+    segments.push(text.slice(cursor - blockStart));
+  }
+
+  return segments.join("");
 }
 
 export function parsePlamoToolCalls(text: string): ParsedPlamoToolCall[] {
@@ -1077,6 +1149,10 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
   ) {
     return;
   }
+  const markupRanges = collectPlamoToolMarkupRanges(combinedText);
+  if (markupRanges.length === 0) {
+    return;
+  }
 
   const existingToolCallCounts = hasToolCallBlock(content)
     ? resolveExistingToolCallSignatureCounts(content)
@@ -1092,19 +1168,32 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
   });
 
   const nextContent: unknown[] = [];
+  let textOffset = 0;
   for (const block of content) {
     if (!isTextBlock(block)) {
       nextContent.push(block);
       continue;
     }
-    if (
-      !block.text.includes(PLAMO_BEGIN_TOOL_REQUEST) &&
-      !block.text.includes(PLAMO_BEGIN_TOOL_REQUESTS)
-    ) {
+    const blockStart = textOffset;
+    const blockEnd = blockStart + block.text.length;
+    let cleanedText = removePlamoToolMarkupRanges(block.text, blockStart, markupRanges);
+    textOffset = blockEnd;
+    if (cleanedText === block.text) {
       nextContent.push(block);
       continue;
     }
-    const cleanedText = stripPlamoToolMarkup(block.text);
+    const shouldTrimStart = markupRanges.some(
+      ([start, end]) => start >= blockStart && start < blockEnd && end > blockStart,
+    );
+    const shouldTrimEnd = markupRanges.some(
+      ([start, end]) => end > blockStart && end <= blockEnd && start < blockEnd,
+    );
+    if (shouldTrimStart) {
+      cleanedText = cleanedText.trimStart();
+    }
+    if (shouldTrimEnd) {
+      cleanedText = cleanedText.trimEnd();
+    }
     if (cleanedText) {
       nextContent.push({ ...block, text: cleanedText });
     }

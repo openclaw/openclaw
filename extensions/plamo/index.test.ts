@@ -381,11 +381,7 @@ describe("plamo provider plugin", () => {
   it("uses PLaMo-safe compat defaults for uncataloged models without explicit compat", async () => {
     const { provider } = await loadPlamoCatalog();
 
-    let resolveRequest:
-      | ((value: {
-          body: Record<string, unknown>;
-        }) => void)
-      | null = null;
+    let resolveRequest: ((value: { body: Record<string, unknown> }) => void) | null = null;
     const requestSeen = new Promise<{
       body: Record<string, unknown>;
     }>((resolve) => {
@@ -500,11 +496,7 @@ describe("plamo provider plugin", () => {
   it("re-normalizes payload after mutation-style onPayload hooks that return undefined", async () => {
     const { provider } = await loadPlamoCatalog();
 
-    let resolveRequest:
-      | ((value: {
-          body: Record<string, unknown>;
-        }) => void)
-      | null = null;
+    let resolveRequest: ((value: { body: Record<string, unknown> }) => void) | null = null;
     const requestSeen = new Promise<{
       body: Record<string, unknown>;
     }>((resolve) => {
@@ -1655,6 +1647,39 @@ describe("plamo provider plugin", () => {
         { type: "text", text: "Before " },
         { type: "text", text: inlineToolMarkup },
         { type: "text", text: " after" },
+      ],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "Before " },
+        { type: "text", text: " after" },
+        {
+          type: "toolCall",
+          name: "write",
+          arguments: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    });
+  });
+
+  it("removes split inline tool markup from continuation text blocks", () => {
+    const splitInlineToolMarkup = [
+      "<|plamo:begin_tool_request:plamo|>" +
+        "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+        '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"notes.txt"',
+      ',"content":"ok"}<|plamo:end_tool_arguments:plamo|>' + "<|plamo:end_tool_request:plamo|>",
+    ] as const;
+
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [
+        { type: "text", text: `Before ${splitInlineToolMarkup[0]}` },
+        { type: "text", text: `${splitInlineToolMarkup[1]} after` },
       ],
     };
 
