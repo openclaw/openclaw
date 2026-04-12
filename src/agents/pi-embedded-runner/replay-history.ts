@@ -434,10 +434,11 @@ export async function sanitizeSessionHistory(params: {
     allowProviderOwnedThinkingReplay,
   });
   const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode && !isOpenAIResponsesApi
+    policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(sanitizedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          preserveOpenAIFunctionCallPairings: isOpenAIResponsesApi,
           allowedToolNames: params.allowedToolNames,
         })
       : sanitizedToolCalls;

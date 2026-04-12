@@ -430,17 +430,25 @@ export function renderApp(state: AppViewState) {
       ? () => updatableState.requestUpdate?.()
       : undefined;
   _pendingUpdate = requestHostUpdate;
+  const hasConnectedOnce = state.hasConnectedOnce === true;
+  const showDashboard = state.connected || hasConnectedOnce;
+  const connectionPhase = state.connectionPhase ?? (state.connected ? "connected" : "disconnected");
 
-  // Gate: require successful gateway connection before showing the dashboard.
-  // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
+  // Gate: show the full login flow until the first successful connection.
+  // After that, keep the dashboard mounted during reconnects so session state stays visible.
+  if (!showDashboard) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
+  const chatDisabledReason =
+    state.connected
+      ? null
+      : connectionPhase === "reconnecting"
+        ? "Reconnecting to the gateway…"
+        : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
@@ -1061,6 +1069,27 @@ export function renderApp(state: AppViewState) {
               >
                 ${icons.x}
               </button>
+            </div>`
+          : nothing}
+        ${state.connectionBanner
+          ? html`<div
+              class="connection-banner callout ${state.connectionBanner.tone}"
+              role=${state.connectionBanner.tone === "danger" ? "alert" : "status"}
+            >
+              <div class="connection-banner__body">
+                <strong>${state.connectionBanner.title}</strong>
+                ${state.connectionBanner.detail
+                  ? html`<span>${state.connectionBanner.detail}</span>`
+                  : nothing}
+              </div>
+              ${!state.connected
+                ? html`<button
+                    class="btn btn--sm connection-banner__btn"
+                    @click=${() => state.connect()}
+                  >
+                    Retry now
+                  </button>`
+                : nothing}
             </div>`
           : nothing}
         ${state.tab === "config"
@@ -1898,6 +1927,7 @@ export function renderApp(state: AppViewState) {
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
+              onRetryMessage: (text) => state.handleSendChat(text, { restoreDraft: true }),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),

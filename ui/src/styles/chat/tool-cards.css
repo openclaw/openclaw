@@ -162,6 +162,38 @@
   margin-top: 6px;
 }
 
+.chat-tool-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-tool-status--running {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.chat-tool-status--complete {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 36%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.chat-tool-status--failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
 /* Collapsed preview - fixed height with truncation */
 .chat-tools-inline {
   display: grid;
@@ -170,6 +202,54 @@
 
 .chat-tool-card__block {
   margin-top: 12px;
+}
+
+.chat-tool-card__timeline {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--secondary) 72%, transparent);
+}
+
+.chat-tool-card__timeline-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.chat-tool-card__timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.chat-tool-card__timeline-step--start .chat-tool-card__timeline-dot,
+.chat-tool-card__timeline-step--update .chat-tool-card__timeline-dot {
+  background: var(--warning);
+}
+
+.chat-tool-card__timeline-step--complete .chat-tool-card__timeline-dot {
+  background: var(--ok);
+}
+
+.chat-tool-card__timeline-step--failed .chat-tool-card__timeline-dot {
+  background: var(--danger);
+}
+
+.chat-tool-card__timeline-label {
+  min-width: 0;
+  color: var(--text);
+}
+
+.chat-tool-card__timeline-time {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .chat-tool-card__preview,

@@ -70,6 +70,14 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  status?: "running" | "complete" | "failed";
+  startedAt?: number;
+  finishedAt?: number | null;
+  timeline?: Array<{
+    kind: "start" | "update" | "complete" | "failed";
+    label: string;
+    at: number;
+  }>;
   preview?: {
     kind: "canvas";
     surface: "assistant_message";

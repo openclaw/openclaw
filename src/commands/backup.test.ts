@@ -17,6 +17,7 @@ import {
   mockStateOnlyBackupPlan,
   tarCreateMock,
 } from "./backup.test-support.js";
+import { backupCreateCommand } from "./backup.js";
 
 const { backupCreateCommand } = await import("./backup.js");
 

@@ -1,6 +1,7 @@
 export type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
+  title?: string;
 };
 
 export type CanvasSidebarContent = {

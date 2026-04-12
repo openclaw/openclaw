@@ -25,6 +25,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import { messageMatchesSearchQuery } from "../chat/search-match.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
+import { resolveChatSpace } from "../chat-spaces.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
@@ -34,7 +35,12 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
-import { buildSidebarContent, extractToolCards, extractToolPreview } from "../chat/tool-cards.ts";
+import {
+  buildPreviewSidebarContent,
+  buildSidebarContent,
+  extractToolCards,
+  extractToolPreview,
+} from "../chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -95,6 +101,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onRetryMessage?: (text: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onDismissSideResult?: () => void;
@@ -125,6 +132,7 @@ const deletedMessagesMap = new Map<string, DeletedMessages>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+const lastAutoOpenedArtifactBySession = new Map<string, string>();
 
 function getInputHistory(sessionKey: string): InputHistory {
   return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
@@ -152,6 +160,10 @@ function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
 
 function getInitializedToolCards(sessionKey: string): Set<string> {
   return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
+}
+
+function getLastAutoOpenedArtifactKey(sessionKey: string): string | null {
+  return getOrCreateSessionCacheValue(lastAutoOpenedArtifactBySession, sessionKey, () => null);
 }
 
 function appendCanvasBlockToAssistantMessage(
@@ -228,6 +240,27 @@ function extractChatMessagePreview(toolMessage: unknown): {
     return null;
   }
   return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+}
+
+function resolveLatestArtifactSidebarState(
+  props: ChatProps,
+): { key: string; content: SidebarContent } | null {
+  const toolMessages = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  for (let index = toolMessages.length - 1; index >= 0; index--) {
+    const preview = extractChatMessagePreview(toolMessages[index]);
+    if (!preview) {
+      continue;
+    }
+    const sidebarContent = buildPreviewSidebarContent(preview.preview, preview.text);
+    if (!sidebarContent) {
+      continue;
+    }
+    return {
+      key: preview.preview.viewId ?? preview.preview.url ?? `artifact:${index}`,
+      content: sidebarContent,
+    };
+  }
+  return null;
 }
 
 function findNearestAssistantMessageIndex(
@@ -591,6 +624,145 @@ function formatTokensCompact(n: number): string {
   return String(n);
 }
 
+function formatAttachmentKindLabel(mimeType?: string): string {
+  const trimmed = mimeType?.trim().toLowerCase() ?? "";
+  if (!trimmed) {
+    return "Attachment";
+  }
+  const [kind, subtypeRaw] = trimmed.split("/");
+  const subtype = subtypeRaw?.split("+")[0] ?? "";
+  if (kind === "image") {
+    return subtype ? `${subtype.toUpperCase()} image` : "Image";
+  }
+  if (kind === "audio") {
+    return subtype ? `${subtype.toUpperCase()} audio` : "Audio";
+  }
+  if (kind === "video") {
+    return subtype ? `${subtype.toUpperCase()} video` : "Video";
+  }
+  return subtype ? `${subtype.toUpperCase()} ${kind}` : kind;
+}
+
+function resolveContextUsage(
+  session: GatewaySessionRow | undefined,
+  defaultContextTokens: number | null,
+): { used: number; limit: number; percent: number } | null {
+  if (session?.totalTokensFresh === false) {
+    return null;
+  }
+  const used = session?.totalTokens ?? 0;
+  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  if (!used || !limit) {
+    return null;
+  }
+  return {
+    used,
+    limit,
+    percent: Math.min(Math.round((used / limit) * 100), 100),
+  };
+}
+
+function renderContextRail(
+  props: ChatProps,
+  activeSession: GatewaySessionRow | undefined,
+): TemplateResult | typeof nothing {
+  const attachments = props.attachments ?? [];
+  const currentSpace = resolveChatSpace(props.sessionKey, activeSession?.space);
+  const sessionLabel =
+    activeSession?.label?.trim() ||
+    activeSession?.displayName?.trim() ||
+    activeSession?.subject?.trim() ||
+    props.sessionKey;
+  const contextUsage = resolveContextUsage(activeSession, props.sessions?.defaults?.contextTokens ?? null);
+  const sessionItems = [
+    `Session ${sessionLabel}`,
+    currentSpace ? `Space ${currentSpace}` : null,
+    props.assistantName ? `Agent ${props.assistantName}` : null,
+    activeSession?.model ? `Model ${activeSession.model}` : null,
+    contextUsage
+      ? `Context ${contextUsage.percent}% (${formatTokensCompact(contextUsage.used)} / ${formatTokensCompact(contextUsage.limit)})`
+      : null,
+    activeSession?.reasoningLevel && activeSession.reasoningLevel !== "off"
+      ? `Reasoning ${activeSession.reasoningLevel}`
+      : null,
+  ].filter(Boolean) as string[];
+
+  if (attachments.length === 0 && sessionItems.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <div class="chat-context-rail" role="status" aria-live="polite">
+      <div class="chat-context-rail__section">
+        <span class="chat-context-rail__label">This turn</span>
+        <div class="chat-context-rail__items">
+          ${attachments.length > 0
+            ? attachments.map((attachment, index) => {
+                const label = `Image ${index + 1}`;
+                const kindLabel = formatAttachmentKindLabel(attachment.mimeType);
+                return html`
+                  <div class="chat-context-attachment">
+                    <button
+                      class="chat-context-attachment__preview"
+                      type="button"
+                      title=${props.onOpenSidebar ? `Preview ${label}` : label}
+                      aria-label=${props.onOpenSidebar ? `Preview ${label}` : label}
+                      @click=${() => {
+                        if (!props.onOpenSidebar) {
+                          return;
+                        }
+                        props.onOpenSidebar(
+                          buildSidebarContent(
+                            `# ${label}\n\n![${label}](${attachment.dataUrl})\n\n${kindLabel} attached for this turn.`,
+                            { title: label },
+                          ),
+                        );
+                      }}
+                    >
+                      <img
+                        class="chat-context-attachment__thumb"
+                        src=${attachment.dataUrl}
+                        alt=${label}
+                      />
+                      <span class="chat-context-attachment__copy">
+                        <span class="chat-context-attachment__title">${label}</span>
+                        <span class="chat-context-attachment__meta">${kindLabel} · Ready</span>
+                      </span>
+                    </button>
+                    <button
+                      class="chat-context-attachment__remove"
+                      type="button"
+                      aria-label=${`Remove ${label}`}
+                      @click=${() => {
+                        const next = attachments.filter((entry) => entry.id !== attachment.id);
+                        props.onAttachmentsChange?.(next);
+                      }}
+                    >
+                      ${icons.x}
+                    </button>
+                  </div>
+                `;
+              })
+            : html`<span class="chat-context-pill chat-context-pill--muted">No files attached</span>`}
+        </div>
+      </div>
+      <div class="chat-context-rail__section">
+        <span class="chat-context-rail__label">This session</span>
+        <div class="chat-context-rail__items">
+          ${sessionItems.map(
+            (item, index) => html`
+              <span
+                class="chat-context-pill ${index === 0 ? "chat-context-pill--accent" : ""}"
+                >${item}</span
+              >
+            `,
+          )}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -689,35 +861,6 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     });
     reader.readAsDataURL(file);
   }
-}
-
-function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof nothing {
-  const attachments = props.attachments ?? [];
-  if (attachments.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="chat-attachments-preview">
-      ${attachments.map(
-        (att) => html`
-          <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
-            <button
-              class="chat-attachment-remove"
-              type="button"
-              aria-label="Remove attachment"
-              @click=${() => {
-                const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
-                props.onAttachmentsChange?.(next);
-              }}
-            >
-              &times;
-            </button>
-          </div>
-        `,
-      )}
-    </div>
-  `;
 }
 
 function resetSlashMenuState(): void {
@@ -1148,6 +1291,39 @@ export function renderChat(props: ChatProps) {
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const getDraft = props.getDraft ?? (() => props.draft);
+  let composerTextarea: HTMLTextAreaElement | null = null;
+
+  const focusComposer = () => {
+    window.requestAnimationFrame(() => {
+      const textarea =
+        composerTextarea ??
+        document.querySelector<HTMLTextAreaElement>(".agent-chat__input textarea");
+      if (!textarea || !textarea.isConnected) {
+        return;
+      }
+      textarea.focus();
+      const length = textarea.value.length;
+      textarea.setSelectionRange(length, length);
+      adjustTextareaHeight(textarea);
+    });
+  };
+
+  const quoteMessageText = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    const quoted = trimmed
+      .split(/\r?\n/)
+      .map((line) => (line ? `> ${line}` : ">"))
+      .join("\n");
+    const currentDraft = getDraft();
+    const normalizedCurrent = currentDraft.trimEnd();
+    const nextDraft = normalizedCurrent ? `${normalizedCurrent}\n\n${quoted}\n\n` : `${quoted}\n\n`;
+    props.onDraftChange(nextDraft);
+    requestUpdate();
+    focusComposer();
+  };
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -1168,11 +1344,22 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
+  const latestArtifact = resolveLatestArtifactSidebarState(props);
+  const lastAutoOpenedArtifactKey = getLastAutoOpenedArtifactKey(props.sessionKey);
+  if (latestArtifact && props.onOpenSidebar && !props.sidebarOpen) {
+    if (lastAutoOpenedArtifactKey !== latestArtifact.key) {
+      lastAutoOpenedArtifactBySession.set(props.sessionKey, latestArtifact.key);
+      queueMicrotask(() => props.onOpenSidebar?.(latestArtifact.content));
+    }
+  }
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
+  const setToolCardExpanded = (toolCardId: string, expanded: boolean) => {
+    expandedToolCards.set(toolCardId, expanded);
     requestUpdate();
+  };
+  const toggleToolCardExpanded = (toolCardId: string) => {
+    setToolCardExpanded(toolCardId, !(expandedToolCards.get(toolCardId) ?? false));
   };
   const isEmpty = chatItems.length === 0 && !props.loading;
 
@@ -1268,8 +1455,15 @@ export function renderChat(props: ChatProps) {
                   expandedToolCards.set(messageId, !expandedToolCards.get(messageId));
                   requestUpdate();
                 },
+                onSetToolMessageExpanded: (messageId: string, expanded: boolean) => {
+                  expandedToolCards.set(messageId, expanded);
+                  requestUpdate();
+                },
                 isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
                 onToggleToolExpanded: toggleToolCardExpanded,
+                onSetToolExpanded: setToolCardExpanded,
+                onQuoteMessage: quoteMessageText,
+                onRetryMessage: props.onRetryMessage,
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
@@ -1467,15 +1661,23 @@ export function renderChat(props: ChatProps) {
                     if (!props.sidebarContent || !props.onOpenSidebar) {
                       return;
                     }
+                    const sidebarTitle = props.sidebarContent.title?.trim() || "Artifact";
                     if (props.sidebarContent.kind === "markdown") {
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``),
+                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``, {
+                          title: `${sidebarTitle} Raw`,
+                        }),
                       );
                       return;
                     }
                     if (props.sidebarContent.rawText?.trim()) {
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``),
+                        buildSidebarContent(
+                          `\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``,
+                          {
+                            title: `${sidebarTitle} Raw`,
+                          },
+                        ),
                       );
                     }
                   },
@@ -1526,7 +1728,7 @@ export function renderChat(props: ChatProps) {
 
       <!-- Input bar -->
       <div class="agent-chat__input">
-        ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
+        ${renderSlashMenu(requestUpdate, props)} ${renderContextRail(props, activeSession)}
 
         <input
           type="file"
@@ -1541,7 +1743,14 @@ export function renderChat(props: ChatProps) {
           : nothing}
 
         <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+          ${ref((el) => {
+            if (el instanceof HTMLTextAreaElement) {
+              composerTextarea = el;
+              adjustTextareaHeight(el);
+              return;
+            }
+            composerTextarea = null;
+          })}
           .value=${props.draft}
           dir=${detectTextDirection(props.draft)}
           ?disabled=${!props.connected}

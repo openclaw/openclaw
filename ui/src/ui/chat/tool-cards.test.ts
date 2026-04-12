@@ -150,6 +150,41 @@ describe("tool-cards", () => {
     expect(sidebar).toContain("No output");
   });
 
+  it("extracts streamed tool status and timeline metadata", () => {
+    const [card] = extractToolCards(
+      {
+        role: "assistant",
+        toolCallId: "call-stream-1",
+        toolStatus: "running",
+        toolStartedAt: 1,
+        toolFinishedAt: null,
+        toolTimeline: [
+          { kind: "start", label: "Started", at: 1 },
+          { kind: "update", label: "Resolving page title", at: 2 },
+        ],
+        content: [
+          {
+            type: "toolcall",
+            id: "call-stream-1",
+            name: "browser.open",
+            arguments: { url: "https://example.com" },
+          },
+        ],
+      },
+      "msg:stream:1",
+    );
+
+    expect(card).toMatchObject({
+      status: "running",
+      startedAt: 1,
+      finishedAt: null,
+      timeline: [
+        { kind: "start", label: "Started", at: 1 },
+        { kind: "update", label: "Resolving page title", at: 2 },
+      ],
+    });
+  });
+
   it("extracts canvas handle payloads into canvas previews", () => {
     const [card] = extractToolCards(
       {
@@ -301,6 +336,34 @@ describe("tool-cards", () => {
     expect(container.textContent).toContain("Tool output");
     expect(container.textContent).toContain("https://example.com");
     expect(container.textContent).toContain("Opened page");
+  });
+
+  it("renders status chips and timeline entries for streamed tool progress", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:timeline:1",
+          name: "browser.open",
+          args: { url: "https://example.com" },
+          inputText: '{\n  "url": "https://example.com"\n}',
+          outputText: "Permission denied",
+          status: "failed",
+          timeline: [
+            { kind: "start", label: "Started", at: 1 },
+            { kind: "update", label: "Resolving page title", at: 2 },
+            { kind: "failed", label: "Permission denied", at: 3 },
+          ],
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Failed");
+    expect(container.textContent).toContain("Started");
+    expect(container.textContent).toContain("Resolving page title");
+    expect(container.textContent).toContain("Permission denied");
   });
 
   it("renders expanded tool calls without an inline output block when no output is present", () => {

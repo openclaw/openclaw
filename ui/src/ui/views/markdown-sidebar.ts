@@ -25,12 +25,13 @@ export type MarkdownSidebarProps = {
 
 export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
+  const title =
+    content?.title?.trim() ||
+    (content?.kind === "canvas" ? "Artifact Preview" : content ? "Artifact" : "Sidebar");
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
-        <div class="sidebar-title">
-          ${content?.kind === "canvas" ? content.title?.trim() || "Render Preview" : "Tool Details"}
-        </div>
+        <div class="sidebar-title">${title}</div>
         <button @click=${props.onClose} class="btn" title="Close sidebar">${icons.x}</button>
       </div>
       <div class="sidebar-content">

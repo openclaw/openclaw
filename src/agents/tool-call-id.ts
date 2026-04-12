@@ -25,6 +25,16 @@ type ReplaySafeToolCallBlock = {
   arguments?: unknown;
 };
 
+function isCanonicalOpenAIFunctionCallPairingId(id: string): boolean {
+  const separator = id.indexOf("|");
+  if (separator <= 0 || separator >= id.length - 1) {
+    return false;
+  }
+  const callId = id.slice(0, separator);
+  const itemId = id.slice(separator + 1);
+  return callId.length > 0 && itemId.startsWith("fc_");
+}
+
 /**
  * Sanitize a tool call ID to be compatible with various providers.
  *
@@ -420,6 +430,8 @@ function createOccurrenceAwareResolver(
 function rewriteAssistantToolCallIds(params: {
   message: Extract<AgentMessage, { role: "assistant" }>;
   resolveId: (id: string) => string;
+  preserveId?: (id: string) => boolean;
+  rememberPreservedId?: (id: string) => void;
 }): Extract<AgentMessage, { role: "assistant" }> {
   const content = params.message.content;
   if (!Array.isArray(content)) {
@@ -439,6 +451,10 @@ function rewriteAssistantToolCallIds(params: {
       typeof id !== "string" ||
       !id
     ) {
+      return block;
+    }
+    if (params.preserveId?.(id)) {
+      params.rememberPreservedId?.(id);
       return block;
     }
     const nextId = params.resolveId(id);
@@ -497,6 +513,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   options?: {
     preserveNativeAnthropicToolUseIds?: boolean;
     preserveReplaySafeThinkingToolCallIds?: boolean;
+    preserveOpenAIFunctionCallPairings?: boolean;
     allowedToolNames?: Iterable<string>;
   },
 ): AgentMessage[] {
@@ -535,6 +552,12 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       const next = rewriteAssistantToolCallIds({
         message: assistant,
         resolveId: resolveAssistantId,
+        preserveId:
+          options?.preserveOpenAIFunctionCallPairings === true
+            ? isCanonicalOpenAIFunctionCallPairingId
+            : undefined,
+        rememberPreservedId:
+          options?.preserveOpenAIFunctionCallPairings === true ? preserveAssistantId : undefined,
       });
       if (next !== msg) {
         changed = true;

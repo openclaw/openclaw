@@ -781,6 +781,11 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.sidebar-version__status.sidebar-connection-status--reconnecting {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
 .sidebar--collapsed .sidebar-shell__footer {
   padding: 8px 0 2px;
 }
