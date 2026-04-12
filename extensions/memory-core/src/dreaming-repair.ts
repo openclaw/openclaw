@@ -40,6 +40,17 @@ const REPAIR_ARCHIVE_RELATIVE_DIR = path.join(".openclaw-repair", "dreaming");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
 
+function requireAbsoluteWorkspaceDir(rawWorkspaceDir: string): string {
+  const trimmed = rawWorkspaceDir.trim();
+  if (!trimmed) {
+    throw new Error("workspaceDir is required");
+  }
+  if (!path.isAbsolute(trimmed)) {
+    throw new Error("workspaceDir must be an absolute path");
+  }
+  return path.resolve(trimmed);
+}
+
 async function resolveExistingDreamsPath(workspaceDir: string): Promise<string | undefined> {
   for (const fileName of DREAMS_FILENAMES) {
     const candidate = path.join(workspaceDir, fileName);
@@ -124,7 +135,7 @@ async function moveToArchive(params: {
 export async function auditDreamingArtifacts(params: {
   workspaceDir: string;
 }): Promise<DreamingArtifactsAuditSummary> {
-  const workspaceDir = params.workspaceDir.trim();
+  const workspaceDir = requireAbsoluteWorkspaceDir(params.workspaceDir);
   const dreamsPath = await resolveExistingDreamsPath(workspaceDir);
   const sessionCorpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
   const sessionIngestionPath = path.join(workspaceDir, SESSION_INGESTION_RELATIVE_PATH);
@@ -212,7 +223,7 @@ export async function repairDreamingArtifacts(params: {
   archiveDiary?: boolean;
   now?: Date;
 }): Promise<RepairDreamingArtifactsResult> {
-  const workspaceDir = params.workspaceDir.trim();
+  const workspaceDir = requireAbsoluteWorkspaceDir(params.workspaceDir);
   const warnings: string[] = [];
   const archivedPaths: string[] = [];
   let archiveDir: string | undefined;

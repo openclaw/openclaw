@@ -82,6 +82,15 @@ describe("dreaming artifact repair", () => {
     expect(audit.issues).toEqual([]);
   });
 
+  it("rejects relative workspace paths during audit and repair", async () => {
+    await expect(auditDreamingArtifacts({ workspaceDir: "relative/workspace" })).rejects.toThrow(
+      "workspaceDir must be an absolute path",
+    );
+    await expect(repairDreamingArtifacts({ workspaceDir: "relative/workspace" })).rejects.toThrow(
+      "workspaceDir must be an absolute path",
+    );
+  });
+
   it("archives derived dreaming artifacts without touching the diary by default", async () => {
     const workspaceDir = await createWorkspace();
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");

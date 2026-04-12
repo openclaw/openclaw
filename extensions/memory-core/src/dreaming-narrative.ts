@@ -82,9 +82,12 @@ const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 
-const dreamsFileLocks = resolveGlobalMap<string, ReturnType<typeof createAsyncLock>>(
-  DREAMS_FILE_LOCKS_KEY,
-);
+type DreamsFileLockEntry = {
+  withLock: ReturnType<typeof createAsyncLock>;
+  refs: number;
+};
+
+const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
@@ -417,31 +420,40 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
 
 async function updateDreamsFile<T>(params: {
   workspaceDir: string;
-  updater:
-    | ((
-        existing: string,
-        dreamsPath: string,
-      ) => Promise<{ content: string; result: T; shouldWrite?: boolean }> | {
+  updater: (
+    existing: string,
+    dreamsPath: string,
+  ) =>
+    | Promise<{ content: string; result: T; shouldWrite?: boolean }>
+    | {
         content: string;
         result: T;
         shouldWrite?: boolean;
-      });
+      };
 }): Promise<T> {
   const dreamsPath = await resolveDreamsPath(params.workspaceDir);
   await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  let withLock = dreamsFileLocks.get(dreamsPath);
-  if (!withLock) {
-    withLock = createAsyncLock();
-    dreamsFileLocks.set(dreamsPath, withLock);
+  let lockEntry = dreamsFileLocks.get(dreamsPath);
+  if (!lockEntry) {
+    lockEntry = { withLock: createAsyncLock(), refs: 0 };
+    dreamsFileLocks.set(dreamsPath, lockEntry);
   }
-  return await withLock(async () => {
-    const existing = await readDreamsFile(dreamsPath);
-    const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
-    if (shouldWrite) {
-      await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
+  lockEntry.refs += 1;
+  try {
+    return await lockEntry.withLock(async () => {
+      const existing = await readDreamsFile(dreamsPath);
+      const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
+      if (shouldWrite) {
+        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
+      }
+      return result;
+    });
+  } finally {
+    lockEntry.refs -= 1;
+    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
+      dreamsFileLocks.delete(dreamsPath);
     }
-    return result;
-  });
+  }
 }
 
 export function buildBackfillDiaryEntry(params: {
@@ -558,7 +570,7 @@ export async function dedupeDreamDiaryEntries(params: {
           removed,
           kept: keptBlocks.length,
         },
-        shouldWrite: removed > 0 || existing.length > 0,
+        shouldWrite: removed > 0,
       };
     },
   });

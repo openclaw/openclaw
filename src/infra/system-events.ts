@@ -128,10 +128,7 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   return out;
 }
 
-function areDeliveryContextsEqual(
-  left?: DeliveryContext,
-  right?: DeliveryContext,
-): boolean {
+function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
   if (!left && !right) {
     return true;
   }
@@ -166,7 +163,7 @@ export function consumeSystemEventEntries(
   }
   if (
     consumedEntries.length > entry.queue.length ||
-    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index]!, event))
+    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index], event))
   ) {
     return [];
   }
@@ -176,7 +173,7 @@ export function consumeSystemEventEntries(
     entry.lastContextKey = null;
     queues.delete(key);
   } else {
-    const newest = entry.queue[entry.queue.length - 1]!;
+    const newest = entry.queue[entry.queue.length - 1];
     entry.lastText = newest.text;
     entry.lastContextKey = newest.contextKey ?? null;
   }

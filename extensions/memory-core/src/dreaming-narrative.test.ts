@@ -5,6 +5,7 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,
@@ -22,9 +23,11 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
 });
 
 describe("buildNarrativePrompt", () => {
@@ -462,6 +465,40 @@ describe("appendNarrativeEntry", () => {
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "Only one entry exists.",
     );
+  });
+
+  it("does not rewrite the diary file when dedupe finds nothing to remove", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+    const before = await fs.stat(dreamsPath);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+    const after = await fs.stat(dreamsPath);
+
+    expect(result.removed).toBe(0);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("cleans up the per-file lock entry after diary updates finish", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY);
+
+    expect(dreamsLocks.size).toBe(0);
+
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+
+    expect(dreamsLocks.size).toBe(0);
   });
 
   it("surfaces temp cleanup failure after atomic replace error", async () => {
