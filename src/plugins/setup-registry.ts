@@ -269,6 +269,15 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function ignoreAsyncSetupRegisterResult(result: void | Promise<void>): void {
+  if (!result || typeof result.then !== "function") {
+    return;
+  }
+  // Setup-only registration is sync-only. Swallow async rejections so they do
+  // not trip the global unhandledRejection fatal path.
+  void Promise.resolve(result).catch(() => undefined);
+}
+
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (normalizeProviderId(provider.id) === normalized) {
@@ -431,6 +440,7 @@ export function resolvePluginSetupRegistry(params?: {
       const result = resolved.register(api);
       if (result && typeof result.then === "function") {
         // Keep setup registration sync-only.
+        ignoreAsyncSetupRegisterResult(result);
       }
     } catch {
       continue;
@@ -532,6 +542,7 @@ export function resolvePluginSetupProvider(params: {
     const result = resolved.register(api);
     if (result && typeof result.then === "function") {
       // Keep setup registration sync-only.
+      ignoreAsyncSetupRegisterResult(result);
     }
   } catch {
     setCachedSetupValue(setupProviderCache, cacheKey, null);
@@ -631,6 +642,7 @@ export function resolvePluginSetupCliBackend(params: {
     const result = resolved.register(api);
     if (result && typeof result.then === "function") {
       // Keep setup registration sync-only.
+      ignoreAsyncSetupRegisterResult(result);
     }
   } catch {
     setCachedSetupValue(setupCliBackendCache, cacheKey, null);

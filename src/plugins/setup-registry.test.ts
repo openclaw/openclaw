@@ -21,6 +21,22 @@ function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
 }
 
+async function expectNoUnhandledRejection(run: () => void | Promise<void>): Promise<void> {
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    await run();
+    await Promise.resolve();
+    await Promise.resolve();
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+  expect(unhandledRejections).toEqual([]);
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -345,6 +361,117 @@ describe("setup-registry getJiti", () => {
           command: "codex",
         },
       },
+    });
+  });
+
+  it("swallows rejected async setup provider registration returns", async () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({
+              id: "openai",
+              label: "OpenAI",
+              auth: [],
+            });
+            return Promise.reject(new Error("async provider register failed"));
+          },
+        },
+      });
+    });
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toEqual(
+        expect.objectContaining({
+          id: "openai",
+          label: "OpenAI",
+        }),
+      );
+    });
+  });
+
+  it("swallows rejected async setup cli backend registration returns", async () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            cliBackends: ["codex-cli"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+          }) {
+            api.registerCliBackend({
+              id: "codex-cli",
+              config: { command: "codex" },
+            });
+            return Promise.reject(new Error("async cli backend register failed"));
+          },
+        },
+      });
+    });
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
+        pluginId: "openai",
+        backend: {
+          id: "codex-cli",
+          config: {
+            command: "codex",
+          },
+        },
+      });
+    });
+  });
+
+  it("swallows rejected async setup registry registration returns", async () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "voice-call", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
+          }) {
+            api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
+            return Promise.reject(new Error("async setup registry register failed"));
+          },
+        },
+      });
+    });
+
+    await expectNoUnhandledRejection(() => {
+      expect(resolvePluginSetupRegistry({ env: {} }).configMigrations).toHaveLength(1);
     });
   });
 
