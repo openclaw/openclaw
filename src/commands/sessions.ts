@@ -1,8 +1,13 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
-import { classifySessionKey } from "../gateway/session-utils.js";
+import {
+  classifySessionKey,
+  resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
+} from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -85,7 +90,14 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 };
 
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string; agent?: string; allAgents?: boolean },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+    explain?: string;
+  },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
@@ -105,6 +117,96 @@ export async function sessionsCommand(
     runtime,
   });
   if (!targets) {
+    return;
+  }
+
+  if (opts.explain) {
+    const initialStore = opts.store ? loadSessionStore(opts.store) : undefined;
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: opts.explain,
+      ...(initialStore ? { store: initialStore } : {}),
+    });
+    const resolvedStorePath = opts.store ?? target.storePath;
+    const store = initialStore ?? loadSessionStore(target.storePath);
+    const matchedKey = target.storeKeys.find((key) => store[key]);
+    const entry = matchedKey ? store[matchedKey] : undefined;
+    if (!entry) {
+      runtime.error(`Session not found: ${opts.explain}`);
+      runtime.exit(1);
+      return;
+    }
+
+    const defaults = resolveSessionModelRef(cfg, undefined, target.agentId);
+    const resolved = resolveSessionModelRef(cfg, entry, target.agentId);
+    const workspaceDir = entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+    const payload = {
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      storePath: resolvedStorePath,
+      defaults,
+      input: {
+        providerOverride: entry.providerOverride ?? null,
+        modelOverride: entry.modelOverride ?? null,
+        runtimeProvider: entry.modelProvider ?? null,
+        runtimeModel: entry.model ?? null,
+        spawnedWorkspaceDir: entry.spawnedWorkspaceDir ?? null,
+      },
+      resolved: {
+        provider: resolved.provider,
+        model: resolved.model,
+        workspaceDir,
+      },
+      resolution: {
+        defaultModelRef: `${defaults.provider}/${defaults.model}`,
+        usesPersistedWorkspace: Boolean(entry.spawnedWorkspaceDir),
+        usesRuntimeModelRef: Boolean(entry.modelProvider || entry.model),
+        usesOverrides: Boolean(entry.providerOverride || entry.modelOverride),
+      },
+    };
+
+    if (opts.json) {
+      writeRuntimeJson(runtime, payload);
+      return;
+    }
+
+    const rich = isRich();
+    const label = (value: string) => (rich ? theme.accent(value.padEnd(24)) : value.padEnd(24));
+    const muted = (value: string) => (rich ? theme.muted(value) : value);
+    const infoLabel = (value: string) => (rich ? theme.info(value) : value);
+    const success = (value: string) => (rich ? theme.success(value) : value);
+
+    runtime.log(`${label("Session key")}${muted(": ")}${infoLabel(payload.key)}`);
+    runtime.log(`${label("Agent")}${muted(": ")}${infoLabel(payload.agentId)}`);
+    runtime.log(`${label("Store path")}${muted(": ")}${muted(payload.storePath)}`);
+    runtime.log(
+      `${label("Default resolved")}${muted(": ")}${infoLabel(`${payload.defaults.provider}/${payload.defaults.model}`)}`,
+    );
+    runtime.log(
+      `${label("Provider override")}${muted(": ")}${infoLabel(payload.input.providerOverride ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Model override")}${muted(": ")}${infoLabel(payload.input.modelOverride ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Runtime model ref")}${muted(": ")}${infoLabel(`${payload.input.runtimeProvider ?? "-"}/${payload.input.runtimeModel ?? "-"}`)}`,
+    );
+    runtime.log(
+      `${label("Persisted workspace")}${muted(": ")}${infoLabel(payload.input.spawnedWorkspaceDir ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Uses overrides")}${muted(": ")}${payload.resolution.usesOverrides ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Uses runtime ref")}${muted(": ")}${payload.resolution.usesRuntimeModelRef ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Uses persisted ws")}${muted(": ")}${payload.resolution.usesPersistedWorkspace ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Final model")}${muted(": ")}${success(`${payload.resolved.provider}/${payload.resolved.model}`)}`,
+    );
+    runtime.log(`${label("Final workspace")}${muted(": ")}${success(payload.resolved.workspaceDir)}`);
     return;
   }
 

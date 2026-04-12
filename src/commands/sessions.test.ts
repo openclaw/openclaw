@@ -148,4 +148,61 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
   });
+
+  it("explains effective resolution for a stored session in JSON", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+          modelOverride: "gpt-5.4",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      },
+      "sessions-explain",
+    );
+
+    const payload = await runSessionsJson<{
+      key: string;
+      agentId: string;
+      defaults: { provider: string; model: string };
+      input: { runtimeProvider: string | null; spawnedWorkspaceDir: string | null };
+      resolved: { model: string; workspaceDir: string };
+      resolution: { usesPersistedWorkspace: boolean };
+    }>(sessionsCommand, store, { explain: "agent:main:main" });
+
+    expect(payload.key).toBe("agent:main:main");
+    expect(payload.agentId).toBe("main");
+    expect(payload.input.runtimeProvider).toBe("openai-codex");
+    expect(payload.input.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+    expect(payload.resolved.model).toBe("gpt-5.4");
+    expect(payload.resolved.workspaceDir).toBe("/tmp/subagent-workspace");
+    expect(payload.resolution.usesPersistedWorkspace).toBe(true);
+  });
+
+  it("renders a readable text explanation for one session", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+          modelOverride: "gpt-5.4",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      },
+      "sessions-explain-text",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store, explain: "agent:main:main" }, runtime);
+    fs.rmSync(store);
+
+    expect(logs.find((line) => line.includes("Session key"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Final model"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
+  });
 });
