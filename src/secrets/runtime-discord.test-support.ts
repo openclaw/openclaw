@@ -5,20 +5,21 @@ const discordSecrets = loadBundledChannelSecretContractApi("discord");
 if (!discordSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Discord secret contract api");
 }
+const discordAssignments = discordSecrets.collectRuntimeConfigAssignments;
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "discord"
       ? {
           secrets: {
-            collectRuntimeConfigAssignments: discordSecrets.collectRuntimeConfigAssignments,
+            collectRuntimeConfigAssignments: discordAssignments,
           },
         }
       : undefined,
   getBootstrapChannelSecrets: (id: string) =>
     id === "discord"
       ? {
-          collectRuntimeConfigAssignments: discordSecrets.collectRuntimeConfigAssignments,
+          collectRuntimeConfigAssignments: discordAssignments,
         }
       : undefined,
 }));
