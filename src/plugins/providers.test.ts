@@ -712,6 +712,50 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
+  it("skips plugin loading when the active registry already covers all requested provider plugins", () => {
+    const provider: ProviderPlugin = {
+      id: "demo-provider",
+      label: "Demo Provider",
+      auth: [],
+    };
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.providers.push({ pluginId: "google", provider, source: "bundled" });
+    setActivePluginRegistry(activeRegistry, "gateway-cache-key", "gateway-bindable");
+
+    const result = resolvePluginProviders({
+      config: {
+        plugins: { allow: ["google"] },
+      },
+      onlyPluginIds: ["google"],
+    });
+
+    // Fast path should have returned providers from the active registry without
+    // calling resolveRuntimePluginRegistry for a separate load.
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
+    expect(result[0]?.id).toBe("demo-provider");
+    expect(result[0]?.pluginId).toBe("google");
+  });
+
+  it("falls back to plugin loading when active registry does not cover all requested provider plugins", () => {
+    // Active registry has only "google" but we also need "moonshot" (which
+    // IS in the manifest and enabled by default).  The fast-path in
+    // tryResolveProvidersFromActiveRegistry should detect the gap and let
+    // resolveRuntimePluginRegistry handle the full load.
+    const provider: ProviderPlugin = { id: "demo", label: "Demo", auth: [] };
+    const partial = createEmptyPluginRegistry();
+    partial.providers.push({ pluginId: "google", provider, source: "bundled" });
+    setActivePluginRegistry(partial, "partial-key", "default");
+
+    resolvePluginProviders({
+      config: { plugins: { allow: ["google", "moonshot"] } },
+      onlyPluginIds: ["google", "moonshot"],
+    });
+
+    // Should fall through because active registry doesn't have "moonshot" providers.
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalled();
+  });
+
   it("activates owning plugins for explicit provider refs", () => {
     setOwningProviderManifestPlugins();
 
