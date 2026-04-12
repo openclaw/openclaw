@@ -207,5 +207,15 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it("does not exit on agent-lifecycle race error and logs suppression warning (#65285)", () => {
+      const raceErr = new Error("Agent listener invoked outside active run");
+
+      expectExitCodeFromUnhandled(raceErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed agent-lifecycle race (continuing):",
+        expect.stringContaining("Agent listener invoked outside active run"),
+      );
+    });
   });
 });

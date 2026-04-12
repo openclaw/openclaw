@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAbortError,
+  isAgentLifecycleRaceError,
   isTransientNetworkError,
   isTransientSqliteError,
   isTransientUnhandledRejectionError,
@@ -254,6 +255,54 @@ describe("isTransientSqliteError", () => {
     const error = new Error("database is locked");
 
     expect(isTransientSqliteError(error)).toBe(false);
+  });
+});
+
+describe("isAgentLifecycleRaceError", () => {
+  it("returns true for the exact pi-agent-core race message", () => {
+    const error = new Error("Agent listener invoked outside active run");
+    expect(isAgentLifecycleRaceError(error)).toBe(true);
+  });
+
+  it("returns true when pi-agent-core appends context to the message", () => {
+    const error = new Error("Agent listener invoked outside active run (runId: abc-123)");
+    expect(isAgentLifecycleRaceError(error)).toBe(true);
+  });
+
+  it("returns false for similar but non-matching messages", () => {
+    expect(isAgentLifecycleRaceError(new Error("Agent listener error"))).toBe(false);
+    expect(isAgentLifecycleRaceError(new Error("invoked outside active run"))).toBe(false);
+    expect(isAgentLifecycleRaceError(new Error("listener invoked outside"))).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-error input %#",
+    (value) => {
+      expect(isAgentLifecycleRaceError(value)).toBe(false);
+    },
+  );
+
+  it("returns false for error objects without a message property", () => {
+    expect(isAgentLifecycleRaceError({ name: "Error" })).toBe(false);
+    expect(isAgentLifecycleRaceError({})).toBe(false);
+  });
+
+  it("returns true when the race error is wrapped in a cause chain", () => {
+    const inner = new Error("Agent listener invoked outside active run");
+    const outer = new Error("tool execution failed", { cause: inner });
+    expect(isAgentLifecycleRaceError(outer)).toBe(true);
+  });
+
+  it("returns true when the race error is inside an AggregateError", () => {
+    const raceError = new Error("Agent listener invoked outside active run");
+    const aggregate = new AggregateError([new Error("unrelated"), raceError], "multiple failures");
+    expect(isAgentLifecycleRaceError(aggregate)).toBe(true);
+  });
+
+  it("returns false when cause chain contains no matching error", () => {
+    const inner = new Error("some other error");
+    const outer = new Error("wrapper", { cause: inner });
+    expect(isAgentLifecycleRaceError(outer)).toBe(false);
   });
 });
 

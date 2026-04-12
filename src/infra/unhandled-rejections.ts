@@ -313,6 +313,34 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
   return isTransientNetworkError(err) || isTransientSqliteError(err);
 }
 
+/**
+ * Detects the "Agent listener invoked outside active run" error from
+ * `pi-agent-core`.  This is a non-fatal race condition where a
+ * `tool_execution_update` event is emitted after the agent run has already
+ * been torn down — see #65285.
+ *
+ * Uses `startsWith` rather than strict equality so the classifier remains
+ * effective if `pi-agent-core` later appends context (e.g. a run ID) to
+ * the message.
+ *
+ * The error may be wrapped in a `cause` chain or an `AggregateError`, so
+ * we walk the full nested error graph via
+ * {@link collectNestedUnhandledErrorCandidates}.
+ */
+export function isAgentLifecycleRaceError(err: unknown): boolean {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const message =
+      "message" in candidate && typeof candidate.message === "string" ? candidate.message : "";
+    if (message.startsWith("Agent listener invoked outside active run")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -369,6 +397,19 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientUnhandledRejectionError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    // Agent-lifecycle race: a tool_execution_update was emitted after the
+    // agent run was torn down.  Non-fatal — the existing guards (updatesDisabled
+    // on process exit, disableUpdates on tool abort) cover normal-exit and abort
+    // paths; this classifier catches the remaining non-abort teardown path
+    // where finishRun() clears activeRun without firing the abort signal (#65285).
+    if (isAgentLifecycleRaceError(reason)) {
+      console.warn(
+        "[openclaw] Suppressed agent-lifecycle race (continuing):",
         formatUncaughtError(reason),
       );
       return;
