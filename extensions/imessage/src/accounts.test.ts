@@ -76,4 +76,28 @@ describe("listEnabledIMessageAccounts", () => {
 
     expect(accounts.map((account) => account.accountId).toSorted()).toEqual(["default", "work"]);
   });
+
+  it("still skips default when it only adds inherited processing settings", () => {
+    const accounts = listEnabledIMessageAccounts({
+      channels: {
+        imessage: {
+          enabled: true,
+          accounts: {
+            work: {
+              enabled: true,
+              cliPath: "imsg",
+              dmPolicy: "pairing",
+            },
+            default: {
+              textChunkLimit: 2000,
+              mediaMaxMb: 32,
+              attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(accounts.map((account) => account.accountId)).toEqual(["work"]);
+  });
 });

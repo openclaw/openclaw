@@ -73,12 +73,7 @@ function hasDistinctDefaultIMessageRuntime(cfg: OpenClawConfig): boolean {
     defaultConfig.cliPath?.trim() ||
     defaultConfig.dbPath?.trim() ||
     defaultConfig.service ||
-    defaultConfig.region?.trim() ||
-    typeof defaultConfig.includeAttachments === "boolean" ||
-    (defaultConfig.attachmentRoots && defaultConfig.attachmentRoots.length > 0) ||
-    (defaultConfig.remoteAttachmentRoots && defaultConfig.remoteAttachmentRoots.length > 0) ||
-    typeof defaultConfig.mediaMaxMb === "number" ||
-    typeof defaultConfig.textChunkLimit === "number",
+    defaultConfig.region?.trim(),
   );
 }
 
