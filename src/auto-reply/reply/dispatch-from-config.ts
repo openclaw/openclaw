@@ -574,6 +574,8 @@ export async function dispatchReplyFromConfig(
         undefined,
       chatType: sessionStoreEntry.entry?.chatType,
     });
+    const suppressDelivery = sendPolicy === "deny";
+    const suppressHookUserDelivery = suppressAcpChildUserDelivery || suppressDelivery;
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
@@ -630,7 +632,7 @@ export async function dispatchReplyFromConfig(
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
         let routedFinalCount = 0;
-        if (text && sendPolicy !== "deny") {
+        if (text && !suppressDelivery) {
           const handledReply = await sendFinalPayload({ text });
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
@@ -652,7 +654,7 @@ export async function dispatchReplyFromConfig(
           inboundAudio,
           sessionTtsAuto,
           ttsChannel,
-          suppressUserDelivery: suppressAcpChildUserDelivery,
+          suppressUserDelivery: suppressHookUserDelivery,
           shouldRouteToOriginating,
           originatingChannel,
           originatingTo,
@@ -678,7 +680,6 @@ export async function dispatchReplyFromConfig(
 
     // When sendPolicy is "deny", we still let the agent process the inbound message
     // (context, memory, tool calls) but suppress all outbound delivery.
-    const suppressDelivery = sendPolicy === "deny";
     if (suppressDelivery) {
       logVerbose(
         `Delivery suppressed by send policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
@@ -951,6 +952,7 @@ export async function dispatchReplyFromConfig(
             inboundAudio,
             sessionTtsAuto,
             ttsChannel,
+            suppressUserDelivery: suppressHookUserDelivery,
             shouldRouteToOriginating,
             originatingChannel,
             originatingTo,

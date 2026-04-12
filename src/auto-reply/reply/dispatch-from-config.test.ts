@@ -3071,6 +3071,47 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("passes suppressUserDelivery to tail reply_dispatch when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown) => {
+      const candidate = event as { isTailDispatch?: boolean };
+      if (candidate.isTailDispatch) {
+        return {
+          handled: true,
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      }
+      return undefined;
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "test:session",
+      AcpDispatchTailAfterReset: true,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "agent reply" }),
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isTailDispatch: true,
+        sendPolicy: "deny",
+        suppressUserDelivery: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("suppresses final reply delivery when sendPolicy is deny", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
