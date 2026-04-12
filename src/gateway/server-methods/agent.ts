@@ -636,8 +636,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfgForAgent = cfg;
       isNewSession = !entry;
       const now = Date.now();
-      const sessionId = entry?.sessionId ?? randomUUID();
-      const labelValue = normalizeOptionalString(request.label) || entry?.label;
+      // Prefer the sessionId established by a reset (resolvedSessionId) over whatever
+      // loadSessionEntry returned — the cache may not have invalidated yet after reset
+      // when the session store write lock was contested (e.g. large sessions with compaction).
+      const sessionId = resolvedSessionId ?? entry?.sessionId ?? randomUUID();
+      const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
