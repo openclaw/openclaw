@@ -1,12 +1,12 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
@@ -17,10 +17,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -190,9 +191,7 @@ function pruneCompletedDirectCronDeliveries(now: number) {
 
 function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
-    ? scheduledAt
-    : params.runStartedAt;
+  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
 }
 
 function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {

@@ -1,7 +1,13 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
+} from "../memory-host-sdk/dreaming.js";
 import {
   createPluginActivationSource,
+  normalizePluginId,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
@@ -24,8 +30,48 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
   );
 }
 
+function isGatewayStartupMemoryPlugin(plugin: PluginManifestRecord): boolean {
+  return hasKind(plugin.kind, "memory");
+}
+
 function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
+}
+
+function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(config),
+    cfg: config,
+  });
+  if (!dreamingConfig.enabled) {
+    return new Set();
+  }
+  return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
+}
+
+function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {
+  const configuredSlot = config.plugins?.slots?.memory?.trim();
+  if (!configuredSlot || configuredSlot.toLowerCase() === "none") {
+    return undefined;
+  }
+  return normalizePluginId(configuredSlot);
+}
+
+function shouldConsiderForGatewayStartup(params: {
+  plugin: PluginManifestRecord;
+  startupDreamingPluginIds: ReadonlySet<string>;
+  explicitMemorySlotStartupPluginId?: string;
+}): boolean {
+  if (isGatewayStartupSidecar(params.plugin)) {
+    return true;
+  }
+  if (!isGatewayStartupMemoryPlugin(params.plugin)) {
+    return false;
+  }
+  if (params.startupDreamingPluginIds.has(params.plugin.id)) {
+    return true;
+  }
+  return params.explicitMemorySlotStartupPluginId === params.plugin.id;
 }
 
 export function resolveChannelPluginIds(params: {
@@ -96,6 +142,10 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
+  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
+  const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
+    params.activationSourceConfig ?? params.config,
+  );
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -105,7 +155,13 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
       }
-      if (!isGatewayStartupSidecar(plugin)) {
+      if (
+        !shouldConsiderForGatewayStartup({
+          plugin,
+          startupDreamingPluginIds,
+          explicitMemorySlotStartupPluginId,
+        })
+      ) {
         return false;
       }
       const activationState = resolveEffectivePluginActivationState({

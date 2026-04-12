@@ -146,7 +146,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   browser: {
     enabled: true, // default: true
     ssrfPolicy: {
-      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowPrivateNetwork: true, // legacy alias
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
@@ -191,7 +191,7 @@ Notes:
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
 - In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled by default. Set it to `true` only when you intentionally trust private-network browser access.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
@@ -575,6 +575,27 @@ Notes:
   Tailscale Serve identity headers.
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes; keep them loopback-only.
+
+### `/act` error contract
+
+`POST /act` uses a structured error response for route-level validation and
+policy failures:
+
+```json
+{ "error": "<message>", "code": "ACT_*" }
+```
+
+Current `code` values:
+
+- `ACT_KIND_REQUIRED` (HTTP 400): `kind` is missing or unrecognized.
+- `ACT_INVALID_REQUEST` (HTTP 400): action payload failed normalization or validation.
+- `ACT_SELECTOR_UNSUPPORTED` (HTTP 400): `selector` was used with an unsupported action kind.
+- `ACT_EVALUATE_DISABLED` (HTTP 403): `evaluate` (or `wait --fn`) is disabled by config.
+- `ACT_TARGET_ID_MISMATCH` (HTTP 403): top-level or batched `targetId` conflicts with request target.
+- `ACT_EXISTING_SESSION_UNSUPPORTED` (HTTP 501): action is not supported for existing-session profiles.
+
+Other runtime failures may still return `{ "error": "<message>" }` without a
+`code` field.
 
 ### Playwright requirement
 

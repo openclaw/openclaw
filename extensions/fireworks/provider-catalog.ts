@@ -20,7 +20,7 @@ export function buildFireworksCatalogModels(): ModelDefinitionConfig[] {
     {
       id: FIREWORKS_DEFAULT_MODEL_ID,
       name: "Kimi K2.5 Turbo (Fire Pass)",
-      reasoning: true,
+      reasoning: false, // Kimi K2.5 can expose reasoning in visible content on FirePass.
       input: ["text", "image"],
       cost: ZERO_COST,
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,

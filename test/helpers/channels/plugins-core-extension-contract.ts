@@ -1,27 +1,4 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-  type DiscordProbe,
-  type DiscordTokenResolution,
-} from "../../../extensions/discord/api.js";
-import type { IMessageProbe } from "../../../extensions/imessage/runtime-api.js";
-import type { SignalProbe } from "../../../extensions/signal/api.js";
-import {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-  type SlackProbe,
-} from "../../../extensions/slack/api.js";
-import {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-  type TelegramProbe,
-  type TelegramTokenResolution,
-} from "../../../extensions/telegram/api.js";
-import {
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "../../../extensions/whatsapp/api.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -29,7 +6,45 @@ import type {
 } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
+import { loadBundledPluginApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
+
+type DiscordApiSurface = typeof import("@openclaw/discord/api.js");
+type DiscordProbe = import("@openclaw/discord/api.js").DiscordProbe;
+type DiscordTokenResolution = import("@openclaw/discord/api.js").DiscordTokenResolution;
+type IMessageProbe = import("@openclaw/imessage/runtime-api.js").IMessageProbe;
+type SignalProbe = import("@openclaw/signal/api.js").SignalProbe;
+type SlackApiSurface = typeof import("@openclaw/slack/api.js");
+type SlackProbe = import("@openclaw/slack/api.js").SlackProbe;
+type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
+type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
+type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
+type WhatsAppApiSurface = typeof import("@openclaw/whatsapp/api.js");
+
+let discordApi: DiscordApiSurface | undefined;
+let slackApi: SlackApiSurface | undefined;
+let telegramApi: TelegramApiSurface | undefined;
+let whatsappApi: WhatsAppApiSurface | undefined;
+
+function getDiscordApi(): DiscordApiSurface {
+  discordApi ??= loadBundledPluginApiSync<DiscordApiSurface>("discord");
+  return discordApi;
+}
+
+function getSlackApi(): SlackApiSurface {
+  slackApi ??= loadBundledPluginApiSync<SlackApiSurface>("slack");
+  return slackApi;
+}
+
+function getTelegramApi(): TelegramApiSurface {
+  telegramApi ??= loadBundledPluginApiSync<TelegramApiSurface>("telegram");
+  return telegramApi;
+}
+
+function getWhatsAppApi(): WhatsAppApiSurface {
+  whatsappApi ??= loadBundledPluginApiSync<WhatsAppApiSurface>("whatsapp");
+  return whatsappApi;
+}
 
 type DirectoryListFn = (params: {
   cfg: OpenClawConfig;
@@ -60,6 +75,9 @@ async function expectDirectoryIds(
 
 export function describeDiscordPluginsCoreExtensionContract() {
   describe("discord plugins-core extension contract", () => {
+    const listPeers = () => getDiscordApi().listDiscordDirectoryPeersFromConfig;
+    const listGroups = () => getDiscordApi().listDiscordDirectoryGroupsFromConfig;
+
     it("DiscordProbe satisfies BaseProbeResult", () => {
       expectTypeOf<DiscordProbe>().toMatchTypeOf<BaseProbeResult>();
     });
@@ -91,17 +109,14 @@ export function describeDiscordPluginsCoreExtensionContract() {
       } as unknown as OpenClawConfig;
 
       await expectDirectoryIds(
-        listDiscordDirectoryPeersFromConfig,
+        listPeers(),
         cfg,
         ["user:111", "user:12345", "user:222", "user:333", "user:444"],
         { sorted: true },
       );
-      await expectDirectoryIds(
-        listDiscordDirectoryGroupsFromConfig,
-        cfg,
-        ["channel:555", "channel:666", "channel:777"],
-        { sorted: true },
-      );
+      await expectDirectoryIds(listGroups(), cfg, ["channel:555", "channel:666", "channel:777"], {
+        sorted: true,
+      });
     });
 
     it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
@@ -126,8 +141,8 @@ export function describeDiscordPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      await expectDirectoryIds(listDiscordDirectoryPeersFromConfig, cfg, ["user:111"]);
-      await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
+      await expectDirectoryIds(listPeers(), cfg, ["user:111"]);
+      await expectDirectoryIds(listGroups(), cfg, ["channel:555"]);
     });
 
     it("applies query and limit filtering for config-backed directories", async () => {
@@ -148,7 +163,7 @@ export function describeDiscordPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      const groups = await listDiscordDirectoryGroupsFromConfig({
+      const groups = await listGroups()({
         cfg,
         accountId: "default",
         query: "666",
@@ -161,6 +176,9 @@ export function describeDiscordPluginsCoreExtensionContract() {
 
 export function describeSlackPluginsCoreExtensionContract() {
   describe("slack plugins-core extension contract", () => {
+    const listPeers = () => getSlackApi().listSlackDirectoryPeersFromConfig;
+    const listGroups = () => getSlackApi().listSlackDirectoryGroupsFromConfig;
+
     it("SlackProbe satisfies BaseProbeResult", () => {
       expectTypeOf<SlackProbe>().toMatchTypeOf<BaseProbeResult>();
     });
@@ -179,12 +197,12 @@ export function describeSlackPluginsCoreExtensionContract() {
       } as unknown as OpenClawConfig;
 
       await expectDirectoryIds(
-        listSlackDirectoryPeersFromConfig,
+        listPeers(),
         cfg,
         ["user:u123", "user:u234", "user:u777", "user:u999"],
         { sorted: true },
       );
-      await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+      await expectDirectoryIds(listGroups(), cfg, ["channel:c111"]);
     });
 
     it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
@@ -204,8 +222,8 @@ export function describeSlackPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      await expectDirectoryIds(listSlackDirectoryPeersFromConfig, cfg, ["user:u123"]);
-      await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+      await expectDirectoryIds(listPeers(), cfg, ["user:u123"]);
+      await expectDirectoryIds(listGroups(), cfg, ["channel:c111"]);
     });
 
     it("applies query and limit filtering for config-backed directories", async () => {
@@ -220,7 +238,7 @@ export function describeSlackPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      const peers = await listSlackDirectoryPeersFromConfig({
+      const peers = await listPeers()({
         cfg,
         accountId: "default",
         query: "user:u",
@@ -234,6 +252,9 @@ export function describeSlackPluginsCoreExtensionContract() {
 
 export function describeTelegramPluginsCoreExtensionContract() {
   describe("telegram plugins-core extension contract", () => {
+    const listPeers = () => getTelegramApi().listTelegramDirectoryPeersFromConfig;
+    const listGroups = () => getTelegramApi().listTelegramDirectoryGroupsFromConfig;
+
     it("TelegramProbe satisfies BaseProbeResult", () => {
       expectTypeOf<TelegramProbe>().toMatchTypeOf<BaseProbeResult>();
     });
@@ -254,13 +275,10 @@ export function describeTelegramPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      await expectDirectoryIds(
-        listTelegramDirectoryPeersFromConfig,
-        cfg,
-        ["123", "456", "@alice", "@bob"],
-        { sorted: true },
-      );
-      await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+      await expectDirectoryIds(listPeers(), cfg, ["123", "456", "@alice", "@bob"], {
+        sorted: true,
+      });
+      await expectDirectoryIds(listGroups(), cfg, ["-1001"]);
     });
 
     it("keeps fallback semantics when accountId is omitted", async () => {
@@ -281,8 +299,8 @@ export function describeTelegramPluginsCoreExtensionContract() {
           },
         } as unknown as OpenClawConfig;
 
-        await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
-        await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+        await expectDirectoryIds(listPeers(), cfg, ["@alice"]);
+        await expectDirectoryIds(listGroups(), cfg, ["-1001"]);
       });
     });
 
@@ -302,8 +320,8 @@ export function describeTelegramPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
-      await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+      await expectDirectoryIds(listPeers(), cfg, ["@alice"]);
+      await expectDirectoryIds(listGroups(), cfg, ["-1001"]);
     });
 
     it("applies query and limit filtering for config-backed directories", async () => {
@@ -316,7 +334,7 @@ export function describeTelegramPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      const groups = await listTelegramDirectoryGroupsFromConfig({
+      const groups = await listGroups()({
         cfg,
         accountId: "default",
         query: "-100",
@@ -329,6 +347,9 @@ export function describeTelegramPluginsCoreExtensionContract() {
 
 export function describeWhatsAppPluginsCoreExtensionContract() {
   describe("whatsapp plugins-core extension contract", () => {
+    const listPeers = () => getWhatsAppApi().listWhatsAppDirectoryPeersFromConfig;
+    const listGroups = () => getWhatsAppApi().listWhatsAppDirectoryGroupsFromConfig;
+
     it("lists peers/groups from config", async () => {
       const cfg = {
         channels: {
@@ -339,8 +360,8 @@ export function describeWhatsAppPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      await expectDirectoryIds(listWhatsAppDirectoryPeersFromConfig, cfg, ["+15550000000"]);
-      await expectDirectoryIds(listWhatsAppDirectoryGroupsFromConfig, cfg, ["999@g.us"]);
+      await expectDirectoryIds(listPeers(), cfg, ["+15550000000"]);
+      await expectDirectoryIds(listGroups(), cfg, ["999@g.us"]);
     });
 
     it("applies query and limit filtering for config-backed directories", async () => {
@@ -352,7 +373,7 @@ export function describeWhatsAppPluginsCoreExtensionContract() {
         },
       } as unknown as OpenClawConfig;
 
-      const groups = await listWhatsAppDirectoryGroupsFromConfig({
+      const groups = await listGroups()({
         cfg,
         accountId: "default",
         query: "@g.us",

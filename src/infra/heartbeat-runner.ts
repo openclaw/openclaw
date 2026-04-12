@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -26,8 +27,7 @@ import {
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -35,8 +35,13 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  saveSessionStore,
+  updateSessionStore,
+} from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
@@ -54,6 +59,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
+import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -64,6 +70,11 @@ import {
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import {
+  computeNextHeartbeatPhaseDueMs,
+  resolveHeartbeatPhaseMs,
+  resolveNextHeartbeatDueMs,
+} from "./heartbeat-schedule.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -125,7 +136,7 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
-  lastRunMs?: number;
+  phaseMs: number;
   nextDueMs: number;
 };
 
@@ -133,6 +144,22 @@ export type HeartbeatRunner = {
   stop: () => void;
   updateConfig: (cfg: OpenClawConfig) => void;
 };
+
+function resolveHeartbeatSchedulerSeed(explicitSeed?: string) {
+  const normalized = normalizeOptionalString(explicitSeed);
+  if (normalized) {
+    return normalized;
+  }
+  try {
+    return loadOrCreateDeviceIdentity().deviceId;
+  } catch {
+    return createHash("sha256")
+      .update(process.env.HOME ?? "")
+      .update("\0")
+      .update(process.cwd())
+      .digest("hex");
+  }
+}
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
@@ -310,6 +337,68 @@ function resolveHeartbeatSession(
     entry: mainEntry,
     suppressOriginatingContext: false,
   };
+}
+
+function resolveIsolatedHeartbeatSessionKey(params: {
+  sessionKey: string;
+  configuredSessionKey: string;
+  sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
+}) {
+  const storedBaseSessionKey = params.sessionEntry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (storedBaseSessionKey) {
+    const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
+    if (
+      params.sessionKey.startsWith(storedBaseSessionKey) &&
+      suffix.length > 0 &&
+      /^(:heartbeat)+$/.test(suffix)
+    ) {
+      return {
+        isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
+        isolatedBaseSessionKey: storedBaseSessionKey,
+      };
+    }
+  }
+
+  // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
+  // The guard on configuredSessionKey ensures we do not strip a legitimate single
+  // `:heartbeat` suffix that is part of the user-configured base key itself
+  // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
+  // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
+  // must be treated as a new base rather than an existing isolated key.
+  const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
+  if (
+    params.sessionKey.startsWith(params.configuredSessionKey) &&
+    /^(:heartbeat)+$/.test(configuredSuffix) &&
+    !params.configuredSessionKey.endsWith(":heartbeat")
+  ) {
+    return {
+      isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
+      isolatedBaseSessionKey: params.configuredSessionKey,
+    };
+  }
+  return {
+    isolatedSessionKey: `${params.sessionKey}:heartbeat`,
+    isolatedBaseSessionKey: params.sessionKey,
+  };
+}
+
+function resolveStaleHeartbeatIsolatedSessionKey(params: {
+  sessionKey: string;
+  isolatedSessionKey: string;
+  isolatedBaseSessionKey: string;
+}) {
+  if (params.sessionKey === params.isolatedSessionKey) {
+    return undefined;
+  }
+  const suffix = params.sessionKey.slice(params.isolatedBaseSessionKey.length);
+  if (
+    params.sessionKey.startsWith(params.isolatedBaseSessionKey) &&
+    suffix.length > 0 &&
+    /^(:heartbeat)+$/.test(suffix)
+  ) {
+    return params.sessionKey;
+  }
+  return undefined;
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -717,17 +806,60 @@ export async function runHeartbeatOnce(opts: {
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
+    const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
+    // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
+    // re-entry for heartbeat-created isolated sessions. Real session keys that
+    // happen to end with `:heartbeat` still get a distinct isolated sibling.
+    const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: entry,
+    });
     const cronSession = resolveCronSession({
       cfg,
-      sessionKey: isolatedKey,
+      sessionKey: isolatedSessionKey,
       agentId,
       nowMs: startedAt,
       forceNew: true,
     });
-    cronSession.store[isolatedKey] = cronSession.sessionEntry;
+    const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
+      sessionKey,
+      isolatedSessionKey,
+      isolatedBaseSessionKey,
+    });
+    const removedSessionFiles = new Map<string, string | undefined>();
+    if (staleIsolatedSessionKey) {
+      const staleEntry = cronSession.store[staleIsolatedSessionKey];
+      if (staleEntry?.sessionId) {
+        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+      }
+      delete cronSession.store[staleIsolatedSessionKey];
+    }
+    cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
+    cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    runSessionKey = isolatedKey;
+    if (removedSessionFiles.size > 0) {
+      try {
+        const referencedSessionIds = new Set(
+          Object.values(cronSession.store)
+            .map((sessionEntry) => sessionEntry?.sessionId)
+            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath: cronSession.storePath,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
+      } catch (err) {
+        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+          err: String(err),
+          sessionKey: staleIsolatedSessionKey,
+        });
+      }
+    }
+    runSessionKey = isolatedSessionKey;
   }
 
   // Update task last run times AFTER successful heartbeat completion
@@ -824,16 +956,18 @@ export async function runHeartbeatOnce(opts: {
   try {
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const timeoutOverrideSeconds =
+      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const replyOpts = {
+      isHeartbeat: true,
+      ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      suppressToolErrorWarnings,
+      // Heartbeat timeout is a per-run override so user turns keep the global default.
+      timeoutOverrideSeconds,
+      bootstrapContextMode,
+    };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
@@ -1070,31 +1204,50 @@ export function startHeartbeatRunner(opts: {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
+  stableSchedulerSeed?: string;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce ?? runHeartbeatOnce;
   const state = {
     cfg: opts.cfg ?? loadConfig(),
     runtime,
+    schedulerSeed: resolveHeartbeatSchedulerSeed(opts.stableSchedulerSeed),
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
-    if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
-    }
-    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
-      return prevState.nextDueMs;
-    }
-    return now + intervalMs;
-  };
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    phaseMs: number,
+    prevState?: HeartbeatAgentState,
+  ) =>
+    resolveNextHeartbeatDueMs({
+      nowMs: now,
+      intervalMs,
+      phaseMs,
+      prev: prevState
+        ? {
+            intervalMs: prevState.intervalMs,
+            phaseMs: prevState.phaseMs,
+            nextDueMs: prevState.nextDueMs,
+          }
+        : undefined,
+    });
 
-  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
-    agent.lastRunMs = now;
-    agent.nextDueMs = now + agent.intervalMs;
+  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
+    agent.nextDueMs =
+      reason === "interval"
+        ? computeNextHeartbeatPhaseDueMs({
+            nowMs: now,
+            intervalMs: agent.intervalMs,
+            phaseMs: agent.phaseMs,
+          })
+        : // Targeted and action-driven wakes still count as a fresh heartbeat run
+          // for cooldown purposes, so keep the existing now + interval behavior.
+          now + agent.intervalMs;
   };
 
   const scheduleNext = () => {
@@ -1140,14 +1293,19 @@ export function startHeartbeatRunner(opts: {
       if (!intervalMs) {
         continue;
       }
+      const phaseMs = resolveHeartbeatPhaseMs({
+        schedulerSeed: state.schedulerSeed,
+        agentId: agent.agentId,
+        intervalMs,
+      });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
-        lastRunMs: prevState?.lastRunMs,
+        phaseMs,
         nextDueMs,
       });
     }
@@ -1221,7 +1379,7 @@ export function startHeartbeatRunner(opts: {
             deps: { runtime: state.runtime },
           });
           if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now);
+            advanceAgentSchedule(targetAgent, now, reason);
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
@@ -1229,7 +1387,7 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
-          advanceAgentSchedule(targetAgent, now);
+          advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
       }
@@ -1251,7 +1409,7 @@ export function startHeartbeatRunner(opts: {
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
           continue;
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -1263,7 +1421,7 @@ export function startHeartbeatRunner(opts: {
           return res;
         }
         if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
         }
         if (res.status === "ran") {
           ran = true;

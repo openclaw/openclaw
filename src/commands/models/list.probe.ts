@@ -20,11 +20,11 @@ import {
   parseModelRef,
 } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { redactSecrets } from "../status-all/format.js";
@@ -130,7 +130,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of modelCandidates) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }

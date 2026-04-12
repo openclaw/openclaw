@@ -245,6 +245,7 @@ Current bundled provider examples:
   | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
   | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers |
+  | `plugin-sdk/command-status` | Command status/help renderers | `buildCommandsMessage`, `buildCommandsMessagePaginated`, `buildHelpMessage` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |

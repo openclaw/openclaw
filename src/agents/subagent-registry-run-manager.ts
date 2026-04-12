@@ -1,11 +1,12 @@
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -39,7 +40,7 @@ export function createSubagentRunManager(params: {
   ensureRuntimePluginsLoaded:
     | typeof ensureRuntimePluginsLoadedFn
     | ((args: {
-        config: ReturnType<typeof loadConfig>;
+        config: OpenClawConfig;
         workspaceDir?: string;
         allowGatewaySubagentBinding?: boolean;
       }) => void | Promise<void>);
@@ -48,10 +49,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
-  resolveSubagentWaitTimeoutMs(
-    cfg: ReturnType<typeof loadConfig>,
-    runTimeoutSeconds?: number,
-  ): number;
+  resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -237,6 +235,7 @@ export function createSubagentRunManager(params: {
         : undefined,
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       suppressAnnounceReason: undefined,
       announceRetryCount: undefined,
       lastAnnounceRetryAt: undefined,
@@ -248,9 +247,8 @@ export function createSubagentRunManager(params: {
     params.runs.set(nextRunId, next);
     params.ensureListener();
     params.persist();
-    if (archiveAtMs) {
-      params.startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    params.startSweeper();
     void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
     return true;
   };
@@ -274,6 +272,13 @@ export function createSubagentRunManager(params: {
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
   }) => {
+    const runId = registerParams.runId.trim();
+    const childSessionKey = registerParams.childSessionKey.trim();
+    const requesterSessionKey = registerParams.requesterSessionKey.trim();
+    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    if (!runId || !childSessionKey || !requesterSessionKey) {
+      return;
+    }
     const now = Date.now();
     const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
@@ -287,12 +292,11 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    params.runs.set(registerParams.runId, {
-      runId: registerParams.runId,
-      childSessionKey: registerParams.childSessionKey,
-      controllerSessionKey:
-        registerParams.controllerSessionKey ?? registerParams.requesterSessionKey,
-      requesterSessionKey: registerParams.requesterSessionKey,
+    params.runs.set(runId, {
+      runId,
+      childSessionKey,
+      controllerSessionKey,
+      requesterSessionKey,
       requesterOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
@@ -309,6 +313,7 @@ export function createSubagentRunManager(params: {
       accumulatedRuntimeMs: 0,
       archiveAtMs,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
@@ -317,12 +322,12 @@ export function createSubagentRunManager(params: {
     try {
       createRunningTaskRun({
         runtime: "subagent",
-        sourceId: registerParams.runId,
-        ownerKey: registerParams.requesterSessionKey,
+        sourceId: runId,
+        ownerKey: requesterSessionKey,
         scopeKind: "session",
         requesterOrigin,
-        childSessionKey: registerParams.childSessionKey,
-        runId: registerParams.runId,
+        childSessionKey,
+        runId,
         label: registerParams.label,
         task: registerParams.task,
         deliveryStatus:
@@ -338,12 +343,11 @@ export function createSubagentRunManager(params: {
     }
     params.ensureListener();
     params.persist();
-    if (archiveAtMs) {
-      params.startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(registerParams.runId, waitTimeoutMs);
+    void waitForSubagentCompletion(runId, waitTimeoutMs);
   };
 
   const releaseSubagentRun = (runId: string) => {

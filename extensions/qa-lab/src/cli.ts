@@ -1,5 +1,8 @@
 import type { Command } from "commander";
+import { collectString } from "./cli-options.js";
+import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
@@ -22,12 +25,31 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
+  concurrency?: number;
+  runner?: string;
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
 }
 
+async function runQaParityReport(opts: {
+  repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
+  outputDir?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaParityReportCommand(opts);
+}
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -38,6 +60,7 @@ async function runQaCharacterEval(opts: {
   modelThinking?: string[];
   judgeModel?: string[];
   judgeTimeoutMs?: number;
+  blindJudgeModels?: boolean;
   concurrency?: number;
   judgeConcurrency?: number;
 }) {
@@ -56,11 +79,6 @@ async function runQaManualLane(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaManualLaneCommand(opts);
-}
-
-function collectString(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
 }
 
 async function runQaUi(opts: {
@@ -120,6 +138,10 @@ async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
   await runtime.runQaMockOpenAiCommand(opts);
 }
 
+export function isQaLabCliAvailable(): boolean {
+  return hasQaScenarioPack();
+}
+
 export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
@@ -137,6 +159,7 @@ export function registerQaLabCli(program: Command) {
     .description("Run repo-backed QA scenarios against the QA gateway lane")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Suite artifact directory")
+    .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
@@ -144,29 +167,82 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--cli-auth-mode <mode>",
+      "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
+    )
+    .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      Number(value),
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option("--image <alias>", "Multipass image alias")
+    .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
+    .option("--memory <size>", "Multipass memory size")
+    .option("--disk <size>", "Multipass disk size")
     .action(
       async (opts: {
         repoRoot?: string;
         outputDir?: string;
+        runner?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
+        cliAuthMode?: string;
+        parityPack?: string;
         scenario?: string[];
+        concurrency?: number;
         fast?: boolean;
+        image?: string;
+        cpus?: number;
+        memory?: string;
+        disk?: string;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
+          runner: opts.runner,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          cliAuthMode: opts.cliAuthMode,
+          parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
+          concurrency: opts.concurrency,
+          image: opts.image,
+          cpus: opts.cpus,
+          memory: opts.memory,
+          disk: opts.disk,
         });
       },
     );
+
+  qa.command("parity-report")
+    .description("Compare two QA suite summaries and write an agentic parity gate report")
+    .requiredOption("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
+    .requiredOption("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--candidate-label <label>", "Candidate display label", "openai/gpt-5.4")
+    .option("--baseline-label <label>", "Baseline display label", "anthropic/claude-opus-4-6")
+    .option("--output-dir <path>", "Artifact directory for the parity report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        candidateSummary: string;
+        baselineSummary: string;
+        candidateLabel?: string;
+        baselineLabel?: string;
+        outputDir?: string;
+      }) => {
+        await runQaParityReport(opts);
+      },
+    );
+
+  for (const lane of LIVE_TRANSPORT_QA_CLI_REGISTRATIONS) {
+    lane.register(qa);
+  }
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -199,6 +275,10 @@ export function registerQaLabCli(program: Command) {
     .option("--judge-timeout-ms <ms>", "Override judge wait timeout", (value: string) =>
       Number(value),
     )
+    .option(
+      "--blind-judge-models",
+      "Hide candidate model refs from judge prompts; reports still map rankings back to real refs",
+    )
     .option("--concurrency <count>", "Candidate model run concurrency", (value: string) =>
       Number(value),
     )
@@ -216,6 +296,7 @@ export function registerQaLabCli(program: Command) {
         modelThinking?: string[];
         judgeModel?: string[];
         judgeTimeoutMs?: number;
+        blindJudgeModels?: boolean;
         concurrency?: number;
         judgeConcurrency?: number;
       }) => {

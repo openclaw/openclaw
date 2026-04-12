@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { QaBusState } from "./bus-state.js";
-import { startQaLabServer } from "./lab-server.js";
 import { renderQaMarkdownReport } from "./report.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
@@ -87,17 +86,3 @@ export async function runQaSelfCheckAgainstState(params: {
     scenarioResult,
   };
 }
-
-export async function runQaLabSelfCheck(params?: { repoRoot?: string; outputPath?: string }) {
-  const server = await startQaLabServer({
-    repoRoot: params?.repoRoot,
-    outputPath: params?.outputPath,
-  });
-  try {
-    return await server.runSelfCheck();
-  } finally {
-    await server.stop();
-  }
-}
-
-export const runQaE2eSelfCheck = runQaLabSelfCheck;

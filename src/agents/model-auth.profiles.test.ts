@@ -821,6 +821,34 @@ describe("getApiKeyForModel", () => {
     expect(resolved).toBeNull();
   });
 
+  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", async () => {
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_CLOUD_API_KEY: "google-cloud-api-key",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved?.apiKey).toBe("google-cloud-api-key");
+    expect(resolved?.source).toBe("gcloud adc");
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
     const credentialsPath = path.join(tempDir, "adc.json");

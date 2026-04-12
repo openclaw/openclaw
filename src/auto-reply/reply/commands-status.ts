@@ -3,6 +3,7 @@ import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
+  resolveAgentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -12,9 +13,9 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
   formatUsageWindowSummary,
@@ -295,6 +296,7 @@ export async function buildStatusText(params: {
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -302,6 +304,7 @@ export async function buildStatusText(params: {
       model: {
         ...toAgentModelListLike(agentDefaults.model),
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,

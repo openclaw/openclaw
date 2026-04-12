@@ -37,13 +37,40 @@ vi.mock("../plugins/provider-openai-codex-oauth.js", () => ({
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
-    "../plugins/provider-auth-choice.runtime.js",
-  );
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => {
+  const normalizeProviderId = (value: string) => value.trim().toLowerCase();
   return {
-    ...actual,
     resolvePluginProviders,
+    resolveProviderPluginChoice: (params: { providers: ProviderPlugin[]; choice: string }) => {
+      const choice = params.choice.trim();
+      if (!choice) {
+        return null;
+      }
+      if (choice.startsWith("provider-plugin:")) {
+        const payload = choice.slice("provider-plugin:".length);
+        const separator = payload.indexOf(":");
+        const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
+        const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
+        const provider = params.providers.find(
+          (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
+        );
+        const method = methodId
+          ? provider?.auth.find((entry) => entry.id === methodId)
+          : provider?.auth[0];
+        return provider && method ? { provider, method } : null;
+      }
+      for (const provider of params.providers) {
+        for (const method of provider.auth) {
+          if (method.wizard?.choiceId === choice) {
+            return { provider, method, wizard: method.wizard };
+          }
+        }
+        if (normalizeProviderId(provider.id) === normalizeProviderId(choice) && provider.auth[0]) {
+          return { provider, method: provider.auth[0] };
+        }
+      }
+      return null;
+    },
     runProviderModelSelectedHook,
   };
 });
@@ -281,9 +308,7 @@ function createDefaultProviderPlugins() {
     run: async (ctx) => {
       const state = "state-test";
       ctx.runtime.log(`Open this URL: https://api.chutes.ai/idp/authorize?state=${state}`);
-      const redirect = String(
-        await ctx.prompter.text({ message: "Paste the redirect URL or code" }),
-      );
+      const redirect = await ctx.prompter.text({ message: "Paste the redirect URL or code" });
       const params = new URLSearchParams(redirect.startsWith("?") ? redirect.slice(1) : redirect);
       const code = params.get("code") ?? redirect;
       const tokenResponse = await fetch("https://api.chutes.ai/idp/token", {
@@ -1466,7 +1491,7 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
+      authChoice: "synthetic-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
@@ -1478,13 +1503,13 @@ describe("applyAuthChoice", () => {
       agentId?: string;
     }> = [
       {
-        authChoice: "xai-api-key",
-        token: "sk-xai-test",
-        promptMessage: "Enter xAI API key",
+        authChoice: "synthetic-api-key",
+        token: "sk-synthetic-agent-test",
+        promptMessage: "Enter Synthetic API key",
         existingPrimary: "openai/gpt-4o-mini",
-        expectedOverride: "xai/grok-4",
-        profileId: "xai:default",
-        profileProvider: "xai",
+        expectedOverride: "synthetic/Synthetic-1",
+        profileId: "synthetic:default",
+        profileProvider: "synthetic",
         agentId: "agent-1",
       },
       {
@@ -1628,16 +1653,10 @@ describe("applyAuthChoice", () => {
   it("does not persist literal 'undefined' when API key prompts return undefined", async () => {
     const scenarios = [
       {
-        authChoice: "apiKey" as const,
-        envKey: "ANTHROPIC_API_KEY",
-        profileId: "anthropic:default",
-        provider: "anthropic",
-      },
-      {
-        authChoice: "openrouter-api-key" as const,
-        envKey: "OPENROUTER_API_KEY",
-        profileId: "openrouter:default",
-        provider: "openrouter",
+        authChoice: "synthetic-api-key" as const,
+        envKey: "SYNTHETIC_API_KEY",
+        profileId: "synthetic:default",
+        provider: "synthetic",
       },
     ];
 

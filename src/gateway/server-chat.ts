@@ -1,15 +1,19 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import {
-  isSilentReplyText,
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  isSuppressedControlReplyLeadFragment,
+  isSuppressedControlReplyText,
+} from "./control-reply-text.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
@@ -81,20 +85,6 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
-}
-
-function isSilentReplyLeadFragment(text: string): boolean {
-  const normalized = text.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
-  if (!/^[A-Z_]+$/.test(normalized)) {
-    return false;
-  }
-  if (normalized === SILENT_REPLY_TOKEN) {
-    return false;
-  }
-  return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
 function appendUniqueSuffix(base: string, suffix: string): string {
@@ -448,6 +438,20 @@ export type ChatEventBroadcast = (
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
+const CHAT_ERROR_KINDS = new Set<ErrorKind>([
+  "refusal",
+  "timeout",
+  "rate_limit",
+  "context_length",
+  "unknown",
+]);
+
+function readChatErrorKind(value: unknown): ErrorKind | undefined {
+  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
+    ? (value as ErrorKind)
+    : undefined;
+}
+
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
   broadcastToConnIds: (
@@ -594,6 +598,8 @@ export function createAgentEventHandler({
       if (!isAborted) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+        const evtErrorKind =
+          readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -609,6 +615,7 @@ export function createAgentEventHandler({
               lifecyclePhase === "error" ? "error" : "done",
               evt.data?.error,
               evtStopReason,
+              evtErrorKind,
             );
           }
         } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
@@ -620,6 +627,7 @@ export function createAgentEventHandler({
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
             evtStopReason,
+            evtErrorKind,
           );
         }
       } else {
@@ -692,11 +700,11 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
-    if (isSilentReplyText(mergedRawText, SILENT_REPLY_TOKEN)) {
+    if (isSuppressedControlReplyText(mergedRawText)) {
       chatRunState.buffers.set(clientRunId, "");
       return;
     }
-    if (isSilentReplyLeadFragment(mergedRawText)) {
+    if (isSuppressedControlReplyLeadFragment(mergedRawText)) {
       chatRunState.buffers.set(clientRunId, mergedRawText);
       return;
     }
@@ -704,6 +712,12 @@ export function createAgentEventHandler({
       ? stripLeadingSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
       : mergedRawText;
     chatRunState.buffers.set(clientRunId, mergedText);
+    if (isSuppressedControlReplyText(mergedText)) {
+      return;
+    }
+    if (isSuppressedControlReplyLeadFragment(mergedText)) {
+      return;
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -740,7 +754,7 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress || isSuppressedControlReplyText(text);
     return { text, shouldSuppressSilent };
   };
 
@@ -751,7 +765,7 @@ export function createAgentEventHandler({
     seq: number,
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
-    const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
+    const shouldSuppressSilentLeadFragment = isSuppressedControlReplyLeadFragment(text);
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
@@ -796,6 +810,7 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
     stopReason?: string,
+    errorKind?: ErrorKind,
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     // Flush any throttled delta so streaming clients receive the complete text
@@ -833,6 +848,7 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
+      ...(errorKind && { errorKind }),
     };
     broadcast("chat", payload);
     nodeSendToSession(sessionKey, "chat", payload);

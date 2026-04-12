@@ -17,6 +17,9 @@ type MediaTargetContext = {
   account: QQBotAccount;
   logPrefix: string;
 };
+type SendDocumentOptions = {
+  allowQQBotDataDownloads?: boolean;
+};
 
 type QQBotFrameworkCommandResult =
   | string
@@ -44,14 +47,22 @@ function resolveQQBotAccount(config: unknown, accountId?: string): QQBotAccount 
   return resolve(config, accountId);
 }
 
-function sendDocument(context: MediaTargetContext, filePath: string) {
+function sendDocument(
+  context: MediaTargetContext,
+  filePath: string,
+  options?: SendDocumentOptions,
+) {
   const send = loadBundledEntryExportSync<
-    (context: MediaTargetContext, filePath: string) => Promise<unknown>
+    (
+      context: MediaTargetContext,
+      filePath: string,
+      options?: SendDocumentOptions,
+    ) => Promise<unknown>
   >(import.meta.url, {
     specifier: "./api.js",
     exportName: "sendDocument",
   });
-  return send(context, filePath);
+  return send(context, filePath, options);
 }
 
 function getFrameworkCommands(): QQBotFrameworkCommand[] {
@@ -173,11 +184,13 @@ export default defineBundledChannelEntry({
                 account,
                 logPrefix: `[qqbot:${account.accountId}]`,
               };
-              await sendDocument(mediaCtx, String(result.filePath));
+              await sendDocument(mediaCtx, String(result.filePath), {
+                allowQQBotDataDownloads: true,
+              });
             } catch {
               // File send failed; the text summary is still returned below.
             }
-            return { text: String(result.text) };
+            return { text: result.text };
           }
 
           return {

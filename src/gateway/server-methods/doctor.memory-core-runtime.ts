@@ -2,4 +2,5 @@ export {
   removeBackfillDiaryEntries,
   previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
-} from "../../../extensions/memory-core/api.js";
+  removeGroundedShortTermCandidates,
+} from "../../plugin-sdk/memory-core-bundled-runtime.js";

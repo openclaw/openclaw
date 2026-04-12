@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
@@ -16,6 +16,7 @@ import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
 import {
   removeBackfillDiaryEntries,
+  removeGroundedShortTermCandidates,
   previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
@@ -122,15 +123,16 @@ export type DoctorMemoryDreamDiaryPayload = {
   updatedAtMs?: number;
 };
 
-export type DoctorMemoryDreamDiaryActionPayload = {
+export type DoctorMemoryDreamActionPayload = {
   agentId: string;
-  path: string;
-  action: "backfill" | "reset";
-  found: boolean;
+  action: "backfill" | "reset" | "resetGroundedShortTerm";
+  path?: string;
+  found?: boolean;
   scannedFiles?: number;
   written?: number;
   replaced?: number;
   removedEntries?: number;
+  removedShortTermEntries?: number;
 };
 
 function extractIsoDayFromPath(filePath: string): string | null {
@@ -244,10 +246,7 @@ function normalizeMemoryPath(rawPath: string): string {
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
-  if (
-    path.isAbsolute(rawPath) &&
-    normalized.startsWith(`${workspaceNormalized}/`)
-  ) {
+  if (path.isAbsolute(rawPath) && normalized.startsWith(`${workspaceNormalized}/`)) {
     return normalized.slice(workspaceNormalized.length + 1);
   }
   return normalized;
@@ -880,7 +879,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
     const sourceFiles = await listWorkspaceDailyFiles(memoryDir);
     if (sourceFiles.length === 0) {
       const dreamDiary = await readDreamDiary(workspaceDir);
-      const payload: DoctorMemoryDreamDiaryActionPayload = {
+      const payload: DoctorMemoryDreamActionPayload = {
         agentId,
         path: dreamDiary.path,
         action: "backfill",
@@ -919,7 +918,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       timezone: remConfig.timezone,
     });
     const dreamDiary = await readDreamDiary(workspaceDir);
-    const payload: DoctorMemoryDreamDiaryActionPayload = {
+    const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       path: dreamDiary.path,
       action: "backfill",
@@ -936,12 +935,24 @@ export const doctorHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const removed = await removeBackfillDiaryEntries({ workspaceDir });
     const dreamDiary = await readDreamDiary(workspaceDir);
-    const payload: DoctorMemoryDreamDiaryActionPayload = {
+    const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       path: dreamDiary.path,
       action: "reset",
       found: dreamDiary.found,
       removedEntries: removed.removed,
+    };
+    respond(true, payload, undefined);
+  },
+  "doctor.memory.resetGroundedShortTerm": async ({ respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const removed = await removeGroundedShortTermCandidates({ workspaceDir });
+    const payload: DoctorMemoryDreamActionPayload = {
+      agentId,
+      action: "resetGroundedShortTerm",
+      removedShortTermEntries: removed.removed,
     };
     respond(true, payload, undefined);
   },

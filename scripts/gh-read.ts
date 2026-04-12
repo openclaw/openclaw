@@ -193,6 +193,7 @@ async function resolveInstallation(
   fail(
     `missing repo context; pass -R owner/repo, set GH_REPO, or set ${INSTALLATION_ID_ENV} for a direct installation lookup`,
   );
+  throw new Error("unreachable");
 }
 
 async function createInstallationToken(

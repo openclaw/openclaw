@@ -13,10 +13,21 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  getDebugProxyCaptureStore,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
+import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
+import type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
@@ -27,13 +38,20 @@ import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./run
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
-type QaLabLatestReport = {
-  outputPath: string;
-  markdown: string;
-  generatedAt: string;
-};
+const CAPTURE_QUERY_PRESETS = new Set([
+  "double-sends",
+  "retry-storms",
+  "cache-busting",
+  "ws-duplicate-frames",
+  "missing-ack",
+  "error-bursts",
+]);
 
-export type { QaLabLatestReport };
+function isCaptureQueryPreset(
+  value: string,
+): value is Parameters<ReturnType<typeof getDebugProxyCaptureStore>["queryPreset"]>[0] {
+  return CAPTURE_QUERY_PRESETS.has(value);
+}
 
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
@@ -42,39 +60,119 @@ type QaLabBootstrapDefaults = {
   senderName: string;
 };
 
-type QaLabRunStatus = "idle" | "running" | "completed";
+export type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 
-type QaLabScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
+function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
+  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(metaJson) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
 
-export type QaLabScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaLabScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
+function readCaptureMetaString(
+  meta: Record<string, unknown> | null,
+  key: string,
+): string | undefined {
+  const value = meta?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
 
-export type QaLabScenarioRun = {
-  kind: "suite" | "self-check";
-  status: QaLabRunStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: QaLabScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
+function mapCaptureEventForQa(row: Record<string, unknown>) {
+  const meta = parseCaptureMeta(row.metaJson);
+  return {
+    ...row,
+    payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
+    provider: readCaptureMetaString(meta, "provider"),
+    api: readCaptureMetaString(meta, "api"),
+    model: readCaptureMetaString(meta, "model"),
+    captureOrigin: readCaptureMetaString(meta, "captureOrigin"),
   };
+}
+
+type QaStartupProbeStatus = {
+  label: string;
+  url: string;
+  ok: boolean;
+  error?: string;
 };
+
+function defaultPortForProtocol(protocol: string): number {
+  if (protocol === "https:") {
+    return 443;
+  }
+  if (protocol === "http:") {
+    return 80;
+  }
+  return 0;
+}
+
+async function probeTcpReachability(
+  rawUrl: string,
+  timeoutMs = 700,
+): Promise<QaStartupProbeStatus> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return {
+      label: rawUrl,
+      url: rawUrl,
+      ok: false,
+      error: "invalid url",
+    };
+  }
+  const host = parsed.hostname;
+  const port = parsed.port ? Number(parsed.port) : defaultPortForProtocol(parsed.protocol);
+  if (!host || !Number.isFinite(port) || port <= 0) {
+    return {
+      label: parsed.origin,
+      url: parsed.toString(),
+      ok: false,
+      error: "missing host or port",
+    };
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.createConnection({ host, port });
+      const onError = (error: Error) => {
+        socket.destroy();
+        reject(error);
+      };
+      socket.setTimeout(timeoutMs, () => {
+        socket.destroy(new Error("timeout"));
+      });
+      socket.once("connect", () => {
+        socket.end();
+        resolve();
+      });
+      socket.once("error", onError);
+      socket.once("timeout", () => onError(new Error("timeout")));
+    });
+    return {
+      label: parsed.host,
+      url: parsed.toString(),
+      ok: true,
+    };
+  } catch (error) {
+    return {
+      label: parsed.host,
+      url: parsed.toString(),
+      ok: false,
+      error: formatErrorMessage(error),
+    };
+  }
+}
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
@@ -399,8 +497,9 @@ function tryResolveUiAsset(
   }
   const safePath = pathname === "/" ? "/index.html" : pathname;
   const decoded = decodeURIComponent(safePath);
-  const candidate = path.normalize(path.join(distDir, decoded));
-  if (!candidate.startsWith(distDir)) {
+  const candidate = path.resolve(distDir, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
+  const relative = path.relative(distDir, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return null;
   }
   if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
@@ -463,22 +562,12 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   };
 }
 
-export async function startQaLabServer(params?: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  outputPath?: string;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiToken?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
+export async function startQaLabServer(
+  params?: QaLabServerStartParams,
+): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
+  const captureSettings = resolveDebugProxySettings();
+  const captureStore = getDebugProxyCaptureStore(captureSettings.dbPath, captureSettings.blobDir);
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -500,39 +589,31 @@ export async function startQaLabServer(params?: {
       }
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
-  let labHandle: {
-    baseUrl: string;
-    listenUrl: string;
-    state: QaBusState;
-    setControlUi: (next: {
-      controlUiUrl?: string | null;
-      controlUiToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) => void;
-    setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;
-    setLatestReport: (next: QaLabLatestReport | null) => void;
-    runSelfCheck: () => Promise<QaSelfCheckResult>;
-    stop: () => Promise<void>;
-  } | null = null;
+  let labHandle: QaLabServerHandle | null = null;
 
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
+  let runnerModelCatalogAbort: AbortController | null = null;
   const ensureRunnerModelCatalog = () => {
     if (runnerModelCatalogPromise) {
       return runnerModelCatalogPromise;
     }
+    runnerModelCatalogAbort = new AbortController();
     runnerModelCatalogPromise = (async () => {
       try {
         const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
         runnerModelOptions = await loadQaRunnerModelOptions({
           repoRoot,
+          signal: runnerModelCatalogAbort?.signal,
         });
         runnerModelCatalogStatus = "ready";
       } catch {
         runnerModelOptions = [];
         runnerModelCatalogStatus = "failed";
       }
-    })();
+    })().finally(() => {
+      runnerModelCatalogAbort = null;
+    });
     return runnerModelCatalogPromise;
   };
 
@@ -646,6 +727,104 @@ export async function startQaLabServer(params?: {
         writeJson(res, 200, { run: latestScenarioRun });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
+        writeJson(res, 200, {
+          sessions: captureStore.listSessions(50),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
+        const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
+        const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
+        const [proxy, gateway] = await Promise.all([
+          probeTcpReachability(proxyUrl),
+          probeTcpReachability(gatewayUrl),
+        ]);
+        writeJson(res, 200, {
+          status: {
+            proxy: {
+              ...proxy,
+              label: "Proxy",
+            },
+            gateway: {
+              ...gateway,
+              label: "Gateway",
+            },
+            qaLab: {
+              label: "QA Lab",
+              url: publicBaseUrl,
+              ok: true,
+            },
+          },
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/events") {
+        const sessionId = url.searchParams.get("sessionId")?.trim();
+        writeJson(res, 200, {
+          events: sessionId
+            ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+            : [],
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/coverage") {
+        const sessionId = url.searchParams.get("sessionId")?.trim();
+        if (!sessionId) {
+          writeError(res, 400, "Missing sessionId");
+          return;
+        }
+        writeJson(res, 200, {
+          coverage: captureStore.summarizeSessionCoverage(sessionId),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/query") {
+        const preset = url.searchParams.get("preset")?.trim();
+        const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
+        if (!preset) {
+          writeError(res, 400, "Missing preset");
+          return;
+        }
+        if (!isCaptureQueryPreset(preset)) {
+          writeError(res, 400, "Unknown preset");
+          return;
+        }
+        writeJson(res, 200, {
+          rows: captureStore.queryPreset(preset, sessionId),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/blob") {
+        const blobId = url.searchParams.get("id")?.trim();
+        if (!blobId) {
+          writeError(res, 400, "Missing blob id");
+          return;
+        }
+        const content = captureStore.readBlob(blobId);
+        if (content == null) {
+          writeError(res, 404, "Blob not found");
+          return;
+        }
+        writeJson(res, 200, { id: blobId, content });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
+        const body = (await readJson(req)) as { sessionIds?: unknown };
+        const sessionIds = Array.isArray(body.sessionIds)
+          ? body.sessionIds.filter((value): value is string => typeof value === "string")
+          : [];
+        writeJson(res, 200, {
+          result: captureStore.deleteSessions(sessionIds),
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/capture/purge") {
+        writeJson(res, 200, {
+          result: captureStore.purgeAll(),
+        });
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/reset") {
         if (activeSuiteRun) {
           writeError(res, 409, "QA suite run already in progress");
@@ -711,8 +890,8 @@ export async function startQaLabServer(params?: {
         };
         activeSuiteRun = (async () => {
           try {
-            const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-            const result = await runQaSuiteFromRuntime({
+            const { runQaSuite } = await import("./suite.js");
+            const result = await runQaSuite({
               lab: labHandle ?? undefined,
               outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,
@@ -854,10 +1033,10 @@ export async function startQaLabServer(params?: {
     },
     runSelfCheck,
     async stop() {
+      runnerModelCatalogAbort?.abort();
+      await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
   labHandle = lab;

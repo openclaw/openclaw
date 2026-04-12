@@ -11,6 +11,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
+  normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -23,22 +24,21 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
-  canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
@@ -59,8 +59,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  canonicalizeSessionKeyForAgent,
+  canonicalizeSpawnedByForAgent,
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "./session-store-key.js";
 import {
   readLatestSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
@@ -85,6 +91,7 @@ export {
   readSessionMessages,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
+export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -488,7 +495,7 @@ export function pruneLegacyStoreKeys(params: {
 }) {
   const keysToDelete = new Set<string>();
   for (const candidate of params.candidates) {
-    const trimmed = normalizeOptionalString(String(candidate ?? "")) ?? "";
+    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
     if (!trimmed) {
       continue;
     }
@@ -507,7 +514,7 @@ export function pruneLegacyStoreKeys(params: {
 }
 
 export function migrateAndPruneGatewaySessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
 }) {
@@ -701,94 +708,6 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     };
   });
   return { defaultId, mainKey, scope, agents };
-}
-
-function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = normalizeLowercaseStringOrEmpty(key);
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
-  }
-  if (lowered.startsWith("agent:")) {
-    return lowered;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${lowered}`;
-}
-
-function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
-  return normalizeAgentId(resolveDefaultAgentId(cfg));
-}
-
-export function resolveSessionStoreKey(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): string {
-  const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  if (!raw) {
-    return raw;
-  }
-  const rawLower = normalizeLowercaseStringOrEmpty(raw);
-  if (rawLower === "global" || rawLower === "unknown") {
-    return rawLower;
-  }
-
-  const parsed = parseAgentSessionKey(raw);
-  if (parsed) {
-    const agentId = normalizeAgentId(parsed.agentId);
-    const lowered = normalizeLowercaseStringOrEmpty(raw);
-    const canonical = canonicalizeMainSessionAlias({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: lowered,
-    });
-    if (canonical !== lowered) {
-      return canonical;
-    }
-    return lowered;
-  }
-
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
-  const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (lowered === "main" || lowered === rawMainKey) {
-    return resolveMainSessionKey(params.cfg);
-  }
-  const agentId = resolveDefaultStoreAgentId(params.cfg);
-  return canonicalizeSessionKeyForAgent(agentId, lowered);
-}
-
-function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
-  if (canonicalKey === "global" || canonicalKey === "unknown") {
-    return resolveDefaultStoreAgentId(cfg);
-  }
-  const parsed = parseAgentSessionKey(canonicalKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  return resolveDefaultStoreAgentId(cfg);
-}
-
-export function canonicalizeSpawnedByForAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  spawnedBy?: string,
-): string | undefined {
-  const raw = normalizeOptionalString(spawnedBy) ?? "";
-  if (!raw) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  let result: string;
-  if (lower.startsWith("agent:")) {
-    result = lower;
-  } else {
-    result = `agent:${normalizeAgentId(agentId)}:${lower}`;
-  }
-  // Resolve main-alias references (e.g. agent:ops:main → configured main key).
-  const parsed = parseAgentSessionKey(result);
-  const resolvedAgent = parsed?.agentId ? normalizeAgentId(parsed.agentId) : agentId;
-  return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
 }
 
 function buildGatewaySessionStoreScanTargets(params: {
@@ -1052,12 +971,17 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+  });
+
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
-    overrideProvider: entry?.providerOverride,
-    overrideModel: entry?.modelOverride,
+    overrideProvider: normalizedOverride.providerOverride,
+    overrideModel: normalizedOverride.modelOverride,
   });
   if (persisted) {
     return persisted;

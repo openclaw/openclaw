@@ -1,5 +1,8 @@
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type {
+  AgentEmbeddedHarnessConfig,
+  AgentModelConfig,
+  AgentSandboxConfig,
+} from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -9,6 +12,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
+export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -46,6 +50,21 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type AgentStartupContextConfig = {
+  /** Enable runtime-owned startup-context prelude on bare session resets (default: true). */
+  enabled?: boolean;
+  /** Which bare reset commands should receive startup context (default: ["new", "reset"]). */
+  applyOn?: Array<"new" | "reset">;
+  /** How many dated memory files to load counting backward from today (default: 2). */
+  dailyMemoryDays?: number;
+  /** Max bytes to read from each daily memory file before skipping (default: 16384). */
+  maxFileBytes?: number;
+  /** Max characters retained from each daily memory file (default: 2000). */
+  maxFileChars?: number;
+  /** Max total characters retained across the startup prelude (default: 4500). */
+  maxTotalChars?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -55,6 +74,8 @@ export type CliBackendConfig = {
   output?: "json" | "text" | "jsonl";
   /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
+  /** JSONL event dialect for CLIs with provider-specific stream formats. */
+  jsonlDialect?: "claude-stream-json";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
@@ -128,6 +149,8 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
+  /** Default embedded agent harness policy. */
+  embeddedHarness?: AgentEmbeddedHarnessConfig;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
@@ -184,6 +207,8 @@ export type AgentDefaultsConfig = {
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
+  /** Runtime-owned first-turn startup context for bare /new and /reset. */
+  startupContext?: AgentStartupContextConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**
@@ -217,6 +242,12 @@ export type AgentDefaultsConfig = {
      * - trusted: trust project settings as-is
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
+    /**
+     * Embedded Pi execution contract:
+     * - default: keep the standard runner behavior
+     * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
+     */
+    executionContract?: EmbeddedPiExecutionContract;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
@@ -272,7 +303,7 @@ export type AgentDefaultsConfig = {
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
-    target?: ChannelId;
+    target?: string;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
@@ -287,6 +318,8 @@ export type AgentDefaultsConfig = {
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
+    /** Run timeout in seconds for heartbeat agent turns. */
+    timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
      * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
@@ -426,7 +459,7 @@ export type AgentLlmConfig = {
    * Idle timeout for LLM streaming responses in seconds.
    * If no token is received within this time, the request is aborted.
    * Set to 0 to disable (never timeout).
-   * Default: 60 seconds.
+   * If unset, OpenClaw uses the default LLM idle timeout.
    */
   idleTimeoutSeconds?: number;
 };

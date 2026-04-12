@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="openclaw-plugins-e2e"
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged plugins-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
 if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
@@ -16,7 +17,8 @@ if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${O
 fi
 
 echo "Running plugins Docker E2E..."
-docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s <<'EOF'
+RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX.log")"
+if ! docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s >"$RUN_LOG" 2>&1 <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then
@@ -54,6 +56,47 @@ BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
+
+record_fixture_plugin_trust() {
+  local plugin_id="$1"
+  local plugin_root="$2"
+  local enabled="$3"
+  node - <<'NODE' "$plugin_id" "$plugin_root" "$enabled"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const pluginId = process.argv[2];
+const pluginRoot = process.argv[3];
+const enabled = process.argv[4] === "1";
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath)
+  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
+  : {};
+const plugins = (config.plugins ??= {});
+const entries = (plugins.entries ??= {});
+entries[pluginId] = { ...(entries[pluginId] ?? {}), enabled };
+const installs = (plugins.installs ??= {});
+installs[pluginId] = {
+  ...(installs[pluginId] ?? {}),
+  source: "path",
+  installPath: pluginRoot,
+  sourcePath: pluginRoot,
+};
+plugins.allow = Array.from(new Set([...(plugins.allow ?? []), pluginId])).sort();
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+}
+
+run_logged() {
+  local label="$1"
+  shift
+  local log_file="/tmp/openclaw-plugins-e2e-${label}.log"
+  if ! "$@" >"$log_file" 2>&1; then
+    cat "$log_file"
+    exit 1
+  fi
+}
 
 seed_openai_provider_config() {
   local openai_api_key="$1"
@@ -178,6 +221,7 @@ const callGatewayOnce = (method, params) => {
       value: JSON.parse(
         execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
           encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
         }),
       ),
     };
@@ -395,6 +439,7 @@ cat > "$demo_plugin_root/openclaw.plugin.json" <<'JSON'
   }
 }
 JSON
+record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
 
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --json > /tmp/plugins-inspect.json
@@ -462,7 +507,7 @@ cat > "$pack_dir/package/openclaw.plugin.json" <<'JSON'
 JSON
 tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
-node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
+run_logged install-tgz node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --json > /tmp/plugins2-inspect.json
 
@@ -510,7 +555,7 @@ cat > "$dir_plugin/openclaw.plugin.json" <<'JSON'
 }
 JSON
 
-node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
+run_logged install-dir node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --json > /tmp/plugins3-inspect.json
 
@@ -559,7 +604,7 @@ cat > "$file_pack_dir/package/openclaw.plugin.json" <<'JSON'
 }
 JSON
 
-node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
+run_logged install-file node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --json > /tmp/plugins4-inspect.json
 
@@ -597,6 +642,7 @@ Act as an engineering advisor.
 Focus on:
 $ARGUMENTS
 MD
+record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
 
 node - <<'NODE'
 const fs = require("node:fs");
@@ -843,8 +889,8 @@ if (!names.includes("marketplace-shortcut") || !names.includes("marketplace-dire
 console.log("ok");
 NODE
 
-node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
-node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
+run_logged install-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
+run_logged install-marketplace-direct node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-shortcut-inspect.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-direct --json > /tmp/plugins-marketplace-direct-inspect.json
@@ -913,8 +959,8 @@ write_fixture_plugin \
   "0.0.2" \
   "demo.marketplace.shortcut.v2" \
   "Marketplace Shortcut"
-node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
-node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
+run_logged update-marketplace-shortcut-dry-run node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
+run_logged update-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace-updated.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-updated-inspect.json
 
@@ -935,7 +981,13 @@ console.log("ok");
 NODE
 
 echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
+then
+  cat "$RUN_LOG"
+  rm -f "$RUN_LOG"
+  exit 1
+fi
+rm -f "$RUN_LOG"
 
 echo "OK"

@@ -105,6 +105,9 @@ function expectNodePairApproveScopes(scopes: string[]): void {
 
 describe("createNodesTool screen_record duration guardrails", () => {
   beforeAll(async () => {
+    // The agents lane runs on the shared non-isolated runner, so clear any
+    // cached prior import before wiring this file's gateway/media mocks.
+    vi.resetModules();
     ({ createNodesTool } = await import("./nodes-tool.js"));
   });
 
