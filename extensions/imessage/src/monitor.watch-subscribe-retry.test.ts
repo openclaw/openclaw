@@ -55,6 +55,10 @@ function createRpcClient(overrides?: {
         }),
     ),
     stop: vi.fn(async () => {}),
+  } as unknown as IMessageRpcClient & {
+    request: ReturnType<typeof vi.fn>;
+    waitForClose: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
   };
   return client as unknown as MockIMessageRpcClient;
 }
