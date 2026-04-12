@@ -125,10 +125,6 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       result.push(msg);
       continue;
     }
-    if (originalContent.some((block) => isThinkingLikeBlock(block))) {
-      result.push(msg);
-      continue;
-    }
     if (
       extractToolCallsFromAssistant(msg as Extract<AgentMessage, { role: "assistant" }>).length ===
       0
@@ -136,7 +132,29 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       result.push(msg);
       continue;
     }
+    const hasThinking = originalContent.some((block) => isThinkingLikeBlock(block));
     const validToolUseIds = collectFutureToolResultIds(messages, i);
+
+    if (hasThinking) {
+      const allToolCallsResolvable = originalContent.every((block) => {
+        if (!block || !isToolCallBlock(block)) {
+          return true;
+        }
+        const blockId = normalizeOptionalString(block.id);
+        return blockId ? validToolUseIds.has(blockId) : false;
+      });
+      if (allToolCallsResolvable) {
+        result.push(msg);
+      } else {
+        result.push({
+          ...assistantMsg,
+          content: isAbortedAssistantTurn(msg)
+            ? []
+            : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
+        } as AgentMessage);
+      }
+      continue;
+    }
 
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
