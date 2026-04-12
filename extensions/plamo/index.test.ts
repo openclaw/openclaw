@@ -1641,4 +1641,29 @@ describe("plamo provider plugin", () => {
       ],
     });
   });
+
+  it("resets toolUse stop reason when no tool-call blocks are produced", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text:
+            "<|plamo:begin_tool_request:plamo|>" +
+            "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+            "<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>not-json" +
+            "<|plamo:end_tool_arguments:plamo|>" +
+            "<|plamo:end_tool_request:plamo|>",
+        },
+      ],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "stop",
+      content: [],
+    });
+  });
 });
