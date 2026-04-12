@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 import {
@@ -102,6 +103,20 @@ describe("lmstudio-runtime", () => {
         config: buildLmstudioConfig({ auth: "api-key" }),
       }),
     ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
+  });
+
+  it("accepts shared synthetic local marker for keyless runtime auth", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.providers.lmstudio (synthetic local key)",
+      mode: "api-key",
+    });
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig(),
+      }),
+    ).resolves.toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
   it("allows header-only runtime auth when Authorization is configured", async () => {

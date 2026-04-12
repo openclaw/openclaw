@@ -7,6 +7,7 @@ import {
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -90,13 +91,14 @@ export default definePluginEntry({
           return undefined;
         }
         return {
-          apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
           source: "models.providers.lmstudio (synthetic local key)",
           mode: "api-key" as const,
         };
       },
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
-        resolvedApiKey?.trim() === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+        resolvedApiKey?.trim() === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
+        resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
       prepareDynamicModel: async (ctx) => {
         const providerSetup = await loadProviderSetup();

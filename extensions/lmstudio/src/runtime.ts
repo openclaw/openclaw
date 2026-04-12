@@ -1,5 +1,6 @@
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import {
+  CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   normalizeApiKeyConfig,
@@ -229,7 +230,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   if (!resolvedApiKey || resolvedApiKey.length === 0) {
     return await resolveConfiguredApiKeyOrThrow();
   }
-  if (isNonSecretApiKeyMarker(resolvedApiKey)) {
+  if (isNonSecretApiKeyMarker(resolvedApiKey) && resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   return resolvedApiKey;

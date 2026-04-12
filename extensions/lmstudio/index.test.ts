@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
@@ -61,7 +62,7 @@ describe("lmstudio plugin", () => {
         }),
       }),
     ).toEqual({
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.providers.lmstudio (synthetic local key)",
       mode: "api-key",
     });
@@ -79,7 +80,7 @@ describe("lmstudio plugin", () => {
         }),
       }),
     ).toEqual({
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.providers.lmstudio (synthetic local key)",
       mode: "api-key",
     });
@@ -110,6 +111,15 @@ describe("lmstudio plugin", () => {
         config: {},
         providerConfig: createRemoteProviderConfig(),
         resolvedApiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      }),
+    ).toBe(true);
+
+    expect(
+      provider?.shouldDeferSyntheticProfileAuth?.({
+        provider: "lmstudio",
+        config: {},
+        providerConfig: createRemoteProviderConfig(),
+        resolvedApiKey: CUSTOM_LOCAL_AUTH_MARKER,
       }),
     ).toBe(true);
 
