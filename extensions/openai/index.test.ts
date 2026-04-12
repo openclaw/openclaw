@@ -416,7 +416,7 @@ describe("openai plugin", () => {
       "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "If HEARTBEAT.md gives you concrete work, follow it strictly. If it does not, use your judgment to decide what matters most.",
+      "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment. If it does not, use your judgment to decide what matters most.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet.",
