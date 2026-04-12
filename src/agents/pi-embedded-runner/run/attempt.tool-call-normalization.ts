@@ -237,6 +237,60 @@ function isThinkingLikeReplayBlock(block: unknown): boolean {
   return type === "thinking" || type === "redacted_thinking";
 }
 
+function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): boolean {
+  const rawName = typeof block.name === "string" ? block.name.trim() : "";
+  if (normalizeLowercaseStringOrEmpty(rawName) !== "sessions_spawn") {
+    return false;
+  }
+  for (const payload of [block.arguments, block.input]) {
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const attachments = (payload as { attachments?: unknown }).attachments;
+    if (!Array.isArray(attachments)) {
+      continue;
+    }
+    for (const attachment of attachments) {
+      if (!attachment || typeof attachment !== "object") {
+        continue;
+      }
+      if (!Object.hasOwn(attachment, "content")) {
+        continue;
+      }
+      const content = (attachment as { content?: unknown }).content;
+      if (content !== "__OPENCLAW_REDACTED__") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isReplaySafeThinkingTurn(
+  content: unknown[],
+  allowedToolNames?: Set<string>,
+): boolean {
+  for (const block of content) {
+    if (!isReplayToolCallBlock(block)) {
+      continue;
+    }
+    const replayBlock = block as ReplayToolCallBlock;
+    if (
+      !replayToolCallHasInput(replayBlock) ||
+      !replayToolCallNonEmptyString(replayBlock.id) ||
+      hasUnredactedSessionsSpawnAttachments(replayBlock)
+    ) {
+      return false;
+    }
+    const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+    const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
+    if (!resolvedName || replayBlock.name !== resolvedName) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -292,7 +346,12 @@ function sanitizeReplayToolCallInputs(
       continue;
     }
     if (message.content.some((block) => isThinkingLikeReplayBlock(block))) {
-      out.push(message);
+      if (isReplaySafeThinkingTurn(message.content, allowedToolNames)) {
+        out.push(message);
+      } else {
+        changed = true;
+        droppedAssistantMessages += 1;
+      }
       continue;
     }
 
