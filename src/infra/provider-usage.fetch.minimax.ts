@@ -366,13 +366,35 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   });
 }
 
+function minimaxHostIsCn(host: string | undefined): boolean {
+  const trimmed = host?.trim();
+  if (!trimmed) {return false;}
+  try {
+    return new URL(trimmed).hostname.endsWith("minimaxi.com");
+  } catch {
+    return trimmed.includes("minimaxi.com");
+  }
+}
+
+function resolveMinimaxUsageEndpoint(baseUrl?: string): string {
+  const cnEndpoint = "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+  if (!baseUrl) {return cnEndpoint;}
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    return `https://${hostname}/v1/api/openplatform/coding_plan/remains`;
+  } catch {
+    return cnEndpoint;
+  }
+}
+
 export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  baseUrl?: string,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+  const usageEndpoint = resolveMinimaxUsageEndpoint(baseUrl);
+  const res = await fetchJson(usageEndpoint,
     {
       method: "GET",
       headers: {

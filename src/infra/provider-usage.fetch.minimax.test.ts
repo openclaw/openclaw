@@ -8,6 +8,7 @@ async function expectMinimaxUsageResult(params: {
     plan?: string;
     windows: Array<{ label: string; usedPercent: number; resetAt?: number }>;
   };
+  baseUrl?: string;
 }) {
   const mockFetch = createProviderUsageFetch(async (_url, init) => {
     const headers = (init?.headers as Record<string, string> | undefined) ?? {};
@@ -16,7 +17,7 @@ async function expectMinimaxUsageResult(params: {
     return makeResponse(200, params.payload);
   });
 
-  const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+  const result = await fetchMinimaxUsage("key", 5000, mockFetch, params.baseUrl);
   expect(result.plan).toBe(params.expected.plan);
   expect(result.windows).toEqual(params.expected.windows);
 }
@@ -252,5 +253,60 @@ describe("fetchMinimaxUsage", () => {
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
     expect(result.windows).toEqual([{ label: "1h", usedPercent: 20, resetAt: undefined }]);
+  });
+
+  it("uses global endpoint when baseUrl points to api.minimax.io", async () => {
+    const capturedUrls: string[] = [];
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      capturedUrls.push(url);
+      return makeResponse(200, {
+        data: { total: 100, used: 25, usage_percent: 25, plan_name: "Pro" },
+      });
+    });
+    const result = await fetchMinimaxUsage(
+      "key",
+      5000,
+      mockFetch,
+      "https://api.minimax.io/anthropic",
+    );
+    expect(result.plan).toBe("Pro");
+    expect(capturedUrls[0]).toBe(
+      "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+    );
+  });
+
+  it("uses CN endpoint when baseUrl points to api.minimaxi.com", async () => {
+    const capturedUrls: string[] = [];
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      capturedUrls.push(url);
+      return makeResponse(200, {
+        data: { total: 100, used: 25, usage_percent: 25, plan_name: "Pro" },
+      });
+    });
+    const result = await fetchMinimaxUsage(
+      "key",
+      5000,
+      mockFetch,
+      "https://api.minimaxi.com/anthropic",
+    );
+    expect(result.plan).toBe("Pro");
+    expect(capturedUrls[0]).toBe(
+      "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    );
+  });
+
+  it("defaults to CN endpoint when baseUrl is not provided", async () => {
+    const capturedUrls: string[] = [];
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      capturedUrls.push(url);
+      return makeResponse(200, {
+        data: { total: 100, used: 25, usage_percent: 25, plan_name: "Pro" },
+      });
+    });
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.plan).toBe("Pro");
+    expect(capturedUrls[0]).toBe(
+      "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    );
   });
 });
