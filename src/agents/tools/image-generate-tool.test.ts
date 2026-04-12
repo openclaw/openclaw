@@ -413,7 +413,7 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("Generated 2 images");
   });
 
-  it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
+  it("omits MEDIA paths from content text, delivers via details.media.mediaUrls instead (#65103)", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
         id: "google",
