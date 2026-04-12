@@ -20,23 +20,19 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./loader.js", () => ({
-  isPluginRegistryLoadInFlight: (...args: unknown[]) => mocks.isPluginRegistryLoadInFlight(...args),
-  loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
-  resolveCompatibleRuntimePluginRegistry: (...args: unknown[]) =>
-    mocks.resolveCompatibleRuntimePluginRegistry(...args),
-  resolveRuntimePluginRegistry: (...args: unknown[]) => mocks.resolveRuntimePluginRegistry(...args),
+  isPluginRegistryLoadInFlight: mocks.isPluginRegistryLoadInFlight,
+  loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  resolveCompatibleRuntimePluginRegistry: mocks.resolveCompatibleRuntimePluginRegistry,
+  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
 vi.mock("./runtime.js", () => ({
-  getActivePluginRegistryWorkspaceDir: (...args: unknown[]) =>
-    mocks.getActivePluginRegistryWorkspaceDir(...args),
+  getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
 vi.mock("./runtime/load-context.js", () => ({
-  buildPluginRuntimeLoadOptionsFromValues: (...args: unknown[]) =>
-    mocks.buildPluginRuntimeLoadOptionsFromValues(...args),
-  createPluginRuntimeLoaderLogger: (...args: unknown[]) =>
-    mocks.createPluginRuntimeLoaderLogger(...args),
+  buildPluginRuntimeLoadOptionsFromValues: mocks.buildPluginRuntimeLoadOptionsFromValues,
+  createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
 }));
 
 let createWebProviderSnapshotCache: typeof import("./web-provider-runtime-shared.js").createWebProviderSnapshotCache;

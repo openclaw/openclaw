@@ -203,7 +203,7 @@ export function resolvePluginWebProviders<TEntry>(
   if (compatible) {
     const resolved = deps.mapRegistryProviders({
       registry: compatible,
-      onlyPluginIds: loadOptions.onlyPluginIds,
+      onlyPluginIds: params.onlyPluginIds,
     });
     memoizeSnapshot(resolved);
     return resolved;
@@ -213,7 +213,7 @@ export function resolvePluginWebProviders<TEntry>(
   }
   const resolved = deps.mapRegistryProviders({
     registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: loadOptions.onlyPluginIds,
+    onlyPluginIds: params.onlyPluginIds,
   });
   memoizeSnapshot(resolved);
   return resolved;
@@ -229,7 +229,7 @@ export function resolveRuntimeWebProviders<TEntry>(
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,
-      onlyPluginIds: loadOptions?.onlyPluginIds ?? params.onlyPluginIds,
+      onlyPluginIds: params.onlyPluginIds,
     });
   }
   return resolvePluginWebProviders(params, deps);
