@@ -316,9 +316,10 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       });
 
       expect(out).toBe(input);
-      expect(((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string }).id).toBe(
-        "call_1",
-      );
+      expect(
+        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string })
+          .id,
+      ).toBe("call_1");
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });
 
@@ -366,6 +367,55 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         firstToolCall.id,
       );
       expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+    });
+
+    it("rewrites later signed turns when an earlier signed turn already owns the raw id", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolCall", id: "call1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          toolName: "read",
+          content: [{ type: "text", text: "first" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_2" },
+            { type: "toolCall", id: "call1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          toolName: "read",
+          content: [{ type: "text", text: "second" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveReplaySafeThinkingToolCallIds: true,
+        allowedToolNames: ["read"],
+      });
+
+      expect(out).not.toBe(input);
+      const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
+      const firstToolCall = firstAssistant.content?.[1] as { id?: string };
+      const secondToolCall = secondAssistant.content?.[1] as { id?: string };
+      expect(firstToolCall.id).toBe("call1");
+      expect(secondToolCall.id).not.toBe("call1");
+      expect(secondToolCall.id).not.toBe(firstToolCall.id);
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        secondToolCall.id,
+      );
     });
 
     it("avoids collisions with alphanumeric-only suffixes", () => {

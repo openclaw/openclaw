@@ -144,7 +144,7 @@ function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
     if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
       return false;
     }
-    if (typeof attachment[key] !== "string" || (attachment[key] as string).trim().length === 0) {
+    if (typeof attachment[key] !== "string" || attachment[key].trim().length === 0) {
       return false;
     }
   }
@@ -218,10 +218,7 @@ function isReplaySafeThinkingAssistantMessage(
       continue;
     }
     const typedBlock = block as ReplaySafeToolCallBlock;
-    if (
-      typeof typedBlock.type !== "string" ||
-      !TOOL_CALL_TYPES.has(typedBlock.type)
-    ) {
+    if (typeof typedBlock.type !== "string" || !TOOL_CALL_TYPES.has(typedBlock.type)) {
       continue;
     }
     sawToolCall = true;
@@ -243,21 +240,28 @@ function isReplaySafeThinkingAssistantMessage(
 function collectReplaySafeThinkingToolIds(
   messages: AgentMessage[],
   allowedToolNames: Set<string> | null,
-): Set<string> {
+): { reservedIds: Set<string>; preservedIndexes: Set<number> } {
   const reserved = new Set<string>();
-  for (const message of messages) {
+  const preservedIndexes = new Set<number>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       continue;
     }
-    const assistant = message as Extract<AgentMessage, { role: "assistant" }>;
+    const assistant = message;
     if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)) {
       continue;
     }
-    for (const toolCall of extractToolCallsFromAssistant(assistant)) {
+    const toolCalls = extractToolCallsFromAssistant(assistant);
+    if (toolCalls.some((toolCall) => reserved.has(toolCall.id))) {
+      continue;
+    }
+    preservedIndexes.add(index);
+    for (const toolCall of toolCalls) {
       reserved.add(toolCall.id);
     }
   }
-  return reserved;
+  return { reservedIds: reserved, preservedIndexes };
 }
 
 export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
@@ -505,27 +509,24 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const preserveReplaySafeThinkingToolCallIds =
     options?.preserveReplaySafeThinkingToolCallIds === true;
-  const reservedIds = preserveReplaySafeThinkingToolCallIds
+  const replaySafeThinking = preserveReplaySafeThinkingToolCallIds
     ? collectReplaySafeThinkingToolIds(messages, allowedToolNames)
     : undefined;
   const { resolveAssistantId, resolveToolResultId, preserveAssistantId } =
     createOccurrenceAwareResolver(mode, {
       ...options,
-      reservedIds,
+      reservedIds: replaySafeThinking?.reservedIds,
     });
 
   let changed = false;
-  const out = messages.map((msg) => {
+  const out = messages.map((msg, index) => {
     if (!msg || typeof msg !== "object") {
       return msg;
     }
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (
-        preserveReplaySafeThinkingToolCallIds &&
-        isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)
-      ) {
+      if (replaySafeThinking?.preservedIndexes.has(index)) {
         for (const toolCall of extractToolCallsFromAssistant(assistant)) {
           preserveAssistantId(toolCall.id);
         }
