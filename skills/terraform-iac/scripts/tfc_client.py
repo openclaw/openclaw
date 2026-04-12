@@ -3768,12 +3768,18 @@ def cmd_state(args):
     if r.status_code == 404:
         print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
         return
+    if r.status_code >= 400:
+        print(f"ERROR: Failed to look up workspace '{args.workspace}' in organization '{org}' (HTTP {r.status_code}).")
+        return
     r.raise_for_status()
     ws_id = r.json()["data"]["id"]
 
     r2 = requests.get(f"{TFC_API}/workspaces/{ws_id}/current-state-version", headers=api_headers())
     if r2.status_code == 404:
         print(f"No state found for workspace '{args.workspace}' — nothing deployed yet.")
+        return
+    if r2.status_code >= 400:
+        print(f"ERROR: Failed to fetch state for workspace '{args.workspace}' (HTTP {r2.status_code}).")
         return
     r2.raise_for_status()
     attrs = r2.json()["data"]["attributes"]
@@ -3818,6 +3824,9 @@ def cmd_outputs(args):
     )
     if r.status_code == 404:
         print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
+        return
+    if r.status_code >= 400:
+        print(f"ERROR: Failed to look up workspace '{args.workspace}' in organization '{org}' (HTTP {r.status_code}).")
         return
     r.raise_for_status()
     ws_id = r.json()["data"]["id"]
