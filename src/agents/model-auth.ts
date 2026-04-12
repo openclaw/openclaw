@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -46,6 +47,24 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
+
+/**
+ * Reentrancy guard for provider runtime auth overrides.
+ *
+ * Plugins can call `resolveApiKeyForProvider` via the public SDK helper from
+ * inside their own override `run()` handler. Without a guard, that would
+ * recurse back into the override loop indefinitely. The guard causes the
+ * inner call to skip overrides and fall through to default resolution.
+ */
+const providerRuntimeAuthOverrideReentry = new AsyncLocalStorage<true>();
+
+const VALID_RESOLVED_PROVIDER_AUTH_MODES: ReadonlyArray<ResolvedProviderAuth["mode"]> = new Set([
+  "api-key",
+  "oauth",
+  "token",
+  "aws-sdk",
+]);
+
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -361,31 +380,53 @@ export async function resolveApiKeyForProvider(params: {
   // ── Plugin runtime auth overrides ──
   // Registered via api.registerProviderRuntimeAuthOverride() in plugins.
   // First non-null result wins. Throwing fails the request (no implicit fallback).
-  {
-    const { getGlobalPluginRegistry } = await import("../plugins/hook-runner-global.js");
-    const pluginRegistry = getGlobalPluginRegistry();
-    if (pluginRegistry) {
-      for (const reg of pluginRegistry.providerRuntimeAuthOverrides) {
-        if (!reg.override.providers.includes(provider)) {
-          continue;
-        }
-        const result = await reg.override.run({
-          provider,
-          modelId: params.modelId ?? "",
-          profileId: params.profileId,
-        });
-        if (result != null) {
-          log.info(
-            `[runtime-auth-override] provider "${provider}" overridden by plugin "${reg.pluginId}"`,
+  //
+  // Reentrancy: if a plugin's override calls resolveApiKeyForProvider via the
+  // public SDK helper, the guard causes the inner call to skip overrides and
+  // fall through to default resolution (preventing infinite recursion).
+  if (!providerRuntimeAuthOverrideReentry.getStore()) {
+    const { getGlobalProviderRuntimeAuthOverrides } =
+      await import("../plugins/provider-runtime-auth-override-global.js");
+    const overrides = getGlobalProviderRuntimeAuthOverrides();
+    for (const reg of overrides) {
+      if (!reg.override.providers.includes(provider)) {
+        continue;
+      }
+      const result = await providerRuntimeAuthOverrideReentry.run(true, async () => {
+        try {
+          return await reg.override.run({
+            provider,
+            modelId: params.modelId ?? "",
+            profileId: params.profileId,
+          });
+        } catch (err) {
+          log.error(
+            `[runtime-auth-override] plugin "${reg.pluginId}" override for provider "${provider}" threw: ${String(err)}`,
           );
-          return {
-            apiKey: result.apiKey,
-            source: result.source ?? `plugin-override:${reg.pluginId}`,
-            mode: (result.mode as ResolvedProviderAuth["mode"]) ?? "api-key",
-            baseUrl: result.baseUrl,
-            providerRequestHeaders: result.providerRequestHeaders,
-          };
+          throw err;
         }
+      });
+      if (result != null) {
+        log.info(
+          `[runtime-auth-override] provider "${provider}" overridden by plugin "${reg.pluginId}"`,
+        );
+        const declaredMode = result.mode;
+        const validatedMode =
+          declaredMode && VALID_RESOLVED_PROVIDER_AUTH_MODES.has(declaredMode)
+            ? declaredMode
+            : "api-key";
+        if (declaredMode && !VALID_RESOLVED_PROVIDER_AUTH_MODES.has(declaredMode)) {
+          log.warn(
+            `[runtime-auth-override] plugin "${reg.pluginId}" returned unknown mode "${String(result.mode)}"; defaulting to "api-key"`,
+          );
+        }
+        return {
+          apiKey: result.apiKey,
+          source: result.source ?? `plugin-override:${reg.pluginId}`,
+          mode: validatedMode,
+          baseUrl: result.baseUrl,
+          providerRequestHeaders: result.providerRequestHeaders,
+        };
       }
     }
   }
@@ -637,6 +678,20 @@ export async function hasAvailableAuthForProvider(params: {
   agentDir?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
+
+  // Plugin runtime auth override registered for this provider.
+  // Note: we can't invoke run() here (it may be async and side-effecting),
+  // so registration presence is treated as "auth may be available."
+  // A registered override that returns null at runtime will fall through
+  // to default resolution at actual resolve time.
+  {
+    const { getGlobalProviderRuntimeAuthOverrides } =
+      await import("../plugins/provider-runtime-auth-override-global.js");
+    const overrides = getGlobalProviderRuntimeAuthOverrides();
+    if (overrides.some((reg) => reg.override.providers.includes(provider))) {
+      return true;
+    }
+  }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {

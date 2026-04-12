@@ -2035,9 +2035,19 @@ export type ProviderRuntimeAuthOverrideContext = {
 
 export type ProviderRuntimeAuthOverrideResult = {
   apiKey: string;
-  mode?: string;
+  mode?: "api-key" | "oauth" | "token" | "aws-sdk";
   source?: string;
+  /**
+   * Optional per-call base URL override. Applied only to the main LLM
+   * inference runner path. Side paths (media understanding, TTS, image
+   * generation) currently consume only `apiKey` in v1.
+   */
   baseUrl?: string;
+  /**
+   * Optional extra headers merged into the outbound provider request in
+   * the main LLM inference runner path. Side paths currently consume only
+   * `apiKey` in v1.
+   */
   providerRequestHeaders?: Record<string, string>;
 };
 
