@@ -360,22 +360,20 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
 
-  it("triggers sendComposing from the reply typing callback", async () => {
+  it("passes sendComposing through as the reply typing callback", async () => {
     const sendComposing = vi.fn(async () => undefined);
 
     await dispatchBufferedReply({
       msg: makeMsg({ sendComposing }),
     });
 
-    const onReplyStart = (
-      capturedDispatchParams as {
-        dispatcherOptions?: { onReplyStart?: (() => Promise<void>) | undefined };
-      }
-    )?.dispatcherOptions?.onReplyStart;
-
-    expect(onReplyStart).toBeTypeOf("function");
-    await onReplyStart?.();
-    expect(sendComposing).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        capturedDispatchParams as {
+          dispatcherOptions?: { onReplyStart?: unknown };
+        }
+      )?.dispatcherOptions?.onReplyStart,
+    ).toBe(sendComposing);
   });
 
   it("updates main last route for DM when session key matches main session key", () => {

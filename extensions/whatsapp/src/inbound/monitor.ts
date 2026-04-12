@@ -106,18 +106,14 @@ export async function attachWebInboxToSocket(
     resolver(reason);
   };
   const presence = options.selfChatMode ? "unavailable" : "available";
-  logVerbose(
-    `WhatsApp global presence on connect for account ${options.accountId}: selfChatMode=${options.selfChatMode === true} -> ${presence}`,
-  );
 
   try {
-    logVerbose(`Sending global '${presence}' presence on connect for account ${options.accountId}`);
     await sock.sendPresenceUpdate(presence);
-    logVerbose(`Sent global '${presence}' presence on connect for account ${options.accountId}`);
+    if (shouldLogVerbose()) {
+      logVerbose(`Sent global '${presence}' presence on connect`);
+    }
   } catch (err) {
-    logVerbose(
-      `Failed to send global '${presence}' presence on connect for account ${options.accountId}: ${String(err)}`,
-    );
+    logVerbose(`Failed to send '${presence}' presence on connect: ${String(err)}`);
   }
 
   const self = await readWebSelfIdentity(
@@ -456,15 +452,12 @@ export async function attachWebInboxToSocket(
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
-        logVerbose(`Skipping composing presence for ${chatJid}: no active socket`);
         return;
       }
       try {
-        logVerbose(`Sending composing presence -> ${chatJid}`);
         await currentSock.sendPresenceUpdate("composing", chatJid);
-        logVerbose(`Sent composing presence -> ${chatJid}`);
       } catch (err) {
-        logVerbose(`Composing presence update failed for ${chatJid}: ${String(err)}`);
+        logVerbose(`Presence update failed: ${String(err)}`);
       }
     };
     const reply = async (text: string) => {

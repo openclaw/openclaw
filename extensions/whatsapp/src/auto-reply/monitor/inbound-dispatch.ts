@@ -306,14 +306,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
           logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
         }
       },
-      onReplyStart: async () => {
-        const fromDisplay =
-          params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        if (shouldLogVerbose()) {
-          logVerbose(`Starting WhatsApp typing presence -> ${fromDisplay}`);
-        }
-        await params.msg.sendComposing();
-      },
+      onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
       disableBlockStreaming,
