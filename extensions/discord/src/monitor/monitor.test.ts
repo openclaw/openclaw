@@ -18,6 +18,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   resolveStorePathMock,
 } from "../test-support/component-runtime.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
 
 type CreateDiscordComponentButton =
   typeof import("./agent-components.js").createDiscordComponentButton;
