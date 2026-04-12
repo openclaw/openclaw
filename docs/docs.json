@@ -1250,6 +1250,7 @@
                   "providers/arcee",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
+                  "providers/claude-subscription-billing-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
