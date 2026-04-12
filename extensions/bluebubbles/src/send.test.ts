@@ -932,6 +932,54 @@ describe("send", () => {
         }
       });
 
+      it("throws for effects when refresh succeeds with private_api: false", async () => {
+        // Cache expired, refresh succeeds but Private API is explicitly disabled
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+        mockResolvedHandleTarget();
+
+        await expect(
+          sendMessageBlueBubbles("+15551234567", "Party!", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            effectId: "confetti",
+          }),
+        ).rejects.toThrow("Private API");
+
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("degrades reply threading when refresh succeeds with private_api: false", async () => {
+        // Cache expired, refresh succeeds but Private API is explicitly disabled
+        // Should degrade without the "unknown" warning (status is known: disabled)
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-disabled-after-refresh" } });
+
+        const runtimeLog = vi.fn();
+        setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            replyToMessageGuid: "reply-guid-disabled",
+          });
+
+          expect(result.messageId).toBe("msg-disabled-after-refresh");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          // No warning — status is known (disabled), not unknown
+          expect(runtimeLog).not.toHaveBeenCalled();
+          const sendCall = mockFetch.mock.calls[1];
+          const body = JSON.parse(sendCall[1].body);
+          expect(body.method).toBeUndefined();
+          expect(body.selectedMessageGuid).toBeUndefined();
+        } finally {
+          clearBlueBubblesRuntime();
+        }
+      });
+
       it("does not refresh when no reply or effect is requested", async () => {
         // Cache expired but no Private API features needed — skip refresh
         mockResolvedHandleTarget();
