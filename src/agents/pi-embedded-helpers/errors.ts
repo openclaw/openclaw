@@ -489,6 +489,23 @@ export function formatAssistantErrorText(
     return "LLM request timed out.";
   }
 
+  // Provider-side 500 errors (e.g. Venice "Inference processing failed")
+  if (isTransientHttpError(raw)) {
+    const providerHint = opts?.provider ? ` (${opts.provider})` : "";
+    return (
+      `The AI provider${providerHint} returned a server error. ` +
+      "This is usually temporary — please try again in a few minutes."
+    );
+  }
+
+  if (isAuthErrorMessage(raw)) {
+    const providerHint = opts?.provider ? ` for ${opts.provider}` : "";
+    return (
+      `API key${providerHint} is invalid or expired. ` +
+      "Please check your API key in the dashboard under Tools > Secrets."
+    );
+  }
+
   if (isBillingErrorMessage(raw)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
