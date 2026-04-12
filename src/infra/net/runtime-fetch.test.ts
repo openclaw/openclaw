@@ -28,6 +28,18 @@ class RuntimeFormData {
   }
 }
 
+class MockAgent {
+  readonly __testStub = true;
+}
+
+class MockEnvHttpProxyAgent {
+  readonly __testStub = true;
+}
+
+class MockProxyAgent {
+  readonly __testStub = true;
+}
+
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
 });
@@ -55,10 +67,10 @@ describe("fetchWithRuntimeDispatcher", () => {
     });
 
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: class MockAgent {},
-      EnvHttpProxyAgent: class MockEnvHttpProxyAgent {},
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
       FormData: RuntimeFormData,
-      ProxyAgent: class MockProxyAgent {},
+      ProxyAgent: MockProxyAgent,
       fetch: runtimeFetch,
     };
 
