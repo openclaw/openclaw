@@ -799,6 +799,9 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
 
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
+  if (normalized.startsWith("memory/dreaming/")) {
+    return false;
+  }
   if (SHORT_TERM_PATH_RE.test(normalized)) {
     return true;
   }

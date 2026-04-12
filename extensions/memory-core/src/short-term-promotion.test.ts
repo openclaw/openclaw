@@ -77,6 +77,8 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/daily/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
   });
 
@@ -104,6 +106,29 @@ describe("short-term promotion", () => {
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, unknown>;
       expect(Object.keys(store).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("ignores dream report paths when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "dream recall",
+        results: [
+          {
+            path: "memory/dreaming/deep/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Auto-generated dream report should not seed promotions.",
+          },
+        ],
+      });
+
+      await expect(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   });
 
