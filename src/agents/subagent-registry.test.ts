@@ -141,6 +141,7 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
@@ -218,6 +219,34 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
+  it("finalizes registered runs when agent.wait transport times out", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway timeout while waiting"));
+
+    mod.registerSubagentRun({
+      runId: "run-wait-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish after transport timeout",
+      cleanup: "keep",
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: "run-wait-timeout",
+          outcome: { status: "timeout" },
+        }),
+      );
+    });
+
+    const entry = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((candidate) => candidate.runId === "run-wait-timeout");
+    expect(entry?.outcome).toEqual({ status: "timeout" });
+    expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {

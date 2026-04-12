@@ -34,10 +34,12 @@ import {
 import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStoreEntry } from "../../../config/sessions/store.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
@@ -162,16 +164,13 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
     };
   }
 
-  const senderId = params.commandParams.command.senderId?.trim() || "";
-  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
-  const conversationRef = {
+  const senderId = normalizeOptionalString(params.commandParams.command.senderId) ?? "";
+  const conversationRef = normalizeConversationRef({
     channel: bindingPolicy.channel,
     accountId: bindingPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   const existingBinding = bindingService.resolveByConversation(conversationRef);
   const boundBy =
     typeof existingBinding?.metadata?.boundBy === "string"
@@ -341,16 +340,13 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const senderId = commandParams.command.senderId?.trim() || "";
-  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
-  const conversationRef = {
+  const senderId = normalizeOptionalString(commandParams.command.senderId) ?? "";
+  const conversationRef = normalizeConversationRef({
     channel: spawnPolicy.channel,
     accountId: spawnPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation(conversationRef);
     const boundBy =

@@ -30,12 +30,12 @@ function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
-function normalizeSubagentWaitTransportError(error: unknown): {
+function resolveWaitTransportFailure(error: unknown): {
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
 } {
   const message = formatErrorMessage(error);
-  if (message.includes("gateway timeout")) {
+  if (/gateway timeout/i.test(message)) {
     return {
       outcome: { status: "timeout" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -151,10 +151,10 @@ export function createSubagentRunManager(params: {
       if (!entry) {
         return;
       }
-      const { outcome, reason } = normalizeSubagentWaitTransportError(error);
-      const endedAt = Date.now();
+      const endedAt = typeof entry.endedAt === "number" ? entry.endedAt : Date.now();
+      const { outcome, reason } = resolveWaitTransportFailure(error);
       let mutated = false;
-      if (typeof entry.endedAt !== "number") {
+      if (entry.endedAt !== endedAt) {
         entry.endedAt = endedAt;
         mutated = true;
       }
@@ -167,7 +167,7 @@ export function createSubagentRunManager(params: {
       }
       await params.completeSubagentRun({
         runId,
-        endedAt: entry.endedAt,
+        endedAt,
         outcome,
         reason,
         sendFarewell: true,
@@ -285,6 +285,7 @@ export function createSubagentRunManager(params: {
         : undefined,
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       suppressAnnounceReason: undefined,
       announceRetryCount: undefined,
       lastAnnounceRetryAt: undefined,
@@ -321,6 +322,13 @@ export function createSubagentRunManager(params: {
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
   }) => {
+    const runId = registerParams.runId.trim();
+    const childSessionKey = registerParams.childSessionKey.trim();
+    const requesterSessionKey = registerParams.requesterSessionKey.trim();
+    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    if (!runId || !childSessionKey || !requesterSessionKey) {
+      return;
+    }
     const now = Date.now();
     const cfg = loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
@@ -334,12 +342,11 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    params.runs.set(registerParams.runId, {
-      runId: registerParams.runId,
-      childSessionKey: registerParams.childSessionKey,
-      controllerSessionKey:
-        registerParams.controllerSessionKey ?? registerParams.requesterSessionKey,
-      requesterSessionKey: registerParams.requesterSessionKey,
+    params.runs.set(runId, {
+      runId,
+      childSessionKey,
+      controllerSessionKey,
+      requesterSessionKey,
       requesterOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
@@ -356,6 +363,7 @@ export function createSubagentRunManager(params: {
       accumulatedRuntimeMs: 0,
       archiveAtMs,
       cleanupHandled: false,
+      completionAnnouncedAt: undefined,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
@@ -364,12 +372,12 @@ export function createSubagentRunManager(params: {
     try {
       createRunningTaskRun({
         runtime: "subagent",
-        sourceId: registerParams.runId,
-        ownerKey: registerParams.requesterSessionKey,
+        sourceId: runId,
+        ownerKey: requesterSessionKey,
         scopeKind: "session",
         requesterOrigin,
-        childSessionKey: registerParams.childSessionKey,
-        runId: registerParams.runId,
+        childSessionKey,
+        runId,
         label: registerParams.label,
         task: registerParams.task,
         deliveryStatus:
@@ -389,7 +397,7 @@ export function createSubagentRunManager(params: {
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(registerParams.runId, waitTimeoutMs);
+    void waitForSubagentCompletion(runId, waitTimeoutMs);
   };
 
   const releaseSubagentRun = (runId: string) => {

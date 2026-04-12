@@ -246,7 +246,7 @@ async function promptEndpointAndModelBase(
     modelInitialValue?: string;
   },
 ): Promise<FoundrySelection> {
-  const endpoint = String(
+  const endpoint = (
     await ctx.prompter.text({
       message: "Microsoft Foundry endpoint URL",
       placeholder: "https://xxx.openai.azure.com or https://xxx.services.ai.azure.com",
@@ -263,9 +263,9 @@ async function promptEndpointAndModelBase(
         }
         return undefined;
       },
-    }),
+    })
   ).trim();
-  const modelId = String(
+  const modelId = (
     await ctx.prompter.text({
       message: "Default model/deployment name",
       ...(options?.modelInitialValue ? { initialValue: options.modelInitialValue } : {}),
@@ -277,7 +277,7 @@ async function promptEndpointAndModelBase(
         }
         return undefined;
       },
-    }),
+    })
   ).trim();
   const familyChoice = await promptFoundryModelFamily(ctx);
   const resolvedModelName =
@@ -403,7 +403,7 @@ export async function promptTenantId(
       "Azure Tenant",
     );
   }
-  const tenantId = String(
+  const tenantId = (
     await ctx.prompter.text({
       message: params?.required ? "Azure tenant ID" : "Azure tenant ID (optional)",
       placeholder: params?.suggestions?.[0]?.id ?? "00000000-0000-0000-0000-000000000000",
@@ -416,7 +416,7 @@ export async function promptTenantId(
           ? undefined
           : "Enter a valid tenant ID or tenant domain";
       },
-    }),
+    })
   ).trim();
   return tenantId || undefined;
 }

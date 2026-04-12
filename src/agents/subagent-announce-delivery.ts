@@ -37,6 +37,18 @@ import { resolveSubagentCompletionAnnounceTimeoutMs } from "./subagent-timeouts.
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 
+type SubagentAnnounceDeliveryDeps = {
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+};
+
+const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
+  callGateway,
+  loadConfig,
+};
+
+let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
+  defaultSubagentAnnounceDeliveryDeps;
 const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
   ? ([8, 16, 32] as const)
   : ([5_000, 10_000, 20_000] as const);
@@ -275,7 +287,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
@@ -288,7 +300,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       enqueuedAt: item.enqueuedAt,
     }),
   );
-  await callGateway({
+  await subagentAnnounceDeliveryDeps.callGateway({
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
@@ -334,7 +346,7 @@ export function resolveRequesterStoreKey(
 }
 
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -344,7 +356,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
@@ -448,7 +460,7 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "none",
     };
   }
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
@@ -478,7 +490,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : "direct announce agent call",
       signal: params.signal,
       run: async () =>
-        await callGateway({
+        await subagentAnnounceDeliveryDeps.callGateway({
           method: "agent",
           params: {
             sessionKey: canonicalRequesterSessionKey,
@@ -572,6 +584,16 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
+export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+
 export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
+    subagentAnnounceDeliveryDeps = overrides
+      ? {
+          ...defaultSubagentAnnounceDeliveryDeps,
+          ...overrides,
+        }
+      : defaultSubagentAnnounceDeliveryDeps;
+  },
   resolveDirectAnnounceDeliveryTarget,
 };

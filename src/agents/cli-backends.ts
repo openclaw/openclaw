@@ -6,6 +6,18 @@ import type { CliBundleMcpMode } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+type CliBackendsDeps = {
+  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
+  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
+};
+
+const defaultCliBackendsDeps: CliBackendsDeps = {
+  resolvePluginSetupCliBackend,
+  resolveRuntimeCliBackends,
+};
+
+let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
+
 export type ResolvedCliBackend = {
   id: string;
   config: CliBackendConfig;
@@ -47,7 +59,7 @@ function normalizeBundleMcpMode(
 }
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  const entry = resolvePluginSetupCliBackend({
+  const entry = cliBackendsDeps.resolvePluginSetupCliBackend({
     backend: provider,
   });
   if (!entry) {
@@ -94,7 +106,9 @@ function pickBackendConfig(
 
 function resolveRegisteredBackend(provider: string) {
   const normalized = normalizeBackendKey(provider);
-  return resolveRuntimeCliBackends().find((entry) => normalizeBackendKey(entry.id) === normalized);
+  return cliBackendsDeps
+    .resolveRuntimeCliBackends()
+    .find((entry) => normalizeBackendKey(entry.id) === normalized);
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -136,7 +150,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
 
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
-  for (const backend of resolveRuntimeCliBackends()) {
+  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
     ids.add(normalizeBackendKey(backend.id));
   }
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -149,8 +163,10 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
   const entry =
-    resolvePluginSetupCliBackend({ backend: normalized }) ??
-    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
+    cliBackendsDeps
+      .resolveRuntimeCliBackends()
+      .find((backend) => normalizeBackendKey(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -227,3 +243,15 @@ export function resolveCliBackendConfig(
     bundleMcpMode: fallbackPolicy?.bundleMcpMode,
   };
 }
+
+export const __testing = {
+  resetDepsForTest(): void {
+    cliBackendsDeps = defaultCliBackendsDeps;
+  },
+  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
+    cliBackendsDeps = {
+      ...defaultCliBackendsDeps,
+      ...deps,
+    };
+  },
+} as const;

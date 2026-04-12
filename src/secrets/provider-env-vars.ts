@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -49,7 +51,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
-  const candidates: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  const candidates: Record<string, string[]> = {};
   for (const plugin of registry.plugins) {
     if (!plugin.providerAuthEnvVars) {
       continue;

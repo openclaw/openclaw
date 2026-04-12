@@ -21,6 +21,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -30,11 +31,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
-import { parseInlineDirectives } from "./directive-handling.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
 
 const liveModelSwitchMocks = vi.hoisted(() => ({
@@ -105,6 +106,8 @@ beforeEach(() => {
       store: { version: 1, profiles: {} },
     },
   ]);
+  vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
+  vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
 });
@@ -473,6 +476,23 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  });
+
+  it("resolves agentDir from the target session agent before wrapper agentDir", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
+
+    await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry(),
+    });
+
+    expect(resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "agent:main:dm:1",
+      config: expect.any(Object),
+    });
+    expect(resolveAgentDir).toHaveBeenCalledWith(expect.any(Object), "target");
   });
 
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {

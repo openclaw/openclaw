@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { BrowserFormField } from "./client-actions-core.js";
+import type { BrowserFormField } from "./client-actions.types.js";
 
 export const DEFAULT_FILL_FIELD_TYPE = "text";
 

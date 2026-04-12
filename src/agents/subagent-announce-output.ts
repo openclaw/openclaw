@@ -1,13 +1,13 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { captureSubagentCompletionReplyUsing } from "./subagent-announce-capture.js";
 import {
+  callGateway,
+  loadConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
-import { captureSubagentCompletionReplyUsing } from "./subagent-announce-capture.js";
+} from "./subagent-announce.runtime.js";
 import { resolveSubagentWaitGatewayTimeoutMs } from "./subagent-timeouts.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
@@ -16,6 +16,19 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
+type SubagentAnnounceOutputDeps = {
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+  readLatestAssistantReply: typeof readLatestAssistantReply;
+};
+
+const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
+  callGateway,
+  loadConfig,
+  readLatestAssistantReply,
+};
+
+let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
@@ -232,7 +245,7 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await callGateway<{ messages?: Array<unknown> }>({
+  const history = await subagentAnnounceOutputDeps.callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
   });
@@ -241,7 +254,10 @@ export async function readSubagentOutput(
   if (selected?.trim()) {
     return selected;
   }
-  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+  const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
+    sessionKey,
+    limit: 100,
+  });
   return latestAssistant?.trim() ? latestAssistant : undefined;
 }
 
@@ -267,9 +283,9 @@ export async function waitForSubagentRunOutcome(
   runId: string,
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceOutputDeps.loadConfig();
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await callGateway<AgentWaitResult>({
+  return await subagentAnnounceOutputDeps.callGateway<AgentWaitResult>({
     method: "agent.wait",
     params: {
       runId,
@@ -481,7 +497,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceOutputDeps.loadConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];
@@ -518,3 +534,14 @@ export async function buildCompactAnnounceStatsLine(params: {
   }
   return `Stats: ${parts.join(" • ")}`;
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
+    subagentAnnounceOutputDeps = overrides
+      ? {
+          ...defaultSubagentAnnounceOutputDeps,
+          ...overrides,
+        }
+      : defaultSubagentAnnounceOutputDeps;
+  },
+};

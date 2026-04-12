@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
-import { handleCommands } from "./commands-core.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
+import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
+
+function expectMcpResult<T>(result: T | null): T {
+  expect(result).toBeTruthy();
+  if (!result) {
+    throw new Error("expected MCP command result");
+  }
+  return result;
+}
 
 function buildCfg(): OpenClawConfig {
   return {
@@ -32,14 +40,14 @@ describe("handleCommands /mcp", () => {
       );
       setParams.command.senderIsOwner = true;
 
-      const setResult = await handleCommands(setParams);
+      const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
       expect(setResult.reply?.text).toContain('MCP server "context7" saved');
 
       const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
         workspaceDir,
       });
       showParams.command.senderIsOwner = true;
-      const showResult = await handleCommands(showParams);
+      const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
       expect(showResult.reply?.text).toContain('"command": "uvx"');
       expect(showResult.reply?.text).toContain('"args": [');
     });
@@ -60,7 +68,7 @@ describe("handleCommands /mcp", () => {
       );
       params.command.senderIsOwner = true;
 
-      const result = await handleCommands(params);
+      const result = expectMcpResult(await handleMcpCommand(params, true));
       expect(result.reply?.text).toContain("requires operator.admin");
     });
   });
@@ -76,7 +84,7 @@ describe("handleCommands /mcp", () => {
       );
       params.command.senderIsOwner = true;
 
-      const result = await handleCommands(params);
+      const result = expectMcpResult(await handleMcpCommand(params, true));
       expect(result.reply?.text).toContain('MCP server "remote" saved');
     });
   });

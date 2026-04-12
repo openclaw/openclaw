@@ -185,7 +185,7 @@ function createCommandsStatusRuntimeModuleMock() {
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
-      resolveDefaultThinkingLevel?: () => Promise<unknown> | unknown;
+      resolveDefaultThinkingLevel?: () => unknown;
     }) => {
       resolveQueueSettingsMock({
         channel: params.statusChannel,

@@ -1,7 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: resolveSessionAgentIdMock,
+    resolveAgentDir: vi.fn(actual.resolveAgentDir),
+  };
+});
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
@@ -35,6 +49,7 @@ const {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } = await import("../../agents/pi-embedded.js");
+const { resolveSessionFilePathOptions } = await import("../../config/sessions.js");
 
 function buildCompactParams(
   commandBodyNormalized: string,
@@ -65,6 +80,7 @@ function buildCompactParams(
 describe("handleCompactCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveSessionAgentIdMock.mockReturnValue("main");
   });
 
   it("returns null when command is not /compact", async () => {
@@ -122,6 +138,9 @@ describe("handleCompactCommand", () => {
           CommandBody: "/compact: focus on decisions",
           From: "+15550001",
           To: "+15550002",
+          SenderName: "Alice",
+          SenderUsername: "alice_u",
+          SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
         sessionEntry: {
@@ -151,9 +170,79 @@ describe("handleCompactCommand", () => {
         groupChannel: "#general",
         groupSpace: "workspace-1",
         spawnedBy: "agent:main:parent",
-        agentDir: "/tmp/openclaw-agent-compact",
+        senderId: "owner",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
       }),
     );
+  });
+
+  it("uses the canonical session agent when resolving the compaction session file", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("target");
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: "/tmp/openclaw-session-store.json" },
+        } as OpenClawConfig),
+        agentId: "main",
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:target:whatsapp:direct:12345",
+      config: expect.any(Object),
+    });
+    expect(vi.mocked(resolveSessionFilePathOptions)).toHaveBeenCalledWith({
+      agentId: "target",
+      storePath: undefined,
+    });
+  });
+
+  it("uses the canonical session agent directory for compaction runtime inputs", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    resolveSessionAgentIdMock.mockReturnValue("target");
+    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        sessionKey: "agent:target:whatsapp:direct:12345",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/target-agent",
+      }),
+    );
+    expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "target");
   });
 
   it("uses configured session-settle timeout when aborting an active embedded run", async () => {

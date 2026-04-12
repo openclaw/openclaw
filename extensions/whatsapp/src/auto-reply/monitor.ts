@@ -3,7 +3,7 @@ import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { drainReconnectQueue } from "openclaw/plugin-sdk/infra-runtime";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/infra-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -73,6 +73,14 @@ let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime
 function loadReplyResolverRuntime() {
   replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
   return replyResolverRuntimePromise;
+}
+
+function normalizeReconnectAccountId(accountId?: string | null): string {
+  return (accountId ?? "").trim() || "default";
+}
+
+function isNoListenerReconnectError(lastError?: string): boolean {
+  return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
 }
 
 export async function monitorWebChannel(
@@ -261,11 +269,24 @@ export async function monitorWebChannel(
 
     setActiveWebListener(account.accountId, listener);
 
-    // Drain any messages that failed with "no listener" during the disconnect window.
-    void drainReconnectQueue({
-      accountId: account.accountId,
+    const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
+
+    // Reconnect is the transport-ready signal for WhatsApp, so drain eligible
+    // pending deliveries for this account here instead of hardcoding that
+    // policy inside the generic queue engine.
+    void drainPendingDeliveries({
+      drainKey: `whatsapp:${normalizedAccountId}`,
+      logLabel: "WhatsApp reconnect drain",
       cfg,
       log: reconnectLogger,
+      selectEntry: (entry) => ({
+        match:
+          entry.channel === "whatsapp" &&
+          normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
+        // Reconnect changed listener readiness, so these should not sit behind
+        // the normal backoff window.
+        bypassBackoff: isNoListenerReconnectError(entry.lastError),
+      }),
     }).catch((err) => {
       reconnectLogger.warn(
         { connectionId: active.connectionId, error: String(err) },

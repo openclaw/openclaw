@@ -286,6 +286,7 @@ export const de: TranslationMap = {
     tabs: {
       scene: "Szene",
       diary: "Tagebuch",
+      advanced: "Erweitert",
     },
     header: {
       refresh: "Aktualisieren",
@@ -304,6 +305,37 @@ export const de: TranslationMap = {
       reset: "Zurücksetzen",
       clearGrounded: "Geerdet löschen",
       working: "Wird bearbeitet…",
+    },
+    phase: {
+      light: "Leicht",
+      deep: "Tief",
+      rem: "REM",
+      off: "aus",
+    },
+    advanced: {
+      eyebrow: "Prüfen",
+      title: "Prüfung des Tagesprotokolls",
+      description:
+        "Prüfe, was aus dem Tagesprotokoll stammt, was auf eine Beförderung wartet und was kürzlich befördert wurde.",
+      summaryFromDailyLog: "aus dem Tagesprotokoll",
+      summaryWaiting: "wartend",
+      summaryPromotedToday: "heute befördert",
+      stagedTitle: "Aus dem Tagesprotokoll",
+      stagedDescription: "Wiedergabe-Kandidaten aus älteren Tagesprotokoll-Einträgen.",
+      shortTermTitle: "Wartet auf Beförderung",
+      shortTermDescription:
+        "Aktuelle kurzfristige Kandidaten, die darauf warten, in den echten Speicher überzugehen.",
+      sortRecent: "Neueste zuerst",
+      sortSignals: "Stärkste Unterstützung",
+      originDailyLog: "wiedergegeben",
+      originLive: "live",
+      originMixed: "gemischt",
+      promotedTitle: "Kürzliche Beförderungen",
+      promotedDescription: "Elemente, die die Beförderung bereits durchlaufen haben.",
+      emptyGrounded: "Derzeit keine vorbereiteten geerdeten Wiedergabeeinträge.",
+      emptyShortTerm: "Keine kurzfristigen Einträge zur Prüfung.",
+      emptyPromoted: "Keine kürzlichen Beförderungen zur Prüfung.",
+      updatedPrefix: "aktualisiert",
     },
     stats: {
       shortTerm: "Kurzfristig",

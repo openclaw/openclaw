@@ -23,24 +23,24 @@ execution:
     prompt: |-
       Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially.
       Subagent 1: verify that `HEARTBEAT.md` exists and report `ok` if it does.
-      Subagent 2: verify that `qa/scenarios/subagent-fanout-synthesis.md` exists and report `ok` if it does.
+      Subagent 2: verify that `repo/qa/scenarios/subagent-fanout-synthesis.md` exists and report `ok` if it does.
       Wait for both subagents to finish.
       Then reply with exactly these two lines and nothing else:
       subagent-1: ok
       subagent-2: ok
       Do not use ACP.
     expectedReplyAny:
-      - subagent-1: ok
-      - subagent-2: ok
+      - "subagent-1: ok"
+      - "subagent-2: ok"
     expectedReplyGroups:
       - - alpha-ok
         - subagent_one_ok
         - subagent one ok
-        - subagent-1: ok
+        - "subagent-1: ok"
       - - beta-ok
         - subagent_two_ok
         - subagent two ok
-        - subagent-2: ok
+        - "subagent-2: ok"
     expectedChildLabels:
       - qa-fanout-alpha
       - qa-fanout-beta
@@ -77,9 +77,6 @@ steps:
                         - set: sessionKey
                           value:
                             expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
-                        - set: beforeCursor
-                          value:
-                            expr: "state.getSnapshot().messages.length"
                         - call: runAgentPrompt
                           args:
                             - ref: env
@@ -93,7 +90,7 @@ steps:
                           saveAs: outbound
                           args:
                             - lambda:
-                                expr: "state.getSnapshot().messages.slice(beforeCursor).filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
+                                expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
                             - expr: liveTurnTimeoutMs(env, 60000)
                             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                         - if:

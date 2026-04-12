@@ -37,6 +37,7 @@ import {
   type GatewayRemoteCredentialFallback,
   type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
+import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -96,6 +97,19 @@ const defaultGatewayCallDeps = {
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
+
+function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
+  if (opts.clientDisplayName) {
+    return opts.clientDisplayName;
+  }
+  const clientName = opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const mode = opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  if (mode !== GATEWAY_CLIENT_MODES.BACKEND && clientName !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
+    return undefined;
+  }
+  const method = opts.method.trim();
+  return method ? `gateway:${method}` : "gateway:request";
+}
 
 function resolveGatewayConfig(): OpenClawConfig {
   const loadConfigFn =
@@ -273,29 +287,29 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   const envUrlOverride = explicitUrl
     ? undefined
     : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
-  const urlOverride = explicitUrl ?? envUrlOverride;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envAuth = resolveExplicitGatewayAuth({
     token: process.env.OPENCLAW_GATEWAY_TOKEN,
     password: process.env.OPENCLAW_GATEWAY_PASSWORD,
   });
-  const hasOverrideAuth =
-    explicitAuth.token || explicitAuth.password || envAuth.token || envAuth.password;
-  let config = opts.config;
-  if (!config) {
-    if (urlOverride && hasOverrideAuth) {
-      config = {} as OpenClawConfig;
-    } else {
-      config = resolveGatewayConfig();
-    }
-  }
+  const cliUrlOverride = explicitUrl;
+  const urlOverride = cliUrlOverride ?? envUrlOverride;
+  const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
+  const canSkipConfigLoad = canSkipGatewayConfigLoad({
+    config: opts.config,
+    urlOverride,
+    explicitAuth: {
+      token: explicitAuth.token ?? envAuth.token,
+      password: explicitAuth.password ?? envAuth.password,
+    },
+  });
+  const config =
+    opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : resolveGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
     : undefined;
-  const cliUrlOverride = explicitUrl;
-  const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
   return {
     config,
@@ -846,7 +860,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       connectChallengeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
+      clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,

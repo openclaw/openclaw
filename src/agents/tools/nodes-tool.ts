@@ -53,13 +53,13 @@ async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
   requestId: string,
 ): Promise<OperatorScope[]> {
-  const pairing = await callGatewayTool<{
+  const pairing: {
     pending?: Array<{
       requestId?: string;
       commands?: unknown;
       requiredApproveScopes?: unknown;
     }>;
-  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
+  } = await callGatewayTool("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
   if (Array.isArray(match?.requiredApproveScopes)) {

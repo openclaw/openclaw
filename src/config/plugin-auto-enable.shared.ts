@@ -107,7 +107,7 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
       if (!isRecord(profile)) {
         continue;
       }
-      const provider = normalizeProviderId(String(profile.provider ?? ""));
+      const provider = normalizeProviderId(profile.provider ?? "");
       if (provider === normalized) {
         return true;
       }
@@ -339,6 +339,7 @@ export function resolvePluginAutoEnableCandidateReason(
     case "setup-auto-enable":
       return candidate.reason;
   }
+  throw new Error("Unsupported plugin auto-enable candidate");
 }
 
 export function resolveConfiguredPluginAutoEnableCandidates(params: {
