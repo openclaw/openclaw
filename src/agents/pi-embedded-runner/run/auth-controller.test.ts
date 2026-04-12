@@ -28,6 +28,9 @@ vi.mock("../../model-auth.js", async () => {
 
 import { createEmbeddedRunAuthController } from "./auth-controller.js";
 
+type SetRuntimeApiKey =
+  Parameters<typeof createEmbeddedRunAuthController>[0]["authStorage"]["setRuntimeApiKey"];
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -79,7 +82,7 @@ describe("createEmbeddedRunAuthController", () => {
     } | null = null;
     let apiKeyInfo: unknown = null;
     let lastProfileId: string | undefined;
-    const setRuntimeApiKey = vi.fn();
+    const setRuntimeApiKey = vi.fn<SetRuntimeApiKey>();
 
     mocks.getApiKeyForModel.mockResolvedValue({
       apiKey: "source-api-key",
@@ -192,7 +195,7 @@ describe("createEmbeddedRunAuthController", () => {
         version: 1,
         profiles: {},
       } as AuthProfileStore,
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: { setRuntimeApiKey: vi.fn<SetRuntimeApiKey>() },
       profileCandidates: ["default"],
       initialThinkLevel: "medium",
       attemptedThinking: new Set(),
@@ -238,7 +241,7 @@ describe("createEmbeddedRunAuthController", () => {
       let apiKeyInfo: unknown = null;
       let lastProfileId: string | undefined;
       let profileIndex = 0;
-      const setRuntimeApiKey = vi.fn();
+      const setRuntimeApiKey = vi.fn<SetRuntimeApiKey>();
       const staleRefresh = createDeferred<{
         apiKey: string;
         baseUrl: string;
