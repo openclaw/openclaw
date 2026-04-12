@@ -56,6 +56,7 @@ import { finalizeInboundContext } from "../reply.runtime.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
+import { resolveSlackDirectContextData } from "./prepare-direct-context.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -704,6 +705,21 @@ export async function prepareSlackMessage(params: {
     envelopeOptions,
     effectiveDirectMedia,
   });
+  const directContextData =
+    isDirectMessage && !isThreadReply
+      ? await resolveSlackDirectContextData({
+          ctx,
+          account,
+          message,
+          senderId,
+          senderName,
+          previousTimestamp,
+          rawBody,
+          envelopeOptions,
+        })
+      : { historyBody: undefined, label: undefined };
+  const supplementalHistoryBody = threadHistoryBody ?? directContextData.historyBody;
+  const supplementalThreadLabel = threadLabel ?? directContextData.label;
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
@@ -746,10 +762,10 @@ export async function prepareSlackMessage(params: {
     ParentSessionKey: threadKeys.parentSessionKey,
     // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
     ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
-    ThreadHistoryBody: threadHistoryBody,
+    ThreadHistoryBody: supplementalHistoryBody,
     IsFirstThreadTurn:
       isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
-    ThreadLabel: threadLabel,
+    ThreadLabel: supplementalThreadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
     MediaPath: firstMedia?.path,

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agent-hub": {
+      "type": "http",
+      "url": "https://agent-hub.pulsebusiness.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer e010ca85b5b9a735ae7078ed1e0f3f7726fd25f24d43daef57721e5a93753d32"
+      }
+    }
+  }
+}
