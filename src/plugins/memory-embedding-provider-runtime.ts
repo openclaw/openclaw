@@ -15,13 +15,15 @@ export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter[] {
   const registered = listRegisteredMemoryEmbeddingProviderAdapters();
-  if (registered.length > 0) {
-    return registered;
-  }
-  return resolvePluginCapabilityProviders({
+  // Always consult the capability registry so that capability-only providers
+  // (e.g. ollama) remain discoverable even when other providers are directly
+  // registered.  Registered adapters take precedence for duplicate ids.
+  const capability = resolvePluginCapabilityProviders({
     key: "memoryEmbeddingProviders",
     cfg,
   });
+  const registeredIds = new Set(registered.map((a) => a.id));
+  return [...registered, ...capability.filter((a) => !registeredIds.has(a.id))];
 }
 
 export function getMemoryEmbeddingProvider(
