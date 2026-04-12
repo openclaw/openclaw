@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeMediaProviderId } from "./provider-registry.js";
-import { normalizeDecisionReason } from "./runner.entries.js";
+import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -37,18 +37,7 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
 function resolveDecisionFailureReason(
   decision: Awaited<ReturnType<typeof runCapability>>["decision"],
 ): string | undefined {
-  for (const attachment of decision.attachments) {
-    for (const attempt of attachment.attempts) {
-      if (attempt.outcome !== "failed") {
-        continue;
-      }
-      const reason = normalizeDecisionReason(attempt.reason);
-      if (reason) {
-        return reason;
-      }
-    }
-  }
-  return undefined;
+  return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 
 function buildFileContext(params: { filePath: string; mime?: string }) {

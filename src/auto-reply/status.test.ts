@@ -753,12 +753,17 @@ describe("buildStatusMessage", () => {
             {
               attachmentIndex: 0,
               attempts: [
-                {
-                  type: "provider",
-                  outcome: "failed",
-                  reason: "Error: Audio transcription response missing text",
-                },
-              ],
+              {
+                type: "provider",
+                outcome: "skipped",
+                reason: "empty output",
+              },
+              {
+                type: "provider",
+                outcome: "failed",
+                reason: "Error: Audio transcription response missing text",
+              },
+            ],
             },
           ],
         },
@@ -768,6 +773,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain(
       "Media: audio failed (Audio transcription response missing text)",
     );
+    expect(normalizeTestText(text)).not.toContain("empty output");
   });
 
   it("omits media line when all decisions are none", () => {
