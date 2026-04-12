@@ -113,10 +113,24 @@ describe("qa scenario catalog", () => {
   });
 
   it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
-    const scenario = readQaScenarioById("image-understanding-attachment");
-    const imageRequestExpr = scenario.execution.flow?.steps
+    const scenario = readQaScenarioPack().scenarios.find(
+      (candidate) => candidate.id === "image-understanding-attachment",
+    );
+    const imageRequestAction = scenario?.execution.flow?.steps
       .flatMap((step) => step.actions ?? [])
-      .find((action) => action.set === "imageRequest")?.value?.expr;
+      .find(
+        (
+          action,
+        ): action is {
+          set: string;
+          value?: { expr?: string };
+        } =>
+          typeof action === "object" &&
+          action !== null &&
+          "set" in action &&
+          action.set === "imageRequest",
+      );
+    const imageRequestExpr = imageRequestAction?.value?.expr;
 
     expect(imageRequestExpr).toContain("env.mock ?");
     expect(imageRequestExpr).toContain("/debug/requests");

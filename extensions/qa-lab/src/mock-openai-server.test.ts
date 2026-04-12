@@ -844,6 +844,48 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("keeps subagent fanout state isolated per mock server instance", async () => {
+    const serverA = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await serverA.stop();
+    });
+    const serverB = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await serverB.stop();
+    });
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+
+    const firstA = await fetch(`${serverA.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(firstA.status).toBe(200);
+    expect(await firstA.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const firstB = await fetch(`${serverB.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(firstB.status).toBe(200);
+    expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+  });
+
   it("answers heartbeat prompts without spawning extra subagents", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
