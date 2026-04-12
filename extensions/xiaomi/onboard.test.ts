@@ -1,6 +1,6 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
+import { expectProviderOnboardMergedLegacyConfig } from "../../test/helpers/plugins/provider-onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "./onboard.js";
 
 describe("xiaomi onboard", () => {
@@ -19,19 +19,16 @@ describe("xiaomi onboard", () => {
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
-    const cfg = applyXiaomiProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "xiaomi",
-        api: "openai-completions",
-        modelId: "custom-model",
-        modelName: "Custom",
-      }),
-    );
-
-    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/v1");
-    expect(cfg.models?.providers?.xiaomi?.api).toBe("openai-completions");
-    expect(cfg.models?.providers?.xiaomi?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
+    const provider = expectProviderOnboardMergedLegacyConfig({
+      applyProviderConfig: applyXiaomiProviderConfig,
+      providerId: "xiaomi",
+      providerApi: "openai-completions",
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      legacyApi: "openai-completions",
+      legacyModelId: "custom-model",
+      legacyModelName: "Custom",
+    });
+    expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "mimo-v2-flash",
       "mimo-v2-pro",
