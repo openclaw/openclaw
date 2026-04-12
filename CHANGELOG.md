@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/memory: restore cached memory capability public artifacts on plugin-registry cache hits so memory-backed artifact surfaces stay visible after warm loads. Thanks @sercada and @vincentkoc.
 - Gateway/cron: preserve requested isolated-agent config across runtime reloads so subagent jobs and heartbeat overrides keep the right workspace and heartbeat settings when the hot-loaded snapshot is stale. Thanks @l0cka and @vincentkoc.
 - Cron/isolated sessions: persist the right transcript path for each isolated run, including fresh session rollovers, so cron runs stop appending to stale session files. Thanks @samrusani and @vincentkoc.
+- Dreaming/diary: use the host local timezone for diary timestamps when `dreaming.timezone` is unset, so `DREAMS.md` and the UI stop defaulting to UTC. (#65034) Thanks @neo1027144-creator and @vincentkoc.
 
 ## 2026.4.11
 
