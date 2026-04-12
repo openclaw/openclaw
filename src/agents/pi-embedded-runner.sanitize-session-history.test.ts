@@ -968,6 +968,33 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("keeps mutable thinking turns outside exact anthropic replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("read a file"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "I should use the read tool",
+          thinkingSignature: "reasoning_text",
+        },
+        { type: "toolCall", id: "tool_123", name: " read ", arguments: { path: "/tmp/test" } },
+      ]),
+    ]);
+
+    const result = await sanitizeGithubCopilotHistory({ messages });
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "I should use the read tool",
+        thinkingSignature: "reasoning_text",
+      },
+      { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+    ]);
+  });
+
   it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
     setNonGoogleModelApi();
 

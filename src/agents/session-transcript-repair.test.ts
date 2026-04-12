@@ -405,7 +405,7 @@ describe("sanitizeToolCallInputs", () => {
 
     const out = sanitizeToolCallInputs(input, {
       allowedToolNames: ["read"],
-      preserveImmutableThinkingTurns: true,
+      allowProviderOwnedThinkingReplay: true,
     });
 
     expect(out).toEqual([]);
@@ -437,11 +437,48 @@ describe("sanitizeToolCallInputs", () => {
 
     const out = sanitizeToolCallInputs(input, {
       allowedToolNames: ["sessions_spawn"],
-      preserveImmutableThinkingTurns: true,
+      allowProviderOwnedThinkingReplay: true,
     });
 
     expect(out).toEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("keeps signed-thinking assistant turns when sessions_spawn attachments are already redacted", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me replay the helper turn.",
+            thinkingSignature: "sig_spawn_safe",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [
+                {
+                  name: "snapshot.txt",
+                  mimeType: "text/plain",
+                  content: "__OPENCLAW_REDACTED__",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual(input);
   });
 
   it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
