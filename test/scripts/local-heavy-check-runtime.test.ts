@@ -251,6 +251,13 @@ describe("local-heavy-check-runtime", () => {
     ).toBe(false);
   });
 
+  it("skips the heavy-check lock for oxlint metadata commands", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--help"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-h"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--version"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-V"])).toBe(false);
+  });
+
   it("keeps the heavy-check lock for directory targets and broad oxlint runs", () => {
     const cwd = createTempDir("openclaw-oxlint-lock-keep-");
     fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
