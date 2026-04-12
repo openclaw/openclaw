@@ -1,5 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -145,6 +146,12 @@ export async function isChromeReachable(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
   try {
+    // For loopback CDP URLs, use a lightweight raw node:http probe that
+    // bypasses the SSRF guard and any global undici dispatchers (e.g.
+    // EnvHttpProxyAgent) which can silently fail on localhost connections.
+    if (!isWebSocketUrl(cdpUrl) && isLoopbackCdpUrl(cdpUrl)) {
+      return await isChromeReachableLoopback(cdpUrl, timeoutMs);
+    }
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
     if (isWebSocketUrl(cdpUrl)) {
       // Direct WebSocket endpoint — probe via WS handshake.
@@ -155,6 +162,64 @@ export async function isChromeReachable(
   } catch {
     return false;
   }
+}
+
+function isLoopbackCdpUrl(cdpUrl: string): boolean {
+  try {
+    const hostname = new URL(cdpUrl).hostname;
+    return (
+      hostname === "127.0.0.1" ||
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lightweight loopback-only CDP reachability probe using raw node:http.
+ * Bypasses the SSRF guard and any global undici dispatchers that may
+ * interfere with plain localhost connections (e.g. EnvHttpProxyAgent).
+ * Used exclusively during the Chrome launch readiness polling loop.
+ */
+async function isChromeReachableLoopback(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const parsed = new URL(versionUrl);
+    const req = http.get(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname,
+        timeout: timeoutMs,
+        family: 4,
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => {
+          data += chunk.toString();
+        });
+        res.on("end", () => {
+          try {
+            const json = JSON.parse(data);
+            resolve(Boolean(json?.Browser));
+          } catch {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
 }
 
 type ChromeVersion = {
@@ -295,11 +360,62 @@ export async function isChromeCdpReady(
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
+  // For loopback CDP URLs, get the WebSocket URL via raw node:http to bypass
+  // global undici dispatchers, then do the normal WS health check.
+  if (!isWebSocketUrl(cdpUrl) && isLoopbackCdpUrl(cdpUrl)) {
+    const wsUrl = await getChromeWebSocketUrlLoopback(cdpUrl, timeoutMs).catch(() => null);
+    if (!wsUrl) {
+      return false;
+    }
+    return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
+  }
   const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs, ssrfPolicy).catch(() => null);
   if (!wsUrl) {
     return false;
   }
   return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
+}
+
+/**
+ * Fetch the Chrome WebSocket debugger URL via raw node:http for loopback.
+ */
+async function getChromeWebSocketUrlLoopback(
+  cdpUrl: string,
+  timeoutMs: number,
+): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const parsed = new URL(versionUrl);
+    const req = http.get(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname,
+        timeout: timeoutMs,
+        family: 4,
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => {
+          data += chunk.toString();
+        });
+        res.on("end", () => {
+          try {
+            const json = JSON.parse(data);
+            const wsUrl = json?.webSocketDebuggerUrl;
+            resolve(typeof wsUrl === "string" && wsUrl ? wsUrl : null);
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
 }
 
 export async function launchOpenClawChrome(
@@ -409,15 +525,18 @@ export async function launchOpenClawChrome(
   proc.stderr?.on("data", onStderr);
 
   // Wait for CDP to come up.
+  // Use the loopback-only probe (raw node:http) to avoid interference from
+  // global undici dispatchers (e.g. EnvHttpProxyAgent) and SSRF guard layers
+  // that can silently fail on localhost connections.
   const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl)) {
+    if (await isChromeReachableLoopback(profile.cdpUrl)) {
       break;
     }
     await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl))) {
+  if (!(await isChromeReachableLoopback(profile.cdpUrl))) {
     const stderrOutput =
       normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
     const stderrHint = stderrOutput
