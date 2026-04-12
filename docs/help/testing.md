@@ -95,6 +95,10 @@ When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`) is
 `openclaw qa telegram`, QA lab acquires an exclusive lease from a Convex-backed pool, heartbeats
 that lease while the lane is running, and releases the lease on shutdown.
 
+Reference Convex project scaffold:
+
+- `qa/convex-credential-broker/`
+
 Required env vars:
 
 - `OPENCLAW_QA_CONVEX_SITE_URL` (for example `https://your-deployment.convex.site`)
