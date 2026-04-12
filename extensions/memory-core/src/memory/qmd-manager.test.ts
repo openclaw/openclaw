@@ -39,7 +39,7 @@ type MockChild = EventEmitter & {
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
-  const child = new EventEmitter() as MockChild;
+  const child = new EventEmitter();
   child.stdout = stdout;
   child.stderr = stderr;
   child.closeWith = (code = 0) => {
@@ -134,7 +134,7 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
-const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+const originalWindowsPath = (process.env).Path;
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -269,9 +269,9 @@ describe("QmdMemoryManager", () => {
       process.env.PATHEXT = originalPathExt;
     }
     if (originalWindowsPath === undefined) {
-      delete (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+      delete (process.env).Path;
     } else {
-      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
+      (process.env).Path = originalWindowsPath;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
@@ -423,7 +423,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as EventEmitter & { close: Mock };
+    const watcher = watchMock.mock.results[0]?.value;
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
 
@@ -554,6 +554,44 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     await manager?.close();
+  });
+
+  it("prefers --mask when adding collections with a custom pattern", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "*.jsonl", name: "transcripts" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const addCall = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .find(
+        (args) =>
+          args[0] === "collection" && args[1] === "add" && args.includes("*.jsonl"),
+      );
+
+    expect(addCall).toBeDefined();
+    expect(addCall).toContain("--mask");
+    expect(addCall).not.toContain("--glob");
+    expect(addCall).toContain("*.jsonl");
   });
 
   it("rebinds sessions collection when existing collection path targets another agent", async () => {

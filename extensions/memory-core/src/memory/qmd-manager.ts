@@ -283,7 +283,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
-  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--glob";
+  // Prefer --mask for fresh processes because QMD 2.0.1 silently ignores
+  // unknown --glob and falls back to the default markdown pattern.
+  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
 
   private constructor(params: {
     cfg: OpenClawConfig;
