@@ -366,13 +366,39 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   });
 }
 
+const DEFAULT_MINIMAX_USAGE_HOST = "https://api.minimaxi.com";
+
+/**
+ * Derive the usage API host from the provider's configured baseUrl.
+ * MiniMax has two endpoints:
+ *   - CN: api.minimaxi.com (default)
+ *   - Global: api.minimax.io
+ * The baseUrl may include a path suffix (e.g. "/anthropic") which we strip.
+ */
+function deriveMinimaxUsageHost(baseUrl?: string): string {
+  if (!baseUrl || typeof baseUrl !== "string") {
+    return DEFAULT_MINIMAX_USAGE_HOST;
+  }
+  try {
+    const url = new URL(baseUrl);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return DEFAULT_MINIMAX_USAGE_HOST;
+  }
+}
+
 export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  baseUrl?: string,
 ): Promise<ProviderUsageSnapshot> {
+  // Derive the usage endpoint from the configured baseUrl so that global
+  // endpoint users (api.minimax.io) hit the correct host instead of the
+  // hardcoded CN endpoint (api.minimaxi.com).  See #65054.
+  const host = deriveMinimaxUsageHost(baseUrl);
   const res = await fetchJson(
-    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    `${host}/v1/api/openplatform/coding_plan/remains`,
     {
       method: "GET",
       headers: {

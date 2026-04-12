@@ -242,8 +242,13 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     ...MINIMAX_FAST_MODE_STREAM_HOOKS,
     resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
-    fetchUsageSnapshot: async (ctx) =>
-      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    fetchUsageSnapshot: async (ctx) => {
+      const providerConfig = (ctx.config?.models as Record<string, unknown>)?.providers as Record<string, Record<string, unknown>> | undefined;
+      const baseUrl =
+        providerConfig?.["minimax-portal"]?.baseUrl as string | undefined ??
+        providerConfig?.minimax?.baseUrl as string | undefined;
+      return await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, baseUrl);
+    },
   });
 
   api.registerProvider({
