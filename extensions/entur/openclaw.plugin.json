@@ -1,0 +1,44 @@
+{
+  "id": "entur",
+  "contracts": {
+    "tools": ["entur_search_stops", "entur_get_departures", "entur_get_nearby_stops"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "clientName": {
+        "type": "string",
+        "description": "ET-Client-Name header value sent to Entur API. Defaults to 'openclaw-entur'."
+      },
+      "defaultStopId": {
+        "type": "string",
+        "description": "Default stop ID for quick departure lookups (e.g. 'NSR:StopPlace:58366')."
+      },
+      "defaultNumDepartures": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 50
+      },
+      "defaultTransportModes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["bus", "tram", "metro", "rail", "water", "air", "coach"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "clientName": {
+      "label": "Client Name",
+      "help": "Identifier sent to Entur API (e.g. 'mycompany-myapp'). Defaults to 'openclaw-entur'.",
+      "placeholder": "openclaw-entur"
+    },
+    "defaultStopId": {
+      "label": "Default Stop",
+      "help": "Your home stop ID. Use entur_search_stops to find it (e.g. 'NSR:StopPlace:58366' for Jernbanetorget).",
+      "placeholder": "NSR:StopPlace:58366"
+    }
+  }
+}

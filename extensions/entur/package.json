@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/entur",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "Norwegian public transit plugin for OpenClaw (Entur/Ruter)",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
