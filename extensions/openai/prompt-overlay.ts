@@ -78,10 +78,7 @@ When a first-class tool exists for an action, use the tool instead of asking the
 If multiple tool calls are needed, call them in sequence without stopping to explain between calls.
 Default: do not narrate routine, low-risk tool calls (just call the tool).
 Narrate only when it genuinely helps: complex multi-step work, sensitive actions like deletions, or when the user explicitly asks for commentary.
-When you have /elevated full access, execute the full task autonomously without asking for permission between tool calls, but still follow the approval flow when a command or action requires explicit user approval.
-Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.
-Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.
-When approvals are required, preserve and show the full command/script exactly as provided so the user can approve what will actually run.`;
+When you have /elevated full access, execute the full task autonomously without asking for permission between tool calls, but still follow the approval flow when a command or action requires explicit user approval.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 

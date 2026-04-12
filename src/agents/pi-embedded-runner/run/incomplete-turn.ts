@@ -55,8 +55,12 @@ const PLANNING_ONLY_COMPLETION_RE =
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
-const SINGLE_ACTION_NARRATIVE_RE =
-  /\b(?:i(?:'ll| will)|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that|let me (?!know\b)\w+)/i;
+const SINGLE_ACTION_EXPLICIT_CONTINUATION_RE =
+  /\b(?:going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that|let me (?!know\b)\w+)/i;
+const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
+  /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once|and)\b)/i;
+const SINGLE_ACTION_RESULT_STYLE_RE =
+  /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
@@ -313,7 +317,13 @@ function isSingleActionThenNarrativePattern(params: {
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
     return false;
   }
-  return SINGLE_ACTION_NARRATIVE_RE.test(text);
+  if (SINGLE_ACTION_RESULT_STYLE_RE.test(text)) {
+    return false;
+  }
+  return (
+    SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(text) ||
+    SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text)
+  );
 }
 
 export function resolvePlanningOnlyRetryLimit(

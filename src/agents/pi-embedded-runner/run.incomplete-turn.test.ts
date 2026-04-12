@@ -516,4 +516,18 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
 
     expect(result).toBeNull();
   });
+
+  it("does not retry when 1 tool call plus an answer-style summary is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "I'll summarize the root cause: the provider auth scope is missing.",
+      ),
+    });
+
+    expect(result).toBeNull();
+  });
 });

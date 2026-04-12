@@ -470,6 +470,7 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
       "When a first-class tool exists for an action, use the tool instead of asking the user to run a command.",
     );
+    expect(OPENAI_GPT5_TOOL_CALL_STYLE).not.toContain("/approve");
     expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
       "Return the requested sections only, in the requested order.",
     );
