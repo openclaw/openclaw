@@ -418,7 +418,10 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
-    preserveImmutableThinkingTurns: policy.validateAnthropicTurns,
+    allowProviderOwnedThinkingReplay:
+      policy.validateAnthropicTurns &&
+      params.provider === "anthropic" &&
+      params.modelApi === "anthropic-messages",
   });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
