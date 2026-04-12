@@ -180,7 +180,7 @@ describe("doctor state integrity oauth dir checks", () => {
     });
 
     expect(text).toContain("without a matching agents.list entry");
-    expect(text).toContain("Examples: research");
+    expect(text).toContain("Examples: Research (id research)");
   });
 
   it("ignores configured agent dirs and incomplete agent folders", async () => {
@@ -196,6 +196,67 @@ describe("doctor state integrity oauth dir checks", () => {
 
     expect(text).not.toContain("without a matching agents.list entry");
     expect(text).not.toContain("Examples:");
+  });
+
+  it("warns when a case-mismatched agent dir does not resolve to the configured agent path", async () => {
+    createAgentDir("Research");
+
+    const realpathNative = fs.realpathSync.native.bind(fs.realpathSync);
+    const realpathSpy = vi
+      .spyOn(fs.realpathSync, "native")
+      .mockImplementation((target, options) => {
+        const targetPath = String(target);
+        if (targetPath.endsWith(`${path.sep}agents${path.sep}research${path.sep}agent`)) {
+          const error = new Error("ENOENT");
+          (error as NodeJS.ErrnoException).code = "ENOENT";
+          throw error;
+        }
+        return realpathNative(target, options);
+      });
+
+    try {
+      const text = await runStateIntegrityText({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "research" }],
+        },
+      });
+
+      expect(text).toContain("without a matching agents.list entry");
+      expect(text).toContain("Examples: Research (id research)");
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it("does not warn when a case-mismatched dir resolves to the configured agent path", async () => {
+    createAgentDir("Research");
+
+    const realpathNative = fs.realpathSync.native.bind(fs.realpathSync);
+    const resolvedResearchAgentDir = realpathNative(
+      path.join(process.env.OPENCLAW_STATE_DIR ?? "", "agents", "Research", "agent"),
+    );
+    const realpathSpy = vi
+      .spyOn(fs.realpathSync, "native")
+      .mockImplementation((target, options) => {
+        const targetPath = String(target);
+        if (targetPath.endsWith(`${path.sep}agents${path.sep}research${path.sep}agent`)) {
+          return resolvedResearchAgentDir;
+        }
+        return realpathNative(target, options);
+      });
+
+    try {
+      const text = await runStateIntegrityText({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "research" }],
+        },
+      });
+
+      expect(text).not.toContain("without a matching agents.list entry");
+      expect(text).not.toContain("Examples:");
+    } finally {
+      realpathSpy.mockRestore();
+    }
   });
 
   it("detects orphan transcripts and offers archival remediation", async () => {
