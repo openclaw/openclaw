@@ -45,6 +45,35 @@ describe("update global helpers", () => {
     ).toBe("openclaw@next");
   });
 
+  it("rejects env package specs that start with '-' (option injection guard)", () => {
+    // Specs beginning with `-` must be rejected to prevent npm option injection
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "latest",
+        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "--registry=http://evil.com" },
+      }),
+    ).toBe("openclaw@latest");
+
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "latest",
+        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "-f" },
+      }),
+    ).toBe("openclaw@latest");
+  });
+
+  it("rejects env package specs with control characters", () => {
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "latest",
+        env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@latest\x00--registry=evil" },
+      }),
+    ).toBe("openclaw@latest");
+  });
+
   it("resolves global roots and package roots from runner output", async () => {
     const runCommand: CommandRunner = async (argv) => {
       if (argv[0] === "npm") {
@@ -138,11 +167,12 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
       "--force",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--",
+      "openclaw@latest",
     ]);
     expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
       "pnpm",
@@ -161,11 +191,12 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
-      "openclaw@latest",
       "--omit=optional",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--",
+      "openclaw@latest",
     ]);
     expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
   });

@@ -130,14 +130,31 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
+/**
+ * Sanitize an env-provided package spec to prevent npm option injection.
+ * Rejects specs that start with `-` or contain control characters.
+ */
+function sanitizeEnvPackageSpec(value: string): string | null {
+  if (!value || value.startsWith("-")) {
+    return null;
+  }
+  // Reject specs with control characters or unprintable bytes
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    return null;
+  }
+  return value;
+}
+
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
   env?: NodeJS.ProcessEnv;
 }): string {
-  const override =
-    params.env?.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
-    process.env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  const override = sanitizeEnvPackageSpec(
+    params.env?.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ??
+      process.env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ??
+      "",
+  );
   if (override) {
     return override;
   }
@@ -289,7 +306,8 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_FORCE_FLAGS];
+  // Use `--` to terminate option parsing so npm cannot interpret `spec` as a flag.
+  return ["npm", "i", "-g", ...NPM_GLOBAL_INSTALL_FORCE_FLAGS, "--", spec];
 }
 
 export function globalInstallFallbackArgs(
@@ -299,7 +317,7 @@ export function globalInstallFallbackArgs(
   if (manager !== "npm") {
     return null;
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  return ["npm", "i", "-g", ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS, "--", spec];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
