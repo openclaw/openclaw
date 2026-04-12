@@ -26,7 +26,7 @@ Docs: https://docs.openclaw.ai
 - Memory/active-memory: default QMD recall to search and surface better search-path telemetry so memory-backed recall works more predictably out of the box. (#65068) Thanks @Takhoffman.
 - Docs/providers: expand bundled provider docs with richer capability, env-var, and setup guidance across provider pages.
 - Docs/memory-wiki: add the recommended QMD + bridge-mode hybrid recipe plus zero-artifact troubleshooting guidance for `memory-wiki` bridge setups. (#63165) Thanks @sercada and @vincentkoc.
-
+- Agents/Anthropic: add native compaction support plus mixed cache retention so stable prefixes can keep a 1h cache while trailing conversation turns stay short-lived, and preserve compaction blocks across Anthropic transport replay. (#65288) Thanks @100yenadmin.
 ### Fixes
 
 - fix(security): remove busybox/toybox from interpreter-like safe bins [AI-assisted]. (#65713) Thanks @pgondhi987.

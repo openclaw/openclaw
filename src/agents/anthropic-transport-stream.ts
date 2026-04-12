@@ -528,6 +528,34 @@ function applyAnthropicUsageSnapshot(
     usageTarget.input + usageTarget.output + usageTarget.cacheRead + usageTarget.cacheWrite;
 }
 
+function parseAnthropicBetaHeader(value: string | undefined): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function mergeAnthropicBetaHeaders(params: {
+  headerSources: Array<Record<string, string> | undefined>;
+  betaFeatures: string[];
+}): Record<string, string> | undefined {
+  const merged = mergeTransportHeaders(...params.headerSources);
+  if (params.betaFeatures.length === 0) {
+    return merged;
+  }
+  const record = { ...merged };
+  const existingKey = Object.keys(record).find(
+    (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
+  );
+  const existingValues = existingKey ? parseAnthropicBetaHeader(record[existingKey]) : [];
+  const key = existingKey ?? "anthropic-beta";
+  record[key] = [...new Set([...existingValues, ...params.betaFeatures])].join(",");
+  return record;
+}
+
 function createAnthropicTransportClient(params: {
   model: AnthropicTransportModel;
   context: Context;
@@ -539,10 +567,9 @@ function createAnthropicTransportClient(params: {
     model.provider,
     model.baseUrl,
   );
-  const transportMessages =
-    supportsCompactionTransport
-      ? context.messages
-      : stripCompactionBlocksForTransport(context.messages);
+  const transportMessages = supportsCompactionTransport
+    ? context.messages
+    : stripCompactionBlocksForTransport(context.messages);
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
   const anthropicCompactionEnabled = shouldEnableAnthropicServerCompaction(
@@ -569,19 +596,21 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(copilotBetas.length > 0 ? { "anthropic-beta": copilotBetas.join(",") } : {}),
-          },
-          model.headers,
-          buildCopilotDynamicHeaders({
-            messages: transportMessages,
-            hasImages: hasCopilotVisionInput(transportMessages),
-          }),
-          options?.headers,
-        ),
+        defaultHeaders: mergeAnthropicBetaHeaders({
+          betaFeatures: copilotBetas,
+          headerSources: [
+            {
+              accept: "application/json",
+              "anthropic-dangerous-direct-browser-access": "true",
+            },
+            model.headers,
+            buildCopilotDynamicHeaders({
+              messages: transportMessages,
+              hasImages: hasCopilotVisionInput(transportMessages),
+            }),
+            options?.headers,
+          ],
+        }),
         fetch,
       }),
       isOAuthToken: false,
@@ -594,17 +623,19 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
-            "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
-            "x-app": "cli",
-          },
-          model.headers,
-          options?.headers,
-        ),
+        defaultHeaders: mergeAnthropicBetaHeaders({
+          betaFeatures: ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures],
+          headerSources: [
+            {
+              accept: "application/json",
+              "anthropic-dangerous-direct-browser-access": "true",
+              "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+              "x-app": "cli",
+            },
+            model.headers,
+            options?.headers,
+          ],
+        }),
         fetch,
       }),
       isOAuthToken: true,
@@ -615,15 +646,17 @@ function createAnthropicTransportClient(params: {
       apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeTransportHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": betaFeatures.join(","),
-        },
-        model.headers,
-        options?.headers,
-      ),
+      defaultHeaders: mergeAnthropicBetaHeaders({
+        betaFeatures,
+        headerSources: [
+          {
+            accept: "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          model.headers,
+          options?.headers,
+        ],
+      }),
       fetch,
     }),
     isOAuthToken: false,
@@ -649,10 +682,9 @@ function buildAnthropicParams(
     model.provider,
     model.baseUrl,
   );
-  const transportMessages =
-    supportsCompactionTransport
-      ? context.messages
-      : stripCompactionBlocksForTransport(context.messages);
+  const transportMessages = supportsCompactionTransport
+    ? context.messages
+    : stripCompactionBlocksForTransport(context.messages);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: convertAnthropicMessages(transportMessages, model, isOAuthToken),

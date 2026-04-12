@@ -15,6 +15,7 @@ import {
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
+  resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -464,6 +465,28 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         incompleteTurnText,
       }),
     ).toBe("paused");
+  });
+
+  it("preserves the side-effect warning for compaction-only incomplete turns", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      didSendViaMessagingTool: true,
+      lastAssistant: {
+        stopReason: "compaction",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toContain("may have already been executed");
   });
 
   it("retries once after an Anthropic compaction-only stop", async () => {

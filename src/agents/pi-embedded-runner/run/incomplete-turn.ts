@@ -173,7 +173,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (isCompactionStopReason(stopReason)) {
-    return "⚠️ Agent compacted the conversation before finishing the reply. Please try again if the response does not continue automatically.";
+    return params.attempt.replayMetadata.hadPotentialSideEffects
+      ? "⚠️ Agent compacted the conversation before finishing the reply. Note: some tool actions may have already been executed — please verify before retrying if the response does not continue automatically."
+      : "⚠️ Agent compacted the conversation before finishing the reply. Please try again if the response does not continue automatically.";
   }
 
   return params.attempt.replayMetadata.hadPotentialSideEffects

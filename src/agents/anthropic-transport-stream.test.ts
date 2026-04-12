@@ -414,6 +414,52 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("merges wrapper-provided Anthropic betas with required compaction betas", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Keep coding." }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          anthropicServerCompaction: true,
+          headers: {
+            "anthropic-beta": "context-1m-2025-08-07",
+          },
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const betaHeader =
+      anthropicCtorMock.mock.calls[0]?.[0]?.defaultHeaders?.["anthropic-beta"] ?? "";
+    expect(betaHeader).toContain("context-1m-2025-08-07");
+    expect(betaHeader).toContain("context-management-2025-06-27");
+    expect(betaHeader).toContain("compact-2026-01-12");
+  });
+
   it("round-trips Anthropic compaction blocks in requests and streamed responses", async () => {
     anthropicMessagesStreamMock.mockReturnValueOnce(
       (async function* () {
