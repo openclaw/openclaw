@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Dreaming/cron: wake managed dreaming jobs immediately instead of waiting for the next heartbeat, so scheduled dreaming runs start when the cron fires. (#65053) Thanks @l0cka and @vincentkoc.
 - QA/packaging: stop packaged QA helpers from crashing when optional scenario execution config is unavailable, so npm distributions can skip the repo-only scenario pack without breaking completion-cache and startup paths. (#65118) Thanks @EdderTalmor and @vincentkoc.
 - Media/audio transcription: surface the real provider failure when every audio transcription attempt fails, so status output and the CLI stop collapsing those errors into generic skips. (#65096) Thanks @l0cka and @vincentkoc.
+- Memory/wiki: preserve Unicode letters, digits, and combining marks in wiki slugs and contradiction clustering, and cap Unicode filename segments to safe byte lengths so non-ASCII titles stop collapsing or overflowing path limits. (#64742) Thanks @zhouhe-xydt and @vincentkoc.
 
 ## 2026.4.11
 
