@@ -96,16 +96,6 @@ describe("runMessageAction send validation", () => {
       },
     },
     {
-      name: "string-encoded poll params",
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: "60",
-        pollPublic: "true",
-      },
-    },
-    {
       name: "snake_case poll params",
       actionParams: {
         channel: "slack",
@@ -114,6 +104,27 @@ describe("runMessageAction send validation", () => {
         poll_question: "Ready?",
         poll_option: ["Yes", "No"],
         poll_public: "true",
+      },
+    },
+  ])("rejects send actions that include $name", async ({ actionParams }) => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
+  it.each([
+    {
+      name: "string-encoded poll metadata",
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: "60",
+        pollPublic: "true",
       },
     },
     {
@@ -125,13 +136,13 @@ describe("runMessageAction send validation", () => {
         pollDurationSeconds: -5,
       },
     },
-  ])("rejects send actions that include $name", async ({ actionParams }) => {
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams,
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  ])("allows send actions that include only $name", async ({ actionParams }) => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams,
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
   });
 });
