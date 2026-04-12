@@ -65,9 +65,8 @@ async function listSessionCorpusFiles(sessionCorpusDir: string): Promise<string[
 
 function isSuspiciousSessionCorpusLine(line: string): boolean {
   return (
-    line.includes(DREAMING_NARRATIVE_PROMPT_PREFIX) ||
-    line.includes(DREAMING_NARRATIVE_RUN_PREFIX) ||
-    line.includes("dreaming-narrative")
+    line.includes(DREAMING_NARRATIVE_PROMPT_PREFIX) &&
+    (line.includes(DREAMING_NARRATIVE_RUN_PREFIX) || line.includes("dreaming-narrative-"))
   );
 }
 

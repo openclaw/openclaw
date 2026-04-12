@@ -61,6 +61,27 @@ describe("dreaming artifact repair", () => {
     ]);
   });
 
+  it("does not flag ordinary transcript text that merely mentions dreaming-narrative", async () => {
+    const workspaceDir = await createWorkspace();
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-11.txt"),
+      [
+        "[main/chat.jsonl#L4] regular session text",
+        "[main/chat.jsonl#L5] We should inspect the dreaming-narrative session behavior tomorrow.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const audit = await auditDreamingArtifacts({ workspaceDir });
+
+    expect(audit.suspiciousSessionCorpusFileCount).toBe(0);
+    expect(audit.suspiciousSessionCorpusLineCount).toBe(0);
+    expect(audit.issues).toEqual([]);
+  });
+
   it("archives derived dreaming artifacts without touching the diary by default", async () => {
     const workspaceDir = await createWorkspace();
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");

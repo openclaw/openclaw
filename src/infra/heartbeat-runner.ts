@@ -98,7 +98,7 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
-  drainSystemEventEntries,
+  consumeSystemEventEntries,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
@@ -805,6 +805,9 @@ export async function runHeartbeatOnce(opts: {
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
+    if (preflight.shouldInspectPendingEvents && preflight.pendingEventEntries.length > 0) {
+      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    }
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
@@ -900,7 +903,7 @@ export async function runHeartbeatOnce(opts: {
     if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
       return;
     }
-    drainSystemEventEntries(sessionKey);
+    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
   };
 
   const ctx = {

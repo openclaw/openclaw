@@ -404,6 +404,66 @@ describe("appendNarrativeEntry", () => {
     expect(content).toContain("*April 11, 2026, 8:30 AM*");
   });
 
+  it("serializes append and dedupe so concurrent rewrites keep the new entry", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await Promise.all([
+      dedupeDreamDiaryEntries({ workspaceDir }),
+      appendNarrativeEntry({
+        workspaceDir,
+        narrative: "A fresh signal arrived after the cleanup started.",
+        nowMs: Date.parse("2026-04-11T14:30:00Z"),
+        timezone: "UTC",
+      }),
+    ]);
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
+    expect(content).toContain("A fresh signal arrived after the cleanup started.");
+  });
+
+  it("keeps dedupe a no-op when no exact duplicates exist", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Only one entry exists.",
+      nowMs: Date.parse("2026-04-11T14:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+
+    expect(result.removed).toBe(0);
+    expect(result.kept).toBe(1);
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "Only one entry exists.",
+    );
+  });
+
   it("surfaces temp cleanup failure after atomic replace error", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
