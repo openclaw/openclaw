@@ -248,25 +248,6 @@ vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-vi.mock("../plugin-sdk/browser-maintenance.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/browser-maintenance.js")>(
-    "../plugin-sdk/browser-maintenance.js",
-  );
-  return {
-    ...actual,
-    closeTrackedBrowserTabsForSessions: vi.fn().mockResolvedValue(0),
-  };
-});
-vi.mock("/src/plugin-sdk/browser-maintenance.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/browser-maintenance.js")>(
-    "../plugin-sdk/browser-maintenance.js",
-  );
-  return {
-    ...actual,
-    closeTrackedBrowserTabsForSessions: vi.fn().mockResolvedValue(0),
-  };
-});
-
 vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),

@@ -14,7 +14,18 @@ import {
   onceMessage,
   rpcReq,
   writeSessionStore,
+  mockLogger,
 } from "./test-helpers.server.js";
+
+vi.mock("../plugin-sdk/browser-maintenance.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugin-sdk/browser-maintenance.js")>(
+    "../plugin-sdk/browser-maintenance.js",
+  );
+  return {
+    ...actual,
+    closeTrackedBrowserTabsForSessions: vi.fn().mockResolvedValue(0),
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 

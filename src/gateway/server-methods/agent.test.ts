@@ -107,7 +107,7 @@ const makeContext = (): GatewayRequestContext =>
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set(),
+    getSessionEventSubscriberConnIds: () => new Set(), getSessionMessageSubscriberConnIds: () => new Set(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -532,7 +532,7 @@ describe("gateway agent handler", () => {
           addChatRun: vi.fn(),
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]), getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
         } as unknown as GatewayRequestContext,
       },
     );
@@ -612,7 +612,7 @@ describe("gateway agent handler", () => {
           addChatRun: vi.fn(),
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]), getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
         } as unknown as GatewayRequestContext,
       },
     );
@@ -752,7 +752,7 @@ describe("gateway agent handler", () => {
           addChatRun: vi.fn(),
           logGateway: { info: logInfo, error: vi.fn() },
           broadcastToConnIds: vi.fn(),
-          getSessionEventSubscriberConnIds: () => new Set(),
+          getSessionEventSubscriberConnIds: () => new Set(), getSessionMessageSubscriberConnIds: () => new Set(),
         } as unknown as GatewayRequestContext,
       },
     );
