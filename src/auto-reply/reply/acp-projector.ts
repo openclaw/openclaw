@@ -467,7 +467,7 @@ export function createAcpReplyProjector(params: {
         }
         lastUsageTuple = usageTuple;
       }
-      await emitSystemStatus(event.text, event.tag ? { tag: event.tag } : undefined, {
+      await emitSystemStatus(event.text ?? "", event.tag ? { tag: event.tag } : undefined, {
         dedupe: true,
       });
       return;
