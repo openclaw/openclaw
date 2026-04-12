@@ -185,6 +185,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
