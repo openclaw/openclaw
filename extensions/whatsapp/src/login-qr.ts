@@ -69,19 +69,28 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
         current.errorStatus = undefined;
       }
     },
-  }).then((result) => {
-    const current = activeLogins.get(accountId);
-    if (current?.id !== login.id) {
-      return;
-    }
-    if (result.outcome === "connected") {
-      current.sock = result.sock;
-      current.connected = true;
-      return;
-    }
-    current.error = result.message;
-    current.errorStatus = result.statusCode;
-  });
+  })
+    .then((result) => {
+      const current = activeLogins.get(accountId);
+      if (current?.id !== login.id) {
+        return;
+      }
+      if (result.outcome === "connected") {
+        current.sock = result.sock;
+        current.connected = true;
+        return;
+      }
+      current.error = result.message;
+      current.errorStatus = result.statusCode;
+    })
+    .catch((err) => {
+      const current = activeLogins.get(accountId);
+      if (current?.id !== login.id) {
+        return;
+      }
+      current.error = err instanceof Error ? err.message : String(err);
+      current.errorStatus = undefined;
+    });
 }
 
 export async function startWebLoginWithQr(

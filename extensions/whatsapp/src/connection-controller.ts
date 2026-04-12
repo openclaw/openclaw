@@ -370,14 +370,15 @@ export class WhatsAppConnectionController {
       await this.closeCurrentConnection();
     }
 
-    const sock = await createWaSocket(false, this.verbose, {
-      authDir: this.authDir,
-    });
-    await waitForWaConnection(sock);
-
-    this.socketRef.current = sock;
+    let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
+      sock = await createWaSocket(false, this.verbose, {
+        authDir: this.authDir,
+      });
+      await waitForWaConnection(sock);
+
+      this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
       connection = createLiveConnection({
         connectionId: params.connectionId,
