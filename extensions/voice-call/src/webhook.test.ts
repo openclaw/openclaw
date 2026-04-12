@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -114,8 +115,20 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
+type TwilioTestProvider = VoiceCallProvider &
+  Partial<
+    Pick<
+      TwilioProvider,
+      | "clearTtsQueue"
+      | "hasRegisteredStream"
+      | "isValidStreamToken"
+      | "registerCallStream"
+      | "unregisterCallStream"
+    >
+  >;
+
 function createTwilioVerificationProvider(
-  overrides: Partial<VoiceCallProvider> = {},
+  overrides: Partial<TwilioTestProvider> = {},
 ): VoiceCallProvider {
   return {
     ...provider,
@@ -126,23 +139,25 @@ function createTwilioVerificationProvider(
 }
 
 function createTwilioStreamingProvider(
-  overrides: Partial<VoiceCallProvider> = {},
-): VoiceCallProvider {
-  return createTwilioVerificationProvider({
-    parseWebhookEvent: () => ({ events: [] }),
-    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
-    hangupCall: async () => {},
-    playTts: async () => {},
-    startListening: async () => {},
-    stopListening: async () => {},
-    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+  overrides: Partial<TwilioTestProvider> = {},
+): TwilioTestProvider {
+  return {
+    ...createTwilioVerificationProvider({
+      parseWebhookEvent: () => ({ events: [] }),
+      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+      hangupCall: async () => {},
+      playTts: async () => {},
+      startListening: async () => {},
+      stopListening: async () => {},
+      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+    }),
     isValidStreamToken: () => true,
     registerCallStream: () => {},
     unregisterCallStream: () => {},
     hasRegisteredStream: () => true,
     clearTtsQueue: () => {},
     ...overrides,
-  });
+  };
 }
 
 describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
@@ -791,7 +806,9 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
   const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) =>
-    createTwilioStreamingProvider({ clearTtsQueue });
+    createTwilioStreamingProvider({
+      clearTtsQueue: clearTtsQueue as TwilioTestProvider["clearTtsQueue"],
+    });
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
     server.getMediaStreamHandler() as unknown as {

@@ -7,8 +7,8 @@ import {
   readErrorName,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
-import { createAsyncLock } from "../../../src/infra/json-files.js";
-import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { createAsyncLock } from "openclaw/plugin-sdk/infra-runtime";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

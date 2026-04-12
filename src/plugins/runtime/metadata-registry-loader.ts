@@ -20,7 +20,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
       activate: false,
       mode: "validate",
       loadModules: options?.loadModules,
-      ...(options?.onlyPluginIds?.length ? { onlyPluginIds: options.onlyPluginIds } : {}),
+      ...(options?.onlyPluginIds !== undefined ? { onlyPluginIds: options.onlyPluginIds } : {}),
     }),
   );
 }
