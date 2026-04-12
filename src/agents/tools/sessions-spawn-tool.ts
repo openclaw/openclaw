@@ -173,6 +173,7 @@ export function createSessionsSpawnTool(
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const expectsCompletionMessage = params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const requestedStreamTo = params.streamTo === "parent" ? "parent" : undefined;
       // Some callers retain ACP-only fields when they fall back to subagent runtime.
@@ -285,7 +286,7 @@ export function createSessionsSpawnTool(
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
-              expectsCompletionMessage: true,
+              expectsCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {
@@ -316,7 +317,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           lightContext,
-          expectsCompletionMessage: true,
+          expectsCompletionMessage,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

@@ -779,11 +779,11 @@ resolve_latest_version() {
 }
 
 baseline_install_version() {
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    printf '%s\n' "$INSTALL_VERSION"
+  if [[ -z "$INSTALL_VERSION" ]]; then
+    printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  printf '%s\n' "$LATEST_VERSION"
+  npm view "openclaw@$INSTALL_VERSION" version --userconfig "$(mktemp)"
 }
 
 resolve_mingit_download() {
@@ -2272,7 +2272,6 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   local baseline_version
-  baseline_version="$(baseline_install_version)"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
@@ -2284,7 +2283,8 @@ run_upgrade_lane() {
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline-package)")"
     phase_run "upgrade.verify-baseline-package-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   else
-    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_baseline_npm_release "$host_ip" "$baseline_version" || return $?
+    baseline_version="$(baseline_install_version)"
+    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_latest_release || return $?
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline)")"
     phase_run "upgrade.verify-baseline-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$baseline_version" || return $?
   fi
