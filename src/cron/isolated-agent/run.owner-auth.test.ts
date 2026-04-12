@@ -12,9 +12,9 @@ const RUN_OWNER_AUTH_TIMEOUT_MS = 300_000;
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-function makeParams() {
+function makeParams(cfg: Record<string, unknown> = {}) {
   return {
-    cfg: {},
+    cfg,
     deps: {} as never,
     job: {
       id: "owner-auth",
@@ -66,6 +66,35 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
       expect(senderIsOwner).toBe(false);
+    },
+  );
+
+  it(
+    "passes resolved bashElevated defaults to isolated cron agent runs",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(
+        makeParams({
+          tools: {
+            elevated: {
+              enabled: true,
+            },
+          },
+          agents: {
+            defaults: {
+              elevatedDefault: "full",
+            },
+          },
+        }),
+      );
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const bashElevated = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.bashElevated;
+      expect(bashElevated).toEqual({
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+      });
     },
   );
 });

@@ -1,4 +1,5 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
+import type { ExecElevatedDefaults } from "../../agents/bash-tools.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,6 +32,26 @@ import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+
+function resolveExecElevatedDefaults(cfg: OpenClawConfig): ExecElevatedDefaults {
+  const globalElevated = cfg.tools?.elevated;
+  const agentElevated = cfg.agents?.defaults?.tools?.elevated;
+  const enabled = globalElevated?.enabled !== false && agentElevated?.enabled !== false;
+  const configuredDefault = cfg.agents?.defaults?.elevatedDefault;
+  const defaultLevel =
+    configuredDefault === "off" ||
+    configuredDefault === "on" ||
+    configuredDefault === "ask" ||
+    configuredDefault === "full"
+      ? configuredDefault
+      : "on";
+
+  return {
+    enabled,
+    allowed: enabled,
+    defaultLevel: enabled ? defaultLevel : "off",
+  };
+}
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 
 export type CronExecutionResult = {
@@ -160,6 +181,7 @@ export function createCronPromptExecutor(params: {
             sessionEntry: params.cronSession.sessionEntry,
           }).enabled,
           verboseLevel: params.resolvedVerboseLevel,
+          bashElevated: resolveExecElevatedDefaults(params.cfgWithAgentDefaults),
           timeoutMs: params.timeoutMs,
           bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
