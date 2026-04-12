@@ -88,11 +88,13 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
   const matches = new Map<string, Set<string>>();
   const role = (message as { role?: unknown }).role;
   const addMatch = (id: string | null, toolName: string | null) => {
-    if (!id || !toolName) {
+    if (!id) {
       return;
     }
     const bucket = matches.get(id) ?? new Set<string>();
-    bucket.add(toolName);
+    if (toolName) {
+      bucket.add(toolName);
+    }
     matches.set(id, bucket);
   };
 
@@ -104,6 +106,22 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
     );
   } else if (role === "tool") {
     const record = message as unknown as Record<string, unknown>;
+    addMatch(extractToolResultMatchId(record), extractToolResultMatchName(record));
+  }
+
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return matches;
+  }
+
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type !== "toolResult" && record.type !== "tool") {
+      continue;
+    }
     addMatch(extractToolResultMatchId(record), extractToolResultMatchName(record));
   }
 
@@ -198,9 +216,14 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         }
         const blockId = normalizeOptionalString(block.id);
         const blockName = normalizeOptionalString(block.name);
-        return blockId && blockName
-          ? validToolResultMatches.get(blockId)?.has(blockName) === true
-          : false;
+        if (!blockId || !blockName) {
+          return false;
+        }
+        const matchingToolNames = validToolResultMatches.get(blockId);
+        if (!matchingToolNames) {
+          return false;
+        }
+        return matchingToolNames.size === 0 || matchingToolNames.has(blockName);
       });
       if (allToolCallsResolvable) {
         result.push(msg);
