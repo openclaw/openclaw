@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { msteamsPlugin } from "./channel.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { msteamsPlugin } from "./channel.js";
 
 function createConfiguredMSTeamsCfg(): OpenClawConfig {
   return {
