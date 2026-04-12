@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/direct sessions: keep commentary-only assistant fallback payloads out of visible direct delivery, so Codex planning chatter cannot leak into Telegram DMs when a run has no `final_answer` text. (#65112) Thanks @vincentkoc.
 - Infra/net: fix multipart FormData fields (including `model`) being silently dropped when a guarded runtime fetch body crosses a FormData implementation boundary, restoring OpenAI audio transcription requests that failed with HTTP 400. (#64349) Thanks @petr-sloup.
 - Plugins/memory: restore cached memory capability public artifacts on plugin-registry cache hits so memory-backed artifact surfaces stay visible after warm loads. Thanks @sercada and @vincentkoc.
+- Gateway/cron: preserve requested isolated-agent config across runtime reloads so subagent jobs and heartbeat overrides keep the right workspace and heartbeat settings when the hot-loaded snapshot is stale. Thanks @l0cka and @vincentkoc.
 
 ## 2026.4.11
 
