@@ -1,6 +1,8 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { resolveEffectiveToolPolicy } from "../agents/pi-tools.policy.js";
+import { resolveStoredSubagentCapabilities } from "../agents/subagent-capabilities.js";
 import { resolveEffectiveToolInventory } from "../agents/tools-effective-inventory.js";
 import { resolveReplyToMode } from "../auto-reply/reply/reply-threading.js";
 import { loadConfig } from "../config/config.js";
@@ -144,6 +146,14 @@ export async function sessionsCommand(
     const resolved = resolveSessionModelRef(cfg, entry, target.agentId);
     const workspaceDir = entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, target.agentId);
     const delivery = deliveryContextFromSession(entry);
+    const effectiveToolPolicy = resolveEffectiveToolPolicy({
+      config: cfg,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+      modelProvider: resolved.provider,
+      modelId: resolved.model,
+    });
+    const subagentCapabilities = resolveStoredSubagentCapabilities(target.canonicalKey, { cfg });
     const effectiveTools = resolveEffectiveToolInventory({
       cfg,
       agentId: target.agentId,
@@ -210,12 +220,19 @@ export async function sessionsCommand(
       },
       tools: {
         profile: effectiveTools.profile,
+        policyProfile: effectiveToolPolicy.profile ?? null,
+        providerProfile: effectiveToolPolicy.providerProfile ?? null,
+        profileAlsoAllow: effectiveToolPolicy.profileAlsoAllow ?? [],
+        providerProfileAlsoAllow: effectiveToolPolicy.providerProfileAlsoAllow ?? [],
         groups: effectiveTools.groups.map((group) => ({
           id: group.id,
           label: group.label,
           count: group.tools.length,
           tools: group.tools.slice(0, 8).map((tool) => tool.id),
         })),
+      },
+      capabilities: {
+        subagent: subagentCapabilities,
       },
     };
 
@@ -271,6 +288,24 @@ export async function sessionsCommand(
     );
     runtime.log(`${label("Final workspace")}${muted(": ")}${success(payload.resolved.workspaceDir)}`);
     runtime.log(`${label("Tools profile")}${muted(": ")}${infoLabel(payload.tools.profile)}`);
+    runtime.log(
+      `${label("Policy profile")}${muted(": ")}${infoLabel(payload.tools.policyProfile ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Provider profile")}${muted(": ")}${infoLabel(payload.tools.providerProfile ?? "-")}`,
+    );
+    runtime.log(
+      `${label("Profile alsoAllow")}${muted(": ")}${infoLabel(payload.tools.profileAlsoAllow.join(", ") || "-")}`,
+    );
+    runtime.log(
+      `${label("Provider alsoAllow")}${muted(": ")}${infoLabel(payload.tools.providerProfileAlsoAllow.join(", ") || "-")}`,
+    );
+    runtime.log(
+      `${label("Subagent role")}${muted(": ")}${infoLabel(payload.capabilities.subagent.role)}`,
+    );
+    runtime.log(
+      `${label("Subagent control")}${muted(": ")}${infoLabel(payload.capabilities.subagent.controlScope)}`,
+    );
     for (const group of payload.tools.groups) {
       runtime.log(
         `${label(`Tools ${group.id}`)}${muted(": ")}${infoLabel(`${group.count} [${group.tools.join(", ")}]`)}`,

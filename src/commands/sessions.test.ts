@@ -194,7 +194,15 @@ describe("sessionsCommand", () => {
         workspaceReasonChain: string[];
         toolsReasonChain: string[];
       };
-      tools: { profile: string; groups: Array<{ id: string; count: number; tools: string[] }> };
+      tools: {
+        profile: string;
+        policyProfile: string | null;
+        providerProfile: string | null;
+        profileAlsoAllow: string[];
+        providerProfileAlsoAllow: string[];
+        groups: Array<{ id: string; count: number; tools: string[] }>;
+      };
+      capabilities: { subagent: { role: string; controlScope: string } };
     }>(sessionsCommand, store, { explain: "agent:main:main" });
 
     expect(payload.key).toBe("agent:main:main");
@@ -208,6 +216,10 @@ describe("sessionsCommand", () => {
     expect(payload.resolution.workspaceReasonChain).toEqual(["persisted-session-workspace"]);
     expect(payload.resolution.toolsReasonChain).toContain("runtime-effective-tool-inventory");
     expect(payload.tools.profile).toBe("coding");
+    expect(payload.tools.policyProfile).toBeNull();
+    expect(payload.tools.providerProfile).toBeNull();
+    expect(payload.capabilities.subagent.role).toBe("main");
+    expect(payload.capabilities.subagent.controlScope).toBe("children");
     expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
   });
 
@@ -237,6 +249,8 @@ describe("sessionsCommand", () => {
     expect(logs.find((line) => line.includes("Final model"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Subagent role"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
   });
 });
