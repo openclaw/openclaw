@@ -88,6 +88,7 @@ const NARRATIVE_DELETE_SETTLE_TIMEOUT_MS = 120_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
+const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
@@ -661,6 +662,38 @@ async function normalizeSessionFileForComparison(params: {
   }
 }
 
+function isDreamingSessionStoreKey(sessionKey: string): boolean {
+  const firstSeparator = sessionKey.indexOf(":");
+  if (firstSeparator < 0) {
+    return sessionKey.startsWith(DREAMING_SESSION_KEY_PREFIX);
+  }
+  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
+}
+
+async function normalizeSessionEntryPathForComparison(params: {
+  sessionsDir: string;
+  entry: { sessionFile?: string; sessionId?: string } | undefined;
+}): Promise<string | null> {
+  const sessionFile = typeof params.entry?.sessionFile === "string" ? params.entry.sessionFile : "";
+  if (sessionFile) {
+    return normalizeSessionFileForComparison({
+      sessionsDir: params.sessionsDir,
+      sessionFile,
+    });
+  }
+  const sessionId =
+    typeof params.entry?.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (!SAFE_SESSION_ID_RE.test(sessionId)) {
+    return null;
+  }
+  return normalizeSessionFileForComparison({
+    sessionsDir: params.sessionsDir,
+    sessionFile: `${sessionId}.jsonl`,
+  });
+}
+
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = loadConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
@@ -681,9 +714,12 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: agentEntry.name });
     const sessionsDir = path.dirname(storePath);
-    let store: Record<string, { sessionFile?: string } | undefined>;
+    let store: Record<string, { sessionFile?: string; sessionId?: string } | undefined>;
     try {
-      store = loadSessionStore(storePath) as Record<string, { sessionFile?: string } | undefined>;
+      store = loadSessionStore(storePath) as Record<
+        string,
+        { sessionFile?: string; sessionId?: string } | undefined
+      >;
     } catch {
       continue;
     }
@@ -691,14 +727,14 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
     const referencedSessionFiles = new Set<string>();
     let needsStoreUpdate = false;
     for (const [key, entry] of Object.entries(store)) {
-      const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
-      const normalizedSessionFile = sessionFile
-        ? await normalizeSessionFileForComparison({ sessionsDir, sessionFile })
-        : null;
+      const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
+        sessionsDir,
+        entry,
+      });
       if (normalizedSessionFile) {
         referencedSessionFiles.add(normalizedSessionFile);
       }
-      if (!key.includes(DREAMING_SESSION_KEY_PREFIX)) {
+      if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
       if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
@@ -711,14 +747,14 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       prunedEntries += await updateSessionStore(storePath, async (lockedStore) => {
         let prunedForAgent = 0;
         for (const [key, entry] of Object.entries(lockedStore)) {
-          const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
-          const normalizedSessionFile = sessionFile
-            ? await normalizeSessionFileForComparison({ sessionsDir, sessionFile })
-            : null;
+          const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
+            sessionsDir,
+            entry,
+          });
           if (normalizedSessionFile) {
             referencedSessionFiles.add(normalizedSessionFile);
           }
-          if (!key.includes(DREAMING_SESSION_KEY_PREFIX)) {
+          if (!isDreamingSessionStoreKey(key)) {
             continue;
           }
           if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {

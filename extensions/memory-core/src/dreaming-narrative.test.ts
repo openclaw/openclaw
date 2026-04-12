@@ -128,10 +128,7 @@ describe("formatNarrativeDate", () => {
 
   it("applies an explicit timezone", () => {
     // 2026-04-11T21:46:55Z in America/Los_Angeles (PDT, UTC-7) → 2:46 PM
-    const date = formatNarrativeDate(
-      Date.parse("2026-04-11T21:46:55Z"),
-      "America/Los_Angeles",
-    );
+    const date = formatNarrativeDate(Date.parse("2026-04-11T21:46:55Z"), "America/Los_Angeles");
     expect(date).toContain("2:46");
     expect(date).toContain("PM");
     expect(date).toContain("PDT");
@@ -802,10 +799,13 @@ describe("generateAndAppendDreamNarrative", () => {
       storePath,
       `${JSON.stringify({
         "agent:main:dreaming-narrative-light-1": {
-          sessionFile: "missing.jsonl",
+          sessionId: "missing",
         },
         "agent:main:kept-session": {
-          sessionFile: "still-live.jsonl",
+          sessionId: "still-live",
+        },
+        "agent:main:telegram:group:dreaming-narrative-room": {
+          sessionId: "still-missing-non-dreaming",
         },
       })}\n`,
       "utf-8",
@@ -841,6 +841,8 @@ describe("generateAndAppendDreamNarrative", () => {
       unknown
     >;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
+    expect(updatedStore).toHaveProperty("agent:main:kept-session");
+    expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
     expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
     expect(sessionFiles).toContain("still-live.jsonl");
