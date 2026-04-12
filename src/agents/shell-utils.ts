@@ -126,6 +126,18 @@ function looksLikeExplicitPath(value: string): boolean {
   );
 }
 
+function hasResolvableWindowsShellPath(value: string): boolean {
+  if (!looksLikeExplicitPath(value)) {
+    return true;
+  }
+  try {
+    fs.accessSync(value, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isUnixLikeShellName(name: string): boolean {
   return (
     name === "nu" ||
@@ -143,6 +155,9 @@ function resolveConfiguredWindowsShellValue(
 ): (ShellConfig & { runtimeShell: string }) | undefined {
   const trimmed = value ? unwrapPairedQuotes(value) : undefined;
   if (!trimmed || isWindowsPosixPath(trimmed)) {
+    return undefined;
+  }
+  if (!hasResolvableWindowsShellPath(trimmed)) {
     return undefined;
   }
 

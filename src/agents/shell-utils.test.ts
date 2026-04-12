@@ -85,6 +85,16 @@ describe("getShellConfig", () => {
       });
     });
 
+    it("falls back to SHELL when OPENCLAW_SHELL points to a missing executable", () => {
+      process.env.OPENCLAW_SHELL = "C:\\missing\\bash.exe";
+      process.env.SHELL = "cmd.exe";
+
+      expect(getShellConfig()).toEqual({
+        shell: "cmd.exe",
+        args: ["/c"],
+      });
+    });
+
     it("ignores non-shell OPENCLAW_SHELL markers on Windows", () => {
       process.env.OPENCLAW_SHELL = "exec";
       process.env.SHELL = "pwsh";
@@ -93,6 +103,16 @@ describe("getShellConfig", () => {
         shell: "pwsh",
         args: ["-NoProfile", "-NonInteractive", "-Command"],
       });
+    });
+
+    it("falls back to PowerShell when configured Windows shell paths do not exist", () => {
+      process.env.OPENCLAW_SHELL = "C:\\missing\\bash.exe";
+      process.env.SHELL = "C:\\missing\\pwsh.exe";
+
+      const { shell, args } = getShellConfig();
+      const normalized = shell.toLowerCase();
+      expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+      expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
     });
     return;
   }
