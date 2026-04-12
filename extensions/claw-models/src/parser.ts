@@ -1,0 +1,167 @@
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+
+let cachedContent: string | null = null;
+let cachedMtimeMs = 0;
+let cachedFilePath = "";
+
+/**
+ * Read MODELS.md from the workspace directory with mtime-based caching.
+ * Only re-reads from disk when the file has been modified.
+ */
+export async function readModelsFile(
+  workspaceDir: string,
+  filename: string = "MODELS.md",
+): Promise<string | null> {
+  const filePath = join(workspaceDir, filename);
+  try {
+    const fileStat = await stat(filePath);
+    if (
+      cachedContent !== null &&
+      cachedFilePath === filePath &&
+      fileStat.mtimeMs === cachedMtimeMs
+    ) {
+      return cachedContent;
+    }
+    const content = await readFile(filePath, "utf-8");
+    cachedContent = content;
+    cachedMtimeMs = fileStat.mtimeMs;
+    cachedFilePath = filePath;
+    return content;
+  } catch {
+    cachedContent = null;
+    cachedMtimeMs = 0;
+    cachedFilePath = "";
+    return null;
+  }
+}
+
+/** Reset the file cache (for testing). */
+export function resetFileCache(): void {
+  cachedContent = null;
+  cachedMtimeMs = 0;
+  cachedFilePath = "";
+}
+
+const HEADING_PREFIX = "## MODEL:";
+const HEADING_PREFIX_LOWER = HEADING_PREFIX.toLowerCase();
+
+/**
+ * Extract a single model section from MODELS.md content by exact model ID.
+ * Uses indexOf for the common case, regex fallback for case-insensitive.
+ */
+export function extractSection(
+  content: string,
+  modelId: string,
+): string | null {
+  if (!modelId) return null;
+
+  const target = `${HEADING_PREFIX} ${modelId}`;
+  let headingEnd = findHeadingEnd(content, target);
+
+  if (headingEnd === -1) {
+    const targetLower = target.toLowerCase();
+    const contentLower = content.toLowerCase();
+    headingEnd = findHeadingEnd(contentLower, targetLower);
+    if (headingEnd === -1) return null;
+  }
+
+  const rest = content.slice(headingEnd);
+  const nextIdx = findNextHeading(rest);
+  const body = nextIdx === -1 ? rest : rest.slice(0, nextIdx);
+
+  const trimmed = body.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Find the end position of a heading line matching `target` exactly.
+ * Returns the index right after the newline, or -1 if not found.
+ */
+function findHeadingEnd(content: string, target: string): number {
+  let pos = 0;
+  while (true) {
+    const idx = content.indexOf(target, pos);
+    if (idx === -1) return -1;
+
+    if (idx > 0 && content[idx - 1] !== "\n") {
+      pos = idx + 1;
+      continue;
+    }
+
+    const afterTarget = idx + target.length;
+    const charAfter = content[afterTarget];
+    if (
+      charAfter === undefined ||
+      charAfter === "\n" ||
+      charAfter === "\r" ||
+      (charAfter === " " &&
+        (content[afterTarget + 1] === "\n" ||
+          content[afterTarget + 1] === "\r" ||
+          content[afterTarget + 1] === undefined))
+    ) {
+      const newlineIdx = content.indexOf("\n", afterTarget);
+      return newlineIdx === -1 ? content.length : newlineIdx + 1;
+    }
+
+    pos = afterTarget;
+  }
+}
+
+/** Find the start of the next `## MODEL:` heading in `rest`. */
+function findNextHeading(rest: string): number {
+  let pos = 0;
+  while (true) {
+    const idx = rest.indexOf(HEADING_PREFIX, pos);
+    if (idx === -1) {
+      const idxLower = rest.toLowerCase().indexOf(HEADING_PREFIX_LOWER, pos);
+      if (idxLower === -1) return -1;
+      if (idxLower === 0 || rest[idxLower - 1] === "\n") return idxLower;
+      pos = idxLower + 1;
+      continue;
+    }
+    if (idx === 0 || rest[idx - 1] === "\n") return idx;
+    pos = idx + 1;
+  }
+}
+
+/**
+ * Parse an OpenClaw model ref into provider and bare model ID.
+ * Model refs are `provider/model-id` (e.g., `openai/gpt-5.4`).
+ */
+export function parseModelRef(modelRef: string): {
+  fullRef: string;
+  bareId: string;
+} {
+  const trimmed = modelRef.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex === -1) {
+    return { fullRef: trimmed, bareId: trimmed };
+  }
+  return {
+    fullRef: trimmed,
+    bareId: trimmed.slice(slashIndex + 1),
+  };
+}
+
+/**
+ * Find the corrective rules for a model by exact ID match.
+ *
+ * Lookup order:
+ * 1. Full ref (e.g., `openai/gpt-5.4`)
+ * 2. Bare model ID (e.g., `gpt-5.4`)
+ * 3. No match -> null (zero tokens injected)
+ */
+export function findModelSection(
+  content: string,
+  modelRef: string,
+): string | null {
+  const { fullRef, bareId } = parseModelRef(modelRef);
+
+  if (fullRef !== bareId) {
+    const fullMatch = extractSection(content, fullRef);
+    if (fullMatch) return fullMatch;
+  }
+
+  return extractSection(content, bareId);
+}

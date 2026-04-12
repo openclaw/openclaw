@@ -1,0 +1,42 @@
+{
+  "id": "claw-models",
+  "name": "Claw Models",
+  "description": "Per-model corrective instructions — patches known model defects like hallucination and tool-call fabrication",
+  "skills": ["skills/claw-models"],
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable per-model corrective instruction injection"
+    },
+    "modelsFile": {
+      "label": "Models File",
+      "help": "Path to the MODELS.md file relative to the workspace directory"
+    },
+    "disabledModels": {
+      "label": "Disabled Models",
+      "help": "Model IDs to skip even if they have entries in MODELS.md"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable per-model corrective instruction injection",
+        "default": true
+      },
+      "modelsFile": {
+        "type": "string",
+        "description": "Path to MODELS.md relative to the workspace directory",
+        "default": "MODELS.md"
+      },
+      "disabledModels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Model IDs to skip even if they have entries in MODELS.md",
+        "default": []
+      }
+    }
+  }
+}
