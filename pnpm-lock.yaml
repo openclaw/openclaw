@@ -950,6 +950,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/plamo:
+    dependencies:
+      '@mariozechner/pi-agent-core':
+        specifier: 0.66.1
+        version: 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai':
+        specifier: 0.66.1
+        version: 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

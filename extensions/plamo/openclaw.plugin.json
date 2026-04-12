@@ -2,6 +2,9 @@
   "id": "plamo",
   "enabledByDefault": true,
   "providers": ["plamo"],
+  "modelSupport": {
+    "modelPrefixes": ["plamo-"]
+  },
   "providerAuthEnvVars": {
     "plamo": ["PLAMO_API_KEY"]
   },

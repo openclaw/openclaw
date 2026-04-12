@@ -1728,6 +1728,49 @@ describe("plamo provider plugin", () => {
     });
   });
 
+  it("preserves malformed inline tool requests while normalizing valid ones", () => {
+    const validToolMarkup =
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>read<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"README.md"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>";
+    const invalidToolMarkup =
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+      "<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>not-json" +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>";
+
+    const message = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: `before ${validToolMarkup} middle ${invalidToolMarkup} after`,
+        },
+      ],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: `before  middle ${invalidToolMarkup} after`,
+        },
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "README.md" },
+        },
+      ],
+    });
+  });
+
   it("preserves raw inline tool markup when no valid tool-call blocks are produced", () => {
     const message = {
       role: "assistant",

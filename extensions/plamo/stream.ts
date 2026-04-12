@@ -40,6 +40,7 @@ const PLAMO_TOOL_REQUESTS_BLOCK_RE = new RegExp(
 type ParsedPlamoToolCall = {
   name: string;
   arguments: Record<string, unknown>;
+  range: TextRange;
 };
 
 type MessageContentBlock = {
@@ -1024,32 +1025,24 @@ function createNativePlamoStream(
 }
 
 export function stripPlamoToolMarkup(text: string): string {
-  return removePlamoToolMarkupRanges(text, 0, collectPlamoToolMarkupRanges(text)).trim();
+  const parsedToolCalls = parsePlamoToolCalls(text);
+  return removePlamoToolMarkupRanges(
+    text,
+    0,
+    collectSafePlamoToolMarkupRanges(text, parsedToolCalls),
+  ).trim();
 }
 
-function collectRegexMatchRanges(text: string, regex: RegExp): TextRange[] {
-  const ranges: TextRange[] = [];
-  for (const match of text.matchAll(regex)) {
-    if (match.index === undefined) {
-      continue;
-    }
-    ranges.push([match.index, match.index + match[0].length] as const);
-  }
-  return ranges;
-}
-
-function collectPlamoToolMarkupRanges(text: string): TextRange[] {
-  const ranges = [
-    ...collectRegexMatchRanges(text, PLAMO_TOOL_REQUESTS_BLOCK_RE),
-    ...collectRegexMatchRanges(text, PLAMO_TOOL_REQUEST_BLOCK_RE),
-  ].toSorted((left, right) => left[0] - right[0] || left[1] - right[1]);
-
+function mergeTextRanges(ranges: readonly TextRange[]): TextRange[] {
   if (ranges.length === 0) {
     return [];
   }
 
+  const sortedRanges = [...ranges].toSorted(
+    (left, right) => left[0] - right[0] || left[1] - right[1],
+  );
   const mergedRanges: Array<[number, number]> = [];
-  for (const [start, end] of ranges) {
+  for (const [start, end] of sortedRanges) {
     const previousRange = mergedRanges.at(-1);
     if (!previousRange || start > previousRange[1]) {
       mergedRanges.push([start, end]);
@@ -1059,6 +1052,38 @@ function collectPlamoToolMarkupRanges(text: string): TextRange[] {
   }
 
   return mergedRanges;
+}
+
+function collectSafePlamoToolMarkupRanges(
+  text: string,
+  parsedToolCalls: readonly ParsedPlamoToolCall[],
+): TextRange[] {
+  if (parsedToolCalls.length === 0) {
+    return [];
+  }
+
+  const requestRanges = mergeTextRanges(parsedToolCalls.map((toolCall) => toolCall.range));
+  const wrapperRanges: TextRange[] = [];
+
+  for (const match of text.matchAll(PLAMO_TOOL_REQUESTS_BLOCK_RE)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    const wrapperStart = match.index;
+    const wrapperEnd = wrapperStart + match[0].length;
+    const contentStart = wrapperStart + PLAMO_BEGIN_TOOL_REQUESTS.length;
+    const contentEnd = wrapperEnd - PLAMO_END_TOOL_REQUESTS.length;
+    const remainingContent = removePlamoToolMarkupRanges(
+      text.slice(contentStart, contentEnd),
+      contentStart,
+      requestRanges,
+    );
+    if (remainingContent.trim().length === 0) {
+      wrapperRanges.push([wrapperStart, wrapperEnd] as const);
+    }
+  }
+
+  return mergeTextRanges([...requestRanges, ...wrapperRanges]);
 }
 
 function removePlamoToolMarkupRanges(
@@ -1109,6 +1134,9 @@ export function parsePlamoToolCalls(text: string): ParsedPlamoToolCall[] {
   const toolCalls: ParsedPlamoToolCall[] = [];
 
   for (const match of text.matchAll(PLAMO_TOOL_REQUEST_BLOCK_RE)) {
+    if (match.index === undefined) {
+      continue;
+    }
     const block = match[1] ?? "";
     const name = extractTaggedText(block, PLAMO_BEGIN_TOOL_NAME, PLAMO_END_TOOL_NAME)?.trim();
     const rawArguments = extractToolArguments(block);
@@ -1122,6 +1150,7 @@ export function parsePlamoToolCalls(text: string): ParsedPlamoToolCall[] {
     toolCalls.push({
       name,
       arguments: argumentsObject,
+      range: [match.index, match.index + match[0].length] as const,
     });
   }
 
@@ -1149,13 +1178,9 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
   ) {
     return;
   }
-  const markupRanges = collectPlamoToolMarkupRanges(combinedText);
-  if (markupRanges.length === 0) {
-    return;
-  }
-
   const parsedToolCalls = parsePlamoToolCalls(combinedText);
-  if (parsedToolCalls.length === 0) {
+  const markupRanges = collectSafePlamoToolMarkupRanges(combinedText, parsedToolCalls);
+  if (markupRanges.length === 0) {
     return;
   }
 
