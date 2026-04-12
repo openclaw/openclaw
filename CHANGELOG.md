@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/memory: restore cached memory capability public artifacts on plugin-registry cache hits so memory-backed artifact surfaces stay visible after warm loads. Thanks @sercada and @vincentkoc.
 - Gateway/cron: preserve requested isolated-agent config across runtime reloads so subagent jobs and heartbeat overrides keep the right workspace and heartbeat settings when the hot-loaded snapshot is stale. Thanks @l0cka and @vincentkoc.
 - Cron/isolated sessions: persist the right transcript path for each isolated run, including fresh session rollovers, so cron runs stop appending to stale session files. Thanks @samrusani and @vincentkoc.
+- Dreaming/cron: wake managed dreaming jobs immediately instead of waiting for the next heartbeat, so scheduled dreaming runs start when the cron fires. (#65053) Thanks @l0cka and @vincentkoc.
 
 ## 2026.4.11
 
