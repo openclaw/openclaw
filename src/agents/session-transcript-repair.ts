@@ -142,7 +142,7 @@ export function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
     if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
       return false;
     }
-    if (typeof attachment[key] !== "string" || (attachment[key] as string).trim().length === 0) {
+    if (typeof attachment[key] !== "string" || attachment[key].trim().length === 0) {
       return false;
     }
   }

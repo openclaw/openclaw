@@ -1243,8 +1243,7 @@ describe("sanitizeSessionHistory", () => {
           message &&
           typeof message === "object" &&
           message.role === "assistant" &&
-          extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
-            .length > 0,
+          extractToolCallsFromAssistant(message).length > 0,
       ),
     ).toHaveLength(1);
     expect(
@@ -1258,8 +1257,7 @@ describe("sanitizeSessionHistory", () => {
           message &&
           typeof message === "object" &&
           message.role === "assistant" &&
-          extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
-            .length > 0,
+          extractToolCallsFromAssistant(message).length > 0,
       ),
     ).toHaveLength(1);
     expect(
