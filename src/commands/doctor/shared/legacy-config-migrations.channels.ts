@@ -892,4 +892,77 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       raw.channels = channels;
     },
   }),
+  defineLegacyConfigMigration({
+    id: "channels.feishu.botName->name",
+    describe:
+      "Rename legacy channels.feishu.accounts.*.botName to name (Feishu account display name)",
+    legacyRules: [
+      {
+        path: ["channels", "feishu"],
+        message:
+          'channels.feishu.botName was renamed to channels.feishu.name. Run "openclaw doctor --fix".',
+        match: (value) => {
+          const feishu = getRecord(value);
+          if (!feishu) {
+            return false;
+          }
+          if (hasOwnKey(feishu, "botName")) {
+            return true;
+          }
+          const accounts = getRecord(feishu.accounts);
+          if (!accounts) {
+            return false;
+          }
+          return Object.values(accounts).some((account) => {
+            const acc = getRecord(account);
+            return acc != null && hasOwnKey(acc, "botName");
+          });
+        },
+      },
+    ],
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+      const feishu = getRecord(channels.feishu);
+      if (!feishu) {
+        return;
+      }
+
+      const renameBotName = (
+        owner: Record<string, unknown>,
+        pathPrefix: string,
+      ) => {
+        if (!hasOwnKey(owner, "botName")) {
+          return;
+        }
+        if (!hasOwnKey(owner, "name")) {
+          owner.name = owner.botName;
+        }
+        delete owner.botName;
+        changes.push(
+          `${pathPrefix}.botName renamed to ${pathPrefix}.name.`,
+        );
+      };
+
+      renameBotName(feishu, "channels.feishu");
+
+      const accounts = getRecord(feishu.accounts);
+      if (accounts) {
+        for (const [accountId, accountValue] of Object.entries(accounts)) {
+          const account = getRecord(accountValue);
+          if (!account) {
+            continue;
+          }
+          renameBotName(account, `channels.feishu.accounts.${accountId}`);
+          accounts[accountId] = account;
+        }
+        feishu.accounts = accounts;
+      }
+
+      channels.feishu = feishu;
+      raw.channels = channels;
+    },
+  }),
 ];
