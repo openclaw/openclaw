@@ -46,6 +46,18 @@ LINUX_UPDATE_STATUS="skip"
 MACOS_UPDATE_VERSION="skip"
 WINDOWS_UPDATE_VERSION="skip"
 LINUX_UPDATE_VERSION="skip"
+MACOS_UPDATE_CHANNELS_STATUS="skip"
+WINDOWS_UPDATE_CHANNELS_STATUS="skip"
+LINUX_UPDATE_CHANNELS_STATUS="skip"
+MACOS_UPDATE_DASHBOARD_STATUS="skip"
+WINDOWS_UPDATE_DASHBOARD_STATUS="skip"
+LINUX_UPDATE_DASHBOARD_STATUS="skip"
+MACOS_UPDATE_AGENT_STATUS="skip"
+WINDOWS_UPDATE_AGENT_STATUS="skip"
+LINUX_UPDATE_AGENT_STATUS="skip"
+MACOS_UPDATE_DISCORD_STATUS="skip"
+WINDOWS_UPDATE_DISCORD_STATUS="skip"
+LINUX_UPDATE_DISCORD_STATUS="skip"
 
 say() {
   printf '==> %s\n' "$*"
@@ -1427,6 +1439,9 @@ PY
 run_macos_update() {
   local update_target="$1"
   local expected_needle="$2"
+  MACOS_UPDATE_CHANNELS_STATUS="fail"
+  MACOS_UPDATE_DASHBOARD_STATUS="fail"
+  MACOS_UPDATE_AGENT_STATUS="fail"
   cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -1513,11 +1528,16 @@ fi
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
+  MACOS_UPDATE_CHANNELS_STATUS="pass"
+  MACOS_UPDATE_DASHBOARD_STATUS="pass"
+  MACOS_UPDATE_AGENT_STATUS="pass"
   if discord_smoke_enabled; then
+    MACOS_UPDATE_DISCORD_STATUS="fail"
     printf '==> update.discord-config\n'
     configure_macos_update_discord
     printf '==> update.discord-roundtrip\n'
     run_macos_update_discord_smoke
+    MACOS_UPDATE_DISCORD_STATUS="pass"
   fi
 }
 
@@ -1525,6 +1545,9 @@ run_windows_update() {
   local update_target="$1"
   local expected_needle="$2"
   local script_url="$3"
+  WINDOWS_UPDATE_CHANNELS_STATUS="fail"
+  WINDOWS_UPDATE_DASHBOARD_STATUS="fail"
+  WINDOWS_UPDATE_AGENT_STATUS="fail"
   run_windows_script_via_log \
     "$script_url" \
     "$update_target" \
@@ -1533,17 +1556,25 @@ run_windows_update() {
     "$MODEL_ID" \
     "$API_KEY_ENV" \
     "$API_KEY_VALUE"
+  WINDOWS_UPDATE_CHANNELS_STATUS="pass"
+  WINDOWS_UPDATE_DASHBOARD_STATUS="pass"
+  WINDOWS_UPDATE_AGENT_STATUS="pass"
   if discord_smoke_enabled; then
+    WINDOWS_UPDATE_DISCORD_STATUS="fail"
     printf '==> update.discord-config\n'
     configure_windows_update_discord
     printf '==> update.discord-roundtrip\n'
     run_windows_update_discord_smoke
+    WINDOWS_UPDATE_DISCORD_STATUS="pass"
   fi
 }
 
 run_linux_update() {
   local update_target="$1"
   local expected_needle="$2"
+  LINUX_UPDATE_CHANNELS_STATUS="fail"
+  LINUX_UPDATE_DASHBOARD_STATUS="fail"
+  LINUX_UPDATE_AGENT_STATUS="fail"
   cat <<EOF | prlctl exec "$LINUX_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export HOME=/root
@@ -1624,11 +1655,16 @@ fi
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
+  LINUX_UPDATE_CHANNELS_STATUS="pass"
+  LINUX_UPDATE_DASHBOARD_STATUS="pass"
+  LINUX_UPDATE_AGENT_STATUS="pass"
   if discord_smoke_enabled; then
+    LINUX_UPDATE_DISCORD_STATUS="fail"
     printf '==> update.discord-config\n'
     configure_linux_update_discord
     printf '==> update.discord-roundtrip\n'
     run_linux_update_discord_smoke
+    LINUX_UPDATE_DISCORD_STATUS="pass"
   fi
 }
 
@@ -1656,15 +1692,27 @@ summary = {
         "macos": {
             "status": os.environ["SUMMARY_MACOS_UPDATE_STATUS"],
             "version": os.environ["SUMMARY_MACOS_UPDATE_VERSION"],
+            "channels": os.environ["SUMMARY_MACOS_UPDATE_CHANNELS_STATUS"],
+            "dashboard": os.environ["SUMMARY_MACOS_UPDATE_DASHBOARD_STATUS"],
+            "agent": os.environ["SUMMARY_MACOS_UPDATE_AGENT_STATUS"],
+            "discord": os.environ["SUMMARY_MACOS_UPDATE_DISCORD_STATUS"],
         },
         "windows": {
             "status": os.environ["SUMMARY_WINDOWS_UPDATE_STATUS"],
             "version": os.environ["SUMMARY_WINDOWS_UPDATE_VERSION"],
+            "channels": os.environ["SUMMARY_WINDOWS_UPDATE_CHANNELS_STATUS"],
+            "dashboard": os.environ["SUMMARY_WINDOWS_UPDATE_DASHBOARD_STATUS"],
+            "agent": os.environ["SUMMARY_WINDOWS_UPDATE_AGENT_STATUS"],
+            "discord": os.environ["SUMMARY_WINDOWS_UPDATE_DISCORD_STATUS"],
         },
         "linux": {
             "status": os.environ["SUMMARY_LINUX_UPDATE_STATUS"],
             "version": os.environ["SUMMARY_LINUX_UPDATE_VERSION"],
             "mode": "local-with-provider-env",
+            "channels": os.environ["SUMMARY_LINUX_UPDATE_CHANNELS_STATUS"],
+            "dashboard": os.environ["SUMMARY_LINUX_UPDATE_DASHBOARD_STATUS"],
+            "agent": os.environ["SUMMARY_LINUX_UPDATE_AGENT_STATUS"],
+            "discord": os.environ["SUMMARY_LINUX_UPDATE_DISCORD_STATUS"],
         },
     },
 }
@@ -1798,11 +1846,30 @@ SUMMARY_LINUX_UPDATE_STATUS="$LINUX_UPDATE_STATUS" \
 SUMMARY_MACOS_UPDATE_VERSION="$MACOS_UPDATE_VERSION" \
 SUMMARY_WINDOWS_UPDATE_VERSION="$WINDOWS_UPDATE_VERSION" \
 SUMMARY_LINUX_UPDATE_VERSION="$LINUX_UPDATE_VERSION" \
+SUMMARY_MACOS_UPDATE_CHANNELS_STATUS="$MACOS_UPDATE_CHANNELS_STATUS" \
+SUMMARY_WINDOWS_UPDATE_CHANNELS_STATUS="$WINDOWS_UPDATE_CHANNELS_STATUS" \
+SUMMARY_LINUX_UPDATE_CHANNELS_STATUS="$LINUX_UPDATE_CHANNELS_STATUS" \
+SUMMARY_MACOS_UPDATE_DASHBOARD_STATUS="$MACOS_UPDATE_DASHBOARD_STATUS" \
+SUMMARY_WINDOWS_UPDATE_DASHBOARD_STATUS="$WINDOWS_UPDATE_DASHBOARD_STATUS" \
+SUMMARY_LINUX_UPDATE_DASHBOARD_STATUS="$LINUX_UPDATE_DASHBOARD_STATUS" \
+SUMMARY_MACOS_UPDATE_AGENT_STATUS="$MACOS_UPDATE_AGENT_STATUS" \
+SUMMARY_WINDOWS_UPDATE_AGENT_STATUS="$WINDOWS_UPDATE_AGENT_STATUS" \
+SUMMARY_LINUX_UPDATE_AGENT_STATUS="$LINUX_UPDATE_AGENT_STATUS" \
+SUMMARY_MACOS_UPDATE_DISCORD_STATUS="$MACOS_UPDATE_DISCORD_STATUS" \
+SUMMARY_WINDOWS_UPDATE_DISCORD_STATUS="$WINDOWS_UPDATE_DISCORD_STATUS" \
+SUMMARY_LINUX_UPDATE_DISCORD_STATUS="$LINUX_UPDATE_DISCORD_STATUS" \
 write_summary_json >/dev/null
 
 if [[ "$JSON_OUTPUT" -eq 1 ]]; then
   cat "$RUN_DIR/summary.json"
 else
   say "Run dir: $RUN_DIR"
-  cat "$RUN_DIR/summary.json"
+  printf '  fresh macOS/windows/linux: %s / %s / %s\n' "$MACOS_FRESH_STATUS" "$WINDOWS_FRESH_STATUS" "$LINUX_FRESH_STATUS"
+  printf '  update macOS: %s (%s) channels=%s dashboard=%s agent=%s discord=%s\n' \
+    "$MACOS_UPDATE_STATUS" "$MACOS_UPDATE_VERSION" "$MACOS_UPDATE_CHANNELS_STATUS" "$MACOS_UPDATE_DASHBOARD_STATUS" "$MACOS_UPDATE_AGENT_STATUS" "$MACOS_UPDATE_DISCORD_STATUS"
+  printf '  update windows: %s (%s) channels=%s dashboard=%s agent=%s discord=%s\n' \
+    "$WINDOWS_UPDATE_STATUS" "$WINDOWS_UPDATE_VERSION" "$WINDOWS_UPDATE_CHANNELS_STATUS" "$WINDOWS_UPDATE_DASHBOARD_STATUS" "$WINDOWS_UPDATE_AGENT_STATUS" "$WINDOWS_UPDATE_DISCORD_STATUS"
+  printf '  update linux: %s (%s) channels=%s dashboard=%s agent=%s discord=%s\n' \
+    "$LINUX_UPDATE_STATUS" "$LINUX_UPDATE_VERSION" "$LINUX_UPDATE_CHANNELS_STATUS" "$LINUX_UPDATE_DASHBOARD_STATUS" "$LINUX_UPDATE_AGENT_STATUS" "$LINUX_UPDATE_DISCORD_STATUS"
+  printf '  summary: %s\n' "$RUN_DIR/summary.json"
 fi
