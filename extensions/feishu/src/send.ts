@@ -185,7 +185,9 @@ async function sendReplyOrFallbackDirect(
 function extractJsonCardTexts(elements: unknown[]): string[] {
   const texts: string[] = [];
   for (const el of elements) {
-    if (!el || typeof el !== "object") { continue; }
+    if (!el || typeof el !== "object") {
+      continue;
+    }
     const node = el as {
       tag?: string;
       property?: { content?: string };
@@ -241,7 +243,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
 
       // Also extract text from body elements (schema 2.0: body.elements)
       if (Array.isArray(jsonCard.body?.elements)) {
-        parts.push(...extractJsonCardTexts(jsonCard.body!.elements));
+        parts.push(...extractJsonCardTexts(jsonCard.body.elements));
       }
       // Schema 1.0: top-level elements
       if (Array.isArray(jsonCard.elements)) {
@@ -249,7 +251,9 @@ function parseInteractiveCardContent(parsed: unknown): string {
       }
 
       const result = parts.join("\n").trim();
-      if (result) { return result; }
+      if (result) {
+        return result;
+      }
     } catch {
       // Fall through to legacy element parsing
     }
