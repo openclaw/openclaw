@@ -147,6 +147,12 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /**
+   * List of non-bot users/bots mentioned in the message (excluding the bot itself).
+   * Each entry has `{ id: string; name: string }`.
+   * Populated by channel plugins (e.g. Feishu) where structured mention data is available.
+   */
+  Mentions?: Array<{ id: string; name: string }>;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

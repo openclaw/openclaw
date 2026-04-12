@@ -130,6 +130,10 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    mentions:
+      Array.isArray(ctx.Mentions) && ctx.Mentions.length > 0
+        ? ctx.Mentions.map((m) => ({ id: m.id, name: m.name }))
+        : undefined,
     has_reply_context: ctx.ReplyToBody ? true : undefined,
     has_forwarded_context: ctx.ForwardedFrom ? true : undefined,
     has_thread_starter: normalizeOptionalString(ctx.ThreadStarterBody) ? true : undefined,

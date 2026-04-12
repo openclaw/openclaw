@@ -1017,6 +1017,17 @@ export async function handleFeishuMessage(params: {
         MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
+        // Expose all non-bot mentions so agents can detect when another bot/user was @mentioned.
+        // This allows agents to stay silent when a different bot (e.g. @Arbiter) was addressed.
+        Mentions:
+          (event.message.mentions ?? [])
+            .filter((m) => m.id.open_id && m.id.open_id !== botOpenId)
+            .map((m) => ({ id: m.id.open_id!, name: m.name }))
+            .length > 0
+            ? (event.message.mentions ?? [])
+                .filter((m) => m.id.open_id && m.id.open_id !== botOpenId)
+                .map((m) => ({ id: m.id.open_id!, name: m.name }))
+            : undefined,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
