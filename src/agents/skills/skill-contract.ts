@@ -8,6 +8,33 @@ export type Skill = CanonicalSkill & {
   source?: string;
 };
 
+/** Shape we attach for newer pi-coding-agent builds that require `sourceInfo` on `Skill`. */
+export type SyntheticSkillSourceInfo = {
+  path: string;
+  source: string;
+  scope: SourceScope;
+  origin: SourceOrigin;
+  baseDir?: string;
+};
+
+export function createSyntheticSourceInfo(
+  filePath: string,
+  options: {
+    source: string;
+    scope?: SourceScope;
+    origin?: SourceOrigin;
+    baseDir?: string;
+  },
+): SyntheticSkillSourceInfo {
+  return {
+    path: filePath,
+    source: options.source,
+    scope: options.scope ?? "temporary",
+    origin: options.origin ?? "top-level",
+    baseDir: options.baseDir,
+  };
+}
+
 function escapeXml(str: string): string {
   return str
     .replace(/&/g, "&amp;")

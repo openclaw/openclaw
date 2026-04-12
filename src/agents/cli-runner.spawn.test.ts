@@ -18,6 +18,7 @@ import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { createSyntheticSourceInfo, type Skill } from "./skills/skill-contract.js";
 
 beforeEach(() => {
   resetAgentEventsForTest();
@@ -302,8 +303,14 @@ describe("runCliAgent spawn path", () => {
                 filePath: path.join(skillDir, "SKILL.md"),
                 baseDir: skillDir,
                 source: "test",
+                sourceInfo: createSyntheticSourceInfo(path.join(skillDir, "SKILL.md"), {
+                  source: "test",
+                  baseDir: skillDir,
+                  scope: "project",
+                  origin: "top-level",
+                }),
                 disableModelInvocation: false,
-              },
+              } as Skill,
             ],
           },
         }),
