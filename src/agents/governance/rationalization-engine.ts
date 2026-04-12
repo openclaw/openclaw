@@ -37,6 +37,8 @@ export interface RationalizationEvaluation {
   rebuttal?: string;
   /** A short reason string suitable for surfacing in block outcomes. */
   reason?: string;
+  /** The text snippet that triggered the match (for audit trail). */
+  matchedText?: string;
 }
 
 export interface EvaluateToolCallInput {
@@ -100,13 +102,17 @@ export function evaluateToolCall(
     // Reset regex state between tests — a global-ish pattern would otherwise
     // carry lastIndex across calls. Our patterns are anchorless so we
     // re-run them as simple .test() which is stateless for non-/g flags.
-    const inProse = prose.length > 0 && rule.compiled.test(prose);
-    if (inProse) {
-      return buildEvaluation(rule, "assistant-text", requireOverrideBlocks);
+    if (prose.length > 0) {
+      const proseMatch = rule.compiled.exec(prose);
+      if (proseMatch) {
+        return buildEvaluation(rule, "assistant-text", requireOverrideBlocks, proseMatch[0]);
+      }
     }
-    const inParams = paramsString.length > 0 && rule.compiled.test(paramsString);
-    if (inParams) {
-      return buildEvaluation(rule, "tool-params", requireOverrideBlocks);
+    if (paramsString.length > 0) {
+      const paramMatch = rule.compiled.exec(paramsString);
+      if (paramMatch) {
+        return buildEvaluation(rule, "tool-params", requireOverrideBlocks, paramMatch[0]);
+      }
     }
   }
 
@@ -117,6 +123,7 @@ function buildEvaluation(
   rule: CompiledRule,
   matchedIn: "assistant-text" | "tool-params",
   requireOverrideBlocks: boolean,
+  matchedText?: string,
 ): RationalizationEvaluation {
   const action: RationalizationAction =
     rule.action === "require_override" && !requireOverrideBlocks
@@ -135,6 +142,7 @@ function buildEvaluation(
     action,
     rebuttal: rule.rebuttal,
     reason,
+    matchedText,
   };
 }
 

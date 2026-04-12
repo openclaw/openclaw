@@ -20,6 +20,8 @@ import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
+import { appendToAssistantWindow } from "./governance/rationalization-engine.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
@@ -171,6 +173,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     assistantTexts.push(text);
     rememberAssistantText(text);
+
+    // RI-011 wire: feed assistant prose into the rationalization engine's
+    // rolling window so it can detect prose-based rationalization patterns
+    // (e.g., "I'll just bypass this safety check") before the next tool call.
+    if (params.sessionKey) {
+      const sessionState = getDiagnosticSessionState({
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      });
+      sessionState.assistantTextWindow = appendToAssistantWindow(
+        sessionState.assistantTextWindow ?? "",
+        text,
+      );
+    }
   };
 
   const finalizeAssistantTexts = (args: {

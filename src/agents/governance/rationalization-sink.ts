@@ -1,14 +1,16 @@
 // RI-011 — Rationalization Hit Sink
 //
-// Persistent daily rollup of rationalization rule matches. Appends to a
-// JSON file at the configured path (default: data/rationalization-hits.json
-// relative to the workspace). Fire-and-forget — never throws, never blocks.
+// Two tiers of persistence:
+//   1. Daily rollup — { date, rule_id, severity, action, count }[]
+//      Used by the MC dashboard for trend charts. Path: rationalization-hits.json
+//   2. Per-event log — { event_id, timestamp, rule_id, ..., session context }[]
+//      Used for audit drill-down. Path: rationalization-events.json
 //
-// Schema: { date, rule_id, severity, action, count }[]
-// Each entry is a daily rollup keyed by (date × rule_id).
+// Both are fire-and-forget — never throw, never block.
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface RationalizationHitRecord {
   date: string;       // YYYY-MM-DD
@@ -17,6 +19,24 @@ export interface RationalizationHitRecord {
   action: string;     // warn | require_override | block
   category: string;
   count: number;
+}
+
+/** Per-event record with full session context for audit trail */
+export interface RationalizationEvent {
+  event_id: string;
+  timestamp: string;  // ISO 8601
+  rule_id: string;
+  severity: string;
+  action: string;
+  category: string;
+  tool_name: string;
+  /** First 500 chars of stringified params — enough for audit, not excessive */
+  params_snippet: string;
+  session_id?: string;
+  session_key?: string;
+  agent_id?: string;
+  /** Snippet of assistant text that triggered the match */
+  matched_text_snippet?: string;
 }
 
 let sinkPath: string | null = null;
@@ -82,6 +102,78 @@ export function recordHit(
     process.stderr.write(
       `[rationalization-sink] Failed to record hit for ${ruleId}: ${err instanceof Error ? err.message : String(err)}\n`,
     );
+  }
+}
+
+/**
+ * Record a per-event audit entry with full session context.
+ * Fire-and-forget — logs to stderr on error, never throws.
+ */
+export function recordEvent(params: {
+  ruleId: string;
+  severity: string;
+  action: string;
+  category: string;
+  toolName: string;
+  toolParams: unknown;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  matchedText?: string;
+}): void {
+  if (!sinkPath) return;
+
+  try {
+    const eventsPath = join(dirname(sinkPath), "rationalization-events.json");
+
+    const existing = loadEvents(eventsPath);
+
+    const paramsStr = typeof params.toolParams === "string"
+      ? params.toolParams
+      : JSON.stringify(params.toolParams ?? "");
+
+    const event: RationalizationEvent = {
+      event_id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      rule_id: params.ruleId,
+      severity: params.severity,
+      action: params.action,
+      category: params.category,
+      tool_name: params.toolName,
+      params_snippet: paramsStr.slice(0, 500),
+      session_id: params.sessionId,
+      session_key: params.sessionKey,
+      agent_id: params.agentId,
+      matched_text_snippet: params.matchedText?.slice(0, 200),
+    };
+
+    existing.push(event);
+
+    // Keep at most 10,000 events (trim oldest)
+    const MAX_EVENTS = 10_000;
+    const trimmed = existing.length > MAX_EVENTS
+      ? existing.slice(existing.length - MAX_EVENTS)
+      : existing;
+
+    mkdirSync(dirname(eventsPath), { recursive: true });
+    writeFileSync(eventsPath, JSON.stringify(trimmed, null, 2), "utf-8");
+  } catch (err) {
+    process.stderr.write(
+      `[rationalization-sink] Failed to record event for ${params.ruleId}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
+
+/** Read all per-event records from disk. Returns empty array if file missing. */
+export function loadEvents(path?: string): RationalizationEvent[] {
+  const p = path ?? (sinkPath ? join(dirname(sinkPath), "rationalization-events.json") : null);
+  if (!p || !existsSync(p)) return [];
+  try {
+    const raw = readFileSync(p, "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
 

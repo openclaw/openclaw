@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { evaluateToolCall } from "./governance/rationalization-engine.js";
-import { recordHit } from "./governance/rationalization-sink.js";
+import { recordHit, recordEvent } from "./governance/rationalization-sink.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -164,8 +164,20 @@ export async function runBeforeToolCallHook(args: {
       const counts = (sessionState.rationalizationCounts ??= new Map());
       counts.set(ratEval.rule.id, (counts.get(ratEval.rule.id) ?? 0) + 1);
 
-      // RI-011 — persist to daily rollup (fire-and-forget, never throws)
+      // RI-011 — persist to daily rollup + per-event audit (fire-and-forget)
       recordHit(ratEval.rule.id, ratEval.rule.severity, ratEval.action ?? "warn", ratEval.rule.category);
+      recordEvent({
+        ruleId: ratEval.rule.id,
+        severity: ratEval.rule.severity,
+        action: ratEval.action ?? "warn",
+        category: ratEval.rule.category,
+        toolName,
+        toolParams: params,
+        sessionId: args.ctx?.sessionId,
+        sessionKey: args.ctx?.sessionKey,
+        agentId: args.ctx?.agentId,
+        matchedText: ratEval.matchedText,
+      });
 
       if (ratEval.action === "block" || ratEval.action === "require_override") {
         log.error(
