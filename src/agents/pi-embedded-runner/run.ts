@@ -417,6 +417,7 @@ export async function runEmbeddedPiAgent(
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_SERVER_COMPACTION_CONTINUE_ATTEMPTS = 1;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
@@ -429,6 +430,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      let serverCompactionContinueAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -1620,6 +1622,26 @@ export async function runEmbeddedPiAgent(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
                 `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
+            );
+            continue;
+          }
+          const compactionOnlyStop =
+            attempt.lastAssistant?.stopReason === "compaction" &&
+            !aborted &&
+            !timedOut &&
+            !attempt.clientToolCall &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            (payloadsWithToolMedia?.length ?? 0) === 0;
+          if (
+            compactionOnlyStop &&
+            serverCompactionContinueAttempts < MAX_SERVER_COMPACTION_CONTINUE_ATTEMPTS
+          ) {
+            serverCompactionContinueAttempts += 1;
+            log.info(
+              `server compaction pause detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ${serverCompactionContinueAttempts}/${MAX_SERVER_COMPACTION_CONTINUE_ATTEMPTS}`,
             );
             continue;
           }

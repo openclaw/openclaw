@@ -45,7 +45,11 @@ export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
-  return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+  return (
+    !params.hasAssistantVisibleText &&
+    (params.lastAssistant?.stopReason === "toolUse" ||
+      params.lastAssistant?.stopReason === "compaction")
+  );
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -164,6 +168,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (stopReason === "compaction") {
+    return "⚠️ Agent compacted the conversation before finishing the reply. Please try again if the response does not continue automatically.";
+  }
+
   return params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
@@ -188,6 +196,12 @@ export function resolveRunLivenessState(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
 }): EmbeddedRunLivenessState {
+  if (
+    params.incompleteTurnText &&
+    params.attempt.lastAssistant?.stopReason === "compaction"
+  ) {
+    return "paused";
+  }
   if (params.incompleteTurnText) {
     return "abandoned";
   }

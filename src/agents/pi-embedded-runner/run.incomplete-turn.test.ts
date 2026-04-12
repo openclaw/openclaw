@@ -440,6 +440,68 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     ).toBe("paused");
   });
+
+  it("marks compaction-only incomplete turns as paused and replay-invalid", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        stopReason: "compaction",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    const incompleteTurnText =
+      "⚠️ Agent compacted the conversation before finishing the reply. Please try again if the response does not continue automatically.";
+
+    expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(true);
+    expect(
+      resolveRunLivenessState({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+        incompleteTurnText,
+      }),
+    ).toBe("paused");
+  });
+
+  it("retries once after an Anthropic compaction-only stop", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        lastAssistant: {
+          stopReason: "compaction",
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          content: [{ type: "compaction", content: "Summarized old context." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Continued response after compaction."],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "Continued response after compaction." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      runId: "run-server-compaction-continue",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
+  });
 });
 
 describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
