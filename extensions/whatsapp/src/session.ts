@@ -133,13 +133,16 @@ async function safeSaveCreds(
     try {
       const backupRaw = readCredsJsonRaw(backupPath);
       if (backupRaw) {
+        JSON.parse(backupRaw); // Validate backup before restoring
         fsSync.copyFileSync(backupPath, credsPath);
         try {
           fsSync.chmodSync(credsPath, 0o600);
         } catch {}
         logger.info({ credsPath }, "restored WhatsApp creds from backup after validation failure");
       }
-    } catch {}
+    } catch (restoreErr) {
+      logger.warn({ error: String(restoreErr) }, "failed to restore WhatsApp creds from backup after validation failure");
+    }
   }
 }
 
