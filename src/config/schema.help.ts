@@ -851,7 +851,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":
-    'Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.',
+    "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
   "agents.defaults.startupContext.applyOn":
     'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
   "agents.defaults.startupContext.dailyMemoryDays":

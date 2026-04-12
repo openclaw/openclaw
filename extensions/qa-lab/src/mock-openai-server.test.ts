@@ -11,15 +11,42 @@ afterEach(async () => {
   }
 });
 
+async function startMockServer() {
+  const server = await startQaMockOpenAiServer({
+    host: "127.0.0.1",
+    port: 0,
+  });
+  cleanups.push(async () => {
+    await server.stop();
+  });
+  return server;
+}
+
+async function postResponses(server: { baseUrl: string }, body: unknown) {
+  return fetch(`${server.baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function expectResponsesText(server: { baseUrl: string }, body: unknown) {
+  const response = await postResponses(server, body);
+  expect(response.status).toBe(200);
+  return response.text();
+}
+
+async function expectResponsesJson<T>(server: { baseUrl: string }, body: unknown) {
+  const response = await postResponses(server, body);
+  expect(response.status).toBe(200);
+  return (await response.json()) as T;
+}
+
 describe("qa mock openai server", () => {
   it("serves health and streamed responses", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const health = await fetch(`${server.baseUrl}/healthz`);
     expect(health.status).toBe(200);
@@ -48,36 +75,22 @@ describe("qa mock openai server", () => {
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: 'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
-              },
-            ],
-          },
-        ],
-      }),
+    const body = await expectResponsesText(server, {
+      stream: true,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: 'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
+            },
+          ],
+        },
+      ],
     });
-    expect(response.status).toBe(200);
-    const body = await response.text();
     expect(body).toContain('"arguments":"{\\"path\\":\\"QA_KICKOFF_TASK.md\\"}"');
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
@@ -90,13 +103,7 @@ describe("qa mock openai server", () => {
   });
 
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const lobster = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -125,40 +132,32 @@ describe("qa mock openai server", () => {
     expect(lobsterBody).toContain('"name":"write"');
     expect(lobsterBody).toContain("lobster-invaders.html");
 
-    const recall = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.4-alt",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "What was the QA canary code I asked you to remember earlier?",
-              },
-            ],
-          },
-        ],
-      }),
-    });
-    expect(recall.status).toBe(200);
-    const payload = (await recall.json()) as {
+    const payload = await expectResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
-    };
+    }>(server, {
+      stream: false,
+      model: "gpt-5.4-alt",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Please remember this fact for later: the QA canary code is ALPHA-7.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "What was the QA canary code I asked you to remember earlier?",
+            },
+          ],
+        },
+      ],
+    });
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("ALPHA-7");
 
     const requests = await fetch(`${server.baseUrl}/debug/requests`);
@@ -170,13 +169,7 @@ describe("qa mock openai server", () => {
   });
 
   it("drives the compaction retry mutating tool parity flow", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -208,35 +201,27 @@ describe("qa mock openai server", () => {
     expect(writePlanBody).toContain('"name":"write"');
     expect(writePlanBody).toContain("compaction-retry-summary.txt");
 
-    const finalReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.4",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
-          },
-        ],
-      }),
-    });
-    expect(finalReply.status).toBe(200);
-    const finalPayload = (await finalReply.json()) as {
+    const finalPayload = await expectResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
-    };
+    }>(server, {
+      stream: false,
+      model: "gpt-5.4",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+            },
+          ],
+        },
+        {
+          type: "function_call_output",
+          output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
+        },
+      ],
+    });
     expect(finalPayload.output?.[0]?.content?.[0]?.text).toContain("replay unsafe after write");
   });
 
@@ -297,36 +282,22 @@ describe("qa mock openai server", () => {
   });
 
   it("requests non-threaded subagent handoff for QA channel runs", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
-              },
-            ],
-          },
-        ],
-      }),
+    const body = await expectResponsesText(server, {
+      stream: true,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
+            },
+          ],
+        },
+      ],
     });
-    expect(response.status).toBe(200);
-    const body = await response.text();
     expect(body).toContain('"name":"sessions_spawn"');
     expect(body).toContain('\\"label\\":\\"qa-sidecar\\"');
     expect(body).toContain('\\"thread\\":false');
@@ -462,6 +433,151 @@ describe("qa mock openai server", () => {
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
+    const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only memory_search and memory_get.",
+                  "",
+                  "Conversation context:",
+                  "Latest user message:",
+                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(activeMemorySearch.status).toBe(200);
+    expect(await activeMemorySearch.text()).toContain('"name":"memory_search"');
+
+    const activeMemoryGet = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only memory_search and memory_get.",
+                  "",
+                  "Conversation context:",
+                  "Latest user message:",
+                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+                ].join("\n"),
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "MEMORY.md",
+                  startLine: 1,
+                  endLine: 1,
+                },
+              ],
+            }),
+          },
+        ],
+      }),
+    });
+    expect(activeMemoryGet.status).toBe(200);
+    expect(await activeMemoryGet.text()).toContain('"name":"memory_get"');
+
+    const activeMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only memory_search and memory_get.",
+                  "",
+                  "Conversation context:",
+                  "Latest user message:",
+                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+                ].join("\n"),
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
+            }),
+          },
+        ],
+      }),
+    });
+    expect(activeMemorySummary.status).toBe(200);
+    expect(JSON.stringify(await activeMemorySummary.json())).toContain(
+      "lemon pepper wings with blue cheese",
+    );
+
+    const injectedMainReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions: [
+          "System context:",
+          "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
+        ].join("\n"),
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(injectedMainReply.status).toBe(200);
+    expect(JSON.stringify(await injectedMainReply.json())).toContain(
+      "lemon pepper wings with blue cheese",
+    );
+    const lastRequest = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(lastRequest.status).toBe(200);
+    expect(await lastRequest.json()).toMatchObject({
+      instructions: expect.stringContaining("<active_memory_plugin>"),
+      allInputText: expect.stringContaining("<active_memory_plugin>"),
+    });
+
     const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -557,20 +673,10 @@ describe("qa mock openai server", () => {
   });
 
   it("answers heartbeat prompts without spawning extra subagents", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    expect(
+      await expectResponsesJson(server, {
         stream: false,
         input: [
           {
@@ -584,10 +690,7 @@ describe("qa mock openai server", () => {
           },
         ],
       }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    ).toMatchObject({
       output: [
         {
           content: [{ text: "HEARTBEAT_OK" }],
@@ -665,20 +768,10 @@ describe("qa mock openai server", () => {
   });
 
   it("uses the latest exact marker directive from conversation history", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    expect(
+      await expectResponsesJson(server, {
         stream: false,
         input: [
           {
@@ -701,10 +794,7 @@ describe("qa mock openai server", () => {
           },
         ],
       }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    ).toMatchObject({
       output: [
         {
           content: [{ text: "NEW_TOKEN" }],
@@ -764,45 +854,33 @@ describe("qa mock openai server", () => {
   });
 
   it("describes reattached generated images in the roundtrip flow", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.4",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
-              },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    });
-    expect(response.status).toBe(200);
-    const payload = (await response.json()) as {
+    const payload = await expectResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
-    };
+    }>(server, {
+      stream: false,
+      model: "mock-openai/gpt-5.4",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
+            },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
+              },
+            },
+          ],
+        },
+      ],
+    });
     const text = payload.output?.[0]?.content?.[0]?.text ?? "";
     expect(text.toLowerCase()).toContain("lighthouse");
   });
@@ -849,20 +927,10 @@ describe("qa mock openai server", () => {
   });
 
   it("returns continuity language after the model-switch reread completes", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    expect(
+      await expectResponsesJson(server, {
         stream: false,
         model: "gpt-5.4-alt",
         input: [
@@ -881,10 +949,7 @@ describe("qa mock openai server", () => {
           },
         ],
       }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    ).toMatchObject({
       output: [
         {
           content: [
@@ -898,20 +963,10 @@ describe("qa mock openai server", () => {
   });
 
   it("returns NO_REPLY for unmentioned group chatter", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    expect(
+      await expectResponsesJson(server, {
         stream: false,
         input: [
           {
@@ -925,9 +980,7 @@ describe("qa mock openai server", () => {
           },
         ],
       }),
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    ).toMatchObject({
       output: [
         {
           content: [{ text: "NO_REPLY" }],
