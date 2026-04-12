@@ -63,6 +63,25 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
     logger: context.logger,
     ...overrides,
   }),
+  buildPluginRuntimeLoadOptionsFromValues: (
+    context: {
+      config: unknown;
+      activationSourceConfig: unknown;
+      autoEnabledReasons: Readonly<Record<string, string[]>>;
+      workspaceDir: string | undefined;
+      env: NodeJS.ProcessEnv;
+      logger: typeof logger;
+    },
+    overrides?: Record<string, unknown>,
+  ) => ({
+    config: context.config,
+    activationSourceConfig: context.activationSourceConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
+    workspaceDir: context.workspaceDir,
+    env: context.env,
+    logger: context.logger,
+    ...overrides,
+  }),
 }));
 
 describe("ensurePluginRegistryLoaded", () => {
