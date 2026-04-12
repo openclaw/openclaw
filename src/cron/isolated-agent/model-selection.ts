@@ -113,17 +113,63 @@ export async function resolveCronModelSelection(
     });
     if ("error" in resolvedOverride) {
       if (resolvedOverride.error.startsWith("model not allowed:")) {
-        return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        };
+        // payload.model is an explicit per-job override declared by the user in the
+        // job config. Unlike ad-hoc requests, the intent is unambiguous — apply it
+        // even when the model is not in agents.defaults.models allowlist, as long
+        // as the model exists in the catalog (i.e. the provider is configured).
+        // Silently falling back to the agent default here causes the bug reported
+        // in #65129: the configured model is stored correctly but never used.
+        const catalog = await loadCatalogOnce();
+        const inCatalog = catalog.some(
+          (entry) =>
+            `${entry.provider}/${entry.id}` === modelOverride ||
+            modelOverride.endsWith(`/${entry.id}`),
+        );
+        if (inCatalog) {
+          // Re-resolve without the allowlist constraint by temporarily patching
+          // the params to treat all catalog models as allowed.
+          const relaxedOverride = resolveAllowedModelRef({
+            cfg: {
+              ...params.cfgWithAgentDefaults,
+              agents: {
+                ...params.cfgWithAgentDefaults.agents,
+                defaults: {
+                  ...params.cfgWithAgentDefaults.agents?.defaults,
+                  models: {},  // empty = allowAny
+                },
+              },
+            },
+            catalog,
+            raw: modelOverride,
+            defaultProvider: resolvedDefault.provider,
+            defaultModel: resolvedDefault.model,
+          });
+          if (!("error" in relaxedOverride)) {
+            provider = relaxedOverride.ref.provider;
+            model = relaxedOverride.ref.model;
+          } else {
+            return {
+              ok: true,
+              provider,
+              model,
+              warning: `cron: payload.model '${modelOverride}' not allowed and not in catalog, falling back to agent defaults`,
+            };
+          }
+        } else {
+          return {
+            ok: true,
+            provider,
+            model,
+            warning: `cron: payload.model '${modelOverride}' not in catalog (provider may not be configured), falling back to agent defaults`,
+          };
+        }
+      } else {
+        return { ok: false, error: resolvedOverride.error };
       }
-      return { ok: false, error: resolvedOverride.error };
+    } else {
+      provider = resolvedOverride.ref.provider;
+      model = resolvedOverride.ref.model;
     }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
