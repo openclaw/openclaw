@@ -1164,6 +1164,9 @@ Best practice:
 
     name   = prompt("Landing zone name (e.g. marsmovers-lz)", default="landing-zone")
     normalized_name = name.strip().lower().replace(" ", "-").replace("_", "-")
+    if len(normalized_name) > 63:
+        print("❌ Landing zone/trail name is too long after normalization; keep it within 63 chars before deriving dependent names.")
+        sys.exit(1)
     if not normalized_name:
         print("❌ Landing zone name cannot be empty")
         sys.exit(1)
@@ -1749,8 +1752,8 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
 # (Audit) account workspace, using that workspace's detector.
 #
 # The management workspace only creates the detector and assigns delegated admin.
-# The delegated-admin workspace should also create aws_guardduty_detector and
-# aws_guardduty_organization_configuration with auto-enable enabled.
+# The delegated-admin workspace must create aws_guardduty_detector first and
+# then aws_guardduty_organization_configuration with auto-enable enabled.
 """
 
     # Security Hub
@@ -2621,6 +2624,9 @@ Best practice:
 
     name   = prompt("Trail name (e.g. marsmovers-audit-trail)")
     normalized_name = name.strip().lower().replace(" ", "-").replace("_", "-")
+    if len(normalized_name) > 63:
+        print("  ❌ Trail name is too long after normalization; keep it within 63 chars before deriving dependent names.")
+        sys.exit(1)
     if not normalized_name:
         print("  ❌ Trail name cannot be empty")
         sys.exit(1)
