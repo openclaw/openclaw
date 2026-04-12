@@ -243,6 +243,60 @@ resolve_latest_version() {
   npm view openclaw version --userconfig "$(mktemp)"
 }
 
+vm_status() {
+  local json vm_name
+  vm_name="$1"
+  json="$(prlctl list --all --json)"
+  PRL_VM_JSON="$json" VM_NAME="$vm_name" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+
+name = os.environ["VM_NAME"]
+for vm in json.loads(os.environ["PRL_VM_JSON"]):
+    if vm.get("name") == name:
+        print(vm.get("status", "unknown"))
+        break
+else:
+    print("missing")
+PY
+}
+
+ensure_vm_running_for_update() {
+  local vm_name status deadline
+  vm_name="$1"
+  deadline=$((SECONDS + 180))
+
+  while :; do
+    status="$(vm_status "$vm_name")"
+    case "$status" in
+      running)
+        return 0
+        ;;
+      stopped)
+        say "Start $vm_name before update phase"
+        prlctl start "$vm_name" >/dev/null
+        ;;
+      suspended|paused)
+        say "Resume $vm_name before update phase"
+        prlctl resume "$vm_name" >/dev/null
+        ;;
+      restoring|stopping|starting|pausing|suspending|resuming)
+        ;;
+      missing)
+        die "VM not found before update phase: $vm_name"
+        ;;
+      *)
+        warn "unexpected VM state for $vm_name before update phase: $status"
+        ;;
+    esac
+
+    if (( SECONDS >= deadline )); then
+      die "VM did not become running before update phase: $vm_name ($status)"
+    fi
+    sleep 5
+  done
+}
+
 resolve_host_ip() {
   local detected
   detected="$(ifconfig | awk '/inet 10\.211\./ { print $2; exit }')"
@@ -402,19 +456,74 @@ function Wait-GatewayRpcReady {
   }
 }
 
+function Stop-OpenClawGatewayProcesses {
+  Write-ProgressLog 'update.stop-old-gateway'
+  $patterns = @(
+    'openclaw-gateway',
+    'openclaw.*gateway --port 18789',
+    'openclaw.*gateway run',
+    'openclaw\.mjs gateway',
+    'dist\\index\.js gateway --port 18789'
+  )
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $commandLine = $_.CommandLine
+      if (-not $commandLine) {
+        $false
+      } else {
+        $matched = $false
+        foreach ($pattern in $patterns) {
+          if ($commandLine -match $pattern) {
+            $matched = $true
+            break
+          }
+        }
+        $matched
+      }
+    } |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+  Start-Sleep -Seconds 2
+}
+
 function Restart-GatewayWithRecovery {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath
   )
 
   $restartFailed = $false
-  try {
-    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
-  } catch {
+  $restartJob = Start-Job -ScriptBlock {
+    param([string]$Path)
+    $output = & $Path gateway restart *>&1
+    [pscustomobject]@{
+      ExitCode = $LASTEXITCODE
+      Output = ($output | Out-String).Trim()
+    }
+  } -ArgumentList $OpenClawPath
+
+  $restartCompleted = Wait-Job $restartJob -Timeout 20
+  if ($null -ne $restartCompleted) {
+    $restartResult = Receive-Job $restartJob
+    if ($null -ne $restartResult.Output -and $restartResult.Output.Length -gt 0) {
+      $restartResult.Output | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    if ($restartResult.ExitCode -ne 0) {
+      $restartFailed = $true
+      Write-ProgressLog 'update.restart-gateway.soft-fail'
+      "openclaw gateway restart failed with exit code $($restartResult.ExitCode)" | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+  } else {
     $restartFailed = $true
-    Write-ProgressLog 'update.restart-gateway.soft-fail'
-    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+    Stop-Job $restartJob -ErrorAction SilentlyContinue
+    Write-ProgressLog 'update.restart-gateway.timeout'
+    'openclaw gateway restart timed out after 20s; continuing to RPC readiness checks' | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
+  Remove-Job $restartJob -Force -ErrorAction SilentlyContinue
 
   Write-ProgressLog 'update.gateway-status'
   try {
@@ -437,6 +546,7 @@ try {
   Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
   Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
   Write-ProgressLog 'update.verify-version'
@@ -758,7 +868,7 @@ EOF
   stream_windows_update_log() {
     set +e
     guest_log="$(
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      guest_powershell_poll 60 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
     )"
     log_rc=$?
     set -e
@@ -786,7 +896,7 @@ PY
   while :; do
     set +e
     done_status="$(
-      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 60 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
     poll_rc=$?
     set -e
@@ -818,7 +928,7 @@ PY
     if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
       set +e
       launcher_state="$(
-        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+        guest_powershell_poll 60 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
       )"
       state_rc=$?
       set -e
@@ -853,7 +963,22 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
+  /usr/bin/pkill -9 -f openclaw-gateway || true
+  /usr/bin/pkill -9 -f 'openclaw gateway run' || true
+  /usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
+  for pid in \$(/usr/sbin/lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+    /bin/kill -9 "\$pid" 2>/dev/null || true
+  done
+}
+# Stop the pre-update gateway before replacing the package. Otherwise the old
+# host can observe new plugin metadata mid-update and abort config validation.
+stop_openclaw_gateway_processes
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+# Same-guest npm upgrades can leave the old gateway process holding the old
+# bundled plugin host version. Stop it before post-update config commands.
+stop_openclaw_gateway_processes
 version="\$(/opt/homebrew/bin/openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
@@ -869,13 +994,31 @@ fi
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 # Same-guest npm upgrades can leave launchd holding the old gateway process or
 # module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
-/opt/homebrew/bin/openclaw gateway restart
+# Fresh npm installs may not have a launchd service yet, so fall back to the
+# same manual gateway launch used by the fresh macOS lane.
+/opt/homebrew/bin/openclaw gateway restart || true
+gateway_ready=0
 for _ in 1 2 3 4 5 6 7 8; do
   if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    gateway_ready=1
     break
   fi
   sleep 2
 done
+if [ "\$gateway_ready" != "1" ]; then
+  stop_openclaw_gateway_processes
+  /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-npm-update-macos-gateway.log 2>&1 </dev/null &
+  for _ in 1 2 3 4 5 6 7 8; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+fi
+if [ "\$gateway_ready" != "1" ]; then
+  tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
+fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
@@ -903,7 +1046,27 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+stop_openclaw_gateway_processes() {
+  openclaw gateway stop >/dev/null 2>&1 || true
+  pkill -9 -f openclaw-gateway || true
+  pkill -9 -f 'openclaw gateway run' || true
+  pkill -9 -f 'openclaw.mjs gateway' || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 18789/tcp >/dev/null 2>&1 || true
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    for pid in \$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true); do
+      kill -9 "\$pid" 2>/dev/null || true
+    done
+  fi
+}
+# Stop the pre-update manual gateway before replacing the package. Otherwise
+# the old host can observe new plugin metadata mid-update and abort validation.
+stop_openclaw_gateway_processes
 openclaw update --tag "$update_target" --yes --json
+# The fresh Linux lane starts a manual gateway; stop the old process before
+# post-update config validation sees mixed old-host/new-plugin metadata.
+stop_openclaw_gateway_processes
 version="\$(openclaw --version)"
 printf '%s\n' "\$version"
 if [ -n "$expected_needle" ]; then
@@ -1037,6 +1200,9 @@ fi
 windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
 
 say "Run same-guest openclaw update to $UPDATE_TARGET_EFFECTIVE"
+ensure_vm_running_for_update "$MACOS_VM"
+ensure_vm_running_for_update "$WINDOWS_VM"
+ensure_vm_running_for_update "$LINUX_VM"
 run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
 macos_update_pid=$!
 run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &

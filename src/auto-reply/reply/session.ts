@@ -21,6 +21,7 @@ import { resolveAndPersistSessionFile } from "../../config/sessions/session-file
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -33,7 +34,7 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookSessionEndReason } from "../../plugins/types.js";
+import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -41,7 +42,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -620,8 +621,15 @@ export async function initSessionState(params: {
       }
     }
   }
+  const threadIdFromSessionKey = parseSessionThreadInfo(
+    sessionCtxForState.SessionKey ?? sessionKey,
+  ).threadId;
   const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    ? resolveSessionTranscriptPath(
+        sessionEntry.sessionId,
+        agentId,
+        ctx.MessageThreadId ?? threadIdFromSessionKey,
+      )
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,

@@ -3,22 +3,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildPluginApi } from "./api-builder.js";
+import type { CliBackendPlugin } from "./cli-backend.types.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import type {
-  CliBackendPlugin,
-  OpenClawPluginModule,
-  OpenClawPluginService,
-  PluginConfigMigration,
-  PluginLogger,
-  PluginSetupAutoEnableProbe,
-  ProviderPlugin,
-} from "./types.js";
+  SetupOnlyPluginApi,
+  SetupOnlyPluginModule,
+  SetupPluginAutoEnableProbe,
+  SetupPluginConfigMigration,
+  SetupPluginLogger,
+  SetupProviderPlugin,
+} from "./setup-registry.types.js";
+import type { OpenClawPluginService } from "./types.js";
 
 const SETUP_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
@@ -28,7 +27,7 @@ const RUNNING_FROM_BUILT_ARTIFACT =
 
 type SetupProviderEntry = {
   pluginId: string;
-  provider: ProviderPlugin;
+  provider: SetupProviderPlugin;
 };
 
 type SetupCliBackendEntry = {
@@ -44,12 +43,12 @@ type SetupServiceEntry = {
 
 type SetupConfigMigrationEntry = {
   pluginId: string;
-  migrate: PluginConfigMigration;
+  migrate: SetupPluginConfigMigration;
 };
 
 type SetupAutoEnableProbeEntry = {
   pluginId: string;
-  probe: PluginSetupAutoEnableProbe;
+  probe: SetupPluginAutoEnableProbe;
 };
 
 type PluginSetupRegistry = {
@@ -65,8 +64,8 @@ type SetupAutoEnableReason = {
   reason: string;
 };
 
-const EMPTY_RUNTIME = {} as PluginRuntime;
-const NOOP_LOGGER: PluginLogger = {
+const EMPTY_SETUP_RUNTIME = {};
+const NOOP_LOGGER: SetupPluginLogger = {
   info() {},
   warn() {},
   error() {},
@@ -74,7 +73,7 @@ const NOOP_LOGGER: PluginLogger = {
 
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const setupRegistryCache = new Map<string, PluginSetupRegistry>();
-const setupProviderCache = new Map<string, ProviderPlugin | null>();
+const setupProviderCache = new Map<string, SetupProviderPlugin | null>();
 
 export function clearPluginSetupRegistryCache(): void {
   jitiLoaders.clear();
@@ -198,9 +197,9 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   return [...ids].toSorted();
 }
 
-function resolveRegister(mod: OpenClawPluginModule): {
+function resolveRegister(mod: SetupOnlyPluginModule): {
   definition?: { id?: string };
-  register?: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
+  register?: (api: SetupOnlyPluginApi) => void | Promise<void>;
 } {
   if (typeof mod === "function") {
     return { register: mod };
@@ -214,7 +213,7 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
-function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
+function matchesProvider(provider: SetupProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (normalizeProviderId(provider.id) === normalized) {
     return true;
@@ -222,6 +221,76 @@ function matchesProvider(provider: ProviderPlugin, providerId: string): boolean 
   return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
     (alias) => normalizeProviderId(alias) === normalized,
   );
+}
+
+function createSetupOnlyPluginApi(params: {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  source: string;
+  rootDir?: string;
+  config?: OpenClawConfig;
+  registerProvider?: (provider: SetupProviderPlugin) => void;
+  registerCliBackend?: (backend: CliBackendPlugin) => void;
+  registerService?: (service: OpenClawPluginService) => void;
+  registerConfigMigration?: (migrate: SetupPluginConfigMigration) => void;
+  registerAutoEnableProbe?: (probe: SetupPluginAutoEnableProbe) => void;
+}): SetupOnlyPluginApi {
+  const noop = (..._args: unknown[]) => {};
+  return {
+    id: params.id,
+    name: params.name,
+    version: params.version,
+    description: params.description,
+    source: params.source,
+    rootDir: params.rootDir,
+    registrationMode: "setup-only",
+    config: params.config ?? ({} as OpenClawConfig),
+    runtime: EMPTY_SETUP_RUNTIME,
+    logger: NOOP_LOGGER,
+    resolvePath: (input) => input,
+    registerProvider: params.registerProvider ?? noop,
+    registerCliBackend: params.registerCliBackend ?? noop,
+    registerService: params.registerService
+      ? (service: unknown) => params.registerService?.(service as OpenClawPluginService)
+      : noop,
+    registerConfigMigration: params.registerConfigMigration ?? noop,
+    registerAutoEnableProbe: params.registerAutoEnableProbe ?? noop,
+    registerTool: noop,
+    registerHook: noop,
+    registerHttpRoute: noop,
+    registerChannel: noop,
+    registerGatewayMethod: noop,
+    registerCli: noop,
+    registerReload: noop,
+    registerNodeHostCommand: noop,
+    registerSecurityAuditCollector: noop,
+    registerTextTransforms: noop,
+    registerSpeechProvider: noop,
+    registerRealtimeTranscriptionProvider: noop,
+    registerRealtimeVoiceProvider: noop,
+    registerMediaUnderstandingProvider: noop,
+    registerImageGenerationProvider: noop,
+    registerVideoGenerationProvider: noop,
+    registerMusicGenerationProvider: noop,
+    registerWebFetchProvider: noop,
+    registerWebSearchProvider: noop,
+    registerInteractiveHandler: noop,
+    onConversationBindingResolved: noop,
+    registerCommand: noop,
+    registerContextEngine: noop,
+    registerCompactionProvider: noop,
+    registerAgentHarness: noop,
+    registerMemoryCapability: noop,
+    registerMemoryPromptSection: noop,
+    registerMemoryPromptSupplement: noop,
+    registerMemoryCorpusSupplement: noop,
+    registerMemoryFlushPlan: noop,
+    registerMemoryRuntime: noop,
+    registerMemoryEmbeddingProvider: noop,
+    on: noop,
+  };
 }
 
 export function resolvePluginSetupRegistry(params?: {
@@ -286,14 +355,14 @@ export function resolvePluginSetupRegistry(params?: {
       continue;
     }
 
-    let mod: OpenClawPluginModule;
+    let mod: SetupOnlyPluginModule;
     try {
-      mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+      mod = getJiti(setupSource)(setupSource) as SetupOnlyPluginModule;
     } catch {
       continue;
     }
 
-    const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
+    const resolved = resolveRegister((mod as { default?: SetupOnlyPluginModule }).default ?? mod);
     if (!resolved.register) {
       continue;
     }
@@ -301,69 +370,62 @@ export function resolvePluginSetupRegistry(params?: {
       continue;
     }
 
-    const api = buildPluginApi({
+    const api = createSetupOnlyPluginApi({
       id: record.id,
       name: record.name ?? record.id,
       version: record.version,
       description: record.description,
       source: setupSource,
       rootDir: record.rootDir,
-      registrationMode: "setup-only",
-      config: {} as OpenClawConfig,
-      runtime: EMPTY_RUNTIME,
-      logger: NOOP_LOGGER,
-      resolvePath: (input) => input,
-      handlers: {
-        registerProvider(provider) {
-          const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (providerKeys.has(key)) {
-            return;
-          }
-          providerKeys.add(key);
-          providers.push({
-            pluginId: record.id,
-            provider,
-          });
-        },
-        registerCliBackend(backend) {
-          const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (cliBackendKeys.has(key)) {
-            return;
-          }
-          cliBackendKeys.add(key);
-          cliBackends.push({
-            pluginId: record.id,
-            backend,
-          });
-        },
-        registerService(service) {
-          const id = service.id.trim();
-          if (!id) {
-            return;
-          }
-          const key = `${record.id}:${record.rootDir ?? ""}:${id}`;
-          if (serviceKeys.has(key)) {
-            return;
-          }
-          serviceKeys.add(key);
-          services.push({
-            pluginId: record.id,
-            rootDir: record.rootDir,
-            service,
-          });
-        },
-        registerConfigMigration(migrate) {
-          configMigrations.push({
-            pluginId: record.id,
-            migrate,
-          });
-        },
-        registerAutoEnableProbe(probe) {
-          autoEnableProbes.push({
-            pluginId: record.id,
-            probe,
-          });
-        },
+      registerProvider(provider) {
+        const key = `${record.id}:${normalizeProviderId(provider.id)}`;
+        if (providerKeys.has(key)) {
+          return;
+        }
+        providerKeys.add(key);
+        providers.push({
+          pluginId: record.id,
+          provider,
+        });
+      },
+      registerCliBackend(backend) {
+        const key = `${record.id}:${normalizeProviderId(backend.id)}`;
+        if (cliBackendKeys.has(key)) {
+          return;
+        }
+        cliBackendKeys.add(key);
+        cliBackends.push({
+          pluginId: record.id,
+          backend,
+        });
+      },
+      registerService(service) {
+        const id = service.id.trim();
+        if (!id) {
+          return;
+        }
+        const key = `${record.id}:${record.rootDir ?? ""}:${id}`;
+        if (serviceKeys.has(key)) {
+          return;
+        }
+        serviceKeys.add(key);
+        services.push({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          service,
+        });
+      },
+      registerConfigMigration(migrate) {
+        configMigrations.push({
+          pluginId: record.id,
+          migrate,
+        });
+      },
+      registerAutoEnableProbe(probe) {
+        autoEnableProbes.push({
+          pluginId: record.id,
+          probe,
+        });
       },
     });
 
@@ -392,7 +454,7 @@ export function resolvePluginSetupProvider(params: {
   provider: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): ProviderPlugin | undefined {
+}): SetupProviderPlugin | undefined {
   const cacheKey = buildSetupProviderCacheKey(params);
   if (setupProviderCache.has(cacheKey)) {
     return setupProviderCache.get(cacheKey) ?? undefined;
@@ -426,15 +488,15 @@ export function resolvePluginSetupProvider(params: {
     return undefined;
   }
 
-  let mod: OpenClawPluginModule;
+  let mod: SetupOnlyPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    mod = getJiti(setupSource)(setupSource) as SetupOnlyPluginModule;
   } catch {
     setupProviderCache.set(cacheKey, null);
     return undefined;
   }
 
-  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
+  const resolved = resolveRegister((mod as { default?: SetupOnlyPluginModule }).default ?? mod);
   if (!resolved.register) {
     setupProviderCache.set(cacheKey, null);
     return undefined;
@@ -444,33 +506,24 @@ export function resolvePluginSetupProvider(params: {
     return undefined;
   }
 
-  let matchedProvider: ProviderPlugin | undefined;
+  let matchedProvider: SetupProviderPlugin | undefined;
   const localProviderKeys = new Set<string>();
-  const api = buildPluginApi({
+  const api = createSetupOnlyPluginApi({
     id: record.id,
     name: record.name ?? record.id,
     version: record.version,
     description: record.description,
     source: setupSource,
     rootDir: record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: EMPTY_RUNTIME,
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
-    handlers: {
-      registerProvider(provider) {
-        const key = normalizeProviderId(provider.id);
-        if (localProviderKeys.has(key)) {
-          return;
-        }
-        localProviderKeys.add(key);
-        if (matchesProvider(provider, normalizedProvider)) {
-          matchedProvider = provider;
-        }
-      },
-      registerConfigMigration() {},
-      registerAutoEnableProbe() {},
+    registerProvider(provider) {
+      const key = normalizeProviderId(provider.id);
+      if (localProviderKeys.has(key)) {
+        return;
+      }
+      localProviderKeys.add(key);
+      if (matchesProvider(provider, normalizedProvider)) {
+        matchedProvider = provider;
+      }
     },
   });
 
@@ -526,13 +579,13 @@ export function resolvePluginSetupCliBackend(params: {
     return undefined;
   }
 
-  let mod: OpenClawPluginModule;
+  let mod: SetupOnlyPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    mod = getJiti(setupSource)(setupSource) as SetupOnlyPluginModule;
   } catch {
     return undefined;
   }
-  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
+  const resolved = resolveRegister((mod as { default?: SetupOnlyPluginModule }).default ?? mod);
   if (!resolved.register) {
     return undefined;
   }
@@ -542,32 +595,22 @@ export function resolvePluginSetupCliBackend(params: {
 
   let matchedBackend: CliBackendPlugin | undefined;
   const localBackendKeys = new Set<string>();
-  const api = buildPluginApi({
+  const api = createSetupOnlyPluginApi({
     id: record.id,
     name: record.name ?? record.id,
     version: record.version,
     description: record.description,
     source: setupSource,
     rootDir: record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: EMPTY_RUNTIME,
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
-    handlers: {
-      registerProvider() {},
-      registerConfigMigration() {},
-      registerAutoEnableProbe() {},
-      registerCliBackend(backend) {
-        const key = normalizeProviderId(backend.id);
-        if (localBackendKeys.has(key)) {
-          return;
-        }
-        localBackendKeys.add(key);
-        if (key === normalized) {
-          matchedBackend = backend;
-        }
-      },
+    registerCliBackend(backend) {
+      const key = normalizeProviderId(backend.id);
+      if (localBackendKeys.has(key)) {
+        return;
+      }
+      localBackendKeys.add(key);
+      if (key === normalized) {
+        matchedBackend = backend;
+      }
     },
   });
 

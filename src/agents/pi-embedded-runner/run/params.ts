@@ -1,7 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -10,7 +10,10 @@ import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.ex
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
-import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type {
+  BlockReplyChunking,
+  ToolResultFormat,
+} from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
