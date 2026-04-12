@@ -120,8 +120,12 @@ CONFIG_DIR="$(resolve_abs_path "$CONFIG_DIR")"
 WORKSPACE_DIR="$(resolve_abs_path "$WORKSPACE_DIR")"
 
 if [[ $STOP_FIRST -eq 1 ]] && command -v docker >/dev/null 2>&1; then
+  compose_file="$REPO_ROOT/docker-compose.yml"
+  [[ -f "$compose_file" ]] || fail "Compose file not found at $compose_file (use --no-stop to skip stopping the gateway)."
   echo "==> Stopping gateway container"
-  docker compose -f "$REPO_ROOT/docker-compose.yml" stop openclaw-gateway >/dev/null 2>&1 || true
+  if ! docker compose -f "$compose_file" stop openclaw-gateway >/dev/null 2>&1; then
+    fail "Failed to stop openclaw-gateway. Fix Docker/Compose first or rerun with --no-stop if the gateway is already stopped."
+  fi
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
