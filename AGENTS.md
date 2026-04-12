@@ -36,6 +36,10 @@
   - `src/channels/AGENTS.md`
   - `src/plugins/AGENTS.md`
   - `src/gateway/protocol/AGENTS.md`
+- Workflow hygiene:
+  - Do not grep or existence-check every `docs/*.md`, `AGENTS.md`, or guide path mentioned in this file before starting work.
+  - Read only the guides and docs that are directly relevant to the files or boundary you are touching.
+  - Only do full broken-link or missing-guide sweeps when the task is explicitly about docs or repo-instruction maintenance.
 - Plugin and extension boundary:
   - Public docs: `docs/plugins/building-plugins.md`, `docs/plugins/architecture.md`, `docs/plugins/sdk-overview.md`, `docs/plugins/sdk-entrypoints.md`, `docs/plugins/sdk-runtime.md`, `docs/plugins/manifest.md`, `docs/plugins/sdk-channel-plugins.md`, `docs/plugins/sdk-provider-plugins.md`
   - Definition files: `src/plugin-sdk/plugin-entry.ts`, `src/plugin-sdk/core.ts`, `src/plugin-sdk/provider-entry.ts`, `src/plugin-sdk/channel-contract.ts`, `scripts/lib/plugin-sdk-entrypoints.json`, `package.json`
