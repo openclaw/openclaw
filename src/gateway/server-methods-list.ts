@@ -8,6 +8,8 @@ const BASE_METHODS = [
   "doctor.memory.backfillDreamDiary",
   "doctor.memory.resetDreamDiary",
   "doctor.memory.resetGroundedShortTerm",
+  "doctor.memory.repairDreamingArtifacts",
+  "doctor.memory.dedupeDreamDiary",
   "logs.tail",
   "channels.status",
   "channels.logout",
