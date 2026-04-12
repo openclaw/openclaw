@@ -53,7 +53,7 @@
         "maxConcurrent": 8
       },
       "sandbox": {
-        "mode": "off",
+        "mode": "non-main",
         "workspaceAccess": "rw",
         "scope": "session",
         "browser": {

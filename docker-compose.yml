@@ -36,6 +36,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        OPENCLAW_INSTALL_DOCKER_CLI: "1"
     image: openclaw:local
     environment:
       HOME: /home/node
