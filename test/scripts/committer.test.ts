@@ -160,4 +160,14 @@ describe("scripts/committer", () => {
     expect(output).toContain('Committed "test: fast hook env" with 1 files');
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
+
+  it("prints usage for --help", () => {
+    const repo = createRepo();
+
+    const output = commitWithHelperArgs(repo, "--help");
+
+    expect(output).toContain(
+      'Usage: committer [--force] [--fast] "commit message" "file" ["file" ...]',
+    );
+  });
 });
