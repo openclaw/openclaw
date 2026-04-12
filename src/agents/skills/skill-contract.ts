@@ -62,3 +62,37 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
   lines.push("</available_skills>");
   return lines.join("\n");
 }
+
+/**
+ * Mixed-tier skill catalog: "always" skills get the full format (name +
+ * description + location) while "discoverable" skills get the compact
+ * format (name + location only). Shares the same XML structure and header
+ * text as {@link formatSkillsForPrompt}.
+ */
+export function formatSkillsMixedTier(tiers: { always: Skill[]; discoverable: Skill[] }): string {
+  if (tiers.always.length === 0 && tiers.discoverable.length === 0) {
+    return "";
+  }
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    "Use the read tool to load a skill's file when the task matches its description.",
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+  for (const skill of tiers.always) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(`    <description>${escapeXml(skill.description)}</description>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  for (const skill of tiers.discoverable) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}

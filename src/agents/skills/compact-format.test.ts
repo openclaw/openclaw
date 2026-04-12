@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { formatSkillsMixedTier } from "./skill-contract.js";
 import type { SkillEntry } from "./types.js";
 import {
   formatSkillsCompact,
@@ -21,10 +22,11 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
   });
 }
 
-function makeEntry(skill: Skill): SkillEntry {
+function makeEntry(skill: Skill, opts?: { always?: boolean }): SkillEntry {
   return {
     skill,
     frontmatter: {},
+    metadata: opts?.always !== undefined ? { always: opts.always } : undefined,
     exposure: {
       includeInRuntimeRegistry: true,
       includeInAvailableSkillsPrompt: true,
@@ -38,7 +40,7 @@ function buildPrompt(
   limits: { maxChars?: number; maxCount?: number } = {},
 ): string {
   return buildWorkspaceSkillsPrompt("/fake", {
-    entries: skills.map(makeEntry),
+    entries: skills.map((s) => makeEntry(s)),
     config: {
       skills: {
         limits: {
@@ -264,7 +266,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
     );
     const snapshot = buildWorkspaceSkillSnapshot("/fake", {
-      entries: skills.map(makeEntry),
+      entries: skills.map((s) => makeEntry(s)),
     });
     // Prompt should use compacted paths
     expect(snapshot.prompt).toContain("~/");
@@ -274,5 +276,184 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       expect(skill.filePath).toContain(home);
       expect(skill.filePath).not.toMatch(/^~\//);
     }
+  });
+});
+
+describe("formatSkillsMixedTier", () => {
+  it("returns empty string when both arrays empty", () => {
+    expect(formatSkillsMixedTier({ always: [], discoverable: [] })).toBe("");
+  });
+
+  it("includes description for always skills, omits for discoverable", () => {
+    const always = [makeSkill("core", "Core skill description")];
+    const discoverable = [makeSkill("optional", "Optional skill description")];
+    const out = formatSkillsMixedTier({ always, discoverable });
+    expect(out).toContain("<name>core</name>");
+    expect(out).toContain("<description>Core skill description</description>");
+    expect(out).toContain("<name>optional</name>");
+    expect(out).toContain("<location>/skills/optional/SKILL.md</location>");
+    expect(out).not.toContain("Optional skill description");
+  });
+
+  it("renders only always skills when discoverable is empty", () => {
+    const always = [makeSkill("core", "Core description")];
+    const out = formatSkillsMixedTier({ always, discoverable: [] });
+    expect(out).toContain("<name>core</name>");
+    expect(out).toContain("<description>Core description</description>");
+    expect(out).toContain("<available_skills>");
+  });
+
+  it("renders only discoverable skills when always is empty", () => {
+    const discoverable = [makeSkill("opt", "Opt desc")];
+    const out = formatSkillsMixedTier({ always: [], discoverable });
+    expect(out).toContain("<name>opt</name>");
+    expect(out).not.toContain("<description>");
+  });
+
+  it("escapes XML special characters in both tiers", () => {
+    const always = [makeSkill("a<b", "desc & more")];
+    const discoverable = [makeSkill("c>d")];
+    const out = formatSkillsMixedTier({ always, discoverable });
+    expect(out).toContain("a&lt;b");
+    expect(out).toContain("desc &amp; more");
+    expect(out).toContain("c&gt;d");
+  });
+
+  it("is smaller than full format but larger than compact", () => {
+    const always = Array.from({ length: 5 }, (_, i) =>
+      makeSkill(`always-${i}`, "A moderately long description for always-tier skills"),
+    );
+    const discoverable = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "A moderately long description for discoverable-tier skills"),
+    );
+    const all = [...always, ...discoverable];
+    const fullLen = formatSkillsForPrompt(all).length;
+    const compactLen = formatSkillsCompact(all).length;
+    const mixedLen = formatSkillsMixedTier({ always, discoverable }).length;
+    expect(mixedLen).toBeLessThan(fullLen);
+    expect(mixedLen).toBeGreaterThan(compactLen);
+  });
+});
+
+describe("mixed-tier prompt integration", () => {
+  function buildPromptWithEntries(
+    entries: SkillEntry[],
+    limits: { maxChars?: number; maxCount?: number } = {},
+  ): string {
+    return buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      config: {
+        skills: {
+          limits: {
+            ...(limits.maxChars !== undefined && { maxSkillsPromptChars: limits.maxChars }),
+            ...(limits.maxCount !== undefined && { maxSkillsInPrompt: limits.maxCount }),
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+  }
+
+  it("uses mixed-tier when full exceeds budget but mixed fits", () => {
+    const alwaysSkills = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { always: true })),
+      ...discSkills.map((s) => makeEntry(s, { always: false })),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const fullLen = formatSkillsForPrompt(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    // Budget between mixed and full
+    const budget = Math.floor((fullLen + mixedLen) / 2) + 150;
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(mixedLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // always skills keep descriptions
+    expect(prompt).toContain("always-0");
+    expect(prompt).toContain("A".repeat(200));
+    // discoverable skills lose descriptions
+    expect(prompt).toContain("disc-0");
+    expect(prompt).not.toContain("B".repeat(200));
+    expect(prompt).toContain("mixed-tier format");
+  });
+
+  it("falls through to compact when mixed also exceeds budget", () => {
+    const alwaysSkills = Array.from({ length: 10 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 10 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { always: true })),
+      ...discSkills.map((s) => makeEntry(s, { always: false })),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const compactLen = formatSkillsCompact(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    // Budget below mixed but above compact
+    const budget = Math.floor((compactLen + mixedLen) / 2) + 150;
+    expect(mixedLen).toBeGreaterThan(budget);
+    expect(compactLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    expect(prompt).not.toContain("<description>");
+    expect(prompt).toContain("compact format");
+    expect(prompt).not.toContain("mixed-tier");
+  });
+
+  it("skips mixed-tier when no skills have always=true", () => {
+    const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const entries = skills.map((s) => makeEntry(s));
+    const fullLen = formatSkillsForPrompt(skills).length;
+    const compactLen = formatSkillsCompact(skills).length;
+    const budget = Math.floor((fullLen + compactLen) / 2);
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(compactLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // Should go straight to compact, not mixed
+    expect(prompt).toContain("compact format");
+    expect(prompt).not.toContain("mixed-tier");
+  });
+
+  it("skips mixed-tier when all skills have always=true", () => {
+    const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const entries = skills.map((s) => makeEntry(s, { always: true }));
+    const fullLen = formatSkillsForPrompt(skills).length;
+    const compactLen = formatSkillsCompact(skills).length;
+    const budget = Math.floor((fullLen + compactLen) / 2);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // All always → no discoverable → can't use mixed, falls to compact
+    expect(prompt).toContain("compact format");
+    expect(prompt).not.toContain("mixed-tier");
+  });
+
+  it("behavior identical to before when no entries have metadata.always", () => {
+    const skills = Array.from({ length: 5 }, (_, i) => makeSkill(`skill-${i}`, "short desc"));
+    const entriesWithout = skills.map((s) => makeEntry(s));
+    const entriesUndefined = skills.map((s) => ({
+      ...makeEntry(s),
+      metadata: undefined,
+    }));
+    const prompt1 = buildPromptWithEntries(entriesWithout, { maxChars: 50_000 });
+    const prompt2 = buildPromptWithEntries(entriesUndefined, { maxChars: 50_000 });
+    // Both should produce full format with descriptions
+    expect(prompt1).toContain("<description>");
+    expect(prompt2).toContain("<description>");
+    expect(prompt1).not.toContain("mixed-tier");
+    expect(prompt2).not.toContain("mixed-tier");
   });
 });
