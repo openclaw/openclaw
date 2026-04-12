@@ -162,6 +162,44 @@ describe("cron service store seam coverage", () => {
     expect(after).toBe(before);
   });
 
+  it("preserves persisted runtime state when normalizing loaded jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW - 5_000;
+    const runningAtMs = STORE_TEST_NOW - 1_000;
+
+    await writeSingleJobStore(storePath, {
+      id: "stateful-job",
+      name: "stateful job",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs,
+        runningAtMs,
+        lastRunAtMs: STORE_TEST_NOW - 60_000,
+        lastStatus: "error",
+        lastError: "boom",
+      },
+    });
+
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    const job = findJobOrThrow(state, "stateful-job");
+    expect(job.state).toMatchObject({
+      nextRunAtMs,
+      runningAtMs,
+      lastRunAtMs: STORE_TEST_NOW - 60_000,
+      lastStatus: "error",
+      lastError: "boom",
+    });
+  });
+
   it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
     const { storePath } = await makeStorePath();
 

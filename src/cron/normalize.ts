@@ -288,6 +288,71 @@ function coerceDelivery(delivery: UnknownRecord) {
   return next;
 }
 
+function coerceState(rawState: UnknownRecord) {
+  const next: UnknownRecord = {};
+
+  const copyFiniteNumber = (
+    field:
+      | "nextRunAtMs"
+      | "runningAtMs"
+      | "lastRunAtMs"
+      | "lastDurationMs"
+      | "consecutiveErrors"
+      | "lastFailureAlertAtMs"
+      | "scheduleErrorCount",
+  ) => {
+    const value = rawState[field];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      next[field] = value;
+    }
+  };
+
+  copyFiniteNumber("nextRunAtMs");
+  copyFiniteNumber("runningAtMs");
+  copyFiniteNumber("lastRunAtMs");
+  copyFiniteNumber("lastDurationMs");
+  copyFiniteNumber("consecutiveErrors");
+  copyFiniteNumber("lastFailureAlertAtMs");
+  copyFiniteNumber("scheduleErrorCount");
+
+  const lastRunStatus = normalizeOptionalLowercaseString(rawState.lastRunStatus);
+  if (lastRunStatus === "ok" || lastRunStatus === "error" || lastRunStatus === "skipped") {
+    next.lastRunStatus = lastRunStatus;
+  }
+
+  const lastStatus = normalizeOptionalLowercaseString(rawState.lastStatus);
+  if (lastStatus === "ok" || lastStatus === "error" || lastStatus === "skipped") {
+    next.lastStatus = lastStatus;
+  }
+
+  const lastDeliveryStatus = normalizeOptionalLowercaseString(rawState.lastDeliveryStatus);
+  if (
+    lastDeliveryStatus === "delivered" ||
+    lastDeliveryStatus === "not-delivered" ||
+    lastDeliveryStatus === "unknown" ||
+    lastDeliveryStatus === "not-requested"
+  ) {
+    next.lastDeliveryStatus = lastDeliveryStatus;
+  }
+
+  const copyOptionalString = (field: "lastError" | "lastErrorReason" | "lastDeliveryError") => {
+    const value = normalizeOptionalString(rawState[field]);
+    if (value) {
+      next[field] = value;
+    }
+  };
+
+  copyOptionalString("lastError");
+  copyOptionalString("lastErrorReason");
+  copyOptionalString("lastDeliveryError");
+
+  if (typeof rawState.lastDelivered === "boolean") {
+    next.lastDelivered = rawState.lastDelivered;
+  }
+
+  return next;
+}
+
 function inferTopLevelPayload(next: UnknownRecord) {
   const message = normalizeOptionalString(next.message) ?? "";
   if (message) {
@@ -490,6 +555,10 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
+  }
+
+  if (isRecord(base.state)) {
+    next.state = coerceState(base.state);
   }
 
   if ("isolation" in next) {
