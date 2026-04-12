@@ -12,6 +12,21 @@ describe("buildSystemdUnit", () => {
     expect(execStart).toBe('ExecStart=/usr/bin/openclaw gateway --name "My Bot"');
   });
 
+  it("renders control-group kill mode for child-process cleanup", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {},
+    });
+    expect(unit).toContain("KillMode=control-group");
+    expect(unit).toContain("TimeoutStopSec=30");
+    expect(unit).toContain("TimeoutStartSec=30");
+    expect(unit).toContain("SuccessExitStatus=0 143");
+    expect(unit).toContain("StartLimitBurst=5");
+    expect(unit).toContain("StartLimitIntervalSec=60");
+    expect(unit).toContain("RestartPreventExitStatus=78");
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({

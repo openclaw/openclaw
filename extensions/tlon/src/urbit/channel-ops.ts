@@ -1,4 +1,4 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -11,6 +11,29 @@ export type UrbitChannelDeps = {
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
+
+async function putUrbitChannel(
+  deps: UrbitChannelDeps,
+  params: { body: unknown; auditContext: string },
+) {
+  return await urbitFetch({
+    baseUrl: deps.baseUrl,
+    path: `/~/channel/${deps.channelId}`,
+    init: {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: deps.cookie,
+      },
+      body: JSON.stringify(params.body),
+    },
+    ssrfPolicy: deps.ssrfPolicy,
+    lookupFn: deps.lookupFn,
+    fetchImpl: deps.fetchImpl,
+    timeoutMs: 30_000,
+    auditContext: params.auditContext,
+  });
+}
 
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
@@ -26,21 +49,8 @@ export async function pokeUrbitChannel(
     json: params.json,
   };
 
-  const { response, release } = await urbitFetch({
-    baseUrl: deps.baseUrl,
-    path: `/~/channel/${deps.channelId}`,
-    init: {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: deps.cookie,
-      },
-      body: JSON.stringify([pokeData]),
-    },
-    ssrfPolicy: deps.ssrfPolicy,
-    lookupFn: deps.lookupFn,
-    fetchImpl: deps.fetchImpl,
-    timeoutMs: 30_000,
+  const { response, release } = await putUrbitChannel(deps, {
+    body: [pokeData],
     auditContext: params.auditContext,
   });
 
@@ -88,23 +98,7 @@ export async function createUrbitChannel(
   deps: UrbitChannelDeps,
   params: { body: unknown; auditContext: string },
 ): Promise<void> {
-  const { response, release } = await urbitFetch({
-    baseUrl: deps.baseUrl,
-    path: `/~/channel/${deps.channelId}`,
-    init: {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: deps.cookie,
-      },
-      body: JSON.stringify(params.body),
-    },
-    ssrfPolicy: deps.ssrfPolicy,
-    lookupFn: deps.lookupFn,
-    fetchImpl: deps.fetchImpl,
-    timeoutMs: 30_000,
-    auditContext: params.auditContext,
-  });
+  const { response, release } = await putUrbitChannel(deps, params);
 
   try {
     if (!response.ok && response.status !== 204) {
@@ -116,30 +110,17 @@ export async function createUrbitChannel(
 }
 
 export async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
-  const { response, release } = await urbitFetch({
-    baseUrl: deps.baseUrl,
-    path: `/~/channel/${deps.channelId}`,
-    init: {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: deps.cookie,
+  const { response, release } = await putUrbitChannel(deps, {
+    body: [
+      {
+        id: Date.now(),
+        action: "poke",
+        ship: deps.ship,
+        app: "hood",
+        mark: "helm-hi",
+        json: "Opening API channel",
       },
-      body: JSON.stringify([
-        {
-          id: Date.now(),
-          action: "poke",
-          ship: deps.ship,
-          app: "hood",
-          mark: "helm-hi",
-          json: "Opening API channel",
-        },
-      ]),
-    },
-    ssrfPolicy: deps.ssrfPolicy,
-    lookupFn: deps.lookupFn,
-    fetchImpl: deps.fetchImpl,
-    timeoutMs: 30_000,
+    ],
     auditContext: "tlon-urbit-channel-wake",
   });
 

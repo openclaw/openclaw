@@ -1,6 +1,9 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
@@ -21,9 +24,6 @@ const ONE_HOUR_MS = 60 * 60_000;
  * This catches the half-dead WebSocket scenario where the connection appears
  * alive (health checks pass) but Slack silently stops delivering events.
  */
-const DEFAULT_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
-const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
-
 export type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
@@ -70,7 +70,7 @@ function resolveTimingPolicy(
     staleEventThresholdMs:
       deps.timing?.staleEventThresholdMs ??
       deps.staleEventThresholdMs ??
-      DEFAULT_STALE_EVENT_THRESHOLD_MS,
+      DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   };
 }
 
@@ -119,13 +119,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!status) {
             continue;
           }
+          if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
+            continue;
+          }
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
           const healthPolicy: ChannelHealthPolicy = {
+            channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            skipStaleSocketCheck: getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {

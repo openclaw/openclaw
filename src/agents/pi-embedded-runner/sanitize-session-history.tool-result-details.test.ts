@@ -1,35 +1,27 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
-import { sanitizeSessionHistory } from "./google.js";
+import { describe, expect, it, vi } from "vitest";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sanitizeSessionHistory } from "./replay-history.js";
 
-function makeAssistantToolCall(timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "toolCall", id: "call_1", name: "web_fetch", arguments: { url: "x" } }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.2",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "toolUse",
-    timestamp,
-  };
-}
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderRuntimePlugin: () => undefined,
+  sanitizeProviderReplayHistoryWithPlugin: () => undefined,
+  validateProviderReplayTurnsWithPlugin: () => undefined,
+}));
 
 describe("sanitizeSessionHistory toolResult details stripping", () => {
   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
     const sm = SessionManager.inMemory();
 
     const messages: AgentMessage[] = [
-      makeAssistantToolCall(1),
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call_1", name: "web_fetch", arguments: { url: "x" } }],
+        model: "gpt-5.4",
+        stopReason: "toolUse",
+        timestamp: 1,
+      }),
       {
         role: "toolResult",
         toolCallId: "call_1",
@@ -52,7 +44,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       messages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
       sessionManager: sm,
       sessionId: "test",
     });

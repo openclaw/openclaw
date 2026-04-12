@@ -1,6 +1,9 @@
 {
   "id": "mattermost",
   "channels": ["mattermost"],
+  "channelEnvVars": {
+    "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

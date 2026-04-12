@@ -1,14 +1,67 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
-export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
+
+function resolveDefaultCronDir(): string {
+  return path.join(resolveConfigDir(), "cron");
+}
+
+function resolveDefaultCronStorePath(): string {
+  return path.join(resolveDefaultCronDir(), "jobs.json");
+}
+
+function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
+  return {
+    version: store.version,
+    jobs: store.jobs.map((job) => {
+      const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+      return rest;
+    }),
+  };
+}
+
+function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const version = (parsed as { version?: unknown }).version;
+    const jobs = (parsed as { jobs?: unknown }).jobs;
+    if (version !== 1 || !Array.isArray(jobs)) {
+      return null;
+    }
+    return {
+      version: 1,
+      jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shouldSkipCronBackupForRuntimeOnlyChanges(
+  previousRaw: string | null,
+  nextStore: CronStoreFile,
+): boolean {
+  if (previousRaw === null) {
+    return false;
+  }
+  const previous = parseCronStoreForBackupComparison(previousRaw);
+  if (!previous) {
+    return false;
+  }
+  return (
+    JSON.stringify(stripRuntimeOnlyCronFields(previous)) ===
+    JSON.stringify(stripRuntimeOnlyCronFields(nextStore))
+  );
+}
 
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
@@ -18,7 +71,7 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  return resolveDefaultCronStorePath();
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
@@ -26,7 +79,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     const raw = await fs.promises.readFile(storePath, "utf-8");
     let parsed: unknown;
     try {
-      parsed = JSON5.parse(raw);
+      parsed = parseJsonWithJson5Fallback(raw);
     } catch (err) {
       throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
         cause: err,
@@ -52,8 +105,22 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   }
 }
 
-export async function saveCronStore(storePath: string, store: CronStoreFile) {
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+type SaveCronStoreOptions = {
+  skipBackup?: boolean;
+};
+
+async function setSecureFileMode(filePath: string): Promise<void> {
+  await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+export async function saveCronStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronStoreOptions,
+) {
+  const storeDir = path.dirname(storePath);
+  await fs.promises.mkdir(storeDir, { recursive: true, mode: 0o700 });
+  await fs.promises.chmod(storeDir, 0o700).catch(() => undefined);
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
   if (cached === json) {
@@ -74,16 +141,22 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     serializedStoreCache.set(storePath, json);
     return;
   }
+  const skipBackup =
+    opts?.skipBackup === true || shouldSkipCronBackupForRuntimeOnlyChanges(previous, store);
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
-  if (previous !== null) {
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+  await setSecureFileMode(tmp);
+  if (previous !== null && !skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      const backupPath = `${storePath}.bak`;
+      await fs.promises.copyFile(storePath, backupPath);
+      await setSecureFileMode(backupPath);
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
+  await setSecureFileMode(storePath);
   serializedStoreCache.set(storePath, json);
 }
 

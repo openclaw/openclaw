@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -14,7 +18,7 @@ export type AgentToAgentPolicy = {
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
-export type SessionAccessAction = "history" | "send" | "list";
+export type SessionAccessAction = "history" | "send" | "list" | "status";
 
 export type SessionAccessResult =
   | { allowed: true }
@@ -23,7 +27,7 @@ export type SessionAccessResult =
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
-  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  const value = normalizeLowercaseStringOrEmpty(raw);
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
@@ -63,14 +67,14 @@ export function resolveSandboxedSessionToolContext(params: {
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
-  const requesterInternalKey =
-    typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
-      ? resolveInternalSessionKey({
-          key: params.agentSessionKey,
-          alias,
-          mainKey,
-        })
-      : undefined;
+  const requesterSessionKey = normalizeOptionalString(params.agentSessionKey);
+  const requesterInternalKey = requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
   const restrictToSpawned =
     params.sandboxed === true &&
@@ -96,7 +100,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return true;
     }
     return allowPatterns.some((pattern) => {
-      const raw = String(pattern ?? "").trim();
+      const raw =
+        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
+        "";
       if (!raw) {
         return false;
       }
@@ -130,6 +136,9 @@ function actionPrefix(action: SessionAccessAction): string {
   if (action === "send") {
     return "Session send";
   }
+  if (action === "status") {
+    return "Session status";
+  }
   return "Session list";
 }
 
@@ -139,6 +148,9 @@ function a2aDisabledMessage(action: SessionAccessAction): string {
   }
   if (action === "send") {
     return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";
+  }
+  if (action === "status") {
+    return "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
   return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
 }
@@ -150,6 +162,9 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
   if (action === "send") {
     return "Agent-to-agent messaging denied by tools.agentToAgent.allow.";
   }
+  if (action === "status") {
+    return "Agent-to-agent status denied by tools.agentToAgent.allow.";
+  }
   return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
 }
 
@@ -159,6 +174,9 @@ function crossVisibilityMessage(action: SessionAccessAction): string {
   }
   if (action === "send") {
     return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  }
+  if (action === "status") {
+    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
   return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
 }

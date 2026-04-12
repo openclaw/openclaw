@@ -1,14 +1,25 @@
-import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { StickerMetadata } from "../telegram/bot/types.js";
-import type { InternalMessageChannel } from "../utils/message-channel.js";
-import type { CommandArgs } from "./commands-registry.types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { CommandArgs } from "./commands-args.types.js";
+import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
-export type OriginatingChannelType = ChannelId | InternalMessageChannel;
+export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
+
+export type StickerContextMetadata = {
+  cachedDescription?: string;
+  emoji?: string;
+  setName?: string;
+  description?: string;
+  fileId?: string;
+  fileUniqueId?: string;
+  uniqueFileId?: string;
+  isAnimated?: boolean;
+  isVideo?: boolean;
+} & Record<string, unknown>;
 
 export type MsgContext = {
   Body?: string;
@@ -53,6 +64,8 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Per-turn reply-threading overrides. */
+  ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -93,7 +106,7 @@ export type MsgContext = {
   MediaUrls?: string[];
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
-  Sticker?: StickerMetadata;
+  Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
   OutputDir?: string;
@@ -117,6 +130,8 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** System-attached provenance for the current inbound message. */
+  InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -129,14 +144,27 @@ export type MsgContext = {
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;
+  /** Platform bot username when command mentions should be normalized. */
+  BotUsername?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
+  /**
+   * Internal flag: command handling prepared trailing prompt text for ACP dispatch.
+   * Used for `/new <prompt>` and `/reset <prompt>` on ACP-bound sessions.
+   */
+  AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Trusted system override for contexts that must never inherit owner semantics. */
+  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
+  /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
+  NativeChannelId?: string;
+  /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
+  NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /** Warning: DM has topics enabled but this message is not in a topic. */
@@ -152,6 +180,16 @@ export type MsgContext = {
    * The chat/channel/user ID where the reply should be sent.
    */
   OriginatingTo?: string;
+  /**
+   * True when the current turn intentionally requested external delivery to
+   * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
+   */
+  ExplicitDeliverRoute?: boolean;
+  /**
+   * Provider-specific parent conversation id for threaded contexts.
+   * For Discord threads, this is the parent channel id.
+   */
+  ThreadParentId?: string;
   /**
    * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".

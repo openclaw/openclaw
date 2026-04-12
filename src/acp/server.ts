@@ -3,25 +3,20 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { loadConfig } from "../config/config.js";
-import {
-  buildGatewayConnectionDetails,
-  resolveGatewayCredentialsWithSecretInputs,
-} from "../gateway/call.js";
+import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
-import type { AcpServerOptions } from "./types.js";
+import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const cfg = loadConfig();
-  const connection = buildGatewayConnectionDetails({
+  const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
-    url: opts.gatewayUrl,
-  });
-  const creds = await resolveGatewayCredentialsWithSecretInputs({
-    config: cfg,
+    gatewayUrl: opts.gatewayUrl,
     explicitAuth: {
       token: opts.gatewayToken,
       password: opts.gatewayPassword,
@@ -58,9 +53,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   };
 
   const gateway = new GatewayClient({
-    url: connection.url,
-    token: creds.token,
-    password: creds.password,
+    url: bootstrap.url,
+    token: bootstrap.auth.token,
+    password: bootstrap.auth.password,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
@@ -118,7 +113,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
-  new AgentSideConnection((conn: AgentSideConnection) => {
+  const _connection = new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, opts);
     agent.start();
     return agent;
@@ -180,6 +175,15 @@ function parseArgs(args: string[]): AcpServerOptions {
       opts.prefixCwd = false;
       continue;
     }
+    if (arg === "--provenance") {
+      const provenanceMode = normalizeAcpProvenanceMode(args[i + 1]);
+      if (!provenanceMode) {
+        throw new Error("Invalid --provenance value. Use off, meta, or meta+receipt.");
+      }
+      opts.provenanceMode = provenanceMode;
+      i += 1;
+      continue;
+    }
     if (arg === "--verbose" || arg === "-v") {
       opts.verbose = true;
       continue;
@@ -189,17 +193,21 @@ function parseArgs(args: string[]): AcpServerOptions {
       process.exit(0);
     }
   }
-  if (opts.gatewayToken?.trim() && tokenFile?.trim()) {
+  const gatewayToken = normalizeOptionalString(opts.gatewayToken);
+  const gatewayPassword = normalizeOptionalString(opts.gatewayPassword);
+  const normalizedTokenFile = normalizeOptionalString(tokenFile);
+  const normalizedPasswordFile = normalizeOptionalString(passwordFile);
+  if (gatewayToken && normalizedTokenFile) {
     throw new Error("Use either --token or --token-file.");
   }
-  if (opts.gatewayPassword?.trim() && passwordFile?.trim()) {
+  if (gatewayPassword && normalizedPasswordFile) {
     throw new Error("Use either --password or --password-file.");
   }
-  if (tokenFile?.trim()) {
-    opts.gatewayToken = readSecretFromFile(tokenFile, "Gateway token");
+  if (normalizedTokenFile) {
+    opts.gatewayToken = readSecretFromFile(normalizedTokenFile, "Gateway token");
   }
-  if (passwordFile?.trim()) {
-    opts.gatewayPassword = readSecretFromFile(passwordFile, "Gateway password");
+  if (normalizedPasswordFile) {
+    opts.gatewayPassword = readSecretFromFile(normalizedPasswordFile, "Gateway password");
   }
   return opts;
 }
@@ -220,6 +228,7 @@ Options:
   --require-existing      Fail if the session key/label does not exist
   --reset-session         Reset the session key before first use
   --no-prefix-cwd         Do not prefix prompts with the working directory
+  --provenance <mode>     ACP provenance mode: off, meta, or meta+receipt
   --verbose, -v           Verbose logging to stderr
   --help, -h              Show this help message
 `);

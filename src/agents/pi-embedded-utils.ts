@@ -1,201 +1,24 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import {
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
+
+export {
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
+} from "../shared/text/assistant-visible-text.js";
+export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
-}
-
-/**
- * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls. This removes:
- * - <invoke name="...">...</invoke> blocks
- * - </minimax:tool_call> closing tags
- */
-export function stripMinimaxToolCallXml(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/minimax:tool_call/i.test(text)) {
-    return text;
-  }
-
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
-
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
-
-  return cleaned;
-}
-
-/**
- * Strip downgraded tool call text representations that leak into text content.
- * When replaying history to Gemini, tool calls without `thought_signature` are
- * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
- * not be shown to users.
- */
-export function stripDowngradedToolCallText(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
-    return text;
-  }
-
-  const consumeJsonish = (
-    input: string,
-    start: number,
-    options?: { allowLeadingNewlines?: boolean },
-  ): number | null => {
-    const { allowLeadingNewlines = false } = options ?? {};
-    let index = start;
-    while (index < input.length) {
-      const ch = input[index];
-      if (ch === " " || ch === "\t") {
-        index += 1;
-        continue;
-      }
-      if (allowLeadingNewlines && (ch === "\n" || ch === "\r")) {
-        index += 1;
-        continue;
-      }
-      break;
-    }
-    if (index >= input.length) {
-      return null;
-    }
-
-    const startChar = input[index];
-    if (startChar === "{" || startChar === "[") {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      for (let i = index; i < input.length; i += 1) {
-        const ch = input[i];
-        if (inString) {
-          if (escape) {
-            escape = false;
-          } else if (ch === "\\") {
-            escape = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        if (ch === '"') {
-          inString = true;
-          continue;
-        }
-        if (ch === "{" || ch === "[") {
-          depth += 1;
-          continue;
-        }
-        if (ch === "}" || ch === "]") {
-          depth -= 1;
-          if (depth === 0) {
-            return i + 1;
-          }
-        }
-      }
-      return null;
-    }
-
-    if (startChar === '"') {
-      let escape = false;
-      for (let i = index + 1; i < input.length; i += 1) {
-        const ch = input[i];
-        if (escape) {
-          escape = false;
-          continue;
-        }
-        if (ch === "\\") {
-          escape = true;
-          continue;
-        }
-        if (ch === '"') {
-          return i + 1;
-        }
-      }
-      return null;
-    }
-
-    let end = index;
-    while (end < input.length && input[end] !== "\n" && input[end] !== "\r") {
-      end += 1;
-    }
-    return end;
-  };
-
-  const stripToolCalls = (input: string): string => {
-    const markerRe = /\[Tool Call:[^\]]*\]/gi;
-    let result = "";
-    let cursor = 0;
-    for (const match of input.matchAll(markerRe)) {
-      const start = match.index ?? 0;
-      if (start < cursor) {
-        continue;
-      }
-      result += input.slice(cursor, start);
-      let index = start + match[0].length;
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input[index] === "\r") {
-        index += 1;
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      } else if (input[index] === "\n") {
-        index += 1;
-      }
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
-        index += 9;
-        if (input[index] === ":") {
-          index += 1;
-        }
-        if (input[index] === " ") {
-          index += 1;
-        }
-        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
-        if (end !== null) {
-          index = end;
-        }
-      }
-      if (
-        (input[index] === "\n" || input[index] === "\r") &&
-        (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
-      ) {
-        if (input[index] === "\r") {
-          index += 1;
-        }
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      }
-      cursor = index;
-    }
-    result += input.slice(cursor);
-    return result;
-  };
-
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
-
-  // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] markers (self-contained within brackets).
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
-
-  return cleaned.trim();
 }
 
 /**
@@ -207,20 +30,110 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+function sanitizeAssistantText(text: string): string {
+  return sanitizeAssistantVisibleText(text);
+}
+
+function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
+  const errorContext = msg.stopReason === "error";
+  return sanitizeUserFacingText(extracted, { errorContext });
+}
+
+type AssistantTextExtractionResult = {
+  text: string;
+  hadRequestedPhase: boolean;
+};
+
+function extractAssistantTextForPhase(
+  msg: AssistantMessage,
+  phase?: AssistantPhase,
+): AssistantTextExtractionResult {
+  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+  const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
+    if (phase) {
+      return resolvedPhase === phase;
+    }
+    return resolvedPhase === undefined;
+  };
+
+  if (typeof msg.content === "string") {
+    const hadRequestedPhase = phase ? messagePhase === phase : messagePhase === undefined;
+    return {
+      text: shouldIncludeContent(messagePhase)
+        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
+        : "",
+      hadRequestedPhase,
+    };
+  }
+
+  if (!Array.isArray(msg.content)) {
+    return { text: "", hadRequestedPhase: false };
+  }
+
+  const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      return false;
+    }
+    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+  });
+
+  let hadRequestedPhase = false;
+  const extracted =
+    extractTextFromChatContent(
+      msg.content.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const record = block as { type?: unknown; textSignature?: unknown };
+        if (record.type !== "text") {
+          return false;
+        }
+        const signature = parseAssistantTextSignature(record.textSignature);
+        const resolvedPhase =
+          signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+        if (phase ? resolvedPhase === phase : resolvedPhase === undefined) {
+          hadRequestedPhase = true;
+        }
+        return shouldIncludeContent(resolvedPhase);
+      }),
+      {
+        sanitizeText: (text) => sanitizeAssistantText(text),
+        joinWith: "\n",
+        normalizeText: (text) => text.trim(),
+      },
+    ) ?? "";
+
+  return {
+    text: finalizeAssistantExtraction(msg, extracted),
+    hadRequestedPhase,
+  };
+}
+
+export function extractAssistantVisibleText(msg: AssistantMessage): string {
+  const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
+  if (finalAnswerExtraction.hadRequestedPhase) {
+    return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
+  }
+
+  return extractAssistantTextForPhase(msg).text;
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
-        ).trim(),
+      sanitizeText: (text) => sanitizeAssistantText(text),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
-  const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
-  return sanitizeUserFacingText(extracted, { errorContext });
+  // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
+  // background tool failure) should not have its content rewritten (#13935).
+  return finalizeAssistantExtraction(msg, extracted);
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
@@ -301,7 +214,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
 
   for (const match of text.matchAll(scanRe)) {
     const index = match.index ?? 0;
-    const isClose = Boolean(match[1]?.includes("/"));
+    const isClose = match[1]?.includes("/") ?? false;
 
     if (!inThinking && !isClose) {
       pushText(text.slice(cursor, index));
@@ -333,7 +246,9 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  const hasThinkingBlock = message.content.some(
+    (block) => block && typeof block === "object" && block.type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -342,6 +257,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
     if (block.type !== "text") {
       next.push(block);
       continue;

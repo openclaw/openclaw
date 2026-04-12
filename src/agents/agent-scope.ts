@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -9,10 +11,23 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
-import { normalizeSkillFilter } from "./skills/filter.js";
+import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
-const log = createSubsystemLogger("agent-scope");
+
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+function getLog(): ReturnType<typeof createSubsystemLogger> {
+  log ??= createSubsystemLogger("agent-scope");
+  return log;
+}
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
@@ -28,7 +43,12 @@ type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  systemPromptOverride?: AgentEntry["systemPromptOverride"];
   model?: AgentEntry["model"];
+  thinkingDefault?: AgentEntry["thinkingDefault"];
+  verboseDefault?: AgentDefaultsConfig["verboseDefault"];
+  reasoningDefault?: AgentEntry["reasoningDefault"];
+  fastModeDefault?: AgentEntry["fastModeDefault"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -36,6 +56,7 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
+  embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -47,7 +68,7 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+  return list.filter((entry): entry is AgentEntry => entry !== null && typeof entry === "object");
 }
 
 export function listAgentIds(cfg: OpenClawConfig): string[] {
@@ -76,7 +97,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    log.warn("Multiple agents marked default=true; using the first entry as default.");
+    getLog().warn("Multiple agents marked default=true; using the first entry as default.");
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
@@ -91,11 +112,10 @@ export function resolveSessionAgentIds(params: {
   sessionAgentId: string;
 } {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
-  const explicitAgentIdRaw =
-    typeof params.agentId === "string" ? params.agentId.trim().toLowerCase() : "";
+  const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
   const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const sessionKey = params.sessionKey?.trim();
-  const normalizedSessionKey = sessionKey ? sessionKey.toLowerCase() : undefined;
+  const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
   const sessionAgentId =
     explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
@@ -123,14 +143,20 @@ export function resolveAgentConfig(
   if (!entry) {
     return undefined;
   }
+  const agentDefaults = cfg.agents?.defaults;
   return {
-    name: typeof entry.name === "string" ? entry.name : undefined,
-    workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
-    agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
+    name: readStringValue(entry.name),
+    workspace: readStringValue(entry.workspace),
+    agentDir: readStringValue(entry.agentDir),
+    systemPromptOverride: readStringValue(entry.systemPromptOverride),
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
+    thinkingDefault: entry.thinkingDefault,
+    verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
+    reasoningDefault: entry.reasoningDefault,
+    fastModeDefault: entry.fastModeDefault,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
@@ -138,32 +164,30 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
+    embeddedPi:
+      typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentExecutionContract(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): NonNullable<NonNullable<AgentDefaultsConfig["embeddedPi"]>["executionContract"]> | undefined {
+  const defaultContract = cfg?.agents?.defaults?.embeddedPi?.executionContract;
+  if (!cfg || !agentId) {
+    return defaultContract;
+  }
+  const agentContract = resolveAgentConfig(cfg, agentId)?.embeddedPi?.executionContract;
+  return agentContract ?? defaultContract;
 }
 
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
-}
-
-function resolveModelPrimary(raw: unknown): string | undefined {
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const primary = (raw as { primary?: unknown }).primary;
-  if (typeof primary !== "string") {
-    return undefined;
-  }
-  const trimmed = primary.trim();
-  return trimmed || undefined;
+  return resolveEffectiveAgentSkillFilter(cfg, agentId);
 }
 
 export function resolveAgentExplicitModelPrimary(
@@ -171,7 +195,7 @@ export function resolveAgentExplicitModelPrimary(
   agentId: string,
 ): string | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
-  return resolveModelPrimary(raw);
+  return resolvePrimaryStringValue(raw);
 }
 
 export function resolveAgentEffectiveModelPrimary(
@@ -180,7 +204,7 @@ export function resolveAgentEffectiveModelPrimary(
 ): string | undefined {
   return (
     resolveAgentExplicitModelPrimary(cfg, agentId) ??
-    resolveModelPrimary(cfg.agents?.defaults?.model)
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model)
   );
 }
 
@@ -208,7 +232,7 @@ export function resolveFallbackAgentId(params: {
   agentId?: string | null;
   sessionKey?: string | null;
 }): string {
-  const explicitAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  const explicitAgentId = normalizeOptionalString(params.agentId) ?? "";
   if (explicitAgentId) {
     return normalizeAgentId(explicitAgentId);
   }
@@ -259,23 +283,88 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
     return stripNullBytes(resolveUserPath(configured));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
-    const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback));
     }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
   }
+  // Non-default agents: use the configured default workspace as a base so that
+  // agents.defaults.workspace is respected for all agents, not just the default.
+  if (fallback) {
+    return stripNullBytes(path.join(resolveUserPath(fallback), id));
+  }
   const stateDir = resolveStateDir(process.env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
-export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
+function normalizePathForComparison(input: string): string {
+  const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
+  let normalized = resolved;
+  // Prefer realpath when available to normalize aliases/symlinks (for example /tmp -> /private/tmp)
+  // and canonical path case without forcing case-folding on case-sensitive macOS volumes.
+  try {
+    normalized = fs.realpathSync.native(resolved);
+  } catch {
+    // Keep lexical path for non-existent directories.
+  }
+  if (process.platform === "win32") {
+    return lowercasePreservingWhitespace(normalized);
+  }
+  return normalized;
+}
+
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function resolveAgentIdsByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string[] {
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  const ids = listAgentIds(cfg);
+  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
+
+  for (let index = 0; index < ids.length; index += 1) {
+    const id = ids[index];
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    if (!isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+      continue;
+    }
+    matches.push({ id, workspaceDir, order: index });
+  }
+
+  matches.sort((left, right) => {
+    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
+    if (workspaceLengthDelta !== 0) {
+      return workspaceLengthDelta;
+    }
+    return left.order - right.order;
+  });
+
+  return matches.map((entry) => entry.id);
+}
+
+export function resolveAgentIdByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string | undefined {
+  return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
+}
+
+export function resolveAgentDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return resolveUserPath(configured, env);
   }
-  const root = resolveStateDir(process.env);
+  const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
 }

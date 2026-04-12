@@ -1,7 +1,9 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { AgentBinding } from "../config/types.agents.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import { listRouteBindings } from "../config/bindings.js";
+import type { AgentRouteBinding } from "../config/types.agents.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 function normalizeBindingChannelId(raw?: string | null): string | null {
@@ -9,15 +11,15 @@ function normalizeBindingChannelId(raw?: string | null): string | null {
   if (normalized) {
     return normalized;
   }
-  const fallback = (raw ?? "").trim().toLowerCase();
+  const fallback = normalizeLowercaseStringOrEmpty(raw);
   return fallback || null;
 }
 
-export function listBindings(cfg: OpenClawConfig): AgentBinding[] {
-  return Array.isArray(cfg.bindings) ? cfg.bindings : [];
+export function listBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
+  return listRouteBindings(cfg);
 }
 
-function resolveNormalizedBindingMatch(binding: AgentBinding): {
+function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   agentId: string;
   accountId: string;
   channelId: string;

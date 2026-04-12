@@ -19,7 +19,7 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { runBrowserProxyCommand } from "./invoke-browser.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
@@ -28,6 +28,7 @@ import type {
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
+import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -43,9 +44,10 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
 };
 let cachedWindowsConsoleEncoding: string | null | undefined;
 
-const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+const execHostEnforced =
+  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
 const execHostFallbackAllowed =
-  process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
+  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
 const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
@@ -84,7 +86,7 @@ function isCmdExeInvocation(argv: string[]): boolean {
   if (!token) {
     return false;
   }
-  const base = path.win32.basename(token).toLowerCase();
+  const base = normalizeLowercaseStringOrEmpty(path.win32.basename(token));
   return base === "cmd.exe" || base === "cmd";
 }
 
@@ -152,7 +154,7 @@ export function decodeCapturedOutputBuffer(params: {
     return utf8;
   }
   const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
-  if (!encoding || encoding.toLowerCase() === "utf-8") {
+  if (!encoding || normalizeLowercaseStringOrEmpty(encoding) === "utf-8") {
     return utf8;
   }
   try {
@@ -298,7 +300,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
     process.platform === "win32"
       ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
           .split(";")
-          .map((ext) => ext.toLowerCase())
+          .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
   for (const dir of resolveEnvPath(env)) {
     for (const ext of extensions) {
@@ -350,11 +352,12 @@ async function sendExecFinishedEvent(
       sessionKey: params.sessionKey,
       runId: params.runId,
       host: "node",
-      command: params.cmdText,
+      command: params.commandText,
       exitCode: params.result.exitCode ?? undefined,
       timedOut: params.result.timedOut,
       success: params.result.success,
       output: combined,
+      suppressNotifyOnExit: params.suppressNotifyOnExit,
     }),
   );
 }
@@ -418,7 +421,7 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
-  const command = String(frame.command ?? "");
+  const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -432,7 +435,9 @@ export async function handleInvoke(
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
-      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
+      const code = normalizeLowercaseStringOrEmpty(message).includes("timed out")
+        ? "TIMEOUT"
+        : "INVALID_REQUEST";
       await sendErrorResult(client, frame, code, message);
     }
     return;
@@ -479,13 +484,14 @@ export async function handleInvoke(
     return;
   }
 
-  if (command === "browser.proxy") {
-    try {
-      const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendRawPayloadResult(client, frame, payload);
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+  try {
+    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
+    if (pluginNodeHostResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+      return;
     }
+  } catch (err) {
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 
@@ -504,7 +510,6 @@ export async function handleInvoke(
         return;
       }
       await sendJsonPayloadResult(client, frame, {
-        cmdText: prepared.cmdText,
         plan: prepared.plan,
       });
     } catch (err) {
@@ -548,8 +553,8 @@ export async function handleInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+    sendExecFinishedEvent: async ({ sessionKey, runId, commandText, result }) => {
+      await sendExecFinishedEvent({ client, sessionKey, runId, commandText, result });
     },
     preferMacAppExecHost,
   });

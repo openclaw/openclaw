@@ -2,8 +2,8 @@ import type {
   GatewayAuthConfig,
   GatewayBindMode,
   GatewayTailscaleConfig,
-  loadConfig,
 } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -12,8 +12,8 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
 import {
+  defaultGatewayBindMode,
   isLoopbackHost,
-  isTrustedProxyAddress,
   isValidIPv4,
   resolveGatewayBindHost,
 } from "./net.js";
@@ -23,6 +23,7 @@ export type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;
+  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
@@ -37,7 +38,7 @@ export type GatewayRuntimeConfig = {
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   port: number;
   bind?: GatewayBindMode;
   host?: string;
@@ -47,7 +48,15 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
-  const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
+  // Tailscale serve/funnel hard-requires loopback.  When bind is not
+  // explicitly set, we must resolve Tailscale mode *before* choosing the
+  // bind default so that container auto-detection does not override the
+  // Tailscale loopback constraint.
+  const tailscaleModeEarly =
+    (params.tailscale?.mode ?? params.cfg.gateway?.tailscale?.mode) || "off";
+  const bindExplicit = params.bind ?? params.cfg.gateway?.bind;
+  const bindMode =
+    bindExplicit ?? (tailscaleModeEarly !== "off" ? "loopback" : defaultGatewayBindMode());
   const customBindHost = params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
@@ -73,10 +82,9 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
+  const openAiChatCompletionsConfig = params.cfg.gateway?.http?.endpoints?.chatCompletions;
   const openAiChatCompletionsEnabled =
-    params.openAiChatCompletionsEnabled ??
-    params.cfg.gateway?.http?.endpoints?.chatCompletions?.enabled ??
-    false;
+    params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
@@ -121,7 +129,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
-  assertGatewayAuthConfigured(resolvedAuth);
+  assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
@@ -152,22 +160,15 @@ export async function resolveGatewayRuntimeConfig(params: {
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
       );
     }
-    if (isLoopbackHost(bindHost)) {
-      const hasLoopbackTrustedProxy =
-        isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
-        isTrustedProxyAddress("::1", trustedProxies);
-      if (!hasLoopbackTrustedProxy) {
-        throw new Error(
-          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
-        );
-      }
-    }
   }
 
   return {
     bindHost,
     controlUiEnabled,
     openAiChatCompletionsEnabled,
+    openAiChatCompletionsConfig: openAiChatCompletionsConfig
+      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
+      : undefined,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }

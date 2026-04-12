@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 
 const { acpAction, registerAcpCli } = vi.hoisted(() => {
   const action = vi.fn();
@@ -18,10 +19,26 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
+const { isQaLabCliAvailable, registerQaLabCli } = vi.hoisted(() => ({
+  isQaLabCliAvailable: vi.fn(() => true),
+  registerQaLabCli: vi.fn((program: Command) => {
+    const qa = program.command("qa");
+    qa.command("run").action(() => undefined);
+  }),
+}));
+
+const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("infer").alias("capability").action(action);
+  });
+  return { inferAction: action, registerCapabilityCli: register };
+});
+
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
-
-const { registerSubCliByName, registerSubCliCommands } = await import("./register.subclis.js");
+vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
+vi.mock("../../plugin-sdk/qa-lab.js", () => ({ isQaLabCliAvailable, registerQaLabCli }));
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -47,6 +64,10 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    isQaLabCliAvailable.mockReset().mockReturnValue(true);
+    registerQaLabCli.mockClear();
+    registerCapabilityCli.mockClear();
+    inferAction.mockClear();
   });
 
   afterEach(() => {
@@ -58,10 +79,10 @@ describe("registerSubCliCommands", () => {
     }
   });
 
-  it("registers only the primary placeholder and dispatches", async () => {
+  it("registers the primary placeholder plus completion and dispatches", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "acp"]);
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp", "completion"]);
 
     await program.parseAsync(["acp"], { from: "user" });
 
@@ -76,18 +97,38 @@ describe("registerSubCliCommands", () => {
     expect(names).toContain("acp");
     expect(names).toContain("gateway");
     expect(names).toContain("clawbot");
+    expect(names).toContain("qa");
     expect(registerAcpCli).not.toHaveBeenCalled();
+  });
+
+  it("omits the qa placeholder when the private qa bundle is unavailable", () => {
+    isQaLabCliAvailable.mockReturnValue(false);
+
+    const program = createRegisteredProgram(["node", "openclaw"]);
+
+    expect(program.commands.map((cmd) => cmd.name())).not.toContain("qa");
   });
 
   it("re-parses argv for lazy subcommands", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes", "completion"]);
 
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
     expect(nodesAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the infer placeholder and dispatches through the capability registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer", "completion"]);
+
+    await program.parseAsync(["infer"], { from: "user" });
+
+    expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
+    expect(inferAction).toHaveBeenCalledTimes(1);
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {

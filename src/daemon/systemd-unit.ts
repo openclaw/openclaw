@@ -54,15 +54,20 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    "StartLimitBurst=5",
+    "StartLimitIntervalSec=60",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    // KillMode=process ensures systemd only waits for the main process to exit.
-    // Without this, podman's conmon (container monitor) processes block shutdown
-    // since they run as children of the gateway and stay in the same cgroup.
-    "KillMode=process",
+    "RestartPreventExitStatus=78",
+    "TimeoutStopSec=30",
+    "TimeoutStartSec=30",
+    "SuccessExitStatus=0 143",
+    // Keep service children in the same lifecycle so restarts do not leave
+    // orphan ACP/runtime workers behind.
+    "KillMode=control-group",
     workingDirLine,
     ...envLines,
     "",

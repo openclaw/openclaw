@@ -29,7 +29,7 @@ function mkSessionsSpawnToolCall(content: string): AgentMessage {
 
 describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   it("replaces attachments[].content with __OPENCLAW_REDACTED__", () => {
-    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST";
+    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = [mkSessionsSpawnToolCall(secret)];
     const out = sanitizeToolCallInputs(input);
     expect(out).toHaveLength(1);
@@ -44,7 +44,7 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   });
 
   it("redacts attachments content from tool input payloads too", () => {
-    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST";
+    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -72,6 +72,52 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
     expect(
       tool?.input?.attachments?.[0]?.content || tool?.arguments?.attachments?.[0]?.content,
     ).toBe("__OPENCLAW_REDACTED__");
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("replaces non-content attachment payload fields with a minimal redacted stub", () => {
+    const secret = "NESTED_ATTACHMENT_SECRET"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_3",
+            name: "sessions_spawn",
+            input: {
+              task: "do thing",
+              attachments: [
+                {
+                  name: "payload.json",
+                  mimeType: "application/json",
+                  encoding: "utf8",
+                  data: secret,
+                  nested: { secret },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const msg = out[0] as { content?: unknown[] };
+    const tool = (msg.content?.[0] ?? null) as {
+      input?: { attachments?: unknown[] };
+      arguments?: { attachments?: unknown[] };
+    } | null;
+    const attachment =
+      (tool?.input?.attachments?.[0] ?? tool?.arguments?.attachments?.[0] ?? null) as
+        | Record<string, unknown>
+        | null;
+    expect(attachment).toEqual({
+      name: "payload.json",
+      mimeType: "application/json",
+      encoding: "utf8",
+      content: "__OPENCLAW_REDACTED__",
+    });
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 });

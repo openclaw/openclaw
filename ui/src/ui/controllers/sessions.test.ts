@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import {
+  deleteSessionsAndRefresh,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+if (!("window" in globalThis)) {
+  Object.assign(globalThis, {
+    window: {
+      confirm: () => false,
+    },
+  });
+}
 
 function createState(request: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
   return {
@@ -14,6 +27,11 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     ...overrides,
   };
 }
@@ -22,8 +40,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("deleteSessionAndRefresh", () => {
-  it("refreshes sessions after a successful delete", async () => {
+describe("subscribeSessions", () => {
+  it("registers for session change events", async () => {
+    const request = vi.fn(async () => ({ subscribed: true }));
+    const state = createState(request);
+
+    await subscribeSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
+    expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("deleteSessionsAndRefresh", () => {
+  it("deletes multiple sessions and refreshes", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.delete") {
         return { ok: true };
@@ -36,39 +66,44 @@ describe("deleteSessionAndRefresh", () => {
     const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
+    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b"]);
 
-    expect(deleted).toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(deleted).toEqual(["key-a", "key-b"]);
+    expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.delete", {
-      key: "agent:main:test",
+      key: "key-a",
       deleteTranscript: true,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.delete", {
+      key: "key-b",
+      deleteTranscript: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
     });
-    expect(state.sessionsError).toBeNull();
     expect(state.sessionsLoading).toBe(false);
   });
 
-  it("does not refresh sessions when user cancels delete", async () => {
+  it("returns empty array when user cancels", async () => {
     const request = vi.fn(async () => undefined);
-    const state = createState(request, { sessionsError: "existing error" });
+    const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(false);
 
-    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
+    const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toBe(false);
+    expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
-    expect(state.sessionsError).toBe("existing error");
-    expect(state.sessionsLoading).toBe(false);
   });
 
-  it("does not refresh sessions when delete fails and preserves the delete error", async () => {
-    const request = vi.fn(async (method: string) => {
+  it("returns partial results when some deletes fail", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.delete") {
-        throw new Error("delete boom");
+        const p = params as { key: string };
+        if (p.key === "key-b" || p.key === "key-c") {
+          throw new Error(`delete failed: ${p.key}`);
+        }
+        return { ok: true };
       }
       if (method === "sessions.list") {
         return undefined;
@@ -78,27 +113,108 @@ describe("deleteSessionAndRefresh", () => {
     const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
+    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b", "key-c", "key-d"]);
 
-    expect(deleted).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: "agent:main:test",
-      deleteTranscript: true,
-    });
-    expect(state.sessionsError).toContain("delete boom");
+    expect(deleted).toEqual(["key-a", "key-d"]);
+    expect(state.sessionsError).toBe("Error: delete failed: key-b; Error: delete failed: key-c");
     expect(state.sessionsLoading).toBe(false);
   });
-});
 
-describe("deleteSession", () => {
-  it("returns false when already loading", async () => {
+  it("returns empty array when already loading", async () => {
     const request = vi.fn(async () => undefined);
     const state = createState(request, { sessionsLoading: true });
 
-    const deleted = await deleteSession(state, "agent:main:test");
+    const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toBe(false);
+    expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadSessions", () => {
+  it("refreshes expanded checkpoint cards when the row summary changes", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: {},
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 1,
+              compactionCheckpointCount: 1,
+              latestCompactionCheckpoint: {
+                checkpointId: "checkpoint-new",
+                createdAt: 20,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "sessions.compaction.list") {
+        return {
+          ok: true,
+          key: "agent:main:main",
+          checkpoints: [
+            {
+              checkpointId: "checkpoint-new",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: 20,
+              reason: "manual",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionsExpandedCheckpointKey: "agent:main:main",
+      sessionsResult: {
+        ts: 0,
+        path: "(multiple)",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 0,
+            compactionCheckpointCount: 3,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-old",
+              createdAt: 10,
+            },
+          },
+        ],
+      } as never,
+      sessionsCheckpointItemsByKey: {
+        "agent:main:main": [
+          {
+            checkpointId: "checkpoint-old",
+            sessionKey: "agent:main:main",
+            sessionId: "session-old",
+            createdAt: 10,
+            reason: "manual",
+          },
+        ] as never,
+      },
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
+      key: "agent:main:main",
+    });
+    expect(
+      state.sessionsCheckpointItemsByKey["agent:main:main"]?.map((item) => item.checkpointId),
+    ).toEqual(["checkpoint-new"]);
   });
 });

@@ -23,6 +23,7 @@ import {
 } from "./gmail-setup-utils.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   buildTopicPath,
@@ -254,7 +255,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   };
 
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(summary, null, 2));
+    defaultRuntime.writeJson(summary);
     return;
   }
 
@@ -353,7 +354,7 @@ export async function runGmailService(opts: GmailRunOptions) {
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
-  defaultRuntime.log(`Starting gog ${args.join(" ")}`);
+  defaultRuntime.log(`Starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   return spawn("gog", args, { stdio: "inherit" });
 }
 

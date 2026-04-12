@@ -122,7 +122,7 @@ If the user is vague ("text my mom"), ask for the recipient handle or chat guid 
 - Prefer `chat_guid` targets when you have them (especially for group chats).
 - BlueBubbles supports rich actions, but some are macOS-version dependent (for example, edit may be broken on macOS 26 Tahoe).
 - The gateway may expose both short and full message ids; full ids are more durable across restarts.
-- Developer reference for the underlying plugin lives in `extensions/bluebubbles/README.md`.
+- Developer reference for the underlying plugin lives in the BlueBubbles plugin package README.
 
 ## Ideas to try
 

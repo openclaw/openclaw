@@ -1,19 +1,17 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
+import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
-import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
+  extractFastDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./directives.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import type { QueueDropPolicy, QueueMode } from "./queue.js";
-import { extractQueueDirective } from "./queue.js";
+import { extractQueueDirective } from "./queue/directive.js";
+import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
 export type InlineDirectives = {
   cleaned: string;
@@ -23,6 +21,9 @@ export type InlineDirectives = {
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
+  hasFastDirective: boolean;
+  fastMode?: boolean;
+  rawFastMode?: string;
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
@@ -30,7 +31,7 @@ export type InlineDirectives = {
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
   hasExecDirective: boolean;
-  execHost?: ExecHost;
+  execHost?: ExecTarget;
   execSecurity?: ExecSecurity;
   execAsk?: ExecAsk;
   execNode?: string;
@@ -81,11 +82,17 @@ export function parseInlineDirectives(
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
   const {
+    cleaned: fastCleaned,
+    fastMode,
+    rawLevel: rawFastMode,
+    hasDirective: hasFastDirective,
+  } = extractFastDirective(verboseCleaned);
+  const {
     cleaned: reasoningCleaned,
     reasoningLevel,
     rawLevel: rawReasoningLevel,
     hasDirective: hasReasoningDirective,
-  } = extractReasoningDirective(verboseCleaned);
+  } = extractReasoningDirective(fastCleaned);
   const {
     cleaned: elevatedCleaned,
     elevatedLevel,
@@ -151,6 +158,9 @@ export function parseInlineDirectives(
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
+    hasFastDirective,
+    fastMode,
+    rawFastMode,
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,
@@ -187,29 +197,4 @@ export function parseInlineDirectives(
     rawDrop,
     hasQueueOptions,
   };
-}
-
-export function isDirectiveOnly(params: {
-  directives: InlineDirectives;
-  cleanedBody: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}): boolean {
-  const { directives, cleanedBody, ctx, cfg, agentId, isGroup } = params;
-  if (
-    !directives.hasThinkDirective &&
-    !directives.hasVerboseDirective &&
-    !directives.hasReasoningDirective &&
-    !directives.hasElevatedDirective &&
-    !directives.hasExecDirective &&
-    !directives.hasModelDirective &&
-    !directives.hasQueueDirective
-  ) {
-    return false;
-  }
-  const stripped = stripStructuralPrefixes(cleanedBody ?? "");
-  const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
-  return noMentions.length === 0;
 }
