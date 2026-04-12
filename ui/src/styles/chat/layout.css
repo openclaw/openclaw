@@ -983,3 +983,27 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* iOS Safari auto-zoom prevention (#64651)
+ *
+ * Safari on iOS zooms the page when a focused input has font-size < 16px.
+ * This media query targets touch devices and enforces 16px on all
+ * interactive inputs to prevent the unwanted zoom, while preserving the
+ * smaller font-size on desktop where zoom is not an issue.
+ *
+ * @media (hover: none) targets touch-primary devices (phones/tablets).
+ * The config-form textarea is included for the Settings panel.
+ */
+@media (hover: none) and (pointer: coarse) {
+  .chat-compose .chat-compose__field textarea,
+  .cfg-textarea,
+  input[type="text"],
+  input[type="search"],
+  input[type="password"],
+  input[type="email"],
+  input[type="number"],
+  input[type="url"],
+  select {
+    font-size: 16px;
+  }
+}
