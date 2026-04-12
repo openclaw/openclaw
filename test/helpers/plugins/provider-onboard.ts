@@ -43,6 +43,16 @@ export function expectProviderOnboardPrimaryAndFallbacks(params: {
   ]);
 }
 
+export function expectProviderOnboardPreservesPrimary(params: {
+  applyProviderConfig: (config: OpenClawConfig) => OpenClawConfig;
+  primaryModelRef: string;
+}) {
+  const cfg = params.applyProviderConfig({
+    agents: { defaults: { model: { primary: params.primaryModelRef } } },
+  });
+  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(params.primaryModelRef);
+}
+
 export function expectProviderOnboardMergedLegacyConfig(params: {
   applyProviderConfig: (config: OpenClawConfig) => OpenClawConfig;
   providerId: string;
