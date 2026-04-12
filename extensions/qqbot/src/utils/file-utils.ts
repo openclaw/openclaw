@@ -16,7 +16,9 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   "*.myqcloud.com",
   "*.qpic.cn",
   "*.qq.com",
+  "*.qq.com.cn",
   "*.tencentcos.com",
+  "*.ugcimg.cn",
 ];
 
 export const QQBOT_MEDIA_SSRF_POLICY: SsrFPolicy = {
