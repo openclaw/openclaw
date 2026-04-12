@@ -336,6 +336,44 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildDiscordActivityCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  runtimeInfo?: {
+    discordActivityEnabled?: boolean;
+    discordActivityPath?: string;
+    discordActivityTokenRequired?: boolean;
+    discordActivityRequireLaunchContext?: boolean;
+  };
+}) {
+  if (
+    params.isMinimal ||
+    params.runtimeChannel !== "discord" ||
+    params.runtimeInfo?.discordActivityEnabled !== true
+  ) {
+    return [];
+  }
+  const activityPath = params.runtimeInfo.discordActivityPath?.trim() || "/__openclaw__/canvas/";
+  return [
+    "## Discord Activity Canvas",
+    `- Activity canvas path: \`${activityPath}\`.`,
+    "- This is separate from node canvas and does not require a paired node.",
+    '- Launch recipe: update hosted canvas content first, then send a Discord message with `activityLaunchButton=true` (optional `activityLaunchLabel`).',
+    "- Hosted canvas pages expose `window.OpenClaw.discord` (alias: `window.openclawDiscord`) helper APIs.",
+    "- SDK boot: `await OpenClaw.discord.load()`.",
+    "- SDK commands helper: `await OpenClaw.discord.commands.run(name, payload?)`.",
+    "- Common helpers: `commands.openShareMomentDialog(...)`, `commands.openExternalLink(url)`, `commands.openInviteDialog(...)`, `commands.encourageHardwareAcceleration(...)`.",
+    "- OAuth helpers: `oauth.authorize(...)`, `oauth.authenticate(...)`, or `oauth.exchangeAndAuthenticate({ authorize, exchange })`.",
+    params.runtimeInfo.discordActivityTokenRequired
+      ? "- Activity token auth is enabled; direct opens without the configured token are rejected."
+      : "",
+    params.runtimeInfo.discordActivityRequireLaunchContext
+      ? "- Launch-context enforcement is enabled; direct opens outside Discord Activity launch context are rejected."
+      : "",
+    "",
+  ];
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -415,6 +453,10 @@ export function buildAgentSystemPrompt(params: {
     capabilities?: string[];
     repoRoot?: string;
     canvasRootDir?: string;
+    discordActivityEnabled?: boolean;
+    discordActivityPath?: string;
+    discordActivityTokenRequired?: boolean;
+    discordActivityRequireLaunchContext?: boolean;
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -820,6 +862,11 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       runtimeChannel,
       canvasRootDir: params.runtimeInfo?.canvasRootDir,
+    }),
+    ...buildDiscordActivityCanvasSection({
+      isMinimal,
+      runtimeChannel,
+      runtimeInfo: params.runtimeInfo,
     }),
     ...buildMessagingSection({
       isMinimal,

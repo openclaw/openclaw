@@ -26,6 +26,10 @@ export type RuntimeInfoInput = {
   channelActions?: string[];
   repoRoot?: string;
   canvasRootDir?: string;
+  discordActivityEnabled?: boolean;
+  discordActivityPath?: string;
+  discordActivityTokenRequired?: boolean;
+  discordActivityRequireLaunchContext?: boolean;
 };
 
 export type SystemPromptRuntimeParams = {
@@ -61,6 +65,15 @@ export function buildSystemPromptParams(params: {
       ...params.runtime,
       repoRoot,
       canvasRootDir,
+      discordActivityEnabled: params.config?.canvasHost?.activity?.enabled === true,
+      discordActivityPath:
+        params.config?.canvasHost?.activity?.enabled === true ? "/__openclaw__/canvas/" : undefined,
+      discordActivityTokenRequired:
+        params.config?.canvasHost?.activity?.enabled === true &&
+        Boolean(params.config?.canvasHost?.activity?.token?.trim()),
+      discordActivityRequireLaunchContext:
+        params.config?.canvasHost?.activity?.enabled === true &&
+        params.config?.canvasHost?.activity?.requireLaunchContext !== false,
     },
     userTimezone,
     userTime,

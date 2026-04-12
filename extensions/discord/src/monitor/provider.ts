@@ -322,18 +322,126 @@ async function deployDiscordCommands(params: {
     err instanceof RateLimitError &&
     err.discordCode === 30034 &&
     /daily application command creates/i.test(err.message);
+  const isEntryPointBulkUpdateRejected = (err: unknown) => {
+    if (!err || typeof err !== "object") {
+      return false;
+    }
+    const status = (err as DiscordDeployErrorLike).status;
+    const code = (err as DiscordDeployErrorLike).discordCode;
+    const rawBody = (err as DiscordDeployErrorLike).rawBody;
+    const messageParts = [
+      formatErrorMessage(err),
+      typeof rawBody === "string"
+        ? rawBody
+        : rawBody && typeof rawBody === "object" && "message" in rawBody
+          ? String((rawBody as { message?: unknown }).message ?? "")
+          : "",
+    ];
+    const joinedMessage = messageParts.join(" ");
+    return (
+      status === 400 &&
+      (code === 50240 || String(code) === "50240") &&
+      /entry point command/i.test(joinedMessage)
+    );
+  };
   const restClient = params.client.rest as {
     put: (path: string, data?: unknown, query?: unknown) => Promise<unknown>;
+    get?: (path: string, query?: unknown) => Promise<unknown>;
     options?: { queueRequests?: boolean };
   };
   const originalPut = restClient.put.bind(restClient);
   const previousQueueRequests = restClient.options?.queueRequests;
+  const isGlobalApplicationCommandsPath = (path: string) => /^\/applications\/\d+\/commands$/.test(path);
+  const readCommandType = (value: unknown): number | undefined => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  };
+  const isPrimaryEntryPointCommand = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) &&
+    typeof value === "object" &&
+    readCommandType((value as { type?: unknown }).type) === 4;
+  const toEntryPointDeployPayload = (value: Record<string, unknown>): Record<string, unknown> => {
+    const payload: Record<string, unknown> = { type: 4 };
+    const allowedKeys = [
+      "name",
+      "name_localizations",
+      "description",
+      "description_localizations",
+      "options",
+      "default_member_permissions",
+      "dm_permission",
+      "default_permission",
+      "nsfw",
+      "integration_types",
+      "contexts",
+      "handler",
+    ];
+    for (const key of allowedKeys) {
+      if (value[key] !== undefined) {
+        payload[key] = value[key];
+      }
+    }
+    return payload;
+  };
+  let cachedPrimaryEntryPointPayload: Record<string, unknown> | null | undefined;
+  const loadPrimaryEntryPointPayload = async (path: string): Promise<Record<string, unknown> | null> => {
+    if (cachedPrimaryEntryPointPayload !== undefined) {
+      return cachedPrimaryEntryPointPayload;
+    }
+    const restGet = typeof restClient.get === "function" ? restClient.get.bind(restClient) : null;
+    if (!restGet || !isGlobalApplicationCommandsPath(path)) {
+      cachedPrimaryEntryPointPayload = null;
+      return null;
+    }
+    try {
+      const existingCommands = await restGet(path);
+      const entryPoint = Array.isArray(existingCommands)
+        ? existingCommands.find((command) => isPrimaryEntryPointCommand(command))
+        : undefined;
+      cachedPrimaryEntryPointPayload = entryPoint ? toEntryPointDeployPayload(entryPoint) : null;
+      return cachedPrimaryEntryPointPayload;
+    } catch {
+      cachedPrimaryEntryPointPayload = null;
+      return null;
+    }
+  };
+  const maybeInjectPrimaryEntryPoint = async (path: string, body: unknown): Promise<unknown> => {
+    if (!isGlobalApplicationCommandsPath(path) || !Array.isArray(body)) {
+      return body;
+    }
+    if (body.some((command) => isPrimaryEntryPointCommand(command))) {
+      return body;
+    }
+    const entryPointPayload = await loadPrimaryEntryPointPayload(path);
+    if (!entryPointPayload) {
+      return body;
+    }
+    params.runtime.log?.(
+      warn(
+        `discord: auto-including existing Entry Point command in bulk deploy for ${accountId}.`,
+      ),
+    );
+    return [...body, entryPointPayload];
+  };
   restClient.put = async (path: string, data?: unknown, query?: unknown) => {
     const startedAt = Date.now();
-    const body =
+    const originalBody =
       data && typeof data === "object" && "body" in data
         ? (data as { body?: unknown }).body
         : undefined;
+    const body = await maybeInjectPrimaryEntryPoint(path, originalBody);
+    const requestData =
+      body !== originalBody && data && typeof data === "object" && "body" in data
+        ? { ...(data as Record<string, unknown>), body }
+        : data;
     const commandCount = Array.isArray(body) ? body.length : undefined;
     const bodyBytes =
       body === undefined
@@ -345,7 +453,7 @@ async function deployDiscordCommands(params: {
       );
     }
     try {
-      const result = await originalPut(path, data, query);
+      const result = await originalPut(path, requestData, query);
       if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
         params.runtime.log?.(
           `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
@@ -381,6 +489,9 @@ async function deployDiscordCommands(params: {
             ),
           );
           return;
+        }
+        if (isEntryPointBulkUpdateRejected(err)) {
+          throw err;
         }
         if (!(err instanceof RateLimitError) || attempt >= maxAttempts) {
           throw err;

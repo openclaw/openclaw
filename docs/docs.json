@@ -1006,6 +1006,7 @@
                 "pages": [
                   "channels/bluebubbles",
                   "channels/discord",
+                  "channels/discord-activities",
                   "channels/feishu",
                   "channels/googlechat",
                   "channels/imessage",

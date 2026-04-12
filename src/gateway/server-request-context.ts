@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { A2uiActivityHub } from "./a2ui-activity.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -31,6 +32,7 @@ export type GatewayRequestContextParams = {
   clients: Set<GatewayRequestContextClient>;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  a2uiActivityHub?: A2uiActivityHub;
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
@@ -124,6 +126,7 @@ export function createGatewayRequestContext(
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
     nodeRegistry: params.nodeRegistry,
+    a2uiActivityHub: params.a2uiActivityHub,
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatAbortedRuns: params.chatAbortedRuns,

@@ -307,5 +307,105 @@
         };
       })();
     </script>
+    <script>
+      (() => {
+        const hasNativeBridge =
+          !!window.webkit?.messageHandlers?.openclawCanvasA2UIAction ||
+          (window.openclawCanvasA2UIAction &&
+            typeof window.openclawCanvasA2UIAction.postMessage === "function");
+        if (hasNativeBridge) {
+          return;
+        }
+
+        const a2ui = window.openclawA2UI;
+        if (!a2ui || typeof a2ui.applyMessages !== "function") {
+          return;
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const activityToken = params.get("activityToken") ?? params.get("a2uiToken") ?? "";
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        const query = activityToken ? `?activityToken=${encodeURIComponent(activityToken)}` : "";
+        const wsUrl = `${proto}://${window.location.host}/__openclaw__/a2ui/ws${query}`;
+
+        const parseJsonl = (jsonl) => {
+          if (typeof jsonl !== "string") {
+            return [];
+          }
+          const messages = [];
+          for (const line of jsonl.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              continue;
+            }
+            try {
+              messages.push(JSON.parse(trimmed));
+            } catch (error) {
+              console.warn("A2UI activity bridge JSONL parse failed", error);
+            }
+          }
+          return messages;
+        };
+
+        let reconnectTimer = null;
+        let retries = 0;
+
+        const scheduleReconnect = () => {
+          if (reconnectTimer) {
+            return;
+          }
+          const delay = Math.min(1000 * 2 ** Math.min(retries, 5), 15000);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            retries += 1;
+            connect();
+          }, delay);
+        };
+
+        const connect = () => {
+          let ws;
+          try {
+            ws = new WebSocket(wsUrl);
+          } catch (error) {
+            console.warn("A2UI activity bridge connection failed", error);
+            scheduleReconnect();
+            return;
+          }
+
+          ws.onopen = () => {
+            retries = 0;
+          };
+          ws.onclose = () => {
+            scheduleReconnect();
+          };
+          ws.onerror = () => {};
+          ws.onmessage = (event) => {
+            if (!event?.data) {
+              return;
+            }
+            let payload;
+            try {
+              payload = JSON.parse(String(event.data));
+            } catch {
+              return;
+            }
+            if (payload?.type === "a2ui.reset") {
+              if (typeof a2ui.reset === "function") {
+                a2ui.reset();
+              }
+              return;
+            }
+            if (payload?.type === "a2ui.push" || payload?.type === "a2ui.state") {
+              const messages = parseJsonl(payload.jsonl ?? "");
+              if (messages.length > 0) {
+                a2ui.applyMessages(messages);
+              }
+            }
+          };
+        };
+
+        connect();
+      })();
+    </script>
   </body>
 </html>

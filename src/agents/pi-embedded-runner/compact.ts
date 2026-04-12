@@ -648,6 +648,15 @@ export async function compactEmbeddedPiSessionDirect(
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
       channelActions,
+      discordActivityEnabled: params.config?.canvasHost?.activity?.enabled === true,
+      discordActivityPath:
+        params.config?.canvasHost?.activity?.enabled === true ? "/__openclaw__/canvas/" : undefined,
+      discordActivityTokenRequired:
+        params.config?.canvasHost?.activity?.enabled === true &&
+        Boolean(params.config?.canvasHost?.activity?.token?.trim()),
+      discordActivityRequireLaunchContext:
+        params.config?.canvasHost?.activity?.enabled === true &&
+        params.config?.canvasHost?.activity?.requireLaunchContext !== false,
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(provider, {

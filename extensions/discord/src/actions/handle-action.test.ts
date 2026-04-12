@@ -71,6 +71,31 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("passes activityLaunchButton helpers through send actions", async () => {
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        activityLaunchButton: true,
+        activityLaunchLabel: "Open Canvas",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        activityLaunchButton: true,
+        activityLaunchLabel: "Open Canvas",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("rejects reactions when no message id source is available", async () => {
     await expect(
       handleDiscordMessageAction({

@@ -678,6 +678,37 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
   });
 
+  it("continues startup when Discord rejects bulk deploy that removes the Entry Point command", async () => {
+    const runtime = baseRuntime();
+    const entryPointError = Object.assign(
+      new Error(
+        "You cannot remove this app's Entry Point command in a bulk update operation. Please include the Entry Point command in your update request or delete it separately.",
+      ),
+      {
+        status: 400,
+        discordCode: 50240,
+        rawBody: {
+          code: 50240,
+          message:
+            "You cannot remove this app's Entry Point command in a bulk update operation. Please include the Entry Point command in your update request or delete it separately.",
+        },
+      },
+    );
+    clientHandleDeployRequestMock.mockRejectedValueOnce(entryPointError);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("failed to deploy native commands"),
+    );
+  });
+
   it("formats rejected Discord deploy entries with command details", () => {
     const details = providerTesting.formatDiscordDeployErrorDetails({
       status: 400,

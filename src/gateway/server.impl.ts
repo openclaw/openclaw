@@ -411,6 +411,7 @@ export async function startGatewayServer(
   log.info("starting HTTP server...");
   const {
     canvasHost,
+    a2uiActivityHub,
     releasePluginRouteRegistry,
     httpServer,
     httpServers,
@@ -511,6 +512,7 @@ export async function startGatewayServer(
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       canvasHost,
       canvasHostServer,
+      a2uiActivityHub,
       releasePluginRouteRegistry,
       stopChannel,
       pluginServices: runtimeState.pluginServices,
@@ -655,6 +657,7 @@ export async function startGatewayServer(
         });
       },
       nodeRegistry,
+      a2uiActivityHub,
       agentRunSeq,
       chatAbortControllers,
       chatAbortedRuns: chatRunState.abortedRuns,
@@ -801,6 +804,7 @@ export async function startGatewayServer(
     tailscaleCleanup: runtimeState.tailscaleCleanup,
     canvasHost,
     canvasHostServer,
+    a2uiActivityHub,
     releasePluginRouteRegistry,
     stopChannel,
     pluginServices: runtimeState.pluginServices,

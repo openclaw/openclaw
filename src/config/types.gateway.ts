@@ -38,6 +38,15 @@ export type DiscoveryConfig = {
   mdns?: MdnsDiscoveryConfig;
 };
 
+export type CanvasHostActivityConfig = {
+  /** Enable Discord Activity bridge for A2UI. */
+  enabled?: boolean;
+  /** Optional shared token for public A2UI activity access. */
+  token?: string;
+  /** Require Discord launch context markers before allowing activity-scoped auth bypass (default: true). */
+  requireLaunchContext?: boolean;
+};
+
 export type CanvasHostConfig = {
   enabled?: boolean;
   /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
@@ -46,6 +55,8 @@ export type CanvasHostConfig = {
   port?: number;
   /** Enable live-reload file watching + WS reloads (default: true). */
   liveReload?: boolean;
+  /** Optional A2UI activity bridge configuration. */
+  activity?: CanvasHostActivityConfig;
 };
 
 export type TalkProviderConfig = {

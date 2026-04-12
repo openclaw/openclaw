@@ -8,6 +8,8 @@ import { resolveFileWithinRoot } from "./file-resolver.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
 
+export const A2UI_ACTIVITY_WS_PATH = "/__openclaw__/a2ui/ws";
+
 export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 export const CANVAS_WS_PATH = "/__openclaw__/ws";
@@ -119,6 +121,204 @@ export function injectCanvasLiveReload(html: string): string {
   globalThis.OpenClaw.sendUserAction = sendUserAction;
   globalThis.openclawPostMessage = postToNode;
   globalThis.openclawSendUserAction = sendUserAction;
+
+  const createDiscordActivityHelper = () => {
+    const params = new URLSearchParams(location.search);
+    const host = String(location.host || "").toLowerCase();
+    const isDiscordHost = host.endsWith(".discordsays.com");
+    const hasLaunchContext = ["instance_id", "frame_id", "platform"].some((key) => {
+      const raw = params.get(key);
+      return typeof raw === "string" && raw.trim().length > 0;
+    });
+    const isActivityContext = isDiscordHost || hasLaunchContext;
+    const defaultClientId = (() => {
+      const hostPrefix = String(location.hostname || "").split(".")[0] || "";
+      return /^\d{17,22}$/.test(hostPrefix) ? hostPrefix : "";
+    })();
+
+    const state = {
+      isActivityContext,
+      isDiscordHost,
+      hasLaunchContext,
+      clientId: defaultClientId || undefined,
+      sdk: undefined,
+      ready: false,
+      error: undefined,
+      _loadPromise: undefined,
+    };
+
+    const resolveClientId = (override) => {
+      const trimmed = typeof override === "string" ? override.trim() : "";
+      if (trimmed) {
+        return trimmed;
+      }
+      return state.clientId;
+    };
+
+    const load = async (options = {}) => {
+      if (!state.isActivityContext) {
+        state.error = "Not running inside Discord Activity context.";
+        return null;
+      }
+      if (state.ready && state.sdk) {
+        return state.sdk;
+      }
+      if (!state._loadPromise) {
+        state._loadPromise = (async () => {
+          try {
+            const moduleFromGlobal = globalThis.DiscordSDK ? { DiscordSDK: globalThis.DiscordSDK } : null;
+            let sdkModule = moduleFromGlobal;
+            if (!sdkModule) {
+              try {
+                sdkModule = await import("https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk/+esm");
+              } catch {
+                sdkModule = await import("https://esm.sh/@discord/embedded-app-sdk");
+              }
+            }
+            const DiscordSDK = sdkModule?.DiscordSDK;
+            if (typeof DiscordSDK !== "function") {
+              throw new Error("DiscordSDK constructor missing from @discord/embedded-app-sdk");
+            }
+            const clientId = resolveClientId(options.clientId);
+            if (!clientId) {
+              throw new Error("Unable to resolve Discord client id from hostname; pass clientId explicitly.");
+            }
+            const sdk = new DiscordSDK(clientId);
+            const readyTimeoutMs =
+              typeof options.readyTimeoutMs === "number" && Number.isFinite(options.readyTimeoutMs)
+                ? Math.max(250, options.readyTimeoutMs)
+                : 6000;
+            await Promise.race([
+              sdk.ready(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("DiscordSDK.ready() timed out")), readyTimeoutMs),
+              ),
+            ]);
+            state.clientId = clientId;
+            state.sdk = sdk;
+            state.ready = true;
+            state.error = undefined;
+            return sdk;
+          } catch (error) {
+            state.error = error instanceof Error ? error.message : String(error);
+            state.ready = false;
+            state.sdk = undefined;
+            throw error;
+          }
+        })();
+      }
+      return await state._loadPromise;
+    };
+
+    const requireActivityContext = async (options = {}) => {
+      if (!state.isActivityContext) {
+        state.error = "Discord Activity context required.";
+        return false;
+      }
+      if (options.requireReady === false) {
+        return true;
+      }
+      try {
+        await load(options);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const requireSdk = async (options = {}) => {
+      const sdk = await load(options);
+      if (!sdk) {
+        throw new Error("Discord Activity SDK unavailable in this context.");
+      }
+      return sdk;
+    };
+
+    const runCommand = async (name, params = undefined, options = {}) => {
+      const sdk = await requireSdk(options);
+      const commands = sdk && sdk.commands ? sdk.commands : undefined;
+      const fn = commands ? commands[name] : undefined;
+      if (typeof fn !== "function") {
+        throw new Error('Discord SDK command unavailable: ' + String(name));
+      }
+      return params === undefined ? await fn.call(commands) : await fn.call(commands, params);
+    };
+
+    const commands = {
+      run: runCommand,
+      openExternalLink: async (params, options = {}) => {
+        const payload =
+          typeof params === "string" ? { url: params } : params && typeof params === "object" ? params : {};
+        return await runCommand("openExternalLink", payload, options);
+      },
+      openInviteDialog: async (params = {}, options = {}) =>
+        await runCommand("openInviteDialog", params, options),
+      openShareMomentDialog: async (params = {}, options = {}) =>
+        await runCommand("openShareMomentDialog", params, options),
+      encourageHardwareAcceleration: async (params = {}, options = {}) =>
+        await runCommand("encourageHardwareAcceleration", params, options),
+      getChannel: async (options = {}) => await runCommand("getChannel", undefined, options),
+      getInstanceConnectedParticipants: async (options = {}) =>
+        await runCommand("getInstanceConnectedParticipants", undefined, options),
+    };
+
+    const oauth = {
+      authorize: async (params = {}, options = {}) => await runCommand("authorize", params, options),
+      authenticate: async (params = {}, options = {}) =>
+        await runCommand("authenticate", params, options),
+      exchangeAndAuthenticate: async (params = {}) => {
+        const authorizeResult = await runCommand("authorize", params.authorize ?? {}, params.load ?? {});
+        const code =
+          authorizeResult && typeof authorizeResult.code === "string"
+            ? authorizeResult.code.trim()
+            : "";
+        if (!code) {
+          throw new Error("Discord authorize did not return an OAuth code.");
+        }
+        if (typeof params.exchange !== "function") {
+          throw new Error("exchangeAndAuthenticate requires an exchange({ code, authorizeResult }) callback.");
+        }
+        const tokenPayload = await params.exchange({ code, authorizeResult });
+        if (!tokenPayload || typeof tokenPayload !== "object") {
+          throw new Error("OAuth exchange callback must return an auth payload object.");
+        }
+        return await runCommand("authenticate", tokenPayload, params.load ?? {});
+      },
+    };
+
+    return {
+      get isActivityContext() {
+        return state.isActivityContext;
+      },
+      get isDiscordHost() {
+        return state.isDiscordHost;
+      },
+      get hasLaunchContext() {
+        return state.hasLaunchContext;
+      },
+      get clientId() {
+        return state.clientId;
+      },
+      get sdk() {
+        return state.sdk;
+      },
+      get ready() {
+        return state.ready;
+      },
+      get error() {
+        return state.error;
+      },
+      load,
+      requireActivityContext,
+      commands,
+      oauth,
+    };
+  };
+
+  if (!globalThis.OpenClaw.discord) {
+    globalThis.OpenClaw.discord = createDiscordActivityHelper();
+  }
+  globalThis.openclawDiscord = globalThis.OpenClaw.discord;
 
   try {
     const cap = new URLSearchParams(location.search).get("oc_cap");

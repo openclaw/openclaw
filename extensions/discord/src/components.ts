@@ -235,8 +235,19 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
   const obj = requireObject(raw, label);
   const style = readOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
   const url = readOptionalString(obj.url);
+  const actionRaw = readOptionalString(obj.action);
+  const action =
+    normalizeLowercaseStringOrEmpty(actionRaw) === "launch-activity"
+      ? "launch-activity"
+      : undefined;
+  if (actionRaw && !action) {
+    throw new Error(`${label}.action must be "launch-activity"`);
+  }
   if ((style === "link" || url) && !url) {
     throw new Error(`${label}.url is required for link buttons`);
+  }
+  if (action && (style === "link" || url)) {
+    throw new Error(`${label}.action is not supported for link buttons`);
   }
   return {
     label: readString(obj.label, `${label}.label`),
@@ -256,6 +267,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
         : undefined,
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
+    action,
   };
 }
 
@@ -545,6 +557,7 @@ function createButtonComponent(params: {
       callbackData: params.spec.callbackData,
       modalId: params.modalId,
       allowedUsers: params.spec.allowedUsers,
+      action: params.spec.action,
     },
   };
 }

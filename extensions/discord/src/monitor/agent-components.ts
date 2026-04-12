@@ -17,7 +17,7 @@ import {
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
-import { ButtonStyle, ChannelType } from "discord-api-types/v10";
+import { ButtonStyle, ChannelType, InteractionResponseType, Routes } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
@@ -164,6 +164,48 @@ export function resolveDiscordComponentOriginatingTo(
     userId: interactionCtx.userId,
     channelId: interactionCtx.channelId,
   });
+}
+
+async function launchDiscordActivityFromInteraction(params: {
+  interaction: AgentComponentMessageInteraction;
+  replyOpts: { ephemeral?: boolean };
+  label: string;
+}): Promise<boolean> {
+  const interactionId = params.interaction.rawData?.id;
+  const interactionToken = params.interaction.rawData?.token;
+  if (!interactionId || !interactionToken) {
+    logError(`${params.label}: missing interaction id/token for activity launch`);
+    try {
+      await params.interaction.reply({
+        content: "Unable to launch the activity right now.",
+        ...params.replyOpts,
+      });
+    } catch {
+      // interaction may have expired
+    }
+    return false;
+  }
+
+  try {
+    await params.interaction.client.rest.post(
+      Routes.interactionCallback(interactionId, interactionToken),
+      {
+        body: { type: InteractionResponseType.LaunchActivity },
+      },
+    );
+    return true;
+  } catch (error) {
+    logError(`${params.label}: failed to launch activity: ${String(error)}`);
+    try {
+      await params.interaction.reply({
+        content: "Failed to launch the activity.",
+        ...params.replyOpts,
+      });
+    } catch {
+      // interaction may have expired
+    }
+    return false;
+  }
 }
 
 async function dispatchPluginDiscordInteractiveEvent(params: {
@@ -715,6 +757,26 @@ async function handleDiscordComponentEvent(params: {
     } catch {
       // Interaction may have expired
     }
+    return;
+  }
+
+  if (consumed.action === "launch-activity") {
+    if (!rawGuildId) {
+      try {
+        await params.interaction.reply({
+          content: "Discord Activities can only be launched from server channels.",
+          ephemeral: true,
+        });
+      } catch {
+        // Interaction may have expired
+      }
+      return;
+    }
+    await launchDiscordActivityFromInteraction({
+      interaction: params.interaction,
+      replyOpts,
+      label: params.label,
+    });
     return;
   }
 

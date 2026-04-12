@@ -125,6 +125,10 @@ describe("canvas host", () => {
     expect(out).toContain("location.reload");
     expect(out).toContain("openclawCanvasA2UIAction");
     expect(out).toContain("openclawSendUserAction");
+    expect(out).toContain("OpenClaw.discord");
+    expect(out).toContain("openShareMomentDialog");
+    expect(out).toContain("exchangeAndAuthenticate");
+    expect(out).not.toContain("OpenClaw.discord.load().catch");
   });
 
   it("creates a default index.html when missing", async () => {

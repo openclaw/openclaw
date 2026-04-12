@@ -463,10 +463,21 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         stripPatterns: () => ["<@!?\\d+>"],
       },
       agentPrompt: {
-        messageToolHints: () => [
-          "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
-          "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
-        ],
+        messageToolHints: ({ cfg }) => {
+          const hints = [
+            "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
+            "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
+          ];
+          if (cfg.canvasHost?.activity?.enabled === true) {
+            hints.push(
+              '- Discord Activity launch: set `activityLaunchButton=true` (optional `activityLaunchLabel`) for a ready-to-use launch button, or set a component button with `action: "launch-activity"`.',
+            );
+            hints.push(
+              '- Discord Activity flow: update hosted canvas content under `/__openclaw__/canvas/` first, then send the launch button.',
+            );
+          }
+          return hints;
+        },
       },
       messaging: {
         normalizeTarget: normalizeDiscordMessagingTarget,

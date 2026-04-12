@@ -114,6 +114,8 @@ describe("discordMessageActions", () => {
     }
 
     expect(Type.Object(schema.properties).required).toBeUndefined();
+    expect(schema.properties).toHaveProperty("activityLaunchButton");
+    expect(schema.properties).toHaveProperty("activityLaunchLabel");
   });
 
   it("extracts send targets for message and thread reply actions", () => {

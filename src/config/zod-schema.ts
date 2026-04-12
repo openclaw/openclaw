@@ -657,6 +657,14 @@ export const OpenClawSchema = z
         root: z.string().optional(),
         port: z.number().int().positive().optional(),
         liveReload: z.boolean().optional(),
+        activity: z
+          .object({
+            enabled: z.boolean().optional(),
+            token: z.string().optional().register(sensitive),
+            requireLaunchContext: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

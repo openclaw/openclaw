@@ -28,6 +28,11 @@ const discordComponentButtonSchema = Type.Object({
       }),
     ),
   ),
+  action: Type.Optional(
+    stringEnum(["launch-activity"], {
+      description: "Special button action (launches this app's Discord Activity).",
+    }),
+  ),
 });
 
 const discordComponentSelectSchema = Type.Object({
@@ -87,6 +92,22 @@ const discordComponentModalSchema = Type.Object({
   triggerStyle: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
   fields: Type.Array(discordComponentModalFieldSchema),
 });
+
+export function createDiscordMessageToolActivityLaunchSchemaProperties() {
+  return {
+    activityLaunchButton: Type.Optional(
+      Type.Boolean({
+        description:
+          'Auto-add a Discord Activity launch button (equivalent to components button action="launch-activity").',
+      }),
+    ),
+    activityLaunchLabel: Type.Optional(
+      Type.String({
+        description: 'Optional label for activityLaunchButton (defaults to "Open Activity").',
+      }),
+    ),
+  };
+}
 
 export function createDiscordMessageToolComponentsSchema() {
   return Type.Object(

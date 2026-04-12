@@ -13,6 +13,7 @@ import {
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createA2uiActivityHub, type A2uiActivityHub } from "./a2ui-activity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -79,6 +80,7 @@ export async function createGatewayRuntimeState(params: {
   getReadiness?: ReadinessChecker;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
+  a2uiActivityHub: A2uiActivityHub;
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -130,6 +132,10 @@ export async function createGatewayRuntimeState(params: {
         params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);
       }
     }
+
+    const a2uiActivityHub = createA2uiActivityHub({
+      activity: params.cfg.canvasHost?.activity,
+    });
 
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
@@ -221,6 +227,7 @@ export async function createGatewayRuntimeState(params: {
         httpServer: server,
         wss,
         canvasHost,
+        a2uiActivityHub,
         clients,
         preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
@@ -242,6 +249,7 @@ export async function createGatewayRuntimeState(params: {
 
     return {
       canvasHost,
+      a2uiActivityHub,
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.
         releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);

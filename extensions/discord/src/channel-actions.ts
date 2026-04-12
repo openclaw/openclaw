@@ -16,7 +16,10 @@ import {
   listEnabledDiscordAccounts,
   resolveDiscordAccount,
 } from "./accounts.js";
-import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+import {
+  createDiscordMessageToolActivityLaunchSchemaProperties,
+  createDiscordMessageToolComponentsSchema,
+} from "./message-tool-schema.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -161,6 +164,7 @@ function describeDiscordMessageTool({
     schema: {
       properties: {
         components: Type.Optional(createDiscordMessageToolComponentsSchema()),
+        ...createDiscordMessageToolActivityLaunchSchemaProperties(),
       },
     },
   };

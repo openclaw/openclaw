@@ -299,7 +299,27 @@ export async function handleDiscordMessagingAction(
       const to = readStringParam(params, "to", { required: true });
       const asVoice = params.asVoice === true;
       const silent = params.silent === true;
-      const rawComponents = params.components;
+      const activityLaunchButton = readBooleanParam(params, "activityLaunchButton") === true;
+      const activityLaunchLabel = readStringParam(params, "activityLaunchLabel")?.trim();
+      if (activityLaunchButton && params.components !== undefined) {
+        throw new Error("activityLaunchButton cannot be combined with components.");
+      }
+      const rawComponents = activityLaunchButton
+        ? {
+            blocks: [
+              {
+                type: "actions",
+                buttons: [
+                  {
+                    label: activityLaunchLabel || "Open Activity",
+                    style: "primary",
+                    action: "launch-activity",
+                  },
+                ],
+              },
+            ],
+          }
+        : params.components;
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
         : null;

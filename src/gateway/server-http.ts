@@ -8,13 +8,23 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { A2UI_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
+import {
+  A2UI_ACTIVITY_WS_PATH,
+  A2UI_PATH,
+  CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
+} from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import {
+  DISCORD_ACTIVITY_CONTEXT_COOKIE_KEY,
+  hasDiscordActivityLaunchContext,
+  type A2uiActivityHub,
+} from "./a2ui-activity.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
@@ -1003,11 +1013,48 @@ export function createGatewayHttpServer(opts: {
               clients,
               canvasCapability: scopedCanvas.capability,
               malformedScopedPath: scopedCanvas.malformedScopedPath,
+              activity: configSnapshot.canvasHost?.activity,
               rateLimiter,
             });
             if (!ok.ok) {
               sendGatewayAuthFailure(res, ok);
               return true;
+            }
+            const appendSetCookie = (value: string) => {
+              const existingCookies = res.getHeader("Set-Cookie");
+              if (!existingCookies) {
+                res.setHeader("Set-Cookie", value);
+                return;
+              }
+              if (Array.isArray(existingCookies)) {
+                res.setHeader("Set-Cookie", [...existingCookies, value]);
+                return;
+              }
+              res.setHeader("Set-Cookie", [String(existingCookies), value]);
+            };
+            const secureCookieSuffix =
+              req.socket && "encrypted" in req.socket && req.socket.encrypted ? "; Secure" : "";
+            const canvasUrl = new URL(req.url ?? "/", "http://localhost");
+            const activityConfig = configSnapshot.canvasHost?.activity;
+            const configuredActivityToken = activityConfig?.token?.trim();
+            if (configuredActivityToken) {
+              const queryActivityToken =
+                canvasUrl.searchParams.get("activityToken") ??
+                canvasUrl.searchParams.get("a2uiToken");
+              if (queryActivityToken?.trim() === configuredActivityToken) {
+                appendSetCookie(
+                  `openclawActivityToken=${encodeURIComponent(configuredActivityToken)}; Path=/__openclaw__/; HttpOnly; SameSite=Lax; Max-Age=600${secureCookieSuffix}`,
+                );
+              }
+            }
+            if (
+              activityConfig?.enabled === true &&
+              activityConfig.requireLaunchContext !== false &&
+              hasDiscordActivityLaunchContext(req)
+            ) {
+              appendSetCookie(
+                `${DISCORD_ACTIVITY_CONTEXT_COOKIE_KEY}=1; Path=/__openclaw__/; HttpOnly; SameSite=Lax; Max-Age=600${secureCookieSuffix}`,
+              );
             }
             return false;
           },
@@ -1114,6 +1161,7 @@ export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
   canvasHost: CanvasHostHandler | null;
+  a2uiActivityHub?: A2uiActivityHub;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
@@ -1124,6 +1172,7 @@ export function attachGatewayUpgradeHandler(opts: {
     httpServer,
     wss,
     canvasHost,
+    a2uiActivityHub,
     clients,
     preauthConnectionBudget,
     resolvedAuth,
@@ -1145,7 +1194,9 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
-        if (url.pathname === CANVAS_WS_PATH) {
+        const isCanvasWs = url.pathname === CANVAS_WS_PATH;
+        const isA2uiActivityWs = url.pathname === A2UI_ACTIVITY_WS_PATH;
+        if (isCanvasWs || isA2uiActivityWs) {
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -1154,6 +1205,7 @@ export function attachGatewayUpgradeHandler(opts: {
             clients,
             canvasCapability: scopedCanvas.capability,
             malformedScopedPath: scopedCanvas.malformedScopedPath,
+            activity: configSnapshot.canvasHost?.activity,
             rateLimiter,
           });
           if (!ok.ok) {
@@ -1161,6 +1213,14 @@ export function attachGatewayUpgradeHandler(opts: {
             socket.destroy();
             return;
           }
+        }
+        if (isA2uiActivityWs) {
+          const handled = await a2uiActivityHub?.handleUpgrade(req, socket, head);
+          if (handled) {
+            return;
+          }
+          socket.destroy();
+          return;
         }
         if (canvasHost.handleUpgrade(req, socket, head)) {
           return;

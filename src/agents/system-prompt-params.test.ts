@@ -110,4 +110,52 @@ describe("buildSystemPromptParams repo root", () => {
 
     expect(runtimeInfo.canvasRootDir).toBe(path.resolve(path.join(resolveStateDir(), "canvas")));
   });
+
+  it("includes Discord activity runtime details only when activity mode is enabled", async () => {
+    const workspaceDir = await makeTempDir("discord-activity-runtime");
+
+    const disabled = buildParams({
+      workspaceDir,
+      config: {
+        canvasHost: {
+          activity: {
+            enabled: false,
+            token: "secret",
+          },
+        },
+      },
+    }).runtimeInfo;
+    expect(disabled.discordActivityEnabled).toBe(false);
+    expect(disabled.discordActivityPath).toBeUndefined();
+    expect(disabled.discordActivityTokenRequired).toBe(false);
+
+    const enabled = buildParams({
+      workspaceDir,
+      config: {
+        canvasHost: {
+          activity: {
+            enabled: true,
+            token: "secret",
+          },
+        },
+      },
+    }).runtimeInfo;
+    expect(enabled.discordActivityEnabled).toBe(true);
+    expect(enabled.discordActivityPath).toBe("/__openclaw__/canvas/");
+    expect(enabled.discordActivityTokenRequired).toBe(true);
+    expect(enabled.discordActivityRequireLaunchContext).toBe(true);
+
+    const explicitOff = buildParams({
+      workspaceDir,
+      config: {
+        canvasHost: {
+          activity: {
+            enabled: true,
+            requireLaunchContext: false,
+          },
+        },
+      },
+    }).runtimeInfo;
+    expect(explicitOff.discordActivityRequireLaunchContext).toBe(false);
+  });
 });

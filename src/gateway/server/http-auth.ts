@@ -1,6 +1,13 @@
 import type { IncomingMessage } from "node:http";
-import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../../canvas-host/a2ui.js";
+import {
+  A2UI_ACTIVITY_WS_PATH,
+  A2UI_PATH,
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+} from "../../canvas-host/a2ui.js";
+import type { CanvasHostActivityConfig } from "../../config/types.gateway.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import { isCanvasActivityAccessAllowed } from "../a2ui-activity.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -17,7 +24,8 @@ export function isCanvasPath(pathname: string): boolean {
     pathname.startsWith(`${A2UI_PATH}/`) ||
     pathname === CANVAS_HOST_PATH ||
     pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
-    pathname === CANVAS_WS_PATH
+    pathname === CANVAS_WS_PATH ||
+    pathname === A2UI_ACTIVITY_WS_PATH
   );
 }
 
@@ -50,6 +58,7 @@ export async function authorizeCanvasRequest(params: {
   clients: Set<GatewayWsClient>;
   canvasCapability?: string;
   malformedScopedPath?: boolean;
+  activity?: CanvasHostActivityConfig;
   rateLimiter?: AuthRateLimiter;
 }): Promise<GatewayAuthResult> {
   const {
@@ -64,6 +73,18 @@ export async function authorizeCanvasRequest(params: {
   } = params;
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
+  }
+
+  const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+  const isActivityCanvasRequest =
+    pathname === A2UI_PATH ||
+    pathname.startsWith(`${A2UI_PATH}/`) ||
+    pathname === A2UI_ACTIVITY_WS_PATH ||
+    pathname === CANVAS_HOST_PATH ||
+    pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
+    pathname === CANVAS_WS_PATH;
+  if (isActivityCanvasRequest && isCanvasActivityAccessAllowed(params.activity, req)) {
+    return { ok: true };
   }
 
   let lastAuthFailure: GatewayAuthResult | null = null;

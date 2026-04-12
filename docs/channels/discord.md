@@ -9,12 +9,15 @@ title: "Discord"
 
 Status: ready for DMs and guild channels via the official Discord gateway.
 
-<CardGroup cols={3}>
+<CardGroup cols={4}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Discord DMs default to pairing mode.
   </Card>
   <Card title="Slash commands" icon="terminal" href="/tools/slash-commands">
     Native command behavior and command catalog.
+  </Card>
+  <Card title="Discord Activities" icon="gamepad-2" href="/channels/discord-activities">
+    Host OpenClaw Canvas in a Discord Activity iframe.
   </Card>
   <Card title="Channel troubleshooting" icon="wrench" href="/channels/troubleshooting">
     Cross-channel diagnostics and repair flow.
@@ -542,6 +545,18 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
   </Accordion>
 </AccordionGroup>
+
+## Discord Activities
+
+OpenClaw uses a single Canvas entrypoint for Discord Activities:
+
+- `/__openclaw__/canvas/`
+
+Use a public HTTPS host (not internal-only LAN URLs), and enable Activity-scoped auth (`canvasHost.activity.*`) so Activity iframe traffic is authorized without exposing normal Gateway auth.
+
+Agents can still render A2UI experiences inside Canvas when needed.
+
+See the full guide: [Discord Activities](/channels/discord-activities).
 
 ## Native commands and command auth
 
@@ -1254,6 +1269,7 @@ High-signal Discord fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Discord Activities](/channels/discord-activities)
 - [Groups](/channels/groups)
 - [Channel routing](/channels/channel-routing)
 - [Security](/gateway/security)

@@ -1084,6 +1084,29 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         return;
       }
+
+      if (context.a2uiActivityHub?.enabled) {
+        if (command === "canvas.a2ui.pushJSONL") {
+          const jsonl =
+            forwardedParams.params && typeof forwardedParams.params === "object"
+              ? (forwardedParams.params as { jsonl?: unknown }).jsonl
+              : undefined;
+          if (typeof jsonl === "string" && jsonl.trim()) {
+            context.a2uiActivityHub.broadcastPush(jsonl);
+          }
+        } else if (command === "canvas.a2ui.push") {
+          const message =
+            forwardedParams.params && typeof forwardedParams.params === "object"
+              ? (forwardedParams.params as { message?: unknown }).message
+              : undefined;
+          if (message && typeof message === "object") {
+            context.a2uiActivityHub.broadcastPush(JSON.stringify(message));
+          }
+        } else if (command === "canvas.a2ui.reset") {
+          context.a2uiActivityHub.broadcastReset();
+        }
+      }
+
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
       respond(
         true,

@@ -47,6 +47,8 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
     const asVoice = readBooleanParam(params, "asVoice") === true;
+    const activityLaunchButton = readBooleanParam(params, "activityLaunchButton") === true;
+    const activityLaunchLabel = readStringParam(params, "activityLaunchLabel");
     const rawComponents =
       params.components ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
@@ -55,7 +57,7 @@ export async function handleDiscordMessageAction(
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents,
+      required: !asVoice && !hasComponents && !activityLaunchButton,
       allowEmpty: true,
     });
     // Support media, path, and filePath for media URL
@@ -80,6 +82,8 @@ export async function handleDiscordMessageAction(
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,
+        ...(activityLaunchButton ? { activityLaunchButton: true } : {}),
+        ...(activityLaunchLabel ? { activityLaunchLabel } : {}),
         embeds,
         asVoice,
         silent,

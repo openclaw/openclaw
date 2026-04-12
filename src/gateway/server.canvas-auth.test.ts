@@ -97,9 +97,9 @@ async function expectWsRejected(
   });
 }
 
-async function expectWsConnected(url: string): Promise<void> {
+async function expectWsConnected(url: string, headers?: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, headers ? { headers } : undefined);
     const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
     ws.once("open", () => {
       clearTimeout(timer);
@@ -367,6 +367,112 @@ describe("gateway canvas host auth", () => {
         expect(a2ui.status).toBe(401);
 
         await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+      },
+    });
+  }, 60_000);
+
+  test("allows direct canvas activity routes only when launch-context enforcement is explicitly disabled", async () => {
+    await withTempConfig({
+      cfg: {
+        canvasHost: {
+          activity: {
+            enabled: true,
+            requireLaunchContext: false,
+          },
+        },
+      },
+      run: async () => {
+        await withCanvasGatewayHarness({
+          resolvedAuth: tokenResolvedAuth,
+          handleHttpRequest: allowCanvasHostHttp,
+          run: async ({ listener }) => {
+            const canvas = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            );
+            expect(canvas.status).toBe(200);
+
+            await expectWsConnected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`);
+          },
+        });
+      },
+    });
+  }, 60_000);
+
+  test("enforces activity token for canvas activity routes when configured", async () => {
+    await withTempConfig({
+      cfg: {
+        canvasHost: {
+          activity: {
+            enabled: true,
+            token: "activity-secret",
+            requireLaunchContext: false,
+          },
+        },
+      },
+      run: async () => {
+        await withCanvasGatewayHarness({
+          resolvedAuth: tokenResolvedAuth,
+          handleHttpRequest: allowCanvasHostHttp,
+          run: async ({ listener }) => {
+            const denied = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            );
+            expect(denied.status).toBe(401);
+
+            const allowed = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/?activityToken=activity-secret`,
+            );
+            expect(allowed.status).toBe(200);
+
+            await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+            await expectWsConnected(
+              `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}?activityToken=activity-secret`,
+            );
+          },
+        });
+      },
+    });
+  }, 60_000);
+
+  test("enforces Discord launch context markers for activity bypass by default", async () => {
+    await withTempConfig({
+      cfg: {
+        canvasHost: {
+          activity: {
+            enabled: true,
+          },
+        },
+      },
+      run: async () => {
+        await withCanvasGatewayHarness({
+          resolvedAuth: tokenResolvedAuth,
+          handleHttpRequest: allowCanvasHostHttp,
+          run: async ({ listener }) => {
+            const denied = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            );
+            expect(denied.status).toBe(401);
+
+            const launched = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/?instance_id=abc123&platform=desktop`,
+            );
+            expect(launched.status).toBe(200);
+            const launchCookie = launched.headers.get("set-cookie") ?? "";
+            expect(launchCookie).toContain("openclawDiscordActivity=1");
+
+            const viaCookie = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+              headers: {
+                cookie: "openclawDiscordActivity=1",
+              },
+            });
+            expect(viaCookie.status).toBe(200);
+
+            await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+            await expectWsConnected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {
+              cookie: "openclawDiscordActivity=1",
+            });
+          },
+        });
       },
     });
   }, 60_000);

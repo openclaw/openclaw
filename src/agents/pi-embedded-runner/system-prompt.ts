@@ -44,6 +44,10 @@ export function buildEmbeddedSystemPrompt(params: {
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
     canvasRootDir?: string;
+    discordActivityEnabled?: boolean;
+    discordActivityPath?: string;
+    discordActivityTokenRequired?: boolean;
+    discordActivityRequireLaunchContext?: boolean;
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;

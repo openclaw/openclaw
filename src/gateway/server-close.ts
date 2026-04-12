@@ -8,6 +8,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { A2uiActivityHub } from "./a2ui-activity.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -40,6 +41,7 @@ export function createGatewayCloseHandler(params: {
   tailscaleCleanup: (() => Promise<void>) | null;
   canvasHost: CanvasHostHandler | null;
   canvasHostServer: CanvasHostServer | null;
+  a2uiActivityHub?: A2uiActivityHub | null;
   releasePluginRouteRegistry?: (() => void) | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
@@ -95,6 +97,11 @@ export function createGatewayCloseHandler(params: {
         } catch {
           /* ignore */
         }
+      }
+      try {
+        await params.a2uiActivityHub?.close();
+      } catch {
+        /* ignore */
       }
       for (const plugin of listChannelPlugins()) {
         await params.stopChannel(plugin.id);

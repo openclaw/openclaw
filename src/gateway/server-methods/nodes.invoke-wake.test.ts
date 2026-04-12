@@ -187,6 +187,11 @@ async function invokeNode(params: {
     }>;
   };
   requestParams?: Partial<Record<string, unknown>>;
+  a2uiActivityHub?: {
+    enabled: boolean;
+    broadcastPush: (jsonl: string) => void;
+    broadcastReset: () => void;
+  };
 }) {
   const respond = vi.fn();
   const logGateway = {
@@ -200,6 +205,7 @@ async function invokeNode(params: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
+      a2uiActivityHub: params.a2uiActivityHub,
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -634,6 +640,65 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "ios-node-policy",
       actions: [],
     });
+  });
+
+  it("broadcasts a2ui pushJSONL to the activity hub after successful invoke", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-a2ui",
+        commands: ["canvas.a2ui.pushJSONL"],
+        platform: "iOS",
+      })),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { ok: true } }),
+    };
+    const broadcastPush = vi.fn();
+    const broadcastReset = vi.fn();
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-a2ui",
+        command: "canvas.a2ui.pushJSONL",
+        params: { jsonl: '{"surfaceUpdate":{"surfaceId":"main"}}' },
+      },
+      a2uiActivityHub: {
+        enabled: true,
+        broadcastPush,
+        broadcastReset,
+      },
+    });
+
+    expect(broadcastPush).toHaveBeenCalledWith('{"surfaceUpdate":{"surfaceId":"main"}}');
+    expect(broadcastReset).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts a2ui reset to the activity hub after successful invoke", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-a2ui",
+        commands: ["canvas.a2ui.reset"],
+        platform: "iOS",
+      })),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { ok: true } }),
+    };
+    const broadcastPush = vi.fn();
+    const broadcastReset = vi.fn();
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-a2ui",
+        command: "canvas.a2ui.reset",
+      },
+      a2uiActivityHub: {
+        enabled: true,
+        broadcastPush,
+        broadcastReset,
+      },
+    });
+
+    expect(broadcastReset).toHaveBeenCalledTimes(1);
+    expect(broadcastPush).not.toHaveBeenCalled();
   });
 
   it("dedupes queued foreground actions by idempotency key", async () => {

@@ -2,6 +2,8 @@ import type { TopLevelComponents } from "@buape/carbon";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 
+export type DiscordComponentButtonAction = "launch-activity";
+
 export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
 
 export type DiscordComponentModalFieldType =
@@ -27,6 +29,8 @@ export type DiscordComponentButtonSpec = {
   disabled?: boolean;
   /** Optional allowlist of users who can interact with this button (ids or names). */
   allowedUsers?: string[];
+  /** Optional special action for this button. */
+  action?: DiscordComponentButtonAction;
 };
 
 export type DiscordComponentSelectOption = {
@@ -144,6 +148,7 @@ export type DiscordComponentEntry = {
   accountId?: string;
   reusable?: boolean;
   allowedUsers?: string[];
+  action?: DiscordComponentButtonAction;
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;

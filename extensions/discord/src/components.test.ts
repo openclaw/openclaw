@@ -56,6 +56,44 @@ describe("discord components", () => {
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
+  it("supports launch-activity button actions", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Open Activity", action: "launch-activity" }],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.action).toBe("launch-activity");
+  });
+
+  it("rejects launch-activity on link buttons", () => {
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            buttons: [
+              {
+                label: "Open Activity",
+                action: "launch-activity",
+                style: "link",
+                url: "https://example.com",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow("not supported for link buttons");
+  });
+
   it("requires options for modal select fields", () => {
     expect(() =>
       readDiscordComponentSpec({

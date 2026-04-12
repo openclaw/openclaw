@@ -427,6 +427,64 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("builds a launch-activity button from activityLaunchButton", async () => {
+    sendDiscordComponentMessage.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "Open the canvas test UI",
+        activityLaunchButton: true,
+        activityLaunchLabel: "Open Canvas",
+      },
+      enableAllActions,
+    );
+
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+    expect(sendDiscordComponentMessage).toHaveBeenCalledWith(
+      "channel:123",
+      expect.objectContaining({
+        text: "Open the canvas test UI",
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+            buttons: [
+              expect.objectContaining({
+                label: "Open Canvas",
+                action: "launch-activity",
+              }),
+            ],
+          }),
+        ],
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects activityLaunchButton when components are also provided", async () => {
+    await expect(
+      handleDiscordMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "hello",
+          activityLaunchButton: true,
+          components: {
+            blocks: [
+              {
+                type: "actions",
+                buttons: [{ label: "Manual", callbackData: "manual" }],
+              },
+            ],
+          },
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow(/cannot be combined with components/i);
+  });
+
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
     await handleDiscordMessagingAction(

@@ -269,6 +269,35 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
+  it("includes Discord Activity canvas guidance only when activity mode is enabled", () => {
+    const withoutActivity = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+    expect(withoutActivity).not.toContain("## Discord Activity Canvas");
+
+    const withActivity = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "discord",
+        discordActivityEnabled: true,
+        discordActivityPath: "/__openclaw__/canvas/",
+        discordActivityTokenRequired: true,
+        discordActivityRequireLaunchContext: true,
+      },
+    });
+    expect(withActivity).toContain("## Discord Activity Canvas");
+    expect(withActivity).toContain("Activity canvas path: `/__openclaw__/canvas/`.");
+    expect(withActivity).toContain("separate from node canvas");
+    expect(withActivity).toContain("activityLaunchButton=true");
+    expect(withActivity).toContain("window.OpenClaw.discord");
+    expect(withActivity).toContain("commands.openShareMomentDialog");
+    expect(withActivity).toContain("oauth.authorize");
+    expect(withActivity).toContain("Launch-context enforcement is enabled");
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
