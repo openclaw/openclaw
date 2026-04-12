@@ -12,6 +12,24 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
+vi.mock("../agents/tools-effective-inventory.js", () => ({
+  resolveEffectiveToolInventory: vi.fn(() => ({
+    agentId: "main",
+    profile: "coding",
+    groups: [
+      {
+        id: "core",
+        label: "Built-in tools",
+        source: "core",
+        tools: [
+          { id: "exec", label: "Exec", description: "Run shell commands", rawDescription: "Run shell commands", source: "core" },
+          { id: "read", label: "Read", description: "Read files", rawDescription: "Read files", source: "core" },
+        ],
+      },
+    ],
+  })),
+}));
+
 import { sessionsCommand } from "./sessions.js";
 
 describe("sessionsCommand", () => {
@@ -171,6 +189,7 @@ describe("sessionsCommand", () => {
       input: { runtimeProvider: string | null; spawnedWorkspaceDir: string | null };
       resolved: { model: string; workspaceDir: string };
       resolution: { usesPersistedWorkspace: boolean };
+      tools: { profile: string; groups: Array<{ id: string; count: number; tools: string[] }> };
     }>(sessionsCommand, store, { explain: "agent:main:main" });
 
     expect(payload.key).toBe("agent:main:main");
@@ -180,6 +199,8 @@ describe("sessionsCommand", () => {
     expect(payload.resolved.model).toBe("gpt-5.4");
     expect(payload.resolved.workspaceDir).toBe("/tmp/subagent-workspace");
     expect(payload.resolution.usesPersistedWorkspace).toBe(true);
+    expect(payload.tools.profile).toBe("coding");
+    expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
   });
 
   it("renders a readable text explanation for one session", async () => {
@@ -204,5 +225,7 @@ describe("sessionsCommand", () => {
     expect(logs.find((line) => line.includes("Session key"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Final model"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
   });
 });

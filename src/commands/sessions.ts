@@ -1,6 +1,8 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { resolveEffectiveToolInventory } from "../agents/tools-effective-inventory.js";
+import { resolveReplyToMode } from "../auto-reply/reply/reply-threading.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
 import {
@@ -12,6 +14,7 @@ import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
@@ -140,6 +143,35 @@ export async function sessionsCommand(
     const defaults = resolveSessionModelRef(cfg, undefined, target.agentId);
     const resolved = resolveSessionModelRef(cfg, entry, target.agentId);
     const workspaceDir = entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+    const delivery = deliveryContextFromSession(entry);
+    const effectiveTools = resolveEffectiveToolInventory({
+      cfg,
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      workspaceDir,
+      messageProvider: delivery?.channel ?? entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+      modelProvider: resolved.provider,
+      modelId: resolved.model,
+      currentChannelId: delivery?.to,
+      currentThreadTs:
+        delivery?.threadId != null
+          ? String(delivery.threadId)
+          : entry.lastThreadId != null
+            ? String(entry.lastThreadId)
+            : entry.origin?.threadId != null
+              ? String(entry.origin.threadId)
+              : undefined,
+      accountId: delivery?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSpace: entry.space,
+      replyToMode: resolveReplyToMode(
+        cfg,
+        delivery?.channel ?? entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+        delivery?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+        entry.chatType ?? entry.origin?.chatType,
+      ),
+    });
     const payload = {
       key: target.canonicalKey,
       agentId: target.agentId,
@@ -162,6 +194,15 @@ export async function sessionsCommand(
         usesPersistedWorkspace: Boolean(entry.spawnedWorkspaceDir),
         usesRuntimeModelRef: Boolean(entry.modelProvider || entry.model),
         usesOverrides: Boolean(entry.providerOverride || entry.modelOverride),
+      },
+      tools: {
+        profile: effectiveTools.profile,
+        groups: effectiveTools.groups.map((group) => ({
+          id: group.id,
+          label: group.label,
+          count: group.tools.length,
+          tools: group.tools.slice(0, 8).map((tool) => tool.id),
+        })),
       },
     };
 
@@ -207,6 +248,12 @@ export async function sessionsCommand(
       `${label("Final model")}${muted(": ")}${success(`${payload.resolved.provider}/${payload.resolved.model}`)}`,
     );
     runtime.log(`${label("Final workspace")}${muted(": ")}${success(payload.resolved.workspaceDir)}`);
+    runtime.log(`${label("Tools profile")}${muted(": ")}${infoLabel(payload.tools.profile)}`);
+    for (const group of payload.tools.groups) {
+      runtime.log(
+        `${label(`Tools ${group.id}`)}${muted(": ")}${infoLabel(`${group.count} [${group.tools.join(", ")}]`)}`,
+      );
+    }
     return;
   }
 
