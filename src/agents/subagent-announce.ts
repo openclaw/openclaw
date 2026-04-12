@@ -229,11 +229,7 @@ export async function runSubagentAnnounceFlow(params: {
   const requesterKey = params.requesterSessionKey?.trim();
   if (childRunId && requesterKey) {
     const claim = claimCompletionDelivery(
-      {
-        runtime: announceType === "cron job" ? "cron" : "subagent",
-        runId: childRunId,
-        ownerSessionKey: requesterKey,
-      },
+      { runId: childRunId, ownerSessionKey: requesterKey },
       "announce_flow",
       "announce_synthesized",
     );

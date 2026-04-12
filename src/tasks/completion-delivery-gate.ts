@@ -1,4 +1,4 @@
-import type { TaskRecord, TaskRuntime } from "./task-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -9,11 +9,15 @@ export type CompletionClaimSource = "silent_wake" | "task_registry" | "announce_
 export type CompletionDeliveryMode =
   | "silent_wake"
   | "visible_banner"
-  | "announce_synthesized"
-  | "system_event";
+  | "announce_synthesized";
 
+/**
+ * Canonical key for a completion event. The runId is globally unique across
+ * runtimes, so the key does not include runtime — this avoids mismatches when
+ * the task registry (which knows the runtime) and the announce flow (which
+ * does not) claim the same completion.
+ */
 export type CompletionKey = {
-  runtime: TaskRuntime;
   runId: string;
   ownerSessionKey: string;
 };
@@ -51,7 +55,7 @@ function resolveGateMode(): GateMode {
 // ---------------------------------------------------------------------------
 
 function buildCanonicalKey(key: CompletionKey): string {
-  return `completion:${key.runtime}:${key.runId}:${key.ownerSessionKey}`;
+  return `completion:${key.runId}:${key.ownerSessionKey}`;
 }
 
 let nextDeliveryId = 0;
@@ -173,7 +177,6 @@ export function resolveCompletionKeyFromTask(task: TaskRecord): CompletionKey | 
     return null;
   }
   return {
-    runtime: task.runtime,
     runId,
     ownerSessionKey: ownerKey,
   };

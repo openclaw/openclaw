@@ -76,7 +76,6 @@ export async function emitSubagentEndedHookOnce(params: {
     const requesterKey = params.entry.requesterSessionKey?.trim();
     if (requesterKey) {
       const claimed = isCompletionClaimed({
-        runtime: "subagent",
         runId,
         ownerSessionKey: requesterKey,
       });

@@ -11,7 +11,6 @@ import type { TaskRecord } from "./task-registry.types.js";
 
 function makeKey(overrides?: Partial<CompletionKey>): CompletionKey {
   return {
-    runtime: "acp",
     runId: "run-001",
     ownerSessionKey: "session-owner-1",
     ...overrides,
@@ -162,7 +161,6 @@ describe("CompletionDeliveryGate", () => {
       const task = makeTaskRecord();
       const key = resolveCompletionKeyFromTask(task);
       expect(key).toEqual({
-        runtime: "acp",
         runId: "run-001",
         ownerSessionKey: "session-owner-1",
       });
