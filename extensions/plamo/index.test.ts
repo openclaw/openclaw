@@ -1671,7 +1671,7 @@ describe("plamo provider plugin", () => {
       "<|plamo:begin_tool_request:plamo|>" +
         "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
         '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"notes.txt"',
-      ',"content":"ok"}<|plamo:end_tool_arguments:plamo|>' + "<|plamo:end_tool_request:plamo|>",
+      ',"content":"ok"}<|plamo:end_tool_arguments:plamo|><|plamo:end_tool_request:plamo|>',
     ] as const;
 
     const message = {
@@ -1728,7 +1728,7 @@ describe("plamo provider plugin", () => {
     });
   });
 
-  it("resets toolUse stop reason when no tool-call blocks are produced", () => {
+  it("preserves raw inline tool markup when no valid tool-call blocks are produced", () => {
     const message = {
       role: "assistant",
       stopReason: "toolUse",
@@ -1748,8 +1748,18 @@ describe("plamo provider plugin", () => {
     normalizePlamoToolMarkupInMessage(message);
 
     expect(message).toMatchObject({
-      stopReason: "stop",
-      content: [],
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text:
+            "<|plamo:begin_tool_request:plamo|>" +
+            "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+            "<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>not-json" +
+            "<|plamo:end_tool_arguments:plamo|>" +
+            "<|plamo:end_tool_request:plamo|>",
+        },
+      ],
     });
   });
 });

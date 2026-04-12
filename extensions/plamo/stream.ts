@@ -1154,10 +1154,15 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
     return;
   }
 
+  const parsedToolCalls = parsePlamoToolCalls(combinedText);
+  if (parsedToolCalls.length === 0) {
+    return;
+  }
+
   const existingToolCallCounts = hasToolCallBlock(content)
     ? resolveExistingToolCallSignatureCounts(content)
     : new Map<string, number>();
-  const synthesizedToolCalls = parsePlamoToolCalls(combinedText).filter((toolCall) => {
+  const synthesizedToolCalls = parsedToolCalls.filter((toolCall) => {
     const signature = createToolCallSignature(toolCall.name, toolCall.arguments);
     const existingCount = existingToolCallCounts.get(signature) ?? 0;
     if (existingCount <= 0) {
