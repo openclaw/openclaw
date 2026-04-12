@@ -333,8 +333,8 @@ function resolveRecallRunChannelContext(params: {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
   const resolveReturnValue = (resolvedChannel?: string) => ({
-    messageChannel: explicitChannel ?? resolvedChannel,
-    messageProvider: explicitChannel ?? resolvedChannel ?? explicitProvider,
+    messageChannel: resolvedChannel ?? explicitChannel,
+    messageProvider: resolvedChannel ?? explicitProvider,
   });
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??

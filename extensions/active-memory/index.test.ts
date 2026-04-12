@@ -1103,6 +1103,30 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("prefers the resolved session channel over a wrapper channel hint", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      channel: "telegram",
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? wrapper channel hint", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "webchat",
+        channelId: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
   it("clears stale status on skipped non-interactive turns even when agentId is missing", async () => {
     const sessionKey = "noncanonical-session";
     hoisted.sessionStore[sessionKey] = {
