@@ -1,10 +1,17 @@
+import type { CronListPageOptions, CronServiceContract } from "./service-contract.js";
 import * as ops from "./service/ops.js";
 import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type {
+  CronListPageOptions,
+  CronListPageResult,
+  CronServiceContract,
+  CronWakeResult,
+} from "./service-contract.js";
 
-export class CronService {
+export class CronService implements CronServiceContract {
   private readonly state;
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
@@ -26,7 +33,7 @@ export class CronService {
     return await ops.list(this.state, opts);
   }
 
-  async listPage(opts?: ops.CronListPageOptions) {
+  async listPage(opts?: CronListPageOptions) {
     return await ops.listPage(this.state, opts);
   }
 
