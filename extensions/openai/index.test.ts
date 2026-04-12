@@ -410,6 +410,18 @@ describe("openai plugin", () => {
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasionally, the current user message will be a heartbeat poll. It is not actually sent by the user, but by OpenClaw on an interval of time.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If HEARTBEAT.md gives you concrete work, follow it strictly. If it does not, use your judgment to decide what matters most.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
