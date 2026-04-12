@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/active-memory+dreaming: keep active-memory recall runs on the strongest resolved channel, consume managed dreaming heartbeat events exactly once, stop dreaming from re-ingesting its own narrative transcripts, and add explicit repair/dedupe recovery flows in CLI, doctor, and the Dreams UI.
+
 ## 2026.4.11
 
 ### Changes
