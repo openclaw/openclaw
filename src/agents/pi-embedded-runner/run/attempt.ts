@@ -1865,9 +1865,10 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptText,
                   prompt: effectivePrompt,
-                  // Shallow-clone to prevent hooks from mutating session state
-                  // in place, which would bypass the declared result contract.
-                  historyMessages: [...activeSession.messages],
+                  // Deep-clone to prevent hooks from mutating session state
+                  // via nested object references, which would bypass the
+                  // declared result contract and allowPromptInjection policy.
+                  historyMessages: activeSession.messages.map((m) => ({ ...m })),
                   imagesCount: imageResult.images.length,
                 },
                 {
@@ -2396,7 +2397,7 @@ export async function runEmbeddedAttempt(
               provider: params.provider,
               model: params.modelId,
               assistantTexts,
-              lastAssistant: lastAssistant ? { ...lastAssistant } : lastAssistant,
+              lastAssistant: lastAssistant ? structuredClone(lastAssistant) : lastAssistant,
               usage: attemptUsage,
             },
             {
@@ -2414,19 +2415,17 @@ export async function runEmbeddedAttempt(
           if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
             wasOutputModifiedByPlugin = true;
-            // Strip text, reasoning, and error content from lastAssistant to
-            // prevent downstream payload construction from leaking the original
-            // model output. This includes reasoning blocks (reasoning mode) and
-            // formatAssistantErrorText output (errored replies).
-            // Preserve stopReason and usage so that run.ts failover/retry
-            // logic can still detect auth, rate-limit, and billing errors on
-            // the original model response.
+            // Strip text and reasoning content from lastAssistant to prevent
+            // downstream payload construction from leaking the original model
+            // output. This includes reasoning blocks (reasoning mode).
+            // Preserve stopReason, usage, and errorMessage so that run.ts
+            // failover/retry logic can still detect auth, rate-limit, and
+            // billing errors on the original model response.
             if (lastAssistant) {
               lastAssistant = {
                 ...lastAssistant,
                 text: "",
                 content: [],
-                errorMessage: undefined,
               } as typeof lastAssistant;
             }
           }

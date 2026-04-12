@@ -655,7 +655,9 @@ export function createHookRunner(
       // from silently overwriting a higher-priority redaction.
       // Use !== undefined so empty arrays (full suppression) are propagated.
       evolveEvent: (ev, result) =>
-        result.assistantTexts !== undefined ? { ...ev, assistantTexts: result.assistantTexts } : ev,
+        result.assistantTexts !== undefined
+          ? { ...ev, assistantTexts: [...result.assistantTexts] }
+          : ev,
     });
   }
 

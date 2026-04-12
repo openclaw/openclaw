@@ -1178,7 +1178,7 @@ export async function runEmbeddedPiAgent(
                     model: model.id,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant,
+                    lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
