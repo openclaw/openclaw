@@ -90,6 +90,23 @@ openclaw models auth login --provider github-copilot --method device --set-defau
     selects the correct transport based on the model ref.
   </Accordion>
 
+  <Accordion title="Environment variable resolution order">
+    OpenClaw resolves Copilot auth from environment variables in the following
+    priority order:
+
+    | Priority | Variable              | Notes                            |
+    | -------- | --------------------- | -------------------------------- |
+    | 1        | `COPILOT_GITHUB_TOKEN` | Highest priority, Copilot-specific |
+    | 2        | `GH_TOKEN`            | GitHub CLI token (fallback)      |
+    | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
+
+    When multiple variables are set, OpenClaw uses the highest-priority one.
+    The device-login flow (`openclaw models auth login-github-copilot`) stores
+    its token in the auth profile store and takes precedence over all environment
+    variables.
+
+  </Accordion>
+
   <Accordion title="Token storage">
     The login stores a GitHub token in the auth profile store and exchanges it
     for a Copilot API token when OpenClaw runs. You do not need to manage the

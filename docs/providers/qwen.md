@@ -198,6 +198,21 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 ## Advanced
 
 <AccordionGroup>
+  <Accordion title="Image and video understanding">
+    The bundled Qwen plugin registers media understanding for images and video
+    on the **Standard** DashScope endpoints (not the Coding Plan endpoints).
+
+    | Property      | Value                 |
+    | ------------- | --------------------- |
+    | Model         | `qwen-vl-max-latest`  |
+    | Supported input | Images, video       |
+
+    Media understanding is auto-resolved from the configured Qwen auth — no
+    additional config is needed. Ensure you are using a Standard (pay-as-you-go)
+    endpoint for media understanding support.
+
+  </Accordion>
+
   <Accordion title="Qwen 3.6 Plus availability">
     `qwen3.6-plus` is available on the Standard (pay-as-you-go) Model Studio
     endpoints:

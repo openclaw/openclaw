@@ -381,6 +381,30 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     Ollama is free and runs locally, so all model costs are set to $0. This applies to both auto-discovered and manually defined models.
   </Accordion>
 
+  <Accordion title="Memory embeddings">
+    The bundled Ollama plugin registers a memory embedding provider for
+    [memory search](/concepts/memory). It uses the configured Ollama base URL
+    and API key.
+
+    | Property      | Value               |
+    | ------------- | ------------------- |
+    | Default model | `nomic-embed-text`  |
+    | Auto-pull     | Yes — the embedding model is pulled automatically if not present locally |
+
+    To select Ollama as the memory search embedding provider:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: { provider: "ollama" },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
   <Accordion title="Streaming configuration">
     OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
 
