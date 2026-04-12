@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GroupChatSchema } from "./zod-schema.core.js";
 
 describe("GroupChatSchema historyLimit", () => {
-  it("accepts zero to disable group history", () => {
+  it("accepts zero to signal unlimited history", () => {
     expect(() => GroupChatSchema.parse({ historyLimit: 0 })).not.toThrow();
   });
 
