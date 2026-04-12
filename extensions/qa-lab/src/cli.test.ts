@@ -72,6 +72,8 @@ describe("qa cli registration", () => {
       fastMode: true,
       scenarioIds: ["matrix-thread-follow-up", "matrix-thread-isolation"],
       sutAccountId: "sut-live",
+      credentialSource: undefined,
+      credentialRole: undefined,
     });
   });
 
@@ -87,6 +89,8 @@ describe("qa cli registration", () => {
       fastMode: false,
       scenarioIds: [],
       sutAccountId: "sut",
+      credentialSource: undefined,
+      credentialRole: undefined,
     });
   });
 });
