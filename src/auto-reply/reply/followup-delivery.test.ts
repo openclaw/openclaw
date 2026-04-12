@@ -104,6 +104,19 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([]);
   });
 
+  it("suppresses Slack replies when the send implicitly uses the current thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        sentTargets: [{ tool: "message", provider: "slack", to: "channel:C1" }],
+      }),
+    ).toEqual([]);
+  });
+
   it("does not suppress Slack replies when channel matches but thread differs", () => {
     expect(
       resolveFollowupDeliveryPayloads({

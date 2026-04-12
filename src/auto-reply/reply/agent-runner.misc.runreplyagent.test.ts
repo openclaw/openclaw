@@ -908,6 +908,21 @@ describe("runReplyAgent messaging tool suppression", () => {
 
     expect(result).toMatchObject({ text: "hello world!" });
   });
+
+  it("drops replies when Slack auto-threading keeps the send in the current thread", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C1" }],
+      meta: {},
+    });
+
+    const result = await createRun("slack", {
+      messageThreadId: "1712345678.123456",
+    });
+
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("runReplyAgent reminder commitment guard", () => {

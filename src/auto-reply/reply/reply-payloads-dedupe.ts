@@ -89,6 +89,16 @@ function normalizeThreadIdForComparison(value?: string): string | undefined {
   return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
+function coerceThreadIdForSuppression(value?: string | number): string | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      return undefined;
+    }
+    return String(value);
+  }
+  return normalizeOptionalString(value);
+}
+
 function resolveTargetProviderForComparison(params: {
   currentProvider: string;
   targetProvider?: string;
@@ -135,8 +145,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   const originRawTarget = normalizeOptionalString(params.originatingTo);
-  const originThreadId =
-    params.originatingThreadId != null ? String(params.originatingThreadId) : undefined;
+  const originThreadId = coerceThreadIdForSuppression(params.originatingThreadId);
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
@@ -155,7 +164,7 @@ export function shouldSuppressMessagingToolReplies(params: {
       return false;
     }
     const targetRaw = normalizeOptionalString(target.to);
-    if (originRawTarget && targetRaw === originRawTarget && !target.threadId && !originThreadId) {
+    if (originRawTarget && targetRaw === originRawTarget && !target.threadId) {
       return true;
     }
     const originTarget = normalizeTargetForProvider(provider, originRawTarget);
@@ -171,7 +180,7 @@ export function shouldSuppressMessagingToolReplies(params: {
       originTarget,
       originThreadId,
       targetKey,
-      targetThreadId: target.threadId,
+      targetThreadId: coerceThreadIdForSuppression(target.threadId),
     });
   });
 }

@@ -238,6 +238,17 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(true);
   });
 
+  it("suppresses Slack replies when the send implicitly uses the current thread", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C1" }],
+      }),
+    ).toBe(true);
+  });
+
   it("does not suppress Slack replies when channel matches but thread differs", () => {
     expect(
       shouldSuppressMessagingToolReplies({
@@ -254,5 +265,16 @@ describe("shouldSuppressMessagingToolReplies", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("ignores non-integer numeric origin thread ids for suppression matching", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C1" }],
+        originatingThreadId: 1712345678.123456,
+      }),
+    ).toBe(true);
   });
 });

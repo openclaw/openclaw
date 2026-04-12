@@ -74,4 +74,15 @@ describe("extractMessagingToolSend", () => {
     expect(result?.to).toBe("channel:C1");
     expect(result?.threadId).toBe("1712345678.123456");
   });
+
+  it("ignores non-integer numeric threadId values", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "thread-reply",
+      provider: "slack",
+      to: "channel:C1",
+      threadId: 1712345678.123456,
+    });
+
+    expect(result?.threadId).toBeUndefined();
+  });
 });

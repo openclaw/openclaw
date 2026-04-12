@@ -407,7 +407,9 @@ export function extractMessagingToolSend(
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadIdRaw =
       typeof args.threadId === "number"
-        ? String(args.threadId)
+        ? Number.isInteger(args.threadId)
+          ? String(args.threadId)
+          : ""
         : (normalizeOptionalString(args.threadId) ?? "");
     const threadId = threadIdRaw.trim() || undefined;
     return to ? { tool: toolName, provider, accountId, to, threadId } : undefined;
