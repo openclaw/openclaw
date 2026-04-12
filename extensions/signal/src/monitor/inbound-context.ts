@@ -33,8 +33,8 @@ export function resolveSignalQuoteContext(params: {
   });
   const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
   const quoteSender = resolveSignalSender({
-    sourceNumber: params.dataMessage?.quote?.author ?? null,
-    sourceUuid: params.dataMessage?.quote?.authorUuid ?? null,
+    sourceNumber: params.dataMessage?.quote?.authorNumber ?? null,
+    sourceUuid: params.dataMessage?.quote?.authorUuid ?? params.dataMessage?.quote?.author ?? null,
   });
   const quoteSenderAllowed =
     !params.isGroup || params.effectiveGroupAllow.length === 0
