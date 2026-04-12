@@ -1,4 +1,5 @@
 import path from "node:path";
+import { platform } from "node:process";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import {
@@ -123,6 +124,26 @@ export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS +
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
+/**
+ * macOS Seatbelt sandbox profiles for exec() isolation.
+ * Used with sandbox-exec -p <profile-string> <command>
+ */
+function getSandboxProfileString(profile: "default" | "permissive"): string {
+  if (profile === "default") {
+    return `(version 1)
+(allow default)
+(deny network*)
+(allow file-read* (regex #"^/tmp/.*" #"^/var/folders/.*" #"^/Users/[^/]+/openclaw-workspace/.*" #"^/usr/lib/.*" #"^/System/Library/.*" #"^/dev/null$" #"^/dev/zero$" #"^/dev/urandom$"#))
+(allow file-write* (regex #"^/tmp/.*" #"^/var/folders/.*" #"^/Users/[^/]+/openclaw-workspace/.*"#))
+`;
+  }
+  // permissive: allows most access but denies network by default
+  return `(version 1)
+(allow default)
+(allow network*)
+`;
+}
+
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
@@ -167,6 +188,14 @@ export const execSchema = Type.Object({
   node: Type.Optional(
     Type.String({
       description: "Node id/name for host=node.",
+    }),
+  ),
+  sandboxProfile: Type.Optional(
+    Type.Union([Type.Literal("default"), Type.Literal("permissive")], {
+      description:
+        "macOS sandbox-exec profile to wrap command with (darwin only, requires macOS 10.14+). " +
+        "'default' restricts file system to /tmp and workspace. " +
+        "'permissive' allows broader access.",
     }),
   ),
 });
@@ -558,6 +587,7 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  sandboxProfile?: "default" | "permissive";
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -707,6 +737,19 @@ export async function runExecProcess(opts: {
         stdinMode:
           backendExecSpec?.stdinMode ??
           (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
+      };
+    }
+    // macOS sandbox-exec wrapper: wraps shell commands with sandbox-exec for OS-level isolation.
+    // Only active when explicitly requested via sandboxProfile option and running on darwin.
+    if (opts.sandboxProfile && platform === "darwin") {
+      const { shell, args: shellArgs } = getShellConfig();
+      const childArgv = [shell, ...shellArgs, execCommand];
+      const profileStr = getSandboxProfileString(opts.sandboxProfile);
+      return {
+        mode: "child" as const,
+        argv: ["/usr/bin/sandbox-exec", "-p", profileStr, ...childArgv],
+        env: shellRuntimeEnv,
+        stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();

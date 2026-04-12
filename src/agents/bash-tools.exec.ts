@@ -1358,6 +1358,7 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        sandboxProfile?: "default" | "permissive";
       };
 
       if (!params.command) {
@@ -1475,6 +1476,13 @@ export function createExecTool(
             'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
           ].join("\n"),
         );
+      }
+      // Validate sandboxProfile option
+      if (params.sandboxProfile && process.platform !== "darwin") {
+        warnings.push(
+          `Warning: sandboxProfile option is only supported on macOS (darwin); ignoring sandboxProfile="${params.sandboxProfile}" on ${process.platform}.`,
+        );
+        params.sandboxProfile = undefined;
       }
       const explicitWorkdir = normalizeOptionalString(params.workdir);
       const defaultWorkdir = normalizeOptionalString(defaults?.cwd);
@@ -1677,6 +1685,7 @@ export function createExecTool(
         sessionKey: notifySessionKey,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
+        sandboxProfile: params.sandboxProfile,
         onUpdate,
       });
 
