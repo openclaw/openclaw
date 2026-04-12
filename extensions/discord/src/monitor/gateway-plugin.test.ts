@@ -88,6 +88,7 @@ describe("SafeGatewayPlugin.connect()", () => {
       plugin.connect(false);
 
       expect(plugin.heartbeatInterval).toBeUndefined();
+      expect(baseConnectSpy).toHaveBeenCalledWith(false);
     } finally {
       clearInterval(staleInterval);
     }
@@ -106,6 +107,7 @@ describe("SafeGatewayPlugin.connect()", () => {
       plugin.connect(false);
 
       expect(plugin.firstHeartbeatTimeout).toBeUndefined();
+      expect(baseConnectSpy).toHaveBeenCalledWith(false);
     } finally {
       clearTimeout(staleTimeout);
     }
