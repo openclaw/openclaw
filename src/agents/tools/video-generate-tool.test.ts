@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
@@ -160,6 +161,7 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
     expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
+    expect(vi.mocked(mediaStore.saveMediaBuffer).mock.calls[0]?.[3]).toBe(MAX_VIDEO_BYTES);
     expect(result.details).toMatchObject({
       provider: "qwen",
       model: "wan2.6-t2v",
