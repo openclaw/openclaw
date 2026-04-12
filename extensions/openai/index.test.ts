@@ -14,6 +14,7 @@ import {
   OPENAI_FRIENDLY_PROMPT_OVERLAY,
   OPENAI_GPT5_EXECUTION_BIAS,
   OPENAI_GPT5_OUTPUT_CONTRACT,
+  OPENAI_GPT5_TOOL_CALL_STYLE,
 } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -369,6 +370,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
@@ -386,6 +388,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
     expect(
@@ -460,6 +463,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -487,6 +491,7 @@ describe("openai plugin", () => {
       stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -513,6 +518,7 @@ describe("openai plugin", () => {
       stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -541,6 +547,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
@@ -568,6 +575,7 @@ describe("openai plugin", () => {
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+        tool_call_style: OPENAI_GPT5_TOOL_CALL_STYLE,
       },
     });
   });
