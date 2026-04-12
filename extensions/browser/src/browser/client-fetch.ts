@@ -1,3 +1,4 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -5,13 +6,7 @@ import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "./control-service.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
-import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
@@ -194,21 +189,22 @@ async function fetchHttpJson<T>(
       url,
       init: { ...init, signal: ctrl.signal },
       timeoutMs,
-      auditContext: "extensions/browser client-fetch",
+      policy: { allowPrivateNetwork: true },
+      auditContext: "browser-control-client",
     });
     try {
       if (!res.ok) {
-      if (isRateLimitStatus(res.status)) {
-        // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        await discardResponseBody(res);
-        throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
-        );
+        if (isRateLimitStatus(res.status)) {
+          // Do not reflect upstream response text into the error surface (log/agent injection risk)
+          await discardResponseBody(res);
+          throw new BrowserServiceError(
+            `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          );
+        }
+        const text = await res.text().catch(() => "");
+        throw new BrowserServiceError(text || `HTTP ${res.status}`);
       }
-      const text = await res.text().catch(() => "");
-      throw new BrowserServiceError(text || `HTTP ${res.status}`);
-    }
-    return (await res.json()) as T;
+      return (await res.json()) as T;
     } finally {
       await release();
     }
@@ -232,11 +228,7 @@ export async function fetchBrowserJson<T>(
       return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
     isDispatcherPath = true;
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error("browser control disabled");
-    }
-    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+    const { dispatchBrowserControlRequest } = await import("./local-dispatch.runtime.js");
     const parsed = new URL(url, "http://localhost");
     const query: Record<string, unknown> = {};
     for (const [key, value] of parsed.searchParams.entries()) {
@@ -276,7 +268,7 @@ export async function fetchBrowserJson<T>(
       timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
     }
 
-    const dispatchPromise = dispatcher.dispatch({
+    const dispatchPromise = dispatchBrowserControlRequest({
       method:
         init?.method?.toUpperCase() === "DELETE"
           ? "DELETE"

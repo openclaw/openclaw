@@ -2,88 +2,93 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
+import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
-} from "../vitest.commands-light-paths.mjs";
-import { isAcpxExtensionRoot } from "../vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../vitest.extension-bluebubbles-paths.mjs";
-import { isDiffsExtensionRoot } from "../vitest.extension-diffs-paths.mjs";
-import { isFeishuExtensionRoot } from "../vitest.extension-feishu-paths.mjs";
-import { isIrcExtensionRoot } from "../vitest.extension-irc-paths.mjs";
-import { isMatrixExtensionRoot } from "../vitest.extension-matrix-paths.mjs";
-import { isMattermostExtensionRoot } from "../vitest.extension-mattermost-paths.mjs";
-import { isMemoryExtensionRoot } from "../vitest.extension-memory-paths.mjs";
-import { isMessagingExtensionRoot } from "../vitest.extension-messaging-paths.mjs";
-import { isMsTeamsExtensionRoot } from "../vitest.extension-msteams-paths.mjs";
-import { isProviderExtensionRoot } from "../vitest.extension-provider-paths.mjs";
-import { isTelegramExtensionRoot } from "../vitest.extension-telegram-paths.mjs";
-import { isVoiceCallExtensionRoot } from "../vitest.extension-voice-call-paths.mjs";
-import { isWhatsAppExtensionRoot } from "../vitest.extension-whatsapp-paths.mjs";
-import { isZaloExtensionRoot } from "../vitest.extension-zalo-paths.mjs";
+} from "../test/vitest/vitest.commands-light-paths.mjs";
+import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
+import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
+import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
+import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
+import { isMatrixExtensionRoot } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
+import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
+import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
+import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
+import { isProviderExtensionRoot } from "../test/vitest/vitest.extension-provider-paths.mjs";
+import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
+import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
+import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
 import {
   isPluginSdkLightTarget,
   resolvePluginSdkLightIncludePattern,
-} from "../vitest.plugin-sdk-paths.mjs";
-import { fullSuiteVitestShards } from "../vitest.test-shards.mjs";
-import { resolveUnitFastTestIncludePattern } from "../vitest.unit-fast-paths.mjs";
-import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
+} from "../test/vitest/vitest.plugin-sdk-paths.mjs";
+import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { resolveUnitFastTestIncludePattern } from "../test/vitest/vitest.unit-fast-paths.mjs";
+import {
+  isBoundaryTestFile,
+  isBundledPluginDependentUnitTestFile,
+} from "../test/vitest/vitest.unit-paths.mjs";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
-const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
-const AGENTS_VITEST_CONFIG = "vitest.agents.config.ts";
-const ACP_VITEST_CONFIG = "vitest.acp.config.ts";
-const AUTO_REPLY_VITEST_CONFIG = "vitest.auto-reply.config.ts";
-const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
-const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
-const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
-const CLI_VITEST_CONFIG = "vitest.cli.config.ts";
-const COMMANDS_LIGHT_VITEST_CONFIG = "vitest.commands-light.config.ts";
-const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
-const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
-const CRON_VITEST_CONFIG = "vitest.cron.config.ts";
-const DAEMON_VITEST_CONFIG = "vitest.daemon.config.ts";
-const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
-const EXTENSION_ACPX_VITEST_CONFIG = "vitest.extension-acpx.config.ts";
-const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "vitest.extension-bluebubbles.config.ts";
-const EXTENSION_CHANNELS_VITEST_CONFIG = "vitest.extension-channels.config.ts";
-const EXTENSION_DIFFS_VITEST_CONFIG = "vitest.extension-diffs.config.ts";
-const EXTENSION_FEISHU_VITEST_CONFIG = "vitest.extension-feishu.config.ts";
-const EXTENSION_IRC_VITEST_CONFIG = "vitest.extension-irc.config.ts";
-const EXTENSION_MATTERMOST_VITEST_CONFIG = "vitest.extension-mattermost.config.ts";
-const EXTENSION_MATRIX_VITEST_CONFIG = "vitest.extension-matrix.config.ts";
-const EXTENSION_MEMORY_VITEST_CONFIG = "vitest.extension-memory.config.ts";
-const EXTENSION_MSTEAMS_VITEST_CONFIG = "vitest.extension-msteams.config.ts";
-const EXTENSION_MESSAGING_VITEST_CONFIG = "vitest.extension-messaging.config.ts";
-const EXTENSION_PROVIDERS_VITEST_CONFIG = "vitest.extension-providers.config.ts";
-const EXTENSION_TELEGRAM_VITEST_CONFIG = "vitest.extension-telegram.config.ts";
-const EXTENSION_VOICE_CALL_VITEST_CONFIG = "vitest.extension-voice-call.config.ts";
-const EXTENSION_WHATSAPP_VITEST_CONFIG = "vitest.extension-whatsapp.config.ts";
-const EXTENSION_ZALO_VITEST_CONFIG = "vitest.extension-zalo.config.ts";
-const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
-const FULL_EXTENSIONS_VITEST_CONFIG = "vitest.full-extensions.config.ts";
-const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
-const HOOKS_VITEST_CONFIG = "vitest.hooks.config.ts";
-const INFRA_VITEST_CONFIG = "vitest.infra.config.ts";
-const MEDIA_VITEST_CONFIG = "vitest.media.config.ts";
-const MEDIA_UNDERSTANDING_VITEST_CONFIG = "vitest.media-understanding.config.ts";
-const LOGGING_VITEST_CONFIG = "vitest.logging.config.ts";
-const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "vitest.plugin-sdk-light.config.ts";
-const PLUGIN_SDK_VITEST_CONFIG = "vitest.plugin-sdk.config.ts";
-const PLUGINS_VITEST_CONFIG = "vitest.plugins.config.ts";
-const UNIT_FAST_VITEST_CONFIG = "vitest.unit-fast.config.ts";
-const PROCESS_VITEST_CONFIG = "vitest.process.config.ts";
-const RUNTIME_CONFIG_VITEST_CONFIG = "vitest.runtime-config.config.ts";
-const SECRETS_VITEST_CONFIG = "vitest.secrets.config.ts";
-const SHARED_CORE_VITEST_CONFIG = "vitest.shared-core.config.ts";
-const TASKS_VITEST_CONFIG = "vitest.tasks.config.ts";
-const TOOLING_VITEST_CONFIG = "vitest.tooling.config.ts";
-const TUI_VITEST_CONFIG = "vitest.tui.config.ts";
-const UI_VITEST_CONFIG = "vitest.ui.config.ts";
-const UTILS_VITEST_CONFIG = "vitest.utils.config.ts";
-const WIZARD_VITEST_CONFIG = "vitest.wizard.config.ts";
+const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
+const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
+const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
+const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
+const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
+const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
+const CLI_VITEST_CONFIG = "test/vitest/vitest.cli.config.ts";
+const COMMANDS_LIGHT_VITEST_CONFIG = "test/vitest/vitest.commands-light.config.ts";
+const COMMANDS_VITEST_CONFIG = "test/vitest/vitest.commands.config.ts";
+const CONTRACTS_VITEST_CONFIG = "test/vitest/vitest.contracts.config.ts";
+const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
+const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
+const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
+const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
+const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
+const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
+const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
+const EXTENSION_FEISHU_VITEST_CONFIG = "test/vitest/vitest.extension-feishu.config.ts";
+const EXTENSION_IRC_VITEST_CONFIG = "test/vitest/vitest.extension-irc.config.ts";
+const EXTENSION_MATTERMOST_VITEST_CONFIG = "test/vitest/vitest.extension-mattermost.config.ts";
+const EXTENSION_MATRIX_VITEST_CONFIG = "test/vitest/vitest.extension-matrix.config.ts";
+const EXTENSION_MEMORY_VITEST_CONFIG = "test/vitest/vitest.extension-memory.config.ts";
+const EXTENSION_MSTEAMS_VITEST_CONFIG = "test/vitest/vitest.extension-msteams.config.ts";
+const EXTENSION_MESSAGING_VITEST_CONFIG = "test/vitest/vitest.extension-messaging.config.ts";
+const EXTENSION_PROVIDERS_VITEST_CONFIG = "test/vitest/vitest.extension-providers.config.ts";
+const EXTENSION_TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
+const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-call.config.ts";
+const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
+const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
+const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
+const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
+const HOOKS_VITEST_CONFIG = "test/vitest/vitest.hooks.config.ts";
+const INFRA_VITEST_CONFIG = "test/vitest/vitest.infra.config.ts";
+const MEDIA_VITEST_CONFIG = "test/vitest/vitest.media.config.ts";
+const MEDIA_UNDERSTANDING_VITEST_CONFIG = "test/vitest/vitest.media-understanding.config.ts";
+const LOGGING_VITEST_CONFIG = "test/vitest/vitest.logging.config.ts";
+const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.config.ts";
+const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
+const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
+const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
+const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
+const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
+const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
+const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
+const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
+const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
+const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
@@ -142,6 +147,7 @@ const BROAD_CHANGED_RERUN_PATTERNS = [
   /^pnpm-lock\.yaml$/u,
   /^test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts$/u,
   /^vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
+  /^test\/vitest\/vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
   /^scripts\/run-vitest\.mjs$/u,
   /^scripts\/test-projects(?:\.test-support)?\.mjs$/u,
 ];
@@ -644,9 +650,82 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
 }
 
 export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+  if (hasConservativeVitestWorkerBudget(env)) {
+    return false;
+  }
   return (
     env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
   );
+}
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function hasConservativeVitestWorkerBudget(env) {
+  const workerBudget = parsePositiveInt(
+    env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
+  );
+  return workerBudget !== null && workerBudget <= 1;
+}
+
+export function resolveParallelFullSuiteConcurrency(specCount, env = process.env, hostInfo) {
+  const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
+  if (override !== null) {
+    return Math.min(override, specCount);
+  }
+  if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
+    return 1;
+  }
+  if (isCiLikeEnv(env)) {
+    return 1;
+  }
+  if (hasConservativeVitestWorkerBudget(env)) {
+    return 1;
+  }
+  if (
+    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" &&
+    !shouldUseLocalFullSuiteParallelByDefault(env)
+  ) {
+    return 1;
+  }
+  return Math.min(resolveLocalFullSuiteProfile(env, hostInfo).shardParallelism, specCount);
+}
+
+function sanitizeVitestCachePathSegment(value) {
+  return (
+    value
+      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 180) || "default"
+  );
+}
+
+export function applyParallelVitestCachePaths(specs, params = {}) {
+  const baseEnv = params.env ?? process.env;
+  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    return specs;
+  }
+  const cwd = params.cwd ?? process.cwd();
+  return specs.map((spec, index) => {
+    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+      return spec;
+    }
+    const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
+    return {
+      ...spec,
+      env: {
+        ...spec.env,
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
+          cwd,
+          "node_modules",
+          ".experimental-vitest-cache",
+          cacheSegment,
+        ),
+      },
+    };
+  });
 }
 
 export function createVitestRunSpecs(args, params = {}) {
@@ -673,6 +752,20 @@ export function createVitestRunSpecs(args, params = {}) {
       watchMode: plan.watchMode,
     };
   });
+}
+
+export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
+  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  return !(
+    runSpecs.length === 1 &&
+    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
+    runSpecs[0]?.watchMode === false &&
+    Array.isArray(runSpecs[0]?.includePatterns) &&
+    runSpecs[0].includePatterns.length > 0
+  );
 }
 
 export function writeVitestIncludeFile(filePath, includePatterns) {

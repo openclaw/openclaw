@@ -46,6 +46,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          senderIsOwner: requestContext.senderIsOwner,
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

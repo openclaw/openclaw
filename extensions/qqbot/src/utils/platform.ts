@@ -37,7 +37,7 @@ export function isWindows(): boolean {
  * Priority:
  * 1. `os.homedir()`
  * 2. `$HOME` or `%USERPROFILE%`
- * 3. `os.tmpdir()` as a last resort
+ * 3. the OpenClaw temp directory as a last resort
  */
 export function getHomeDir(): string {
   try {
@@ -53,7 +53,7 @@ export function getHomeDir(): string {
     return envHome;
   }
 
-  // Final fallback (prefer OpenClaw-scoped tmp root).
+  // Final fallback (OpenClaw-scoped tmp root).
   return resolvePreferredOpenClawTmpDir();
 }
 
@@ -84,7 +84,7 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
 
 // Temporary directory helpers.
 
-/** Return the OS temp directory. */
+/** Return the preferred OpenClaw temp directory. */
 export function getTempDir(): string {
   return resolvePreferredOpenClawTmpDir();
 }

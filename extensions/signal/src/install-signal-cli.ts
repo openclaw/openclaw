@@ -1,7 +1,6 @@
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request } from "node:https";
-import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

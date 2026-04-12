@@ -1,21 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  namedAccountPromotionKeys as matrixNamedAccountPromotionKeys,
-  resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
-  singleAccountKeysToMove as matrixSingleAccountKeysToMove,
-} from "../../plugin-sdk/matrix.js";
-import {
-  namedAccountPromotionKeys as telegramNamedAccountPromotionKeys,
-  resolveSingleAccountPromotionTarget as resolveTelegramSingleAccountPromotionTarget,
-  singleAccountKeysToMove as telegramSingleAccountKeysToMove,
-} from "../../plugin-sdk/telegram.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -79,7 +69,44 @@ import {
   resolveSingleAccountPromotionTarget,
 } from "./setup-helpers.js";
 
-beforeEach(() => {
+const matrixSingleAccountKeysToMove = [
+  "allowBots",
+  "deviceId",
+  "deviceName",
+  "dm",
+  "encryption",
+  "groups",
+  "rooms",
+] as const;
+const matrixNamedAccountPromotionKeys = [
+  "accessToken",
+  "deviceId",
+  "deviceName",
+  "encryption",
+  "homeserver",
+  "userId",
+] as const;
+const telegramSingleAccountKeysToMove = ["streaming"] as const;
+
+function resolveMatrixSingleAccountPromotionTarget(params: {
+  channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
+}): string {
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount = params.channel.defaultAccount?.trim()
+    ? normalizeAccountId(params.channel.defaultAccount)
+    : undefined;
+  if (normalizedDefaultAccount) {
+    return (
+      Object.keys(accounts).find(
+        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+      ) ?? DEFAULT_ACCOUNT_ID
+    );
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+}
+
+beforeAll(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -101,8 +128,6 @@ beforeEach(() => {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
           setup: {
             singleAccountKeysToMove: telegramSingleAccountKeysToMove,
-            namedAccountPromotionKeys: telegramNamedAccountPromotionKeys,
-            resolveSingleAccountPromotionTarget: resolveTelegramSingleAccountPromotionTarget,
           },
         },
       },
@@ -110,7 +135,7 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterAll(() => {
   resetPluginRuntimeStateForTest();
 });
 
