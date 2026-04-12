@@ -1,6 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { readModelsFile, findModelSection, parseModelRef } from "./parser.js";
 import { ensureDefaultModelsFile } from "./defaults.js";
+import { readModelsFile, findModelSection, parseModelRef } from "./parser.js";
 
 interface ModelRulesConfig {
   enabled?: boolean;
@@ -8,10 +8,13 @@ interface ModelRulesConfig {
   disabledModels?: string[];
 }
 
+interface BootstrapContext {
+  workspaceDir: string;
+  bootstrapFiles: Array<{ name: string; content: string }>;
+}
+
 interface BootstrapEvent {
-  context?: {
-    bootstrapFiles?: Array<{ name: string; content: string }>;
-  };
+  context?: BootstrapContext;
 }
 
 export default definePluginEntry({
@@ -34,68 +37,57 @@ export default definePluginEntry({
 
     let defaultEnsured = false;
 
-    api.registerHook(
-      ["agent:bootstrap"],
-      async (event) => {
-        try {
-          const cfg = api.config;
-          const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(cfg);
-
-          if (!defaultEnsured) {
-            await ensureDefaultModelsFile(workspaceDir, modelsFilename);
-            defaultEnsured = true;
-          }
-
-          const modelRef = api.runtime.agent.defaults.model;
-          if (!modelRef) return;
-
-          const log = api.logger;
-          log.debug?.(`model-rules: active model is ${modelRef}`);
-
-          const { bareId } = parseModelRef(modelRef);
-          if (disabledModels.has(bareId.toLowerCase())) {
-            log.debug?.(
-              `model-rules: model ${bareId} is in disabledModels, skipping`,
-            );
-            return;
-          }
-          if (disabledModels.has(modelRef.toLowerCase())) {
-            log.debug?.(
-              `model-rules: model ${modelRef} is in disabledModels, skipping`,
-            );
-            return;
-          }
-
-          const content = await readModelsFile(workspaceDir, modelsFilename);
-          if (!content) return;
-
-          const section = findModelSection(content, modelRef);
-
-          if (section) {
-            log.debug?.(
-              `model-rules: matched section for ${bareId} (${section.length} chars)`,
-            );
-            pushSection(event as BootstrapEvent, section);
-          } else {
-            log.debug?.(
-              `model-rules: no section found for ${bareId}, skipping injection`,
-            );
-          }
-        } catch (err) {
-          api.logger.warn(
-            `model-rules: bootstrap injection failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+    api.registerHook(["agent:bootstrap"], async (event) => {
+      try {
+        const ctx = (event as BootstrapEvent).context;
+        if (!ctx?.workspaceDir) {
+          return;
         }
-      },
-    );
+        const workspaceDir = ctx.workspaceDir;
+
+        if (!defaultEnsured) {
+          await ensureDefaultModelsFile(workspaceDir, modelsFilename);
+          defaultEnsured = true;
+        }
+
+        const modelRef = api.runtime.agent.defaults.model;
+        if (!modelRef) {
+          return;
+        }
+
+        const log = api.logger;
+        log.debug?.(`model-rules: active model is ${modelRef}`);
+
+        const { bareId } = parseModelRef(modelRef);
+        if (disabledModels.has(bareId.toLowerCase())) {
+          log.debug?.(`model-rules: model ${bareId} is in disabledModels, skipping`);
+          return;
+        }
+        if (disabledModels.has(modelRef.toLowerCase())) {
+          log.debug?.(`model-rules: model ${modelRef} is in disabledModels, skipping`);
+          return;
+        }
+
+        const content = await readModelsFile(workspaceDir, modelsFilename);
+        if (!content) {
+          return;
+        }
+
+        const section = findModelSection(content, modelRef);
+
+        if (section) {
+          log.debug?.(`model-rules: matched section for ${bareId} (${section.length} chars)`);
+          ctx.bootstrapFiles.push({ name: "MODELS.md", content: section });
+        } else {
+          log.debug?.(`model-rules: no section found for ${bareId}, skipping injection`);
+        }
+      } catch (err) {
+        api.logger.warn(
+          `model-rules: bootstrap injection failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    });
 
     api.logger.info("model-rules: registered");
   },
 });
-
-function pushSection(event: BootstrapEvent, section: string): void {
-  const bootstrapFiles = event.context?.bootstrapFiles;
-  if (Array.isArray(bootstrapFiles)) {
-    bootstrapFiles.push({ name: "MODELS.md", content: section });
-  }
-}
