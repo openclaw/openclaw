@@ -1,4 +1,4 @@
-name: OpenClaw Release Live Validation
+name: OpenClaw Release Checks
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-live-validation-${{ inputs.ref }}
+  group: openclaw-release-checks-${{ inputs.ref }}
   cancel-in-progress: false
 
 env:
@@ -65,11 +65,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${OPENAI_API_KEY}" ]]; then
-            echo "Missing OPENAI_API_KEY secret for release live cache validation." >&2
+            echo "Missing OPENAI_API_KEY secret for release checks." >&2
             exit 1
           fi
           if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "Missing ANTHROPIC_API_KEY secret for release live cache validation." >&2
+            echo "Missing ANTHROPIC_API_KEY secret for release checks." >&2
             exit 1
           fi
 
@@ -87,7 +87,7 @@ jobs:
           RELEASE_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           {
-            echo "## Release live validation"
+            echo "## Release checks"
             echo
             echo "- Requested ref: \`${RELEASE_REF}\`"
             echo "- Validated SHA: \`${RELEASE_SHA}\`"

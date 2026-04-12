@@ -41,13 +41,13 @@ OpenClaw has three public release lanes:
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
 - Run `pnpm release:check` before every tagged release
-- Release live cache validation now runs in a separate manual workflow:
-  `OpenClaw Release Live Validation`
+- Release checks now run in a separate manual workflow:
+  `OpenClaw Release Checks`
 - That workflow accepts either an existing release tag or a commit SHA on
   `main` and runs
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
   using both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` workflow secrets
-- npm release preflight no longer waits on the live cache validation lane
+- npm release preflight no longer waits on the separate release checks lane
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
 - After npm publish, run
@@ -97,7 +97,7 @@ OpenClaw has three public release lanes:
 - `promote_beta_to_latest`: `true` to skip publish and move an already-published
   stable `beta` build onto `latest`
 
-`OpenClaw Release Live Validation` accepts these operator-controlled inputs:
+`OpenClaw Release Checks` accepts these operator-controlled inputs:
 
 - `ref`: existing release tag or commit SHA on `main` to validate
 
@@ -119,7 +119,7 @@ When cutting a stable npm release:
 1. Run `OpenClaw NPM Release` with `preflight_only=true`
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
-3. Run `OpenClaw Release Live Validation` separately with the same tag or the
+3. Run `OpenClaw Release Checks` separately with the same tag or the
    release commit SHA when you want live prompt cache coverage
 4. Save the successful `preflight_run_id`
 5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
@@ -138,7 +138,7 @@ documented and operator-visible.
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
-- [`.github/workflows/openclaw-release-live-validation.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-live-validation.yml)
+- [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
