@@ -93,7 +93,6 @@ export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
   promptError: unknown;
   aborted: boolean;
-  yieldAborted: boolean;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
 }): boolean {
@@ -103,7 +102,5 @@ export function shouldPersistCompletedBootstrapTurn(params: {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
-  // Intentionally allow clean sessions_yield exits here so continuation-skip
-  // can treat the next relay/user turn as an existing bootstrap session.
   return true;
 }
