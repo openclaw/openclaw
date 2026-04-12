@@ -525,6 +525,52 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
+  it("preserves assistant turns that include signed thinking blocks", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+    ]);
+  });
+
+  it("preserves assistant turns that include redacted thinking blocks", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "blob", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "redacted_thinking", data: "blob", thinkingSignature: "sig_1" },
+      { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
+    ]);
+  });
+
   it("is replay-safe across repeated validation passes", () => {
     const msgs = makeDualToolAnthropicTurns([
       {
