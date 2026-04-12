@@ -124,10 +124,18 @@ function runVitestSpec(spec) {
         console.error(message);
       },
       onTimeout: () => {
-        forwardSignalToVitestProcessGroup({ child, signal: "SIGTERM" });
+        forwardSignalToVitestProcessGroup({
+          child,
+          signal: "SIGTERM",
+          kill: process.kill.bind(process),
+        });
       },
       onForceKill: () => {
-        forwardSignalToVitestProcessGroup({ child, signal: "SIGKILL" });
+        forwardSignalToVitestProcessGroup({
+          child,
+          signal: "SIGKILL",
+          kill: process.kill.bind(process),
+        });
       },
     });
 
