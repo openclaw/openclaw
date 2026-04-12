@@ -84,6 +84,12 @@
   - `src/plugins/AGENTS.md` expands plugin loading, registry, and manifest rules.
   - `src/gateway/protocol/AGENTS.md` expands typed Gateway protocol rules.
   - `test/helpers/AGENTS.md` and `test/helpers/channels/AGENTS.md` expand shared test helper boundary rules.
+- Plugin architecture direction:
+  - Keep a manifest-first control plane: discovery, validation, enablement, setup hints, and activation planning should stay metadata-driven by default.
+  - Keep runtime execution separate: actual provider/channel/tool execution should resolve through narrow targeted loaders, not broad registry materialization.
+  - Host loads plugins; plugins do not load host internals. Prefer a small versioned host/kernel seam plus documented SDK entrypoints over ambient reachability.
+  - Treat broad runtime registries and mutable global plugin state as transitional compatibility surfaces, not the target architecture.
+  - If a setup or config flow truly needs plugin runtime, make that explicit instead of silently importing runtime code on the cold path.
 
 ## Scoped Workflow Guides
 
