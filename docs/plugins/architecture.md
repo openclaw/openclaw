@@ -527,6 +527,12 @@ actual behavior such as hooks, tools, commands, or provider flows.
 Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
+The first live activation consumers now use manifest command and provider hints
+to narrow plugin loading before broader registry materialization:
+
+- CLI loading narrows to plugins that own the requested primary command
+- explicit provider setup/runtime resolution narrows to plugins that own the
+  requested provider id
 
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to

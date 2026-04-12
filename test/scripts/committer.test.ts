@@ -60,6 +60,10 @@ function committedPaths(repo: string) {
   return output.split("\n").filter(Boolean).toSorted();
 }
 
+function committedFileContents(repo: string, relativePath: string) {
+  return git(repo, "show", `HEAD:${relativePath}`);
+}
+
 describe("scripts/committer", () => {
   it("accepts supported path argument shapes", () => {
     const cases = [
@@ -159,6 +163,28 @@ describe("scripts/committer", () => {
 
     expect(output).toContain('Committed "test: fast hook env" with 1 files');
     expect(committedPaths(repo)).toEqual(["note.txt"]);
+  });
+
+  it("commits the hook-restaged file contents and leaves the tree clean", () => {
+    const repo = createRepo();
+    installHook(
+      repo,
+      ".githooks/pre-commit",
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'formatted\\n' > note.txt",
+        "git add note.txt",
+      ].join("\n") + "\n",
+    );
+    writeRepoFile(repo, "note.txt", "raw\n");
+
+    const output = commitWithHelperArgs(repo, "test: hook rewrite", "note.txt");
+
+    expect(output).toContain('Committed "test: hook rewrite" with 1 files');
+    expect(committedPaths(repo)).toEqual(["note.txt"]);
+    expect(committedFileContents(repo, "note.txt")).toBe("formatted");
+    expect(git(repo, "status", "--short", "--untracked-files=no")).toBe("");
   });
 
   it("prints usage for --help", () => {

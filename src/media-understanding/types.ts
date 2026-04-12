@@ -7,6 +7,13 @@ export type MediaUnderstandingKind =
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type MediaUnderstandingCapabilityRegistry = Map<
+  string,
+  {
+    capabilities?: MediaUnderstandingCapability[];
+  }
+>;
+
 export type MediaAttachment = {
   path?: string;
   url?: string;

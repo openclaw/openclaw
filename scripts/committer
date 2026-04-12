@@ -216,11 +216,11 @@ fi
 committed=false
 if [ "$fast_commit" = true ]; then
   declare -a commit_env=(FAST_COMMIT=1)
-  if run_git_with_lock_retry "commit" env "${commit_env[@]}" git commit -m "$commit_message" -- "${files[@]}"; then
+  if run_git_with_lock_retry "commit" env "${commit_env[@]}" git commit -m "$commit_message"; then
     committed=true
   fi
 else
-  if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
+  if run_git_with_lock_retry "commit" git commit -m "$commit_message"; then
     committed=true
   fi
 fi

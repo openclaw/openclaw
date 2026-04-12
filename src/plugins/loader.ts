@@ -48,6 +48,7 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
@@ -148,6 +149,7 @@ export class PluginLoadReentryError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
@@ -358,7 +360,8 @@ function buildCacheKey(params: {
       },
     ]),
   );
-  const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
+  const scopeKey =
+    params.onlyPluginIds === undefined ? "__unscoped__" : JSON.stringify(params.onlyPluginIds);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
@@ -378,7 +381,7 @@ function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
     return undefined;
   }
   const normalized = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean))).toSorted();
-  return normalized.length > 0 ? normalized : undefined;
+  return normalized;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -442,19 +445,19 @@ function buildActivationMetadataHash(params: {
 }
 
 function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
-  return Boolean(
+  return (
     options.config !== undefined ||
     options.activationSourceConfig !== undefined ||
     options.autoEnabledReasons !== undefined ||
     options.workspaceDir !== undefined ||
     options.env !== undefined ||
-    options.onlyPluginIds?.length ||
+    options.onlyPluginIds !== undefined ||
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
-    options.loadModules === false,
+    options.loadModules === false
   );
 }
 
@@ -1103,6 +1106,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       restoreRegisteredCompactionProviders(cached.compactionProviders);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
+        capability: cached.memoryCapability,
         corpusSupplements: cached.memoryCorpusSupplements,
         promptBuilder: cached.memoryPromptBuilder,
         promptSupplements: cached.memoryPromptSupplements,
@@ -1798,6 +1802,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (cacheEnabled) {
       setCachedPluginRegistry(cacheKey, {
+        memoryCapability: getMemoryCapabilityRegistration(),
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
         agentHarnesses: listRegisteredAgentHarnesses(),
