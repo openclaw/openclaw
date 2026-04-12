@@ -7,6 +7,9 @@ import { join } from "node:path";
  */
 export const DEFAULT_MODELS_MD = `# Per-Model Corrective Instructions
 # Only the section matching the active model is injected into context.
+# Add your own models: copy a section heading and use your model's exact ID.
+# Works with any provider — cloud, local (Ollama, vLLM), or custom.
+# Example: ## MODEL: my-custom-model
 
 ## MODEL: gpt-5.3
 
