@@ -17,7 +17,9 @@ const {
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
-  runHeartbeatOnceMock: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
+  runHeartbeatOnceMock: vi.fn<
+    (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
+  >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
@@ -401,17 +403,19 @@ describe("buildGatewayCronService", () => {
       broadcast: () => {},
     });
     try {
-      const cronDeps = (state.cron as unknown as {
-        state?: {
-          deps?: {
-            runHeartbeatOnce?: (opts?: {
-              agentId?: string;
-              sessionKey?: string | null;
-              heartbeat?: Record<string, unknown>;
-            }) => Promise<unknown>;
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              runHeartbeatOnce?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                heartbeat?: Record<string, unknown>;
+              }) => Promise<unknown>;
+            };
           };
-        };
-      }).state?.deps;
+        }
+      ).state?.deps;
       await cronDeps?.runHeartbeatOnce?.({
         agentId: "yinze",
         sessionKey: "agent:yinze:main",
