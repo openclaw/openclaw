@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
   createConfiguredMatrixDefaultAccountConfig,
+  createConfiguredMatrixTopLevelConfig,
+  createMatrixEnvShortcutAddAccountPrompter,
+  createMatrixNamedAccountsConfig,
   createLegacyMatrixTopLevelConfig,
+  installMatrixScopedEnvShortcut,
   createMatrixTokenAddAccountPrompter,
+  createMatrixUpdateKeepCredentialsPrompter,
   installMatrixOnboardingEnvRestoreHooks,
   createMatrixWizardPrompter,
   runMatrixAddAccountAllowlistConfigure,
@@ -22,23 +27,10 @@ describe("matrix onboarding", () => {
 
   it("offers env shortcut for non-default account when scoped env vars are present", async () => {
     installMatrixTestRuntime();
-
-    process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
-    process.env.MATRIX_USER_ID = "@env:example.org";
-    process.env.MATRIX_PASSWORD = "env-password"; // pragma: allowlist secret
-    process.env.MATRIX_ACCESS_TOKEN = "";
-    process.env.MATRIX_OPS_HOMESERVER = "https://matrix.ops.env.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+    installMatrixScopedEnvShortcut();
 
     const confirmMessages: string[] = [];
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-      },
+    const prompter = createMatrixEnvShortcutAddAccountPrompter({
       onConfirm: (message) => {
         confirmMessages.push(message);
         return message.startsWith("Matrix env vars detected");
@@ -79,24 +71,16 @@ describe("matrix onboarding", () => {
 
   it("routes env-shortcut add-account flow through Matrix invite auto-join setup", async () => {
     installMatrixTestRuntime();
-
-    process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
-    process.env.MATRIX_USER_ID = "@env:example.org";
-    process.env.MATRIX_PASSWORD = "env-password"; // pragma: allowlist secret
-    process.env.MATRIX_ACCESS_TOKEN = "";
-    process.env.MATRIX_OPS_HOMESERVER = "https://matrix.ops.env.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+    installMatrixScopedEnvShortcut();
 
     const notes: string[] = [];
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixEnvShortcutAddAccountPrompter({
       notes,
       select: {
-        "Matrix already configured. What do you want to do?": "add-account",
         "Matrix rooms access": "allowlist",
         "Matrix invite auto-join": "allowlist",
       },
       text: {
-        "Matrix account name": "ops",
         "Matrix rooms allowlist (comma-separated)": "!ops-room:example.org",
         "Matrix invite auto-join allowlist (comma-separated)": "#ops-invites:example.org",
       },
@@ -289,30 +273,13 @@ describe("matrix onboarding", () => {
 
     process.env.MATRIX_ACCESS_TOKEN = "env-token";
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": false,
-      },
-    });
+    const prompter = createMatrixUpdateKeepCredentialsPrompter();
 
     const result = await runMatrixInteractiveConfigure({
       cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-          },
-        },
+        ...createConfiguredMatrixTopLevelConfig({
+          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+        }),
         secrets: {
           defaults: {
             env: "default",
@@ -337,22 +304,18 @@ describe("matrix onboarding", () => {
 
   it("resolves status using the overridden Matrix account", async () => {
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            defaultAccount: "default",
-            accounts: {
-              default: {
-                homeserver: "https://matrix.default.example.org",
-              },
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        defaultAccount: "default",
+        accounts: {
+          default: {
+            homeserver: "https://matrix.default.example.org",
+          },
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       options: undefined,
       accountOverrides: {
         matrix: "ops",
@@ -418,36 +381,16 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
     const notes: string[] = [];
 
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
       notes,
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-        "Matrix invite auto-join": "off",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": true,
-        "Update Matrix invite auto-join?": true,
-      },
+      inviteAutoJoin: "off",
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: "matrix-token",
-            autoJoin: "allowlist",
-            autoJoinAllowlist: ["#ops:example.org"],
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixTopLevelConfig({
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["#ops:example.org"],
+      }),
       prompter,
       configured: true,
     });
@@ -470,23 +413,9 @@ describe("matrix onboarding", () => {
     const notes: string[] = [];
     let inviteAllowlistPrompts = 0;
 
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
       notes,
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-        "Matrix invite auto-join": "allowlist",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": true,
-        "Update Matrix invite auto-join?": true,
-      },
+      inviteAutoJoin: "allowlist",
       onText: async (message) => {
         if (message === "Matrix invite auto-join allowlist (comma-separated)") {
           inviteAllowlistPrompts += 1;
@@ -497,14 +426,7 @@ describe("matrix onboarding", () => {
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: "matrix-token",
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixTopLevelConfig(),
       prompter,
       configured: true,
     });
@@ -532,20 +454,16 @@ describe("matrix onboarding", () => {
 
     expect(
       resolveConfigKeys(
-        {
-          channels: {
-            matrix: {
-              accounts: {
-                default: {
-                  homeserver: "https://matrix.main.example.org",
-                },
-                ops: {
-                  homeserver: "https://matrix.ops.example.org",
-                },
-              },
+        createMatrixNamedAccountsConfig({
+          accounts: {
+            default: {
+              homeserver: "https://matrix.main.example.org",
+            },
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
             },
           },
-        } as CoreConfig,
+        }),
         "ops",
       ),
     ).toEqual({
@@ -558,19 +476,15 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            defaultAccount: "ops",
-            accounts: {
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        defaultAccount: "ops",
+        accounts: {
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {},
     });
 
@@ -583,22 +497,18 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              assistant: {
-                homeserver: "https://matrix.assistant.example.org",
-                accessToken: "assistant-token",
-              },
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        accounts: {
+          assistant: {
+            homeserver: "https://matrix.assistant.example.org",
+            accessToken: "assistant-token",
+          },
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {},
     });
 
