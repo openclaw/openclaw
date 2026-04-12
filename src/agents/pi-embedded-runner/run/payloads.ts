@@ -20,8 +20,8 @@ import {
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
-  extractAssistantText,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
@@ -217,7 +217,9 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = params.lastAssistant
+    ? extractAssistantVisibleText(params.lastAssistant)
+    : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
