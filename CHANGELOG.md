@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Dreaming/diary: use the host local timezone for diary timestamps when `dreaming.timezone` is unset, so `DREAMS.md` and the UI stop defaulting to UTC. (#65034) Thanks @neo1027144-creator and @vincentkoc.
 - Dreaming/diary: include the timezone abbreviation in diary timestamps so `DREAMS.md` and the UI make UTC or local host time explicit. (#65057) Thanks @Yanhu007 and @vincentkoc.
 - Dreaming/narrative: harden transient narrative cleanup by retrying timed-out deletes and scrubbing stale dreaming session artifacts through the lock-aware session-store path. (#65320) Thanks @serkonyc and @vincentkoc.
+- Dreaming/narrative: isolate transient narrative session keys per workspace so simultaneous dreaming phases cannot cross-read or delete each other's session state. (#61674) Thanks @GaosCode and @vincentkoc.
 - Plugins/memory: restore cached memory capability public artifacts on plugin-registry cache hits so memory-backed artifact surfaces stay visible after warm loads. Thanks @sercada and @vincentkoc.
 - Gateway/cron: preserve requested isolated-agent config across runtime reloads so subagent jobs and heartbeat overrides keep the right workspace and heartbeat settings when the hot-loaded snapshot is stale. Thanks @l0cka and @vincentkoc.
 - Gateway/plugins: always send a non-empty `idempotencyKey` for plugin subagent runs, so dreaming narrative jobs stop failing gateway schema validation. (#65354) Thanks @CodeForgeNet and @vincentkoc.
