@@ -58,6 +58,17 @@ function stateIntegrityText(): string {
     .join("\n");
 }
 
+function createAgentDir(agentId: string, includeNestedAgentDir = true) {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is not set");
+  }
+  const targetDir = includeNestedAgentDir
+    ? path.join(stateDir, "agents", agentId, "agent")
+    : path.join(stateDir, "agents", agentId);
+  fs.mkdirSync(targetDir, { recursive: true });
+}
+
 const OAUTH_PROMPT_MATCHER = expect.objectContaining({
   message: expect.stringContaining("Create OAuth dir at"),
 });
@@ -142,6 +153,36 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = await runStateIntegrity(cfg);
     expect(confirmRuntimeRepair).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("warns about orphaned on-disk agent directories missing from agents.list", async () => {
+    createAgentDir("big-brain");
+    createAgentDir("cerebro");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: big-brain, cerebro");
+    expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
+  });
+
+  it("ignores configured agent dirs and incomplete agent folders", async () => {
+    createAgentDir("main");
+    createAgentDir("ops");
+    createAgentDir("staging", false);
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
   });
 
   it("detects orphan transcripts and offers archival remediation", async () => {
