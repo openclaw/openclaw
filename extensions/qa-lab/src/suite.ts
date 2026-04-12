@@ -604,6 +604,12 @@ async function waitForConfigRestartSettle(
   timeoutMs = 60_000,
 ) {
   const settleTimeoutMs = Math.max(timeoutMs, restartDelayMs + 10_000);
+  // config.patch/config.apply schedule restarts asynchronously after the
+  // RPC returns. Without a delay, the health check below returns
+  // immediately because the gateway hasn't gone down yet, and the
+  // calling code proceeds against the pre-restart state. The delay gives
+  // the async restart window time to fire before we poll.
+  await sleep(restartDelayMs + 500);
   await waitForGatewayHealthy(env, settleTimeoutMs);
   const snapshot = await readConfigSnapshot(env);
   if (hasEnabledQaChannel(snapshot.config)) {
