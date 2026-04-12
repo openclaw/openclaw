@@ -44,4 +44,30 @@ describe("provider auth env trust", () => {
       resolvedValue: "test-secret",
     });
   });
+
+  it("promptSecretRefForSetup keeps config-aware trusted env var suggestions", async () => {
+    const { promptSecretRefForSetup } = await import("./provider-auth-ref.js");
+    const config = { plugins: { allow: ["workspace-audio"] } };
+    const prompter = {
+      select: vi.fn(async () => "env"),
+      text: vi.fn(async () => "WHISPERX_API_KEY"),
+      note: vi.fn(async () => {}),
+    };
+
+    const result = await promptSecretRefForSetup({
+      config,
+      provider: "whisperx",
+      prompter: prompter as never,
+      env: { WHISPERX_API_KEY: "test-secret" },
+    });
+
+    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+      config,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    expect(result).toMatchObject({
+      ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+      resolvedValue: "test-secret",
+    });
+  });
 });

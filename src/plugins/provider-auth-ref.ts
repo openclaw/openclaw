@@ -42,8 +42,12 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
   return match?.[1];
 }
 
-function resolveDefaultProviderEnvVar(provider: string): string | undefined {
+function resolveDefaultProviderEnvVar(
+  provider: string,
+  config?: OpenClawConfig,
+): string | undefined {
   const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
@@ -269,7 +273,7 @@ export async function promptSecretRefForSetup(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
-    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config) ?? "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
   let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 

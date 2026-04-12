@@ -2,6 +2,7 @@ import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { hasKind } from "../plugins/slots.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
@@ -73,7 +74,10 @@ function isWorkspacePluginTrustedForProviderEnvVars(
   if (entry?.enabled === true || hasPluginId(pluginsConfig?.allow, pluginId)) {
     return true;
   }
-  return normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId;
+  return (
+    hasKind(plugin.kind, "context-engine") &&
+    normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId
+  );
 }
 
 function shouldUsePluginProviderEnvVars(
