@@ -148,6 +148,12 @@ function createHost(): TestGatewayHost {
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatCommandCatalogLoading: false,
+    chatCommandCatalogLoadingAgentId: null,
+    chatCommandCatalogAgentId: null,
+    chatCommandCatalogRequestId: 0,
+    chatCommandCatalogError: null,
+    chatCommandCatalogResult: null,
     chatSideResult: null,
     chatSending: false,
     toolStreamById: new Map(),
@@ -304,6 +310,37 @@ describe("connectGateway", () => {
     connectGateway(host);
     expect(host.execApprovalQueue).toHaveLength(1);
     expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
+  });
+
+  it("clears cached command catalog state on reconnect so later loads refetch", () => {
+    const host = createHost();
+    host.chatCommandCatalogLoading = true;
+    host.chatCommandCatalogLoadingAgentId = "main";
+    host.chatCommandCatalogAgentId = "main";
+    host.chatCommandCatalogRequestId = 7;
+    host.chatCommandCatalogError = "stale";
+    host.chatCommandCatalogResult = {
+      commands: [
+        {
+          name: "office_hours",
+          textAliases: ["/office_hours"],
+          description: "Run office hours workflow.",
+          acceptsArgs: true,
+          source: "skill",
+          scope: "both",
+          category: "tools",
+        },
+      ],
+    } as never;
+
+    connectGateway(host);
+
+    expect(host.chatCommandCatalogLoading).toBe(false);
+    expect(host.chatCommandCatalogLoadingAgentId).toBeNull();
+    expect(host.chatCommandCatalogAgentId).toBeNull();
+    expect(host.chatCommandCatalogRequestId).toBe(8);
+    expect(host.chatCommandCatalogError).toBeNull();
+    expect(host.chatCommandCatalogResult).toBeNull();
   });
 
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {

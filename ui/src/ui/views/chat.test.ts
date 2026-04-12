@@ -2718,4 +2718,48 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Tool input");
     expect(container.textContent).toContain('"status": "error"');
   });
+
+  it("refreshes slash suggestions when runtime commands arrive after slash input", async () => {
+    const container = document.createElement("div");
+    let props: ChatProps;
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+
+    props = createProps({
+      slashCommands: null,
+      onDraftChange: (next) => {
+        props.draft = next;
+        rerender();
+      },
+    });
+
+    rerender();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+
+    textarea.value = "/";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("/office_hours");
+
+    props.slashCommands = [
+      {
+        key: "office_hours",
+        name: "office_hours",
+        description: "Run office hours workflow.",
+        executeLocal: false,
+      },
+    ];
+    rerender();
+    await flushTasks();
+
+    expect(container.textContent).toContain("/office_hours");
+  });
 });

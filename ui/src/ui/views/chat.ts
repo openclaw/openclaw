@@ -294,6 +294,8 @@ interface ChatEphemeralState {
   slashMenuMode: "command" | "args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
+  slashMenuValue: string;
+  slashMenuCommandsSignature: string;
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
@@ -309,6 +311,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
+    slashMenuValue: "",
+    slashMenuCommandsSignature: "",
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
@@ -729,11 +733,33 @@ function resetSlashMenuState(): void {
   vs.slashMenuItems = [];
 }
 
+function getSlashMenuCommandsSignature(
+  availableCommands?: readonly SlashCommandDef[] | null,
+): string {
+  if (!availableCommands?.length) {
+    return "";
+  }
+  return availableCommands
+    .map((command) =>
+      [
+        command.name,
+        command.description,
+        command.args ?? "",
+        command.executeLocal ? "local" : "remote",
+        command.aliases?.join(",") ?? "",
+        command.argOptions?.join(",") ?? "",
+      ].join("|"),
+    )
+    .join("||");
+}
+
 function updateSlashMenu(
   value: string,
   requestUpdate: () => void,
   availableCommands?: readonly SlashCommandDef[] | null,
 ): void {
+  vs.slashMenuValue = value;
+  vs.slashMenuCommandsSignature = getSlashMenuCommandsSignature(availableCommands);
   const commands = availableCommands?.length ? availableCommands : SLASH_COMMANDS;
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
@@ -777,6 +803,14 @@ function updateSlashMenu(
     resetSlashMenuState();
   }
   requestUpdate();
+}
+
+function syncSlashMenuFromProps(props: ChatProps): void {
+  const commandsSignature = getSlashMenuCommandsSignature(props.slashCommands);
+  if (vs.slashMenuValue === props.draft && vs.slashMenuCommandsSignature === commandsSignature) {
+    return;
+  }
+  updateSlashMenu(props.draft, () => {}, props.slashCommands);
 }
 
 function selectSlashCommand(
@@ -1125,6 +1159,7 @@ function renderSlashMenu(
 }
 
 export function renderChat(props: ChatProps) {
+  syncSlashMenuFromProps(props);
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);

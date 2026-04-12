@@ -52,6 +52,7 @@ import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
+  CommandCatalogResult,
   PresenceEntry,
   HealthSummary,
   StatusSummary,
@@ -91,6 +92,12 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatCommandCatalogLoading: boolean;
+  chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogAgentId: string | null;
+  chatCommandCatalogRequestId: number;
+  chatCommandCatalogError: string | null;
+  chatCommandCatalogResult: CommandCatalogResult | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -212,6 +219,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
+  host.chatCommandCatalogLoading = false;
+  host.chatCommandCatalogLoadingAgentId = null;
+  host.chatCommandCatalogAgentId = null;
+  host.chatCommandCatalogRequestId += 1;
+  host.chatCommandCatalogError = null;
+  host.chatCommandCatalogResult = null;
   if (reconnectReason === "seq-gap") {
     host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
     clearPendingQueueItemsForRun(
