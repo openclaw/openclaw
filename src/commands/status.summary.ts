@@ -6,6 +6,7 @@ import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -124,13 +125,31 @@ export async function getStatusSummary(
       )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
+  const lastHeartbeatEvent = getLastHeartbeatEvent();
+  const lastHeartbeatTs = lastHeartbeatEvent?.ts ?? null;
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    let observedState: HeartbeatStatus["observedState"] = undefined;
+    if (summary.enabled) {
+      if (
+        lastHeartbeatTs &&
+        summary.everyMs &&
+        Date.now() - lastHeartbeatTs <= summary.everyMs * 2
+      ) {
+        observedState = "running";
+      } else if (lastHeartbeatTs && summary.everyMs) {
+        observedState = "stale";
+      } else {
+        observedState = "unknown";
+      }
+    }
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      observedState,
+      lastTickTs: summary.enabled ? lastHeartbeatTs : null,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins

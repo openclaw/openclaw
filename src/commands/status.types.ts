@@ -34,6 +34,8 @@ export type HeartbeatStatus = {
   enabled: boolean;
   every: string;
   everyMs: number | null;
+  observedState?: "running" | "stale" | "unknown";
+  lastTickTs?: number | null;
 };
 
 export type StatusSummary = {

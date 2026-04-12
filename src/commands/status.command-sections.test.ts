@@ -3,6 +3,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusHeartbeatValue,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -207,5 +208,52 @@ describe("status.command-sections", () => {
       { key: "Status", header: "Status", minWidth: 8 },
       { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
     ]);
+  });
+
+  it("shows observed running state for enabled heartbeat agents", () => {
+    const value = buildStatusHeartbeatValue({
+      summary: {
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [
+            {
+              agentId: "main",
+              enabled: true,
+              every: "30m",
+              everyMs: 1_800_000,
+              observedState: "running",
+            },
+            {
+              agentId: "devclaw",
+              enabled: false,
+              every: "disabled",
+              everyMs: null,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(value).toBe("30m (main, running), disabled (devclaw)");
+  });
+
+  it("falls back to disabled when no heartbeat agents are enabled", () => {
+    const value = buildStatusHeartbeatValue({
+      summary: {
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [
+            {
+              agentId: "main",
+              enabled: false,
+              every: "disabled",
+              everyMs: null,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(value).toBe("disabled (main)");
   });
 });

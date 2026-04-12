@@ -82,7 +82,8 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
       if (!agent.enabled || !agent.everyMs) {
         return `disabled (${agent.agentId})`;
       }
-      return `${agent.every} (${agent.agentId})`;
+      const observed = agent.observedState ? `, ${agent.observedState}` : "";
+      return `${agent.every} (${agent.agentId}${observed})`;
     })
     .filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : "disabled";

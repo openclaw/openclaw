@@ -3,6 +3,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  listGatewayAgentsBasic: vi.fn(() => ({
+    defaultId: "main",
+    agents: [{ id: "main" }],
+  })),
+  resolveHeartbeatSummaryForAgent: vi.fn(() => ({
+    enabled: true,
+    every: "5m",
+    everyMs: 300_000,
+  })),
+  getLastHeartbeatEvent: vi.fn(() => null),
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
@@ -35,10 +45,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
-  listGatewayAgentsBasic: vi.fn(() => ({
-    defaultId: "main",
-    agents: [{ id: "main" }],
-  })),
+  listGatewayAgentsBasic: statusSummaryMocks.listGatewayAgentsBasic,
 }));
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -46,11 +53,11 @@ vi.mock("../infra/channel-summary.js", () => ({
 }));
 
 vi.mock("../infra/heartbeat-summary.js", () => ({
-  resolveHeartbeatSummaryForAgent: vi.fn(() => ({
-    enabled: true,
-    every: "5m",
-    everyMs: 300_000,
-  })),
+  resolveHeartbeatSummaryForAgent: statusSummaryMocks.resolveHeartbeatSummaryForAgent,
+}));
+
+vi.mock("../infra/heartbeat-events.js", () => ({
+  getLastHeartbeatEvent: statusSummaryMocks.getLastHeartbeatEvent,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -127,6 +134,16 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.listGatewayAgentsBasic.mockReturnValue({
+      defaultId: "main",
+      agents: [{ id: "main" }],
+    });
+    statusSummaryMocks.resolveHeartbeatSummaryForAgent.mockReturnValue({
+      enabled: true,
+      every: "5m",
+      everyMs: 300_000,
+    });
+    statusSummaryMocks.getLastHeartbeatEvent.mockReturnValue(null);
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -137,6 +154,81 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("marks enabled heartbeat agents as running when a recent tick was observed", async () => {
+    const now = Date.now();
+    statusSummaryMocks.getLastHeartbeatEvent.mockReturnValue({
+      ts: now - 60_000,
+      status: "ok",
+      channel: "telegram",
+      accountId: "default",
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.heartbeat.agents).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        enabled: true,
+        observedState: "running",
+        lastTickTs: now - 60_000,
+      }),
+    ]);
+  });
+
+  it("marks enabled heartbeat agents as stale when the last observed tick is too old", async () => {
+    const now = Date.now();
+    statusSummaryMocks.getLastHeartbeatEvent.mockReturnValue({
+      ts: now - 700_000,
+      status: "ok",
+      channel: "telegram",
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.heartbeat.agents).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        enabled: true,
+        observedState: "stale",
+        lastTickTs: now - 700_000,
+      }),
+    ]);
+  });
+
+  it("keeps disabled agents disabled even when another agent heartbeat was observed", async () => {
+    statusSummaryMocks.listGatewayAgentsBasic.mockReturnValue({
+      defaultId: "main",
+      agents: [{ id: "main" }, { id: "devclaw" }],
+    });
+    statusSummaryMocks.resolveHeartbeatSummaryForAgent.mockImplementation(
+      (_cfg: unknown, agentId: string) =>
+        agentId === "devclaw"
+          ? { enabled: false, every: "disabled", everyMs: null }
+          : { enabled: true, every: "30m", everyMs: 1_800_000 },
+    );
+    statusSummaryMocks.getLastHeartbeatEvent.mockReturnValue({
+      ts: Date.now() - 60_000,
+      status: "ok",
+      channel: "telegram",
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.heartbeat.agents).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        enabled: true,
+        observedState: "running",
+      }),
+      expect.objectContaining({
+        agentId: "devclaw",
+        enabled: false,
+        observedState: undefined,
+        lastTickTs: null,
+      }),
+    ]);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
