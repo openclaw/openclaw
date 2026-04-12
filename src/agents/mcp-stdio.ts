@@ -32,8 +32,37 @@ const PROXY_ENV_KEYS = [
 ] as const;
 
 /**
+ * Case-insensitive pairs for proxy env vars.  Used to deduplicate defaults so
+ * that we never forward both `HTTPS_PROXY` and `https_proxy` simultaneously
+ * (lowercase takes precedence per convention, so forwarding both would cause
+ * the user's explicit uppercase override to be silently ignored).
+ */
+const PROXY_CASE_PAIRS: ReadonlyArray<[uppercase: string, lowercase: string]> = [
+  ["HTTPS_PROXY", "https_proxy"],
+  ["HTTP_PROXY", "http_proxy"],
+  ["NO_PROXY", "no_proxy"],
+];
+
+/**
+ * Regex that matches `--inspect`, `--inspect-brk`, and `--inspect-port=…`
+ * tokens inside a NODE_OPTIONS string.  If the gateway process is running
+ * under a debugger these flags would cause every MCP child to hang waiting
+ * for its own debugger connection.
+ */
+const INSPECT_FLAG_RE = /--inspect(?:-brk|-port(?:=\S*)?)?(?:\s+\d+)?/g;
+
+/**
  * Collect proxy-related env vars from the current process so they can be
  * forwarded to MCP stdio child processes as lowest-priority defaults.
+ *
+ * Case-dedup: when the gateway has both `HTTPS_PROXY` and `https_proxy` set,
+ * only the uppercase variant is forwarded.  This avoids a subtle bug where
+ * both keys reach the child and the lowercase one silently wins (per
+ * convention), overriding any explicit user config for the uppercase key.
+ *
+ * NODE_OPTIONS: `--inspect*` flags are stripped so that MCP child processes
+ * don't hang waiting for a debugger connection when the gateway itself is
+ * being debugged.
  *
  * @internal — exported for testing only.
  */
@@ -45,6 +74,26 @@ export function getProxyEnvDefaults(): Record<string, string> {
       defaults[key] = value;
     }
   }
+
+  // Case-insensitive dedup: when both cases are present, keep only uppercase.
+  for (const [upper, lower] of PROXY_CASE_PAIRS) {
+    if (defaults[upper] !== undefined && defaults[lower] !== undefined) {
+      delete defaults[lower];
+    }
+  }
+
+  // Strip --inspect* flags from NODE_OPTIONS so child processes don't hang.
+  if (defaults.NODE_OPTIONS !== undefined) {
+    const sanitized = defaults.NODE_OPTIONS.replace(INSPECT_FLAG_RE, "")
+      .trim()
+      .replace(/\s{2,}/g, " ");
+    if (sanitized.length === 0) {
+      delete defaults.NODE_OPTIONS;
+    } else {
+      defaults.NODE_OPTIONS = sanitized;
+    }
+  }
+
   return defaults;
 }
 
@@ -70,8 +119,22 @@ export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerL
 
   // Merge proxy/NODE_OPTIONS env vars from the gateway process as
   // lowest-priority defaults. User-configured env values always win.
+  //
+  // Cross-case dedup: if userEnv explicitly sets `https_proxy`, drop the
+  // uppercase `HTTPS_PROXY` default (and vice-versa) so both aren't
+  // forwarded to the child.
   const proxyDefaults = getProxyEnvDefaults();
   const userEnv = toMcpStringRecord(raw.env);
+  if (userEnv) {
+    for (const [upper, lower] of PROXY_CASE_PAIRS) {
+      if (userEnv[lower] !== undefined) {
+        delete proxyDefaults[upper];
+      }
+      if (userEnv[upper] !== undefined) {
+        delete proxyDefaults[lower];
+      }
+    }
+  }
   const hasProxyDefaults = Object.keys(proxyDefaults).length > 0;
   const mergedEnv = hasProxyDefaults || userEnv ? { ...proxyDefaults, ...userEnv } : undefined;
 

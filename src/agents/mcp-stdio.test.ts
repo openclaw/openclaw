@@ -76,6 +76,60 @@ describe("getProxyEnvDefaults", () => {
       HTTP_PROXY: "http://proxy:3128",
     });
   });
+
+  it("deduplicates when both upper and lower case proxy vars are set", () => {
+    process.env.HTTPS_PROXY = "http://upper:3128";
+    process.env.https_proxy = "http://lower:3128";
+    process.env.HTTP_PROXY = "http://upper-http:3128";
+    process.env.http_proxy = "http://lower-http:3128";
+
+    const result = getProxyEnvDefaults();
+    // Only uppercase should survive when both are present
+    expect(result).toEqual({
+      HTTPS_PROXY: "http://upper:3128",
+      HTTP_PROXY: "http://upper-http:3128",
+    });
+    expect(result).not.toHaveProperty("https_proxy");
+    expect(result).not.toHaveProperty("http_proxy");
+  });
+
+  it("keeps lowercase when only lowercase is set", () => {
+    process.env.https_proxy = "http://lower:3128";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      https_proxy: "http://lower:3128",
+    });
+  });
+
+  it("strips --inspect from NODE_OPTIONS", () => {
+    process.env.NODE_OPTIONS = "--inspect --require /patch.js";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
+  });
+
+  it("strips --inspect-brk from NODE_OPTIONS", () => {
+    process.env.NODE_OPTIONS = "--inspect-brk --require /patch.js";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
+  });
+
+  it("strips --inspect-port=N from NODE_OPTIONS", () => {
+    process.env.NODE_OPTIONS = "--require /patch.js --inspect-port=9230";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
+  });
+
+  it("removes NODE_OPTIONS entirely if only inspect flags remain", () => {
+    process.env.NODE_OPTIONS = "--inspect-brk";
+
+    expect(getProxyEnvDefaults()).toEqual({});
+  });
 });
 
 describe("resolveStdioMcpServerLaunchConfig — proxy env propagation", () => {
@@ -159,5 +213,55 @@ describe("resolveStdioMcpServerLaunchConfig — proxy env propagation", () => {
       return;
     }
     expect(result.config.env).toBeUndefined();
+  });
+
+  it("drops uppercase default when user sets lowercase equivalent", () => {
+    process.env.HTTPS_PROXY = "http://gateway:3128";
+
+    const result = resolveStdioMcpServerLaunchConfig({
+      command: "node",
+      args: ["server.js"],
+      env: { https_proxy: "http://user:9999" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // User's lowercase wins; gateway's uppercase default must not leak through
+    expect(result.config.env).toEqual({
+      https_proxy: "http://user:9999",
+    });
+    expect(result.config.env).not.toHaveProperty("HTTPS_PROXY");
+  });
+
+  it("drops lowercase default when user sets uppercase equivalent", () => {
+    process.env.https_proxy = "http://gateway:3128";
+
+    const result = resolveStdioMcpServerLaunchConfig({
+      command: "node",
+      args: ["server.js"],
+      env: { HTTPS_PROXY: "http://user:9999" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.config.env).toEqual({
+      HTTPS_PROXY: "http://user:9999",
+    });
+    expect(result.config.env).not.toHaveProperty("https_proxy");
+  });
+
+  it("strips --inspect-brk from propagated NODE_OPTIONS", () => {
+    process.env.NODE_OPTIONS = "--inspect-brk --require /patch.js";
+
+    const result = resolveStdioMcpServerLaunchConfig({ command: "node", args: ["server.js"] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.config.env).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
   });
 });
