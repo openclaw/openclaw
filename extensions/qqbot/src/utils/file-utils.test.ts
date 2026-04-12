@@ -47,7 +47,14 @@ describe("qqbot file-utils downloadFile", () => {
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
     });
     expect(QQBOT_MEDIA_SSRF_POLICY).toEqual({
-      hostnameAllowlist: ["*.myqcloud.com", "*.qpic.cn", "*.qq.com", "*.tencentcos.com"],
+      hostnameAllowlist: [
+        "*.myqcloud.com",
+        "*.qpic.cn",
+        "*.qq.com",
+        "*.qq.com.cn",
+        "*.tencentcos.com",
+        "*.ugcimg.cn",
+      ],
       allowRfc2544BenchmarkRange: true,
     });
   });
