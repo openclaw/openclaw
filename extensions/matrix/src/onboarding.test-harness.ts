@@ -205,3 +205,52 @@ export function createMatrixTokenAddAccountPrompter(params?: {
     onConfirm: async () => false,
   });
 }
+
+export function createConfiguredMatrixTopLevelConfig(params?: {
+  homeserver?: string;
+  accessToken?: string | { source: "env"; provider: "default"; id: string };
+  autoJoin?: "allowlist" | "off";
+  autoJoinAllowlist?: string[];
+}): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        homeserver: params?.homeserver ?? "https://matrix.example.org",
+        accessToken: params?.accessToken ?? "matrix-token",
+        ...(params?.autoJoin ? { autoJoin: params.autoJoin } : {}),
+        ...(params?.autoJoinAllowlist ? { autoJoinAllowlist: params.autoJoinAllowlist } : {}),
+      },
+    },
+  } as CoreConfig;
+}
+
+export function createMatrixUpdateKeepCredentialsPrompter(params?: {
+  notes?: string[];
+  inviteAutoJoin?: "off" | "allowlist";
+  updateAutoJoin?: boolean;
+  homeserver?: string;
+  deviceName?: string;
+  onText?: PromptHandler<string | Promise<string>>;
+}) {
+  return createMatrixWizardPrompter({
+    notes: params?.notes,
+    select: {
+      "Matrix already configured. What do you want to do?": "update",
+      ...(params?.inviteAutoJoin ? { "Matrix invite auto-join": params.inviteAutoJoin } : {}),
+    },
+    text: {
+      "Matrix homeserver URL": params?.homeserver ?? "https://matrix.example.org",
+      "Matrix device name (optional)": params?.deviceName ?? "OpenClaw Gateway",
+    },
+    confirm: {
+      "Matrix credentials already configured. Keep them?": true,
+      "Enable end-to-end encryption (E2EE)?": false,
+      "Configure Matrix rooms access?": false,
+      "Configure Matrix invite auto-join?": params?.inviteAutoJoin !== undefined,
+      ...(params?.inviteAutoJoin !== undefined
+        ? { "Update Matrix invite auto-join?": params?.updateAutoJoin ?? true }
+        : {}),
+    },
+    ...(params?.onText ? { onText: params.onText } : {}),
+  });
+}
