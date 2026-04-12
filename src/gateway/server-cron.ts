@@ -172,16 +172,18 @@ export function buildGatewayCronService(params: {
     if (!fallbackAgentEntry) {
       return runtimeConfig;
     }
+    const startupAgents = params.cfg.agents;
+    const runtimeAgents = runtimeConfig.agents;
     return {
       ...runtimeConfig,
       agents: {
-        ...params.cfg.agents,
-        ...runtimeConfig.agents,
+        ...startupAgents,
+        ...runtimeAgents,
         defaults: {
-          ...params.cfg.agents?.defaults,
-          ...runtimeConfig.agents?.defaults,
+          ...startupAgents?.defaults,
+          ...runtimeAgents?.defaults,
         },
-        list: [...(runtimeConfig.agents?.list ?? []), fallbackAgentEntry],
+        list: [...(runtimeAgents?.list ?? []), fallbackAgentEntry],
       },
     };
   };
@@ -234,13 +236,20 @@ export function buildGatewayCronService(params: {
   };
 
   const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
-    const runtimeConfig = loadConfig();
-    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const requestedAgentId =
+      typeof opts?.agentId === "string" && opts.agentId.trim()
+        ? normalizeAgentId(opts.agentId)
+        : undefined;
     const derivedAgentId =
       requestedAgentId ??
       (opts?.sessionKey
         ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
         : undefined);
+    const runtimeConfigBase = loadConfig();
+    const runtimeConfig =
+      derivedAgentId !== undefined
+        ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
+        : runtimeConfigBase;
     const agentId = derivedAgentId || undefined;
     const sessionKey =
       opts?.sessionKey && agentId
