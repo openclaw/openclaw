@@ -1700,4 +1700,60 @@ describe("openai transport stream", () => {
       false,
     );
   });
+
+  it("throws a context-overflow precheck for oversized openai-codex responses payloads", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 256,
+    } satisfies Model<"openai-codex-responses">;
+
+    const payload = {
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "x".repeat(3000) }],
+        },
+      ],
+    };
+
+    expect(() =>
+      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload),
+    ).toThrow(__testing.CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE);
+  });
+
+  it("does not throw the codex precheck for non-codex providers", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 256,
+    } satisfies Model<"openai-responses">;
+
+    const payload = {
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "x".repeat(3000) }],
+        },
+      ],
+    };
+
+    expect(() =>
+      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload),
+    ).not.toThrow();
+  });
 });

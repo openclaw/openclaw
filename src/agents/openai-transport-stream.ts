@@ -102,6 +102,11 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+const CODEX_RESPONSES_PREFLIGHT_SAFE_CONTEXT_RATIO = 0.7;
+const CODEX_RESPONSES_PREFLIGHT_CHARS_PER_TOKEN = 3;
+const CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE =
+  "Context overflow: prompt too large for the model (precheck).";
+
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
@@ -646,6 +651,45 @@ function createOpenAIResponsesClient(
   });
 }
 
+function parsePositiveContextWindow(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+function estimateCodexResponsesPayloadTokens(payload: unknown): number {
+  try {
+    const serialized = JSON.stringify(payload);
+    if (!serialized) {
+      return 0;
+    }
+    return Math.ceil(serialized.length / CODEX_RESPONSES_PREFLIGHT_CHARS_PER_TOKEN);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function enforceOpenAICodexResponsesPreflightGuard(model: Model<Api>, payload: unknown): void {
+  if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+    return;
+  }
+  const contextWindow = parsePositiveContextWindow(
+    (model as { contextWindow?: unknown }).contextWindow,
+  );
+  if (!contextWindow) {
+    return;
+  }
+  const safeThreshold = Math.max(
+    1_000,
+    Math.floor(contextWindow * CODEX_RESPONSES_PREFLIGHT_SAFE_CONTEXT_RATIO),
+  );
+  const estimatedTokens = estimateCodexResponsesPayloadTokens(payload);
+  if (estimatedTokens > safeThreshold) {
+    throw new Error(CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE);
+  }
+}
+
 export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
@@ -694,6 +738,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         params = mergeTransportMetadata(params, turnState?.metadata);
+        enforceOpenAICodexResponsesPreflightGuard(model, params);
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -1397,4 +1442,7 @@ function mapStopReason(reason: string | null) {
 
 export const __testing = {
   processOpenAICompletionsStream,
+  enforceOpenAICodexResponsesPreflightGuard,
+  estimateCodexResponsesPayloadTokens,
+  CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE,
 };
