@@ -336,7 +336,6 @@ knowledge layer:
   memory: {
     backend: "qmd",
       "memory-wiki": {
-      "memory-wiki": {
         enabled: true,
         config: {
           vaultMode: "bridge",
