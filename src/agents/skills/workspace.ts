@@ -533,6 +533,13 @@ export function formatSkillsCompact(skills: Skill[]): string {
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
+// tier field takes precedence over always boolean
+function isAlwaysTier(entry: SkillEntry): boolean {
+  if (entry.metadata?.tier === "always") return true;
+  if (entry.metadata?.tier === "discoverable") return false;
+  return entry.metadata?.always === true;
+}
+
 function applySkillsPromptLimits(params: {
   skills: Skill[];
   config?: OpenClawConfig;
@@ -572,7 +579,7 @@ function applySkillsPromptLimits(params: {
         if (!entryNames.has(entry.skill.name)) continue;
         const matched = skillsForPrompt.find((s) => s.name === entry.skill.name);
         if (!matched) continue;
-        if (entry.metadata?.always === true) {
+        if (isAlwaysTier(entry)) {
           alwaysSkills.push(matched);
         } else {
           discoverableSkills.push(matched);
@@ -701,7 +708,7 @@ function resolveWorkspaceSkillPromptState(
   if (mixed) {
     // Split prompt skills back into always / discoverable based on entry metadata.
     const alwaysNames = new Set(
-      promptEntries.filter((e) => e.metadata?.always === true).map((e) => e.skill.name),
+      promptEntries.filter((e) => isAlwaysTier(e)).map((e) => e.skill.name),
     );
     const always: Skill[] = [];
     const discoverable: Skill[] = [];

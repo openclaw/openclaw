@@ -194,8 +194,11 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const tierRaw = readStringValue(metadataObj.tier);
+  const tier = tierRaw === "always" || tierRaw === "discoverable" ? tierRaw : undefined;
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    tier,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
     skillKey: readStringValue(metadataObj.skillKey),

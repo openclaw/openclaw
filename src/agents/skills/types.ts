@@ -18,6 +18,7 @@ export type SkillInstallSpec = {
 
 export type OpenClawSkillMetadata = {
   always?: boolean;
+  tier?: "always" | "discoverable";
   skillKey?: string;
   primaryEnv?: string;
   emoji?: string;

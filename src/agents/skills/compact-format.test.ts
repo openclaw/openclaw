@@ -22,11 +22,20 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
   });
 }
 
-function makeEntry(skill: Skill, opts?: { always?: boolean }): SkillEntry {
+function makeEntry(
+  skill: Skill,
+  opts?: { always?: boolean; tier?: "always" | "discoverable" | string },
+): SkillEntry {
   return {
     skill,
     frontmatter: {},
-    metadata: opts?.always !== undefined ? { always: opts.always } : undefined,
+    metadata:
+      opts?.always !== undefined || opts?.tier !== undefined
+        ? {
+            always: opts?.always,
+            tier: opts?.tier as "always" | "discoverable" | undefined,
+          }
+        : undefined,
     exposure: {
       includeInRuntimeRegistry: true,
       includeInAvailableSkillsPrompt: true,
@@ -455,5 +464,142 @@ describe("mixed-tier prompt integration", () => {
     expect(prompt2).toContain("<description>");
     expect(prompt1).not.toContain("mixed-tier");
     expect(prompt2).not.toContain("mixed-tier");
+  });
+});
+
+describe("tier frontmatter field", () => {
+  function buildPromptWithEntries(
+    entries: SkillEntry[],
+    limits: { maxChars?: number; maxCount?: number } = {},
+  ): string {
+    return buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      config: {
+        skills: {
+          limits: {
+            ...(limits.maxChars !== undefined && { maxSkillsPromptChars: limits.maxChars }),
+            ...(limits.maxCount !== undefined && { maxSkillsInPrompt: limits.maxCount }),
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+  }
+
+  it('tier: "always" causes skill to be in the always group', () => {
+    const alwaysSkills = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { tier: "always" })),
+      ...discSkills.map((s) => makeEntry(s)),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const fullLen = formatSkillsForPrompt(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    const budget = Math.floor((fullLen + mixedLen) / 2) + 150;
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(mixedLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // always-tier skills keep descriptions
+    expect(prompt).toContain("always-0");
+    expect(prompt).toContain("A".repeat(200));
+    // discoverable skills lose descriptions
+    expect(prompt).toContain("disc-0");
+    expect(prompt).not.toContain("B".repeat(200));
+    expect(prompt).toContain("mixed-tier format");
+  });
+
+  it('tier: "discoverable" overrides always: true', () => {
+    const alwaysSkills = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    // disc skills have always: true BUT tier: "discoverable" — tier wins
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { always: true })),
+      ...discSkills.map((s) => makeEntry(s, { always: true, tier: "discoverable" })),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const fullLen = formatSkillsForPrompt(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    const budget = Math.floor((fullLen + mixedLen) / 2) + 150;
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(mixedLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // always-tier skills (only 3 with always:true, no tier override)
+    expect(prompt).toContain("A".repeat(200));
+    // disc skills had always:true overridden by tier:"discoverable" → no description
+    expect(prompt).not.toContain("B".repeat(200));
+    expect(prompt).toContain("mixed-tier format");
+  });
+
+  it("without tier, always: true still works (backward compat)", () => {
+    const alwaysSkills = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    // No tier field, just always: true
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { always: true })),
+      ...discSkills.map((s) => makeEntry(s, { always: false })),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const fullLen = formatSkillsForPrompt(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    const budget = Math.floor((fullLen + mixedLen) / 2) + 150;
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(mixedLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    expect(prompt).toContain("A".repeat(200));
+    expect(prompt).not.toContain("B".repeat(200));
+    expect(prompt).toContain("mixed-tier format");
+  });
+
+  it("invalid tier value is ignored, falls back to always boolean", () => {
+    const alwaysSkills = Array.from({ length: 3 }, (_, i) =>
+      makeSkill(`always-${i}`, "A".repeat(200)),
+    );
+    const discSkills = Array.from({ length: 20 }, (_, i) =>
+      makeSkill(`disc-${i}`, "B".repeat(200)),
+    );
+    // Invalid tier value + always: true → should still be treated as always
+    const entries = [
+      ...alwaysSkills.map((s) => makeEntry(s, { always: true, tier: "invalid" })),
+      ...discSkills.map((s) => makeEntry(s, { always: false })),
+    ];
+    const allSkills = [...alwaysSkills, ...discSkills];
+    const fullLen = formatSkillsForPrompt(allSkills).length;
+    const mixedLen = formatSkillsMixedTier({
+      always: alwaysSkills,
+      discoverable: discSkills,
+    }).length;
+    const budget = Math.floor((fullLen + mixedLen) / 2) + 150;
+    expect(fullLen).toBeGreaterThan(budget);
+    expect(mixedLen + 150).toBeLessThan(budget);
+
+    const prompt = buildPromptWithEntries(entries, { maxChars: budget });
+    // Invalid tier falls back to always: true → descriptions kept
+    expect(prompt).toContain("A".repeat(200));
+    expect(prompt).not.toContain("B".repeat(200));
+    expect(prompt).toContain("mixed-tier format");
   });
 });
