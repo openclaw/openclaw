@@ -43,4 +43,19 @@ describe("backoff helpers", () => {
       cause: expect.anything(),
     });
   });
+
+  it("advances with fake timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleeper = sleepWithAbort(50);
+      await vi.advanceTimersByTimeAsync(49);
+      await expect(
+        Promise.race([sleeper.then(() => "done"), Promise.resolve("pending")]),
+      ).resolves.toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(sleeper).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
