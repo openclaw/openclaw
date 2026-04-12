@@ -525,15 +525,24 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         containerWorkdir: options.containerWorkdir,
       });
 
-      if (resolvedPath === allowedAbsolutePath) {
+      // Normalize for case-insensitive filesystems (macOS HFS+/APFS, Windows NTFS).
+      const ciFs = process.platform === "darwin" || process.platform === "win32";
+      const normPath = (p: string): string => {
+        const n = path.normalize(p);
+        return ciFs ? n.toLowerCase() : n;
+      };
+      const normResolved = normPath(resolvedPath);
+
+      if (normResolved === normPath(allowedAbsolutePath)) {
         // Exact match — fall through to append logic below.
       } else {
         // Block writes to other files inside the memory directory (e.g. a different date's
         // memory file). Writes to unrelated workspace files are passed through to the
         // underlying tool so normal edits are not blocked during a flush run.
+        const normMemDir = normPath(memoryDirAbsolutePath);
         const isInMemoryDir =
-          resolvedPath === memoryDirAbsolutePath ||
-          resolvedPath.startsWith(memoryDirAbsolutePath + path.sep);
+          normResolved === normMemDir ||
+          normResolved.startsWith(normMemDir + path.sep);
         if (isInMemoryDir) {
           throw new Error(
             `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
