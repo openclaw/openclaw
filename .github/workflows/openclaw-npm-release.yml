@@ -194,7 +194,8 @@ jobs:
           fi
 
   publish_openclaw_npm:
-    # npm trusted publishing + provenance requires a GitHub-hosted runner.
+    # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
+    # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
     if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
     runs-on: ubuntu-latest
@@ -334,6 +335,9 @@ jobs:
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
   promote_beta_to_latest:
+    # KEEP THE MUTATING RELEASE PATH ON A GITHUB-HOSTED RUNNER TOO.
+    # This job changes the public npm dist-tags, so we keep it aligned with the
+    # real release path instead of moving it onto the larger Blacksmith runners.
     if: ${{ inputs.promote_beta_to_latest }}
     runs-on: ubuntu-latest
     environment: npm-release
