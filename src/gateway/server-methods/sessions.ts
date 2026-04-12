@@ -151,8 +151,9 @@ function emitSessionsChanged(
   const msgSubs = payload.sessionKey
     ? context.getSessionMessageSubscriberConnIds(payload.sessionKey)
     : new Set<string>();
-  const connIds = new Set<string>([...evSubs, ...msgSubs]);
-  if (connIds.size === 0) {
+  const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+  if (drainConnIds.size === 0) {
     return;
   }
   const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
@@ -168,9 +169,13 @@ function emitSessionsChanged(
           reason: payload.reason,
           ts: Date.now(),
         },
-        connIds,
+        drainConnIds,
       );
     }
+  }
+
+  if (evSubs.size === 0) {
+    return;
   }
 
   context.broadcastToConnIds(
@@ -231,7 +236,7 @@ function emitSessionsChanged(
           }
         : {}),
     },
-    connIds,
+    evSubs,
     { dropIfSlow: !isTeardown },
   );
 }
