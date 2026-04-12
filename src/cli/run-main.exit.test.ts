@@ -15,6 +15,9 @@ const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() =>
+  vi.fn(async () => undefined),
+);
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
@@ -76,6 +79,10 @@ vi.mock("./root-help-metadata.js", () => ({
 
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
+}));
+
+vi.mock("../plugins/cli.js", () => ({
+  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
 }));
 
 vi.mock("./program/program-context.js", () => ({
@@ -188,6 +195,48 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status");
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
+  });
+
+  it("keeps built-in runtime command hints on the Commander unknown-command path", async () => {
+    const exitCode = process.exitCode;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    registerPluginCliCommandsFromValidatedConfigMock.mockResolvedValueOnce({});
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new CommanderError(1, "commander.unknownCommand", "error: unknown command 'commands'"),
+        ),
+    });
+
+    await expect(runCli(["node", "openclaw", "commands"])).resolves.toBeUndefined();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("built-in runtime slash command"),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("/commands"));
+    expect(process.exitCode).toBe(1);
+    process.exitCode = exitCode;
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("still throws plugin allowlist diagnostics before parse for actionable config errors", async () => {
+    registerPluginCliCommandsFromValidatedConfigMock.mockResolvedValueOnce({
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+    const parseAsyncMock = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync: parseAsyncMock,
+    });
+
+    await expect(runCli(["node", "openclaw", "commands"])).rejects.toThrow(
+      '`plugins.allow` excludes "commands"',
+    );
+    expect(parseAsyncMock).not.toHaveBeenCalled();
   });
 
   it("loads the real primary command before rendering command help", async () => {
