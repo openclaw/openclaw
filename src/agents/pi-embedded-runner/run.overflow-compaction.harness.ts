@@ -327,8 +327,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => mockedContextEngine),
   }));
 
@@ -392,6 +394,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
+    sanitizeUserFacingText: vi.fn((text: unknown) => (typeof text === "string" ? text : "")),
   }));
 
   vi.doMock("./run/attempt.js", () => ({

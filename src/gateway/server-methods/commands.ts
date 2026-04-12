@@ -8,6 +8,7 @@ import type {
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCommandSpecs } from "../../plugins/command-registry-state.js";
 import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -120,8 +121,36 @@ function mapCommand(
   };
 }
 
+function buildPluginCommandEntries(params: {
+  provider?: string;
+  nameSurface: CommandNameSurface;
+}): CommandEntry[] {
+  const pluginTextSpecs = listPluginCommands();
+  const pluginNativeSpecs = getPluginCommandSpecs(params.provider);
+  const entries: CommandEntry[] = [];
+
+  for (const [index, textSpec] of pluginTextSpecs.entries()) {
+    const nativeSpec = pluginNativeSpecs[index];
+    const nativeName = nativeSpec?.name;
+    entries.push({
+      name: params.nameSurface === "text" ? textSpec.name : (nativeName ?? textSpec.name),
+      ...(nativeName ? { nativeName } : {}),
+      textAliases: [`/${textSpec.name}`],
+      description: textSpec.description,
+      source: "plugin",
+      scope: "both",
+      acceptsArgs: textSpec.acceptsArgs,
+    });
+  }
+
+  if (params.nameSurface === "native") {
+    return entries.filter((entry) => entry.nativeName);
+  }
+  return entries;
+}
+
 export function buildCommandsListResult(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   scope?: "native" | "text" | "both";
@@ -153,33 +182,7 @@ export function buildCommandsListResult(params: {
     );
   }
 
-  if (nameSurface === "text") {
-    for (const spec of listPluginCommands()) {
-      commands.push({
-        name: spec.name,
-        textAliases: [`/${spec.name}`],
-        description: spec.description,
-        source: "plugin",
-        scope: "both",
-        acceptsArgs: spec.acceptsArgs,
-      });
-    }
-  } else {
-    const pluginTextSpecs = listPluginCommands();
-    const pluginSpecs = getPluginCommandSpecs(provider);
-    for (const [index, spec] of pluginSpecs.entries()) {
-      const textName = pluginTextSpecs[index]?.name ?? spec.name;
-      commands.push({
-        name: spec.name,
-        nativeName: spec.name,
-        textAliases: [`/${textName}`],
-        description: spec.description,
-        source: "plugin",
-        scope: "both",
-        acceptsArgs: spec.acceptsArgs,
-      });
-    }
-  }
+  commands.push(...buildPluginCommandEntries({ provider, nameSurface }));
 
   return { commands };
 }

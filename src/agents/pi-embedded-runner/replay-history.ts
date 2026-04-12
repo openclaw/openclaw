@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   sanitizeProviderReplayHistoryWithPlugin,
   validateProviderReplayTurnsWithPlugin,
@@ -8,7 +9,6 @@ import {
 import type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
-  ProviderRuntimeModel,
 } from "../../plugins/types.js";
 import {
   hasInterSessionUserProvenance,

@@ -4,7 +4,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
-import { runQaSuite, type QaSuiteResult } from "./suite.js";
+import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
@@ -233,6 +235,9 @@ function collectTranscriptStats(transcript: string) {
 }
 
 function detectTranscriptFailure(transcript: string): string | undefined {
+  if (extractQaVisibleReplyLeakText(transcript)) {
+    return "internal harness/meta text leaked into transcript";
+  }
   const checks: Array<[RegExp, string]> = [
     [/\bmodel `[^`]+` is not supported\b/i, "model unsupported error leaked into transcript"],
     [/\binsufficient account balance\b/i, "account balance error leaked into transcript"],
@@ -518,7 +523,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuite;
+  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
   const candidateConcurrency = normalizeConcurrency(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,

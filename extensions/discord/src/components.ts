@@ -36,14 +36,14 @@ import type {
   DiscordComponentButtonStyle,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentModalEntry,
-  DiscordComponentModalFieldDefinition,
-  DiscordComponentModalFieldSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
   DiscordComponentSelectSpec,
   DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
   DiscordModalSpec,
 } from "./components.types.js";
 export type {
@@ -53,22 +53,19 @@ export type {
   DiscordComponentButtonStyle,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentModalEntry,
-  DiscordComponentModalEntry as DiscordModalEntry,
-  DiscordComponentModalFieldDefinition,
-  DiscordComponentModalFieldDefinition as DiscordModalFieldDefinition,
-  DiscordComponentModalFieldSpec,
-  DiscordComponentModalFieldSpec as DiscordModalFieldSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
   DiscordComponentSelectSpec,
   DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
   DiscordModalSpec,
 } from "./components.types.js";
 // Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
 // Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = Modal ?? class {};
+const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
@@ -190,7 +187,7 @@ function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
   }
 }
 
-function mapTextInputStyle(style?: DiscordComponentModalFieldSpec["style"]) {
+function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
   return style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short;
 }
 
@@ -286,11 +283,7 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   };
 }
 
-function parseModalField(
-  raw: unknown,
-  label: string,
-  index: number,
-): DiscordComponentModalFieldSpec {
+function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
   const type = normalizeLowercaseStringOrEmpty(
     readString(obj.type, `${label}.type`),
@@ -322,7 +315,7 @@ function parseModalField(
     maxValues: readOptionalNumber(obj.maxValues),
     minLength: readOptionalNumber(obj.minLength),
     maxLength: readOptionalNumber(obj.maxLength),
-    style: readOptionalString(obj.style) as DiscordComponentModalFieldSpec["style"],
+    style: readOptionalString(obj.style) as DiscordModalFieldSpec["style"],
   };
 }
 
@@ -697,7 +690,7 @@ function isSelectComponent(
 }
 
 function createModalFieldComponent(
-  field: DiscordComponentModalFieldDefinition,
+  field: DiscordModalFieldDefinition,
 ): TextInput | StringSelectMenu | UserSelectMenu | RoleSelectMenu | CheckboxGroup | RadioGroup {
   if (field.type === "text") {
     class DynamicTextInput extends TextInput {
@@ -772,7 +765,7 @@ export function buildDiscordComponentMessage(params: {
   accountId?: string;
 }): DiscordComponentBuildResult {
   const entries: DiscordComponentEntry[] = [];
-  const modals: DiscordComponentModalEntry[] = [];
+  const modals: DiscordModalEntry[] = [];
   const components: TopLevelComponents[] = [];
   const containerChildren: Array<
     | Row<
@@ -951,11 +944,7 @@ export class DiscordFormModal extends ModalBase {
   components: Array<Label | TextDisplay>;
   customIdParser = parseDiscordModalCustomIdForCarbonImpl;
 
-  constructor(params: {
-    modalId: string;
-    title: string;
-    fields: DiscordComponentModalFieldDefinition[];
-  }) {
+  constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
     super();
     this.title = params.title;
     this.customId = buildDiscordModalCustomIdImpl(params.modalId);
@@ -976,7 +965,7 @@ export class DiscordFormModal extends ModalBase {
   }
 }
 
-export function createDiscordFormModal(entry: DiscordComponentModalEntry): Modal {
+export function createDiscordFormModal(entry: DiscordModalEntry): Modal {
   return new DiscordFormModal({
     modalId: entry.id,
     title: entry.title,

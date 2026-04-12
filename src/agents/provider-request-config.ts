@@ -60,10 +60,11 @@ export type ProviderRequestTransportOverrides = {
   auth?: ProviderRequestAuthOverride;
   proxy?: ProviderRequestProxyOverride;
   tls?: ProviderRequestTlsOverride;
-  allowPrivateNetwork?: boolean;
 };
 
-export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides;
+export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
+  allowPrivateNetwork?: boolean;
+};
 
 export type ResolvedProviderRequestAuthConfig =
   | {
@@ -307,8 +308,7 @@ export function sanitizeConfiguredProviderRequest(
 export function sanitizeConfiguredModelProviderRequest(
   request: ConfiguredModelProviderRequest | undefined,
 ): ModelProviderRequestTransportOverrides | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sanitized = sanitizeConfiguredProviderRequest(request as unknown as any);
+  const sanitized = sanitizeConfiguredProviderRequest(request);
   const rawAllow = request?.allowPrivateNetwork;
   const allowPrivateNetwork = rawAllow === true ? true : rawAllow === false ? false : undefined;
   if (!sanitized && allowPrivateNetwork === undefined) {
@@ -323,33 +323,42 @@ export function sanitizeConfiguredModelProviderRequest(
 export function mergeProviderRequestOverrides(
   ...overrides: Array<ProviderRequestTransportOverrides | undefined>
 ): ProviderRequestTransportOverrides | undefined {
-  let merged: ProviderRequestTransportOverrides | undefined;
+  const merged: ProviderRequestTransportOverrides = {};
+  let hasMerged = false;
   for (const current of overrides) {
     if (!current) {
       continue;
     }
-    merged = {
-      ...merged,
-      ...(current.headers
-        ? {
-            headers: {
-              ...merged?.headers,
-              ...current.headers,
-            },
-          }
-        : {}),
-      ...(current.auth ? { auth: current.auth } : {}),
-      ...(current.proxy ? { proxy: current.proxy } : {}),
-      ...(current.tls ? { tls: current.tls } : {}),
-    };
+    hasMerged = true;
+    if (current.headers) {
+      merged.headers = Object.assign({}, merged.headers, current.headers);
+    }
+    if (current.auth) {
+      merged.auth = current.auth;
+    }
+    if (current.proxy) {
+      merged.proxy = current.proxy;
+    }
+    if (current.tls) {
+      merged.tls = current.tls;
+    }
   }
-  return merged;
+  return hasMerged ? merged : undefined;
 }
 
 export function mergeModelProviderRequestOverrides(
   ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
 ): ModelProviderRequestTransportOverrides | undefined {
-  return mergeProviderRequestOverrides(...overrides);
+  let merged: ModelProviderRequestTransportOverrides | undefined = mergeProviderRequestOverrides(
+    ...overrides,
+  );
+  for (const current of overrides) {
+    if (current?.allowPrivateNetwork !== undefined) {
+      merged ??= {};
+      merged.allowPrivateNetwork = current.allowPrivateNetwork;
+    }
+  }
+  return merged;
 }
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;

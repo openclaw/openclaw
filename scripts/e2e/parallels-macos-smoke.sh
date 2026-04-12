@@ -1066,10 +1066,30 @@ verify_bundle_permissions() {
   local npm_q cmd
   npm_q="$(shell_quote "$GUEST_NPM_BIN")"
   cmd="$(cat <<EOF
-root=\$($npm_q root -g); check_path() { local path="\$1"; [ -e "\$path" ] || return 0; local perm perm_oct; perm=\$(/usr/bin/stat -f '%OLp' "\$path"); perm_oct=\$((8#\$perm)); if (( perm_oct & 0002 )); then echo "world-writable install artifact: \$path (\$perm)" >&2; exit 1; fi; }; check_path "\$root/openclaw"; check_path "\$root/openclaw/extensions"; if [ -d "\$root/openclaw/extensions" ]; then while IFS= read -r -d '' extension_dir; do check_path "\$extension_dir"; done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0); fi
+set -eu
+set -o pipefail
+root=\$($npm_q root -g)
+check_path() {
+  local path="\$1"
+  [ -e "\$path" ] || return 0
+  local perm perm_oct
+  perm=\$(/usr/bin/stat -f '%OLp' "\$path")
+  perm_oct=\$((8#\$perm))
+  if (( perm_oct & 0002 )); then
+    echo "world-writable install artifact: \$path (\$perm)" >&2
+    exit 1
+  fi
+}
+check_path "\$root/openclaw"
+check_path "\$root/openclaw/extensions"
+if [ -d "\$root/openclaw/extensions" ]; then
+  while IFS= read -r -d '' extension_dir; do
+    check_path "\$extension_dir"
+  done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0)
+fi
 EOF
 )"
-  guest_current_user_sh "$cmd"
+  guest_current_user_exec /bin/bash -lc "$cmd"
 }
 
 run_ref_onboard() {
@@ -1185,7 +1205,7 @@ fi
 deadline=\$((SECONDS + 30))
 dashboard_ready=0
 while [ \$SECONDS -lt \$deadline ]; do
-  if curl -fsSL "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
+  if curl -fsSL --connect-timeout 2 --max-time 5 "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
     if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
       if grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
         dashboard_ready=1
@@ -1210,7 +1230,7 @@ deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
   # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
   # app process exits, so require a non-node client connection rather than a
-  # long-lived `Safari` process specifically.
+  # long-lived Safari process specifically.
   if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
     | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
     exit 0

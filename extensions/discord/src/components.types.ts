@@ -94,7 +94,7 @@ export type DiscordComponentBlock =
       spoiler?: boolean;
     };
 
-export type DiscordComponentModalFieldSpec = {
+export type DiscordModalFieldSpec = {
   type: DiscordComponentModalFieldType;
   name?: string;
   label: string;
@@ -109,13 +109,15 @@ export type DiscordComponentModalFieldSpec = {
   style?: "short" | "paragraph";
 };
 
+export type DiscordComponentModalFieldSpec = DiscordModalFieldSpec;
+
 export type DiscordModalSpec = {
   title: string;
   callbackData?: string;
   triggerLabel?: string;
   triggerStyle?: DiscordComponentButtonStyle;
   allowedUsers?: string[];
-  fields: DiscordComponentModalFieldSpec[];
+  fields: DiscordModalFieldSpec[];
 };
 
 export type DiscordComponentMessageSpec = {
@@ -147,7 +149,7 @@ export type DiscordComponentEntry = {
   expiresAt?: number;
 };
 
-export type DiscordComponentModalFieldDefinition = {
+export type DiscordModalFieldDefinition = {
   id: string;
   name: string;
   label: string;
@@ -163,11 +165,13 @@ export type DiscordComponentModalFieldDefinition = {
   style?: "short" | "paragraph";
 };
 
-export type DiscordComponentModalEntry = {
+export type DiscordComponentModalFieldDefinition = DiscordModalFieldDefinition;
+
+export type DiscordModalEntry = {
   id: string;
   title: string;
   callbackData?: string;
-  fields: DiscordComponentModalFieldDefinition[];
+  fields: DiscordModalFieldDefinition[];
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
@@ -178,8 +182,10 @@ export type DiscordComponentModalEntry = {
   allowedUsers?: string[];
 };
 
+export type DiscordComponentModalEntry = DiscordModalEntry;
+
 export type DiscordComponentBuildResult = {
   components: TopLevelComponents[];
   entries: DiscordComponentEntry[];
-  modals: DiscordComponentModalEntry[];
+  modals: DiscordModalEntry[];
 };

@@ -45,7 +45,7 @@ import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
-import { installCompletion } from "../completion-cli.js";
+import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
@@ -680,7 +680,7 @@ async function maybeRestartService(params: {
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         try {
           const interactiveDoctor =
-            Boolean(process.stdin.isTTY) && !params.opts.json && params.opts.yes !== true;
+            process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
           });
