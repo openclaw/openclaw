@@ -32,6 +32,7 @@ function normalizeRuntimeFormData(
   const next = new RuntimeFormData();
   for (const [key, value] of body.entries()) {
     const namedValue = value as FormDataEntryValueWithOptionalName;
+    // File.name is the standard filename property; skip empty/whitespace-only values
     const fileName =
       typeof namedValue.name === "string" && namedValue.name.trim() ? namedValue.name : undefined;
     if (fileName) {
@@ -40,7 +41,9 @@ function normalizeRuntimeFormData(
       next.append(key, value);
     }
   }
-  return next;
+  // undici.FormData is structurally compatible with BodyInit but lives in a separate
+  // type namespace; the cast avoids a cross-implementation assignability error.
+  return next as unknown as BodyInit;
 }
 
 function normalizeRuntimeRequestInit(

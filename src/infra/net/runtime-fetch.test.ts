@@ -35,7 +35,9 @@ afterEach(() => {
 describe("fetchWithRuntimeDispatcher", () => {
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = init?.body as RuntimeFormData;
+      // init.body was rebuilt as RuntimeFormData by normalizeRuntimeFormData;
+      // BodyInit and RuntimeFormData live in separate type namespaces so a double cast is needed.
+      const body = init?.body as unknown as RuntimeFormData;
       expect(body).toBeInstanceOf(RuntimeFormData);
       expect(body.records).toEqual(
         expect.arrayContaining([
