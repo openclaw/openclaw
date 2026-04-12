@@ -1,20 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
-import { channelsAddCommand } from "./channels.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import {
   createMSTeamsCatalogEntry,
   createMSTeamsSetupPlugin,
 } from "./channels.plugin-install.test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+
+let channelsAddCommand: typeof import("./channels.js").channelsAddCommand;
 
 const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
@@ -83,7 +84,7 @@ function createTelegramAddTestPlugin(): ChannelPlugin {
     const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
     const scoped = telegram?.accounts?.[resolvedAccountId];
     return {
-      token: String(scoped?.botToken ?? telegram?.botToken ?? ""),
+      token: scoped?.botToken ?? telegram?.botToken ?? "",
       enabled:
         typeof scoped?.enabled === "boolean"
           ? scoped.enabled
@@ -225,7 +226,12 @@ async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccount
 }
 
 describe("channelsAddCommand", () => {
+  beforeAll(async () => {
+    ({ channelsAddCommand } = await import("./channels.js"));
+  });
+
   beforeEach(async () => {
+    resetPluginRuntimeStateForTest();
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
@@ -315,18 +321,12 @@ describe("channelsAddCommand", () => {
     expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
       expect.objectContaining({ entry: catalogEntry }),
     );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
           msteams: {
             enabled: true,
-            tenantId: "tenant-scoped",
           },
         },
       }),
@@ -362,18 +362,12 @@ describe("channelsAddCommand", () => {
     );
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
           msteams: {
             enabled: true,
-            tenantId: "tenant-installed",
           },
         },
       }),
@@ -441,10 +435,14 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@vendor/teams-runtime",
+        channels: {
+          msteams: {
+            enabled: true,
+          },
+        },
       }),
     );
     expect(runtime.error).not.toHaveBeenCalled();

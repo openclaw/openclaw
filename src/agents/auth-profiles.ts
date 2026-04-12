@@ -27,6 +27,7 @@ export {
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,

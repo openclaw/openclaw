@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
@@ -9,7 +10,6 @@ import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
-  MAX_IMAGE_INPUT_PIXELS,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -19,7 +19,13 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
-import { detectMime, extensionForMime, kindFromMime } from "./mime.js";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  kindFromMime,
+  normalizeMimeType,
+} from "./mime.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -35,6 +41,7 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
@@ -42,8 +49,6 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
-  workspaceDir?: string;
 };
 
 function resolveWebMediaOptions(params: {
@@ -69,6 +74,7 @@ function resolveWebMediaOptions(params: {
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
@@ -92,13 +98,6 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
-function isPixelLimitError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes(`${MAX_IMAGE_INPUT_PIXELS.toLocaleString("en-US")} pixel input limit`)
-  );
-}
-
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
@@ -110,25 +109,43 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
 }
 
 function assertHostReadMediaAllowed(params: {
+  sniffedContentType?: string;
   contentType?: string;
+  filePath?: string;
   kind: MediaKind | undefined;
 }): void {
-  if (params.kind === "image" || params.kind === "audio" || params.kind === "video") {
+  const sniffedKind = kindFromMime(params.sniffedContentType);
+  if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
     return;
   }
-  if (params.kind !== "document") {
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (
+    sniffedKind === "document" &&
+    sniffedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
+  ) {
+    return;
+  }
+  if (
+    sniffedMime === "application/x-cfb" &&
+    [".doc", ".ppt", ".xls"].includes(getFileExtension(params.filePath) ?? "")
+  ) {
+    return;
+  }
+  const normalizedMime = normalizeMimeType(params.contentType);
+  if (
+    params.kind === "document" &&
+    normalizedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
+  ) {
     throw new LocalMediaAccessError(
       "path-not-allowed",
-      `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${params.contentType?.trim().toLowerCase() ?? "unknown"}).`,
+      `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
     );
-  }
-  const normalizedMime = params.contentType?.trim().toLowerCase();
-  if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
-    return;
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
@@ -207,11 +224,11 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    workspaceDir,
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
-    workspaceDir,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -224,6 +241,7 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
+  mediaUrl = resolveCanvasHttpPathToLocalPath(mediaUrl) ?? mediaUrl;
 
   const optimizeAndClampImage = async (
     buffer: Buffer,
@@ -312,11 +330,7 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
-
-  // Resolve relative MEDIA: paths (e.g. "poker_profit.png", "./subdir/file.png")
-  // against the agent workspace directory so bare filenames written by agents
-  // are found on disk and pass the local-roots allowlist check.
-  if (workspaceDir && !path.isAbsolute(mediaUrl)) {
+  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl)) {
     mediaUrl = path.resolve(workspaceDir, mediaUrl);
   }
   try {
@@ -369,22 +383,23 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const detectedMime = await detectMime({ buffer: data, filePath: mediaUrl });
-  const verifiedMime = hostReadCapability ? await detectMime({ buffer: data }) : detectedMime;
-  const mime = verifiedMime ?? detectedMime;
+  const sniffedMime = await detectMime({ buffer: data });
+  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
+  if (hostReadCapability) {
+    assertHostReadMediaAllowed({
+      sniffedContentType: sniffedMime,
+      contentType: mime,
+      filePath: mediaUrl,
+      kind,
+    });
+  }
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
       fileName = `${fileName}${ext}`;
     }
-  }
-  if (hostReadCapability) {
-    assertHostReadMediaAllowed({
-      contentType: verifiedMime,
-      kind: kindFromMime(detectedMime ?? verifiedMime),
-    });
   }
   return await clampAndFinalize({
     buffer: data,
@@ -465,10 +480,7 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch (error) {
-        if (isPixelLimitError(error)) {
-          throw error;
-        }
+      } catch {
         // Continue trying other size/quality combinations
       }
     }

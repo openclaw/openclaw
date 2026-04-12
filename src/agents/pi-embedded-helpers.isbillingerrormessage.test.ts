@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
@@ -222,6 +223,7 @@ describe("isBillingErrorMessage", () => {
     const samples = [
       "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
       "Extra usage is required for long context requests.",
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
       '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
       '{"type":"error","error":{"type":"invalid_request_error","message":"Extra usage is required for long context requests."}}',
     ];
@@ -652,6 +654,25 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
   });
 
+  it("classifies HTTP 404 assistant errors as model_not_found so model fallback can continue", () => {
+    expect(classifyFailoverReason("404 status code (no body)")).toBe("model_not_found");
+    expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
+  });
+
+  it("preserves session and auth billing signals on HTTP 404 text", () => {
+    expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("HTTP 404: invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
+  });
+
+  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
     expect(
       classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
@@ -1079,5 +1100,88 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
+  });
+});
+
+describe("classifyProviderRuntimeFailureKind", () => {
+  it("classifies missing scope failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      }),
+    ).toBe("auth_scope");
+  });
+
+  it("classifies raw missing scope payloads without an HTTP prefix", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"},"code":401}',
+      }),
+    ).toBe("auth_scope");
+  });
+
+  it("does not classify non-Codex permission errors as missing scope failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        message:
+          '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      }),
+    ).not.toBe("auth_scope");
+  });
+
+  it("does not treat generic Codex permission failures as missing scope failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
+      }),
+    ).not.toBe("auth_scope");
+  });
+
+  it("classifies OAuth refresh failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      ),
+    ).toBe("auth_refresh");
+  });
+
+  it("classifies HTML 403 auth failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      ),
+    ).toBe("auth_html_403");
+  });
+
+  it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {
+    expect(classifyProviderRuntimeFailureKind("407 Proxy Authentication Required")).toBe("proxy");
+    expect(
+      classifyProviderRuntimeFailureKind("dial tcp: lookup api.example.com: no such host"),
+    ).toBe("dns");
+    expect(classifyProviderRuntimeFailureKind("socket hang up")).toBe("timeout");
+    expect(
+      classifyProviderRuntimeFailureKind("INVALID_REQUEST_ERROR: string should match pattern"),
+    ).toBe("schema");
+    expect(classifyProviderRuntimeFailureKind("exec denied (allowlist-miss):")).toBe(
+      "sandbox_blocked",
+    );
+    expect(classifyProviderRuntimeFailureKind("tool_use.input: Field required")).toBe(
+      "replay_invalid",
+    );
+  });
+
+  it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      ),
+    ).not.toBe("proxy");
   });
 });

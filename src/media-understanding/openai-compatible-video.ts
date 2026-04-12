@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type OpenAiCompatibleVideoPayload = {
   choices?: Array<{
     message?: {
@@ -11,7 +13,7 @@ export function resolveMediaUnderstandingString(
   value: string | undefined,
   fallback: string,
 ): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   return trimmed || fallback;
 }
 

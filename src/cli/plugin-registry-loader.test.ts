@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 
@@ -12,12 +12,14 @@ describe("plugin-registry-loader", () => {
   let resolvePluginRegistryScopeForCommandPath: typeof import("./plugin-registry-loader.js").resolvePluginRegistryScopeForCommandPath;
   let loggingState: typeof import("../logging/state.js").loggingState;
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    vi.resetModules();
+  beforeAll(async () => {
     ({ ensureCliPluginRegistryLoaded, resolvePluginRegistryScopeForCommandPath } =
       await import("./plugin-registry-loader.js"));
     ({ loggingState } = await import("../logging/state.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
   });

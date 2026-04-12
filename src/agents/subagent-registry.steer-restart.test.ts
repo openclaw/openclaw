@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -101,10 +101,13 @@ describe("subagent registry steer restarts", () => {
   const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
   const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
-  beforeEach(async () => {
-    vi.resetModules();
-    lifecycleHandler = undefined;
+  beforeAll(async () => {
     mod = await import("./subagent-registry.js");
+  });
+
+  beforeEach(() => {
+    lifecycleHandler = undefined;
+    mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   const flushAnnounce = async () => {

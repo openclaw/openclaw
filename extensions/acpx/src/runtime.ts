@@ -12,7 +12,7 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-} from "acpx/dist/runtime.js";
+} from "acpx/runtime";
 import type { AcpRuntime } from "../runtime-api.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
@@ -131,6 +131,7 @@ export class AcpxRuntime implements AcpxRuntimeLike {
       .close({
         handle: input.handle,
         reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
       })
       .then(() => {
         if (input.discardPersistentState) {

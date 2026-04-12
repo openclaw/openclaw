@@ -1,7 +1,13 @@
 import path from "node:path";
+import {
+  defaultQaModelForMode as resolveDefaultQaModelForMode,
+  normalizeQaProviderMode as normalizeQaProviderModeInput,
+  type QaProviderMode,
+} from "./model-selection.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
 
-export type QaProviderMode = "mock-openai" | "live-openai";
+export type { QaProviderMode } from "./model-selection.js";
+export type QaProviderModeInput = QaProviderMode | "live-openai";
 
 export type QaLabRunSelection = {
   providerMode: QaProviderMode;
@@ -27,25 +33,27 @@ export type QaLabRunnerSnapshot = {
   error: string | null;
 };
 
+export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
+  return resolveDefaultQaModelForMode(mode, alternate ? { alternate: true } : undefined);
+}
+
 export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {
+  const providerMode: QaProviderMode = "live-frontier";
   return {
-    providerMode: "mock-openai",
-    primaryModel: "mock-openai/gpt-5.4",
-    alternateModel: "mock-openai/gpt-5.4-alt",
-    fastMode: false,
+    providerMode,
+    primaryModel: defaultQaModelForMode(providerMode),
+    alternateModel: defaultQaModelForMode(providerMode, true),
+    fastMode: true,
     scenarioIds: scenarios.map((scenario) => scenario.id),
   };
 }
 
-function defaultModelForMode(mode: QaProviderMode, alternate = false) {
-  if (mode === "live-openai") {
-    return "openai/gpt-5.4";
-  }
-  return alternate ? "mock-openai/gpt-5.4-alt" : "mock-openai/gpt-5.4";
-}
-
-function normalizeProviderMode(input: unknown): QaProviderMode {
-  return input === "live-openai" ? "live-openai" : "mock-openai";
+export function normalizeQaProviderMode(input: unknown): QaProviderMode {
+  return normalizeQaProviderModeInput(
+    input === "mock-openai" || input === "live-frontier" || input === "live-openai"
+      ? input
+      : "live-frontier",
+  );
 }
 
 function normalizeModel(input: unknown, fallback: string) {
@@ -71,13 +79,15 @@ export function normalizeQaRunSelection(
   scenarios: QaSeedScenario[],
 ): QaLabRunSelection {
   const payload = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const providerMode = normalizeProviderMode(payload.providerMode);
+  const providerMode = normalizeQaProviderMode(payload.providerMode);
   return {
     providerMode,
-    primaryModel: normalizeModel(payload.primaryModel, defaultModelForMode(providerMode)),
-    alternateModel: normalizeModel(payload.alternateModel, defaultModelForMode(providerMode, true)),
-    fastMode:
-      typeof payload.fastMode === "boolean" ? payload.fastMode : providerMode === "live-openai",
+    primaryModel: normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode)),
+    alternateModel: normalizeModel(
+      payload.alternateModel,
+      defaultQaModelForMode(providerMode, true),
+    ),
+    fastMode: providerMode === "live-frontier" || payload.fastMode === true,
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }

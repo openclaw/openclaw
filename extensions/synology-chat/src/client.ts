@@ -6,6 +6,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
@@ -221,16 +222,16 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   log?: { warn: (...args: unknown[]) => void };
 }): Promise<number | undefined> {
   const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
-  const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
+  const byNickname = users.find((u) => normalizeLowercaseStringOrEmpty(u.nickname) === lower);
   if (byNickname) {
     return byNickname.user_id;
   }
 
   // Then by username
-  const byUsername = users.find((u) => u.username.toLowerCase() === lower);
+  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
   if (byUsername) {
     return byUsername.user_id;
   }

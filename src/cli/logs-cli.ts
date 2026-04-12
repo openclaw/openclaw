@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -94,7 +95,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
-  const message = normalizeErrorMessage(error).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   if (!message.includes("pairing required")) {
     return false;
   }
@@ -267,7 +268,7 @@ export function registerLogsCli(program: Command) {
     let cursor: number | undefined;
     let first = true;
     const jsonMode = Boolean(opts.json);
-    const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
+    const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
     const localTime =
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));

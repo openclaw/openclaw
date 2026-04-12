@@ -1,17 +1,16 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import {
+  buildCapabilityProviderMaps,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderId } from "./provider-types.js";
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
-}
 
 export function normalizeRealtimeTranscriptionProviderId(
   providerId: string | undefined,
 ): RealtimeTranscriptionProviderId | undefined {
-  return trimToUndefined(providerId);
+  return normalizeCapabilityProviderId(providerId);
 }
 
 function resolveRealtimeTranscriptionProviderEntries(
@@ -27,28 +26,7 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   canonical: Map<string, RealtimeTranscriptionProviderPlugin>;
   aliases: Map<string, RealtimeTranscriptionProviderPlugin>;
 } {
-  const canonical = new Map<string, RealtimeTranscriptionProviderPlugin>();
-  const aliases = new Map<string, RealtimeTranscriptionProviderPlugin>();
-  const register = (provider: RealtimeTranscriptionProviderPlugin) => {
-    const id = normalizeRealtimeTranscriptionProviderId(provider.id);
-    if (!id) {
-      return;
-    }
-    canonical.set(id, provider);
-    aliases.set(id, provider);
-    for (const alias of provider.aliases ?? []) {
-      const normalizedAlias = normalizeRealtimeTranscriptionProviderId(alias);
-      if (normalizedAlias) {
-        aliases.set(normalizedAlias, provider);
-      }
-    }
-  };
-
-  for (const provider of resolveRealtimeTranscriptionProviderEntries(cfg)) {
-    register(provider);
-  }
-
-  return { canonical, aliases };
+  return buildCapabilityProviderMaps(resolveRealtimeTranscriptionProviderEntries(cfg));
 }
 
 export function listRealtimeTranscriptionProviders(

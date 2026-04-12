@@ -174,6 +174,7 @@ function buildCommandParams(params?: {
     invalidExecNode: false,
     hasStatusDirective: false,
     hasModelDirective: false,
+    hasTraceDirective: false,
     hasQueueDirective: false,
     queueReset: false,
     hasQueueOptions: false,
@@ -546,6 +547,39 @@ describe("focus actions", () => {
     });
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
       bindingId: "default:room-thread-1",
+      reason: "manual",
+    });
+  });
+
+  it("drops self-parent refs before resolving /unfocus bindings", async () => {
+    hoisted.resolveConversationBindingContextMock.mockReturnValue({
+      channel: THREAD_CHANNEL,
+      accountId: "default",
+      conversationId: "dm-1",
+      parentConversationId: "dm-1",
+    });
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSessionBindingRecord({
+        bindingId: "default:dm-1",
+        conversation: {
+          channel: THREAD_CHANNEL,
+          accountId: "default",
+          conversationId: "dm-1",
+        },
+        metadata: { boundBy: "user-1" },
+      }),
+    );
+
+    const result = await handleSubagentsUnfocusAction(buildUnfocusContext());
+
+    expect(result.reply?.text).toContain("Conversation unfocused");
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith({
+      channel: THREAD_CHANNEL,
+      accountId: "default",
+      conversationId: "dm-1",
+    });
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
+      bindingId: "default:dm-1",
       reason: "manual",
     });
   });

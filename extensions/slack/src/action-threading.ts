@@ -1,4 +1,5 @@
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackTarget } from "./targets.js";
 
 export function resolveSlackAutoThreadId(params: {
@@ -21,7 +22,10 @@ export function resolveSlackAutoThreadId(params: {
   if (!parsedTarget || parsedTarget.kind !== "channel") {
     return undefined;
   }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(parsedTarget.id) !==
+    normalizeLowercaseStringOrEmpty(context.currentChannelId)
+  ) {
     return undefined;
   }
   if (isSingleUseReplyToMode(context.replyToMode ?? "off") && context.hasRepliedRef?.value) {

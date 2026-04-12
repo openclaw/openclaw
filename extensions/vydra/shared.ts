@@ -5,6 +5,11 @@ import {
   fetchWithTimeout,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -47,9 +52,7 @@ function addUrlValue(value: unknown, urls: Set<string>): void {
   }
 }
 
-export function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+export const trimToUndefined = normalizeOptionalString;
 
 export function normalizeVydraBaseUrl(value: string | undefined): string {
   const fallback = DEFAULT_VYDRA_BASE_URL;
@@ -131,7 +134,7 @@ export function resolveVydraResponseJobId(payload: unknown): string | undefined 
 }
 
 export function resolveVydraResponseStatus(payload: unknown): string | undefined {
-  return trimToUndefined(asObject(payload)?.status)?.toLowerCase();
+  return normalizeOptionalLowercaseString(trimToUndefined(asObject(payload)?.status));
 }
 
 export function resolveVydraErrorMessage(payload: unknown): string | undefined {
@@ -188,7 +191,7 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
 }
 
 function inferExtension(kind: VydraMediaKind, mimeType: string): string {
-  const normalized = mimeType.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
   if (normalized.includes("jpeg")) {
     return "jpg";
   }

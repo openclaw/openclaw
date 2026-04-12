@@ -63,10 +63,3 @@ export function resolveExactLineGroupConfigKey(params: {
     Object.hasOwn(groups, candidate),
   );
 }
-
-export function resolveLineGroupHistoryKey(params: {
-  groupId?: string | null;
-  roomId?: string | null;
-}): string | undefined {
-  return params.groupId?.trim() || params.roomId?.trim() || undefined;
-}

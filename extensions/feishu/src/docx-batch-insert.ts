@@ -7,6 +7,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { cleanBlocksForDescendant } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 
@@ -25,7 +26,8 @@ function normalizeChildIds(children: string[] | string | undefined): string[] | 
   if (Array.isArray(children)) {
     return children;
   }
-  return typeof children === "string" ? [children] : undefined;
+  const child = readStringValue(children);
+  return child ? [child] : undefined;
 }
 
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {

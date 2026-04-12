@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
+import {
+  importChatGptConversations,
+  rollbackChatGptImportRun,
+  type ChatGptImportResult,
+  type ChatGptRollbackResult,
+} from "./chatgpt-import.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
   resolveMemoryWikiConfig,
@@ -95,6 +101,16 @@ type WikiBridgeImportCommandOptions = {
 };
 
 type WikiUnsafeLocalImportCommandOptions = {
+  json?: boolean;
+};
+
+type WikiChatGptImportCommandOptions = {
+  json?: boolean;
+  dryRun?: boolean;
+  export?: string;
+};
+
+type WikiChatGptRollbackCommandOptions = {
   json?: boolean;
 };
 
@@ -240,7 +256,9 @@ export async function runWikiStatus(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const status = await resolveMemoryWikiStatus(params.config);
+  const status = await resolveMemoryWikiStatus(params.config, {
+    appConfig: params.appConfig,
+  });
   writeOutput(
     params.json ? JSON.stringify(status, null, 2) : renderMemoryWikiStatus(status),
     params.stdout,
@@ -255,7 +273,11 @@ export async function runWikiDoctor(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const report = buildMemoryWikiDoctorReport(await resolveMemoryWikiStatus(params.config));
+  const report = buildMemoryWikiDoctorReport(
+    await resolveMemoryWikiStatus(params.config, {
+      appConfig: params.appConfig,
+    }),
+  );
   if (!report.healthy) {
     process.exitCode = 1;
   }
@@ -586,6 +608,59 @@ export async function runWikiObsidianDailyCli(params: {
   });
 }
 
+function formatChatGptImportSummary(result: ChatGptImportResult): string {
+  if (result.dryRun) {
+    return `ChatGPT import dry run scanned ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged).`;
+  }
+  const runSuffix = result.runId ? ` Run id: ${result.runId}.` : "";
+  return `ChatGPT import applied ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.${runSuffix}`;
+}
+
+function formatChatGptRollbackSummary(result: ChatGptRollbackResult): string {
+  if (result.alreadyRolledBack) {
+    return `ChatGPT import run ${result.runId} was already rolled back.`;
+  }
+  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+}
+
+export async function runWikiChatGptImport(params: {
+  config: ResolvedMemoryWikiConfig;
+  exportPath: string;
+  dryRun?: boolean;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      importChatGptConversations({
+        config: params.config,
+        exportPath: params.exportPath,
+        dryRun: params.dryRun,
+      }),
+    render: formatChatGptImportSummary,
+  });
+}
+
+export async function runWikiChatGptRollback(params: {
+  config: ResolvedMemoryWikiConfig;
+  runId: string;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      rollbackChatGptImportRun({
+        config: params.config,
+        runId: params.runId,
+      }),
+    render: formatChatGptRollbackSummary,
+  });
+}
+
 export function registerWikiCli(
   program: Command,
   pluginConfig?: MemoryWikiPluginConfig | ResolvedMemoryWikiConfig,
@@ -738,10 +813,10 @@ export function registerWikiCli(
 
   const bridge = wiki
     .command("bridge")
-    .description("Import public memory-core artifacts into the wiki vault");
+    .description("Import public memory artifacts into the wiki vault");
   bridge
     .command("import")
-    .description("Sync bridge-backed memory-core artifacts into wiki source pages")
+    .description("Sync bridge-backed memory artifacts into wiki source pages")
     .option("--json", "Print JSON")
     .action(async (opts: WikiBridgeImportCommandOptions) => {
       await runWikiBridgeImport({ config, appConfig, json: opts.json });
@@ -756,6 +831,36 @@ export function registerWikiCli(
     .option("--json", "Print JSON")
     .action(async (opts: WikiUnsafeLocalImportCommandOptions) => {
       await runWikiUnsafeLocalImport({ config, appConfig, json: opts.json });
+    });
+
+  const chatgpt = wiki
+    .command("chatgpt")
+    .description("Import ChatGPT export history into wiki source pages");
+  chatgpt
+    .command("import")
+    .description("Import a ChatGPT export into draft wiki source pages")
+    .requiredOption("--export <path>", "ChatGPT export directory or conversations.json path")
+    .option("--dry-run", "Preview changes without writing", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: WikiChatGptImportCommandOptions) => {
+      await runWikiChatGptImport({
+        config,
+        exportPath: opts.export!,
+        dryRun: opts.dryRun,
+        json: opts.json,
+      });
+    });
+  chatgpt
+    .command("rollback")
+    .description("Roll back a previously applied ChatGPT import run")
+    .argument("<run-id>", "Import run id")
+    .option("--json", "Print JSON")
+    .action(async (runId: string, opts: WikiChatGptRollbackCommandOptions) => {
+      await runWikiChatGptRollback({
+        config,
+        runId,
+        json: opts.json,
+      });
     });
 
   const obsidian = wiki.command("obsidian").description("Run official Obsidian CLI helpers");

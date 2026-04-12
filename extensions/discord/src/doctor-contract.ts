@@ -3,33 +3,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as runtimeDoctor from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  normalizeLegacyDmAliases,
+  normalizeLegacyStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  if (
-    typeof entry.streamMode === "string" ||
-    typeof entry.chunkMode === "string" ||
-    typeof entry.blockStreaming === "boolean" ||
-    typeof entry.blockStreamingCoalesce === "boolean" ||
-    typeof entry.draftChunk === "boolean" ||
-    (entry.draftChunk && typeof entry.draftChunk === "object")
-  ) {
-    return true;
-  }
-  const streaming = entry.streaming;
-  return typeof streaming === "string" || typeof streaming === "boolean";
-}
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 
@@ -130,19 +109,6 @@ function migrateLegacyTtsConfig(
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
-    path: ["channels", "discord"],
-    message:
-      "channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyDiscordStreamingAliases,
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) =>
-      runtimeDoctor.hasLegacyAccountStreamingAliases(value, hasLegacyDiscordStreamingAliases),
-  },
-  {
     path: ["channels", "discord", "voice", "tts"],
     message:
       'channels.discord.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
@@ -171,7 +137,7 @@ export function normalizeCompatibilityConfig({
   let changed = false;
   const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
-  const dm = runtimeDoctor.normalizeLegacyDmAliases({
+  const dm = normalizeLegacyDmAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
@@ -180,14 +146,12 @@ export function normalizeCompatibilityConfig({
   updated = dm.entry;
   changed = changed || dm.changed;
 
-  const streaming = runtimeDoctor.normalizeLegacyStreamingAliases({
+  const streaming = normalizeLegacyStreamingAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
-    includePreviewChunk: true,
     resolvedMode: resolveDiscordPreviewStreamMode(updated),
-    offModeLegacyNotice: (pathPrefix) =>
-      `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
+    includePreviewChunk: true,
   });
   updated = streaming.entry;
   changed = changed || streaming.changed;
@@ -203,21 +167,19 @@ export function normalizeCompatibilityConfig({
       }
       let accountEntry = account;
       let accountChanged = false;
-      const accountDm = runtimeDoctor.normalizeLegacyDmAliases({
+      const accountDm = normalizeLegacyDmAliases({
         entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
       accountEntry = accountDm.entry;
       accountChanged = accountDm.changed;
-      const accountStreaming = runtimeDoctor.normalizeLegacyStreamingAliases({
+      const accountStreaming = normalizeLegacyStreamingAliases({
         entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
-        includePreviewChunk: true,
         resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
-        offModeLegacyNotice: (pathPrefix) =>
-          `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
+        includePreviewChunk: true,
       });
       accountEntry = accountStreaming.entry;
       accountChanged = accountChanged || accountStreaming.changed;

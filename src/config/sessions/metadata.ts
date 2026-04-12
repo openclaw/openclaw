@@ -2,6 +2,10 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
@@ -48,20 +52,21 @@ const mergeOrigin = (
 };
 
 export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
-  const label = resolveConversationLabel(ctx)?.trim();
+  const label = normalizeOptionalString(resolveConversationLabel(ctx));
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
     ctx.Surface ||
     ctx.Provider;
   const provider = normalizeMessageChannel(providerRaw);
-  const surface = ctx.Surface?.trim().toLowerCase();
+  const surface = normalizeOptionalLowercaseString(ctx.Surface);
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
-  const from = ctx.From?.trim();
-  const to =
-    (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
-  const nativeChannelId = ctx.NativeChannelId?.trim();
-  const nativeDirectUserId = ctx.NativeDirectUserId?.trim();
-  const accountId = ctx.AccountId?.trim();
+  const from = normalizeOptionalString(ctx.From);
+  const to = normalizeOptionalString(
+    typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To,
+  );
+  const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
+  const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
+  const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
   const origin: SessionOrigin = {};
@@ -121,14 +126,16 @@ export function deriveGroupSessionPatch(params: {
   const subject = params.ctx.GroupSubject?.trim();
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
-  const normalizedChannel = normalizeChannelId(channel);
+  const subjectLooksChannel = Boolean(subject?.startsWith("#"));
+  const normalizedChannel =
+    subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
   const isChannelProvider = Boolean(
     normalizedChannel &&
     getChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
-    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
+    (subjectLooksChannel && subject && (resolution.chatType === "channel" || isChannelProvider)
       ? subject
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;

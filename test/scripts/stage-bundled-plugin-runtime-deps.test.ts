@@ -29,9 +29,21 @@ describe("stageBundledPluginRuntimeDeps", () => {
         name: "@openclaw/fixture-plugin",
         version: "1.0.0",
         dependencies: { "left-pad": "1.3.0" },
-        peerDependencies: { openclaw: "^1.0.0" },
-        peerDependenciesMeta: { openclaw: { optional: true } },
-        devDependencies: { openclaw: "^1.0.0" },
+        peerDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          openclaw: "^1.0.0",
+          react: "^19.0.0",
+        },
+        peerDependenciesMeta: {
+          "@openclaw/plugin-sdk": { optional: true },
+          openclaw: { optional: true },
+          react: { optional: true },
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          openclaw: "^1.0.0",
+          typescript: "^5.9.0",
+        },
         openclaw: { bundle: { stageRuntimeDependencies: true } },
       },
     });

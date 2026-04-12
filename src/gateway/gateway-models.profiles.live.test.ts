@@ -4,14 +4,10 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  type AuthProfileStore,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -19,8 +15,10 @@ import {
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
   isHighSignalLiveModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
@@ -31,7 +29,6 @@ import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
-import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
@@ -73,7 +70,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
-  "google/gemini-2.5-flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
@@ -135,12 +131,17 @@ function toInt(value: string | undefined, fallback: number): number {
 }
 
 function resolveGatewayLiveMaxModels(): number {
-  const gatewayMax = toInt(process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS, -1);
-  if (gatewayMax >= 0) {
-    return gatewayMax;
+  const gatewayRaw = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS?.trim();
+  if (gatewayRaw) {
+    return Math.max(0, toInt(gatewayRaw, 0));
   }
-  // Reuse shared live-model cap when gateway-specific cap is not provided.
-  return Math.max(0, toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0));
+  const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
+  const useExplicitModels = Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all";
+  return resolveHighSignalLiveModelLimit({
+    rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
+    useExplicitModels,
+    defaultLimit: DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  });
 }
 
 function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
@@ -230,6 +231,19 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
     timeoutLabel: "model",
     context,
   });
+}
+
+let gatewayConfigModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+let authProfilesModulePromise: Promise<typeof import("../agents/auth-profiles.js")> | undefined;
+
+async function getGatewayConfigModule() {
+  gatewayConfigModulePromise ??= import("../config/config.js");
+  return await gatewayConfigModulePromise;
+}
+
+async function getAuthProfilesModule() {
+  authProfilesModulePromise ??= import("../agents/auth-profiles.js");
+  return await authProfilesModulePromise;
 }
 
 function logProgress(message: string): void {
@@ -387,7 +401,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<final>Visible</final>",
-        "google/gemini-2.5-flash",
+        "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
     expect(
@@ -412,12 +426,6 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
         "google/gemini-3.1-pro-preview-customtools",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-2.5-flash",
       ),
     ).toBe("Visible");
   });
@@ -471,6 +479,44 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
+  });
+});
+
+describe("resolveGatewayLiveMaxModels", () => {
+  const originalGatewayModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
+  const originalGatewayMax = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+  const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
+  function restoreEnvValue(name: string, value: string | undefined): void {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+
+  afterEach(() => {
+    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MODELS", originalGatewayModels);
+    restoreEnvValue("OPENCLAW_LIVE_GATEWAY_MAX_MODELS", originalGatewayMax);
+    restoreEnvValue("OPENCLAW_LIVE_MAX_MODELS", originalSharedMax);
+  });
+
+  it("defaults modern gateway sweeps to the curated high-signal cap", () => {
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.4,anthropic/claude-opus-4-6";
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(0);
+
+    process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS = "2";
+    expect(resolveGatewayLiveMaxModels()).toBe(2);
   });
 });
 
@@ -629,10 +675,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(1);
-    expect(
-      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-2.5-flash" }),
     ).toBe(2);
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
+    ).toBe(3);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1115,7 +1161,7 @@ async function requestGatewayAgentText(params: {
     params.modelKey,
   ).length;
   const accepted = await withGatewayLiveProbeTimeout(
-    params.client.request<{ runId?: unknown; status?: unknown }>("agent", {
+    params.client.request("agent", {
       sessionKey: params.sessionKey,
       idempotencyKey: params.idempotencyKey,
       message: params.message,
@@ -1192,14 +1238,15 @@ function buildLiveGatewayConfig(params: {
   };
 }
 
-function sanitizeAuthConfig(params: {
+async function sanitizeAuthConfig(params: {
   cfg: OpenClawConfig;
   agentDir: string;
-}): OpenClawConfig["auth"] | undefined {
+}): Promise<OpenClawConfig["auth"] | undefined> {
   const auth = params.cfg.auth;
   if (!auth) {
     return auth;
   }
+  const { ensureAuthProfileStore } = await getAuthProfilesModule();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -1260,7 +1307,7 @@ function buildMinimaxProviderOverride(params: {
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  clearRuntimeConfigSnapshot();
+  (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
   const runtimeEnv = enterProductionEnvForLiveRun();
   const previous = {
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -1292,6 +1339,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const agentId = "dev";
 
   const hostAgentDir = resolveOpenClawAgentDir();
+  const { ensureAuthProfileStore, saveAuthProfileStore } = await getAuthProfilesModule();
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -1325,7 +1373,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const agentDir = resolveOpenClawAgentDir();
   const sanitizedCfg: OpenClawConfig = {
     ...params.cfg,
-    auth: sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+    auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
   };
   const nextCfg = buildLiveGatewayConfig({
     cfg: sanitizedCfg,
@@ -1949,7 +1997,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
     }
   } finally {
-    clearRuntimeConfigSnapshot();
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
     restoreProductionEnvForLiveRun(runtimeEnv);
     client.stop();
     await server.close({ reason: "live test complete" });
@@ -1983,7 +2031,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        clearRuntimeConfigSnapshot();
+        const { loadConfig } = await getGatewayConfigModule();
+        (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
         const cfg = loadConfig();
         await ensureOpenClawModelsJson(cfg);
 
@@ -2106,7 +2155,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     if (!ZAI_FALLBACK) {
       return;
     }
-    clearRuntimeConfigSnapshot();
+    const { loadConfig } = await getGatewayConfigModule();
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -2264,7 +2314,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`zai followup missing nonce: ${followupText}`);
       }
     } finally {
-      clearRuntimeConfigSnapshot();
+      {
+        const { clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
+        clearRuntimeConfigSnapshot();
+      }
       restoreProductionEnvForLiveRun(runtimeEnv);
       client.stop();
       await server.close({ reason: "live test complete" });

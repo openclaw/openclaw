@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
 type AutoSelectableProvider = {
   autoSelectOrder?: number;
 };
@@ -11,7 +13,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
   missingConfiguredProvider: boolean;
   provider: TProvider | undefined;
 } {
-  const configuredProviderId = params.configuredProviderId?.trim() || undefined;
+  const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
   const configuredProvider = params.getConfiguredProvider(configuredProviderId);
 
   if (configuredProviderId && !configuredProvider) {

@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
-import { markCompleteReplyConfig, withFastReplyConfig } from "./get-reply-fast-path.js";
+import {
+  initFastReplySessionState,
+  markCompleteReplyConfig,
+  withFastReplyConfig,
+} from "./get-reply-fast-path.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -14,13 +18,10 @@ const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
 }));
 
-vi.mock("../../agents/workspace.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
-  return {
-    ...actual,
-    ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
-  };
-});
+vi.mock("../../agents/workspace.js", () => ({
+  DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
+  ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
+}));
 vi.mock("./directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
     defaultProvider: "openai",
@@ -34,13 +35,9 @@ vi.mock("./get-reply-directives.js", () => ({
 vi.mock("./get-reply-inline-actions.js", () => ({
   handleInlineActions: vi.fn(async () => ({ kind: "reply", reply: { text: "ok" } })),
 }));
-vi.mock("./session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session.js")>();
-  return {
-    ...actual,
-    initSessionState: (...args: unknown[]) => mocks.initSessionState(...args),
-  };
-});
+vi.mock("./session.js", () => ({
+  initSessionState: (...args: unknown[]) => mocks.initSessionState(...args),
+}));
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").loadConfig;
@@ -70,8 +67,11 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
+  });
+
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
@@ -182,5 +182,22 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("uses native command target session keys during fast bootstrap", () => {
+    const result = initFastReplySessionState({
+      ctx: buildCtx({
+        SessionKey: "telegram:slash:123",
+        CommandSource: "native",
+        CommandTargetSessionKey: "agent:main:main",
+      }),
+      cfg: { session: { store: "/tmp/sessions.json" } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:main");
+    expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
   });
 });

@@ -94,6 +94,33 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
   };
 }
 
+function createLifecycleController({
+  entry,
+  runs = new Map([[entry.runId, entry]]),
+  ...overrides
+}: {
+  entry: SubagentRunRecord;
+  runs?: Map<string, SubagentRunRecord>;
+} & Partial<Parameters<typeof createSubagentRegistryLifecycleController>[0]>) {
+  return createSubagentRegistryLifecycleController({
+    runs,
+    resumedRuns: new Set(),
+    subagentAnnounceTimeoutMs: 1_000,
+    persist: vi.fn(),
+    clearPendingLifecycleError: vi.fn(),
+    countPendingDescendantRuns: () => 0,
+    suppressAnnounceForSteerRestart: () => false,
+    shouldEmitEndedHookForRun: () => false,
+    emitSubagentEndedHookForRun: vi.fn(async () => {}),
+    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+    resumeSubagentRun: vi.fn(),
+    captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+    runSubagentAnnounceFlow: vi.fn(async () => true),
+    warn: vi.fn(),
+    ...overrides,
+  });
+}
+
 describe("subagent registry lifecycle hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,22 +136,7 @@ describe("subagent registry lifecycle hardening", () => {
       throw new Error("task store boom");
     });
 
-    const controller = createSubagentRegistryLifecycleController({
-      runs,
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
-      persist,
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
-      suppressAnnounceForSteerRestart: () => false,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
-      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
-      runSubagentAnnounceFlow: vi.fn(async () => true),
-      warn,
-    });
+    const controller = createLifecycleController({ entry, runs, persist, warn });
 
     await expect(
       controller.completeSubagentRun({
@@ -166,20 +178,10 @@ describe("subagent registry lifecycle hardening", () => {
       throw new Error("delivery state boom");
     });
 
-    const controller = createSubagentRegistryLifecycleController({
-      runs: new Map([[entry.runId, entry]]),
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+    const controller = createLifecycleController({
+      entry,
       persist,
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
-      suppressAnnounceForSteerRestart: () => false,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
       captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => true),
       warn,
     });
 
@@ -211,22 +213,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createSubagentRegistryLifecycleController({
-      runs: new Map([[entry.runId, entry]]),
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
-      persist,
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
-      suppressAnnounceForSteerRestart: () => false,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
-      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
-      runSubagentAnnounceFlow,
-      warn: vi.fn(),
-    });
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
 
     await expect(
       controller.completeSubagentRun({
@@ -257,21 +244,10 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const captureSubagentCompletionReply = vi.fn(async () => undefined);
 
-    const controller = createSubagentRegistryLifecycleController({
-      runs: new Map([[entry.runId, entry]]),
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
-      persist: vi.fn(),
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
-      suppressAnnounceForSteerRestart: () => false,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
+    const controller = createLifecycleController({
+      entry,
       captureSubagentCompletionReply,
       runSubagentAnnounceFlow: vi.fn(async () => false),
-      warn: vi.fn(),
     });
 
     await expect(
@@ -289,27 +265,155 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("does not re-run announce flow after completion was already delivered", async () => {
+    const entry = createRunEntry({
+      completionAnnouncedAt: 3_500,
+      endedAt: 4_000,
+    });
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const notifyContextEngineSubagentEnded = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      notifyContextEngineSubagentEnded,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(typeof entry.cleanupCompletedAt).toBe("number");
+    expect(entry.cleanupCompletedAt).toBeGreaterThan(0);
+    expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
+      childSessionKey: entry.childSessionKey,
+      reason: "completed",
+      workspaceDir: entry.workspaceDir,
+    });
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
+    const entry = createRunEntry({
+      completionAnnouncedAt: 3_500,
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
+      entry,
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+    });
+  });
+
+  it("produces valid cleanupCompletedAt on give-up path when completionAnnouncedAt is undefined", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    expect(entry.completionAnnouncedAt).toBeUndefined();
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
+  });
+
+  it("continues cleanup when delivery-status persistence throws after announce delivery", async () => {
+    const persist = vi.fn();
+    const warn = vi.fn();
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      retainAttachmentsOnKeep: false,
+    });
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockImplementation(() => {
+      throw new Error("delivery status boom");
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+      warn,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      "failed to update subagent background task delivery state",
+      expect.objectContaining({
+        error: { name: "Error", message: "delivery status boom" },
+        deliveryStatus: "delivered",
+      }),
+    );
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledTimes(1);
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(persist).toHaveBeenCalled();
+  });
+
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createSubagentRegistryLifecycleController({
-      runs: new Map([[entry.runId, entry]]),
-      resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
-      persist: vi.fn(),
-      clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
+    const controller = createLifecycleController({
+      entry,
       suppressAnnounceForSteerRestart: () => true,
-      shouldEmitEndedHookForRun: () => false,
-      emitSubagentEndedHookForRun: vi.fn(async () => {}),
-      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-      resumeSubagentRun: vi.fn(),
-      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
       runSubagentAnnounceFlow,
-      warn: vi.fn(),
     });
 
     await expect(

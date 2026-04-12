@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 import { loadShellEnvFallback } from "../src/infra/shell-env.js";
 import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 type SpawnPnpmRunner = (params: {
@@ -29,7 +30,7 @@ export type MediaSuiteConfig = {
 export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
   image: {
     id: "image",
-    testFile: "src/image-generation/runtime.live.test.ts",
+    testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
     providers: ["fal", "google", "minimax", "openai", "vydra"],
   },
@@ -365,7 +366,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(formatErrorMessage(error));
       process.exit(1);
     });
 }

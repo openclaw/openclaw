@@ -57,10 +57,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-status" },
   },
   {
-    commandPath: ["cron"],
-    policy: { bypassConfigGuard: true },
-  },
-  {
     commandPath: ["sessions"],
     exact: true,
     policy: { ensureCliPath: false },

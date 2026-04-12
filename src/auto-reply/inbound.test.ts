@@ -814,7 +814,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("respects Slack channel requireMention settings", async () => {
@@ -840,7 +840,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
@@ -871,7 +871,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
@@ -902,7 +902,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("uses Discord fallback resolver semantics for guild slug matches", async () => {
@@ -932,7 +932,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {

@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -90,11 +91,6 @@ function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
 }
 
-function normalizeScopedChannelId(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function selectChannelTargetIds(channel?: string): Set<string> {
   const commandSecretTargets = getCommandSecretTargets();
   if (!channel) {
@@ -128,7 +124,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
-  const channel = normalizeScopedChannelId(params.channel);
+  const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
   const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {

@@ -1,3 +1,4 @@
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -16,11 +17,15 @@ import {
 import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -32,10 +37,8 @@ const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
-  resolveHeartbeatPrompt: async (
-    prompt: Parameters<typeof import("../../auto-reply/heartbeat.js").resolveHeartbeatPrompt>[0],
-  ) => (await import("../../auto-reply/heartbeat.js")).resolveHeartbeatPrompt(prompt),
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
@@ -113,10 +116,20 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime =
-    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  let mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
+  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+    try {
+      await prepareDeps.ensureMcpLoopbackServer();
+    } catch (error) {
+      cliBackendLog.warn(`mcp loopback server failed to start: ${String(error)}`);
+    }
+    mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
+  }
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
@@ -130,47 +143,77 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    authEpoch,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
-  const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
-      ? await prepareDeps.resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-      : undefined;
+  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
   const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir,
     config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    modelDisplay,
     agentId: sessionAgentId,
   });
+  const builtSystemPrompt =
+    resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    }) ??
+    buildSystemPrompt({
+      workspaceDir,
+      config: params.config,
+      defaultThinkLevel: params.thinkLevel,
+      extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      heartbeatPrompt,
+      docsPath: docsPath ?? undefined,
+      skillsPrompt,
+      tools: [],
+      contextFiles,
+      modelDisplay,
+      agentId: sessionAgentId,
+    });
+  const transformedSystemPrompt =
+    backendResolved.transformSystemPrompt?.({
+      config: params.config,
+      workspaceDir,
+      provider: params.provider,
+      modelId,
+      modelDisplay,
+      agentId: sessionAgentId,
+      systemPrompt: builtSystemPrompt,
+    }) ?? builtSystemPrompt;
+  const systemPrompt = applyPluginTextReplacements(
+    transformedSystemPrompt,
+    backendResolved.textTransforms?.input,
+  );
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -190,7 +233,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

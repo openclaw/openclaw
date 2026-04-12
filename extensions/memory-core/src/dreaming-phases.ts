@@ -12,7 +12,6 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -30,61 +29,29 @@ import {
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-
-type CronSchedule = { kind: "cron"; expr: string; tz?: string };
-type CronPayload = { kind: "systemEvent"; text: string };
-type ManagedCronJobCreate = {
-  name: string;
-  description: string;
-  enabled: boolean;
-  schedule: CronSchedule;
-  sessionTarget: "main";
-  wakeMode: "next-heartbeat";
-  payload: CronPayload;
+type DreamingPhaseStorageConfig = {
+  timezone?: string;
+  storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
 };
-
-type ManagedCronJobPatch = {
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: CronSchedule;
-  sessionTarget?: "main";
-  wakeMode?: "next-heartbeat";
-  payload?: CronPayload;
-};
-
-type ManagedCronJobLike = {
-  id: string;
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: {
-    kind?: string;
-    expr?: string;
-    tz?: string;
-  };
-  sessionTarget?: string;
-  wakeMode?: string;
-  payload?: {
-    kind?: string;
-    text?: string;
-  };
-  createdAtMs?: number;
-};
-
-type CronServiceLike = {
-  list: (opts?: { includeDisabled?: boolean }) => Promise<ManagedCronJobLike[]>;
-  add: (input: ManagedCronJobCreate) => Promise<unknown>;
-  update: (id: string, patch: ManagedCronJobPatch) => Promise<unknown>;
-  remove: (id: string) => Promise<{ removed?: boolean }>;
-};
-
-const LIGHT_SLEEP_CRON_NAME = "Memory Light Dreaming";
-const LIGHT_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
+type RunPhaseIfTriggeredParams = {
+  cleanedBody: string;
+  trigger?: string;
+  workspaceDir?: string;
+  cfg?: OpenClawConfig;
+  logger: Logger;
+  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  eventText: string;
+} & (
+  | {
+      phase: "light";
+      config: MemoryLightDreamingConfig & DreamingPhaseStorageConfig;
+    }
+  | {
+      phase: "rem";
+      config: MemoryRemDreamingConfig & DreamingPhaseStorageConfig;
+    }
+);
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
-
-const REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
-const REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
@@ -120,193 +87,6 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
     endMarker: "<!-- openclaw:dreaming:rem:end -->",
   },
 ] as const;
-
-function buildCronDescription(params: {
-  tag: string;
-  phase: "light" | "rem";
-  cron: string;
-  limit: number;
-  lookbackDays: number;
-}): string {
-  return `${params.tag} Run ${params.phase} dreaming (cron=${params.cron}, limit=${params.limit}, lookbackDays=${params.lookbackDays}).`;
-}
-
-function buildManagedCronJob(params: {
-  name: string;
-  tag: string;
-  payloadText: string;
-  cron: string;
-  timezone?: string;
-  phase: "light" | "rem";
-  limit: number;
-  lookbackDays: number;
-}): ManagedCronJobCreate {
-  return {
-    name: params.name,
-    description: buildCronDescription({
-      tag: params.tag,
-      phase: params.phase,
-      cron: params.cron,
-      limit: params.limit,
-      lookbackDays: params.lookbackDays,
-    }),
-    enabled: true,
-    schedule: {
-      kind: "cron",
-      expr: params.cron,
-      ...(params.timezone ? { tz: params.timezone } : {}),
-    },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: {
-      kind: "systemEvent",
-      text: params.payloadText,
-    },
-  };
-}
-
-function isManagedPhaseJob(
-  job: ManagedCronJobLike,
-  params: {
-    name: string;
-    tag: string;
-    payloadText: string;
-  },
-): boolean {
-  const description = normalizeTrimmedString(job.description);
-  if (description?.includes(params.tag)) {
-    return true;
-  }
-  const name = normalizeTrimmedString(job.name);
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  return name === params.name && payloadText === params.payloadText;
-}
-
-function buildManagedPhasePatch(
-  job: ManagedCronJobLike,
-  desired: ManagedCronJobCreate,
-): ManagedCronJobPatch | null {
-  const patch: ManagedCronJobPatch = {};
-  const scheduleKind = normalizeTrimmedString(job.schedule?.kind)?.toLowerCase();
-  const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
-  const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
-  if (normalizeTrimmedString(job.name) !== desired.name) {
-    patch.name = desired.name;
-  }
-  if (normalizeTrimmedString(job.description) !== desired.description) {
-    patch.description = desired.description;
-  }
-  if (job.enabled !== true) {
-    patch.enabled = true;
-  }
-  if (
-    scheduleKind !== "cron" ||
-    scheduleExpr !== desired.schedule.expr ||
-    scheduleTz !== desired.schedule.tz
-  ) {
-    patch.schedule = desired.schedule;
-  }
-  if (normalizeTrimmedString(job.sessionTarget)?.toLowerCase() !== "main") {
-    patch.sessionTarget = "main";
-  }
-  if (normalizeTrimmedString(job.wakeMode)?.toLowerCase() !== "next-heartbeat") {
-    patch.wakeMode = "next-heartbeat";
-  }
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  if (payloadKind !== "systemevent" || payloadText !== desired.payload.text) {
-    patch.payload = desired.payload;
-  }
-  return Object.keys(patch).length > 0 ? patch : null;
-}
-
-function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
-  return managed.toSorted((a, b) => {
-    const aCreated =
-      typeof a.createdAtMs === "number" && Number.isFinite(a.createdAtMs)
-        ? a.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    const bCreated =
-      typeof b.createdAtMs === "number" && Number.isFinite(b.createdAtMs)
-        ? b.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    if (aCreated !== bCreated) {
-      return aCreated - bCreated;
-    }
-    return a.id.localeCompare(b.id);
-  });
-}
-
-function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | null {
-  const payload = asRecord(event);
-  if (!payload || payload.type !== "gateway" || payload.action !== "startup") {
-    return null;
-  }
-  const context = asRecord(payload.context);
-  const deps = asRecord(context?.deps);
-  const cronCandidate = context?.cron ?? deps?.cron;
-  if (!cronCandidate || typeof cronCandidate !== "object") {
-    return null;
-  }
-  const cron = cronCandidate as Partial<CronServiceLike>;
-  if (
-    typeof cron.list !== "function" ||
-    typeof cron.add !== "function" ||
-    typeof cron.update !== "function" ||
-    typeof cron.remove !== "function"
-  ) {
-    return null;
-  }
-  return cron as CronServiceLike;
-}
-
-async function reconcileManagedPhaseCronJob(params: {
-  cron: CronServiceLike | null;
-  desired: ManagedCronJobCreate;
-  match: { name: string; tag: string; payloadText: string };
-  enabled: boolean;
-  logger: Logger;
-}): Promise<void> {
-  const cron = params.cron;
-  if (!cron) {
-    return;
-  }
-  const allJobs = await cron.list({ includeDisabled: true });
-  const managed = allJobs.filter((job) => isManagedPhaseJob(job, params.match));
-  if (!params.enabled) {
-    for (const job of managed) {
-      try {
-        await cron.remove(job.id);
-      } catch (err) {
-        params.logger.warn(
-          `memory-core: failed to remove managed ${params.match.name} cron job ${job.id}: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    return;
-  }
-
-  if (managed.length === 0) {
-    await cron.add(params.desired);
-    return;
-  }
-
-  const [primary, ...duplicates] = sortManagedJobs(managed);
-  for (const duplicate of duplicates) {
-    try {
-      await cron.remove(duplicate.id);
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to prune duplicate managed ${params.match.name} cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
-
-  const patch = buildManagedPhasePatch(primary, params.desired);
-  if (patch) {
-    await cron.update(primary.id, patch);
-  }
-}
 
 function resolveWorkspaces(params: {
   cfg?: OpenClawConfig;
@@ -978,6 +758,26 @@ async function collectSessionIngestionBatches(params: {
     if (!entry) {
       continue;
     }
+    if (entry.generatedByDreamingNarrative) {
+      nextFiles[stateKey] = {
+        mtimeMs: fingerprint.mtimeMs,
+        size: fingerprint.size,
+        contentHash: entry.hash.trim(),
+        lineCount: entry.lineMap.length,
+        lastContentLine: entry.lineMap.length,
+      };
+      if (
+        !previous ||
+        previous.mtimeMs !== fingerprint.mtimeMs ||
+        previous.size !== fingerprint.size ||
+        previous.contentHash !== entry.hash.trim() ||
+        previous.lineCount !== entry.lineMap.length ||
+        previous.lastContentLine !== entry.lineMap.length
+      ) {
+        changed = true;
+      }
+      continue;
+    }
     const contentHash = entry.hash.trim();
     if (
       previous &&
@@ -1333,8 +1133,121 @@ async function ingestDailyMemorySignals(params: {
   }
 }
 
+export async function seedHistoricalDailyMemorySignals(params: {
+  workspaceDir: string;
+  filePaths: string[];
+  limit: number;
+  nowMs: number;
+  timezone?: string;
+}): Promise<{
+  importedFileCount: number;
+  importedSignalCount: number;
+  skippedPaths: string[];
+}> {
+  const normalizedPaths = [
+    ...new Set(params.filePaths.map((entry) => entry.trim()).filter(Boolean)),
+  ];
+  if (normalizedPaths.length === 0) {
+    return {
+      importedFileCount: 0,
+      importedSignalCount: 0,
+      skippedPaths: [],
+    };
+  }
+
+  const resolved = normalizedPaths
+    .map((filePath) => {
+      const fileName = path.basename(filePath);
+      const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+      if (!match) {
+        return { filePath, day: null as string | null };
+      }
+      return { filePath, day: match[1] ?? null };
+    })
+    .toSorted((a, b) => {
+      if (a.day && b.day) {
+        return b.day.localeCompare(a.day);
+      }
+      if (a.day) {
+        return -1;
+      }
+      if (b.day) {
+        return 1;
+      }
+      return a.filePath.localeCompare(b.filePath);
+    });
+
+  const valid = resolved.filter((entry): entry is { filePath: string; day: string } =>
+    Boolean(entry.day),
+  );
+  const skippedPaths = resolved.filter((entry) => !entry.day).map((entry) => entry.filePath);
+  const totalCap = Math.max(20, params.limit * 4);
+  const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
+  let importedSignalCount = 0;
+  let importedFileCount = 0;
+
+  for (const entry of valid) {
+    if (importedSignalCount >= totalCap) {
+      break;
+    }
+    const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        skippedPaths.push(entry.filePath);
+        return "";
+      }
+      throw err;
+    });
+    if (!raw) {
+      continue;
+    }
+    const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
+    const chunks = buildDailySnippetChunks(lines, perFileCap);
+    const results: MemorySearchResult[] = [];
+    for (const chunk of chunks) {
+      results.push({
+        path: `memory/${entry.day}.md`,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+        score: DAILY_INGESTION_SCORE,
+        snippet: chunk.snippet,
+        source: "memory",
+      });
+      if (results.length >= perFileCap || importedSignalCount + results.length >= totalCap) {
+        break;
+      }
+    }
+    if (results.length === 0) {
+      continue;
+    }
+    await recordShortTermRecalls({
+      workspaceDir: params.workspaceDir,
+      query: `__dreaming_daily__:${entry.day}`,
+      results,
+      signalType: "daily",
+      dedupeByQueryPerDay: true,
+      dayBucket: entry.day,
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+    });
+    importedSignalCount += results.length;
+    importedFileCount += 1;
+  }
+
+  return {
+    importedFileCount,
+    importedSignalCount,
+    skippedPaths,
+  };
+}
+
 function entryAverageScore(entry: ShortTermRecallEntry): number {
-  return entry.recallCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / entry.recallCount)) : 0;
+  const signalCount = Math.max(
+    0,
+    Math.floor(entry.recallCount ?? 0) +
+      Math.floor(entry.dailyCount ?? 0) +
+      Math.floor(entry.groundedCount ?? 0),
+  );
+  return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {
@@ -1744,26 +1657,11 @@ export async function runDreamingSweepPhases(params: {
   }
 }
 
-async function runPhaseIfTriggered(params: {
-  cleanedBody: string;
-  trigger?: string;
-  workspaceDir?: string;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  phase: "light" | "rem";
-  eventText: string;
-  config:
-    | (MemoryLightDreamingConfig & {
-        timezone?: string;
-        storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-      })
-    | (MemoryRemDreamingConfig & {
-        timezone?: string;
-        storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-      });
-}): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
+async function runPhaseIfTriggered(
+  params: RunPhaseIfTriggeredParams,
+): Promise<{ handled: true; reason: string } | undefined> {
+  const hasEventToken = params.cleanedBody.trim().split(/\s+/).includes(params.eventText);
+  if (params.trigger !== "heartbeat" || !hasEventToken) {
     return undefined;
   }
   if (!params.config.enabled) {
@@ -1789,10 +1687,7 @@ async function runPhaseIfTriggered(params: {
         await runLightDreaming({
           workspaceDir,
           cfg: params.cfg,
-          config: params.config as MemoryLightDreamingConfig & {
-            timezone?: string;
-            storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-          },
+          config: params.config,
           logger: params.logger,
           subagent: params.subagent,
         });
@@ -1800,10 +1695,7 @@ async function runPhaseIfTriggered(params: {
         await runRemDreaming({
           workspaceDir,
           cfg: params.cfg,
-          config: params.config as MemoryRemDreamingConfig & {
-            timezone?: string;
-            storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-          },
+          config: params.config,
           logger: params.logger,
           subagent: params.subagent,
         });
@@ -1817,94 +1709,18 @@ async function runPhaseIfTriggered(params: {
   return { handled: true, reason: `memory-core: ${params.phase} dreaming processed` };
 }
 
-export function registerMemoryDreamingPhases(api: OpenClawPluginApi): void {
-  api.registerHook(
-    "gateway:startup",
-    async (event: unknown) => {
-      const cron = resolveCronServiceFromStartupEvent(event);
-      const pluginConfig = resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig;
-      const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: api.config });
-      const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: api.config });
-      const lightDesired = buildManagedCronJob({
-        name: LIGHT_SLEEP_CRON_NAME,
-        tag: LIGHT_SLEEP_CRON_TAG,
-        payloadText: LIGHT_SLEEP_EVENT_TEXT,
-        cron: light.cron,
-        timezone: light.timezone,
-        phase: "light",
-        limit: light.limit,
-        lookbackDays: light.lookbackDays,
-      });
-      const remDesired = buildManagedCronJob({
-        name: REM_SLEEP_CRON_NAME,
-        tag: REM_SLEEP_CRON_TAG,
-        payloadText: REM_SLEEP_EVENT_TEXT,
-        cron: rem.cron,
-        timezone: rem.timezone,
-        phase: "rem",
-        limit: rem.limit,
-        lookbackDays: rem.lookbackDays,
-      });
-      try {
-        await reconcileManagedPhaseCronJob({
-          cron,
-          desired: lightDesired,
-          match: {
-            name: LIGHT_SLEEP_CRON_NAME,
-            tag: LIGHT_SLEEP_CRON_TAG,
-            payloadText: LIGHT_SLEEP_EVENT_TEXT,
-          },
-          enabled: light.enabled,
-          logger: api.logger,
-        });
-        await reconcileManagedPhaseCronJob({
-          cron,
-          desired: remDesired,
-          match: {
-            name: REM_SLEEP_CRON_NAME,
-            tag: REM_SLEEP_CRON_TAG,
-            payloadText: REM_SLEEP_EVENT_TEXT,
-          },
-          enabled: rem.enabled,
-          logger: api.logger,
-        });
-      } catch (err) {
-        api.logger.error(
-          `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    },
-    { name: "memory-core-dreaming-phase-cron" },
-  );
-
-  api.on("before_agent_reply", async (event, ctx) => {
-    const pluginConfig = resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig;
-    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: api.config });
-    const lightResult = await runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: api.config,
-      logger: api.logger,
-      subagent: light.enabled ? api.runtime?.subagent : undefined,
-      phase: "light",
-      eventText: LIGHT_SLEEP_EVENT_TEXT,
-      config: light,
-    });
-    if (lightResult) {
-      return lightResult;
-    }
-    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: api.config });
-    return await runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: api.config,
-      logger: api.logger,
-      subagent: rem.enabled ? api.runtime?.subagent : undefined,
-      phase: "rem",
-      eventText: REM_SLEEP_EVENT_TEXT,
-      config: rem,
-    });
-  });
+/**
+ * @deprecated Unified dreaming registration lives in registerShortTermPromotionDreaming().
+ */
+export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
+  // LEGACY(memory-v1): kept as a no-op compatibility shim while the unified
+  // dreaming controller owns startup reconciliation and heartbeat triggers.
 }
+
+export const __testing = {
+  runPhaseIfTriggered,
+  constants: {
+    LIGHT_SLEEP_EVENT_TEXT,
+    REM_SLEEP_EVENT_TEXT,
+  },
+};

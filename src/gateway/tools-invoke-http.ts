@@ -6,8 +6,13 @@ import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -44,15 +49,14 @@ function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
   return undefined;
 }
 
-function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
+function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
   if (!process.env.VITEST) {
     return [];
   }
   const reasons: string[] = [];
   const plugins = cfg.plugins;
   const slotRaw = plugins?.slots?.memory;
-  const slotDisabled =
-    slotRaw === null || (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
+  const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
 
@@ -186,7 +190,7 @@ export async function handleToolsInvokeHttpRequest(
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
 
-  const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
+  const toolName = normalizeOptionalString(body.tool) ?? "";
   if (!toolName) {
     sendInvalidRequest(res, "tools.invoke requires body.tool");
     return true;
@@ -209,7 +213,7 @@ export async function handleToolsInvokeHttpRequest(
     }
   }
 
-  const action = typeof body.action === "string" ? body.action.trim() : undefined;
+  const action = normalizeOptionalString(body.action);
 
   const argsRaw = body.args;
   const args =
@@ -225,9 +229,15 @@ export async function handleToolsInvokeHttpRequest(
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
-  const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
-  const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
+  const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
+  const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
+  const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
+  // Owner semantics intentionally follow the same shared-secret HTTP contract
+  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
+  // Computed before resolveGatewayScopedTools so the message tool is created
+  // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
+  // work correctly for both owner and non-owner callers.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const { agentId, tools } = resolveGatewayScopedTools({
     cfg,
     sessionKey,
@@ -237,12 +247,10 @@ export async function handleToolsInvokeHttpRequest(
     agentThreadId,
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
-    applyDefaultGatewayHttpDeny: true,
+    surface: "http",
     disablePluginTools: isKnownCoreToolId(toolName),
+    senderIsOwner,
   });
-  // Owner semantics intentionally follow the same shared-secret HTTP contract
-  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);

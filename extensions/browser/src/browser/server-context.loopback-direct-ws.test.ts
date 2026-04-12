@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-support.js";
 import * as cdpModule from "./cdp.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
 
@@ -138,5 +139,26 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
 
     await openclaw.focusTab("T2");
     await openclaw.closeTab("T2");
+  });
+
+  it("blocks direct WebSocket tab operations when strict SSRF policy rejects the cdpUrl", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("unexpected fetch");
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.profiles.openclaw = {
+      cdpUrl: "ws://10.0.0.42:18800/devtools/browser/SESSION?token=abc",
+      color: "#FF4500",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    await expect(openclaw.listTabs()).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(openclaw.focusTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(openclaw.closeTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

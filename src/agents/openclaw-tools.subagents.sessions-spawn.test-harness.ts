@@ -1,20 +1,12 @@
 import { vi, type Mock } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import {
-  __testing as subagentAnnounceDeliveryTesting,
-  resolveRequesterStoreKey,
-} from "./subagent-announce-delivery.js";
-import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import {
-  __testing as subagentAnnounceTesting,
-  captureSubagentCompletionReply,
-  runSubagentAnnounceFlow,
-} from "./subagent-announce.js";
-import { __testing as subagentRegistryTesting } from "./subagent-registry.js";
-import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
+import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
 type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
+type CaptureSubagentCompletionReply =
+  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
@@ -32,6 +24,7 @@ type SessionsSpawnGatewayMockOptions = {
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
       mainKey: "main",
@@ -39,7 +32,7 @@ const hoisted = vi.hoisted(() => {
     },
   } as SessionsSpawnTestConfig;
   let configOverride = defaultConfigOverride;
-  const defaultRunSubagentAnnounceFlow: typeof runSubagentAnnounceFlow = async (params) => {
+  const defaultRunSubagentAnnounceFlow: RunSubagentAnnounceFlow = async (params) => {
     const statusLabel =
       params.outcome?.status === "timeout" ? "timed out" : "completed successfully";
     const requesterSessionKey = resolveRequesterStoreKey(
@@ -79,6 +72,8 @@ const hoisted = vi.hoisted(() => {
 
     return true;
   };
+  const defaultCaptureSubagentCompletionReply: CaptureSubagentCompletionReply = async () =>
+    undefined;
   const state = {
     get configOverride() {
       return configOverride;
@@ -87,11 +82,23 @@ const hoisted = vi.hoisted(() => {
       configOverride = next;
     },
     hookRunnerOverride: null as SessionsSpawnHookRunner,
+    defaultCaptureSubagentCompletionReply,
+    captureSubagentCompletionReplyOverride: defaultCaptureSubagentCompletionReply,
     defaultRunSubagentAnnounceFlow,
     runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
   };
-  return { callGatewayMock, defaultConfigOverride, state };
+  return {
+    callGatewayMock,
+    defaultConfigOverride,
+    nextRunId: () => {
+      nextRunId += 1;
+      return `run-${nextRunId}`;
+    },
+    state,
+  };
 });
+
+let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -129,37 +136,32 @@ export function setSessionsSpawnHookRunnerOverride(next: SessionsSpawnHookRunner
   hoisted.state.hookRunnerOverride = next;
 }
 
-export function setSessionsSpawnAnnounceFlowOverride(next: typeof runSubagentAnnounceFlow): void {
+export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFlow): void {
   hoisted.state.runSubagentAnnounceFlowOverride = next;
 }
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
+  const [{ __testing: subagentSpawnTesting }, { __testing: subagentRegistryTesting }] =
+    await Promise.all([import("./subagent-spawn.js"), import("./subagent-registry.js")]);
   subagentSpawnTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
     loadConfig: () => hoisted.state.configOverride,
     updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
-  subagentAnnounceTesting.setDepsForTest({
-    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    loadConfig: () => hoisted.state.configOverride,
-  });
-  subagentAnnounceDeliveryTesting.setDepsForTest({
-    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    loadConfig: () => hoisted.state.configOverride,
-  });
-  subagentAnnounceOutputTesting.setDepsForTest({
-    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    loadConfig: () => hoisted.state.configOverride,
-  });
   subagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     loadConfig: () => hoisted.state.configOverride,
-    captureSubagentCompletionReply,
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
+    captureSubagentCompletionReply: (sessionKey) =>
+      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
     runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
   });
-  const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
-  return createSessionsSpawnTool(opts);
+  if (!cachedCreateSessionsSpawnTool) {
+    ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
+      await import("./tools/sessions-spawn-tool.js"));
+  }
+  return cachedCreateSessionsSpawnTool(opts);
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {
@@ -169,7 +171,6 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 } {
   const calls: Array<GatewayRequest> = [];
   const waitCalls: Array<AgentWaitCall> = [];
-  let agentCallCount = 0;
   let childRunId: string | undefined;
   let childSessionKey: string | undefined;
 
@@ -190,8 +191,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
     }
 
     if (request.method === "agent") {
-      agentCallCount += 1;
-      const runId = `run-${agentCallCount}`;
+      const runId = hoisted.nextRunId();
       const params = request.params as { lane?: string; sessionKey?: string } | undefined;
       // Capture only the subagent run metadata.
       if (params?.lane === "subagent") {
@@ -202,7 +202,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
       return {
         runId,
         status: "accepted",
-        acceptedAt: 1000 + agentCallCount,
+        acceptedAt: Date.now(),
       };
     }
 

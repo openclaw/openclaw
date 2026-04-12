@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isRecord } from "../src/utils.js";
 
 function writeStdoutLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -544,10 +545,6 @@ function extractResponseText(payload: OpenAIResponse): string {
   }
 
   return chunks.join("\n").trim();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function fallbackCategory(issueText: string): "bug" | "enhancement" {

@@ -6,6 +6,10 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
@@ -129,13 +133,26 @@ const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
 export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
-  const response = await fetch(
+  const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
-      `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`,
-    {
-      headers: buildMicrosoftVoiceHeaders(),
-    },
-  );
+    `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
+  const headers = buildMicrosoftVoiceHeaders();
+  const response = await fetch(url, {
+    headers,
+  });
+  if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    captureHttpExchange({
+      url,
+      method: "GET",
+      requestHeaders: headers,
+      response,
+      transport: "http",
+      meta: {
+        provider: "microsoft",
+        capability: "speech-voices",
+      },
+    });
+  }
   if (!response.ok) {
     throw new Error(`Microsoft voices API error (${response.status})`);
   }
@@ -144,11 +161,11 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     ? voices
         .map((voice) => ({
           id: voice.ShortName?.trim() ?? "",
-          name: voice.FriendlyName?.trim() || voice.ShortName?.trim() || undefined,
+          name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
           category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
           description: formatMicrosoftVoiceDescription(voice),
-          locale: voice.Locale?.trim() || undefined,
-          gender: voice.Gender?.trim() || undefined,
+          locale: trimToUndefined(voice.Locale),
+          gender: trimToUndefined(voice.Gender),
           personalities: voice.VoiceTag?.VoicePersonalities?.filter(
             (value): value is string => value.trim().length > 0,
           ),
