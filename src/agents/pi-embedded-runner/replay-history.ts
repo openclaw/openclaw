@@ -433,11 +433,19 @@ export async function sanitizeSessionHistory(params: {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
-  // OpenAI's fc_* pairing downgrade must run before generic tool-id sanitization,
-  // otherwise strict sanitization removes the "|" separator that the downgrade
-  // logic needs in order to strip orphaned function-call ids.
+  // OpenAI's fc_* pairing downgrade needs the raw call_id|fc_id separator intact,
+  // but displaced tool results must first be repaired back next to their
+  // assistant turn so the downgrade can rewrite both sides consistently.
+  const openAIRepairedToolCalls =
+    isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(downgradeOpenAIReasoningBlocks(sanitizedToolCalls))
+    ? downgradeOpenAIFunctionCallReasoningPairs(
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls),
+      )
     : sanitizedToolCalls;
   const sanitizedToolIds =
     policy.sanitizeToolCallIds && policy.toolCallIdMode
@@ -447,11 +455,12 @@ export async function sanitizeSessionHistory(params: {
           allowedToolNames: params.allowedToolNames,
         })
       : openAISafeToolCalls;
-  const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-        erroredAssistantResultPolicy: "drop",
-      })
-    : sanitizedToolIds;
+  const repairedTools =
+    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : sanitizedToolIds;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
