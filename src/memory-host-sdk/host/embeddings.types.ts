@@ -15,6 +15,7 @@ export type EmbeddingProviderId =
   | "openai"
   | "local"
   | "gemini"
+  | "google-vertex"
   | "voyage"
   | "mistral"
   | "ollama"

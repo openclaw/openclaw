@@ -11,6 +11,10 @@ import {
 } from "./embeddings-bedrock.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
+  createGoogleVertexEmbeddingProvider,
+  type GoogleVertexEmbeddingClient,
+} from "./embeddings-google-vertex.js";
+import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
@@ -28,6 +32,7 @@ import type {
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { GoogleVertexEmbeddingClient } from "./embeddings-google-vertex.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
@@ -46,7 +51,13 @@ export type {
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
 // Bedrock is included when AWS credentials are detected.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "google-vertex",
+  "voyage",
+  "mistral",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -56,6 +67,7 @@ export type EmbeddingProviderResult = {
   providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  googleVertex?: GoogleVertexEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
@@ -167,6 +179,10 @@ export async function createEmbeddingProvider(
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
+    }
+    if (id === "google-vertex") {
+      const { provider, client } = await createGoogleVertexEmbeddingProvider(options);
+      return { provider, googleVertex: client };
     }
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
