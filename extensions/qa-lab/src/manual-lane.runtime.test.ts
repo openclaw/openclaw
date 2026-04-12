@@ -5,6 +5,9 @@ const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hois
   startQaGatewayChild: vi.fn(),
   startQaProviderServer: vi.fn(),
 }));
+const { createQaTransportAdapter } = vi.hoisted(() => ({
+  createQaTransportAdapter: vi.fn(),
+}));
 
 vi.mock("./lab-server.js", () => ({
   startQaLabServer,
@@ -18,12 +21,23 @@ vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer,
 }));
 
+vi.mock("./qa-transport-registry.js", () => ({
+  createQaTransportAdapter,
+}));
+
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
 describe("runQaManualLane", () => {
   const gatewayStop = vi.fn();
   const mockStop = vi.fn();
   const labStop = vi.fn();
+  const transport = {
+    buildAgentDelivery: vi.fn(() => ({
+      channel: "qa-channel",
+      replyChannel: "qa-channel",
+      replyTo: "dm:qa-operator",
+    })),
+  };
 
   beforeEach(() => {
     gatewayStop.mockReset();
@@ -32,6 +46,8 @@ describe("runQaManualLane", () => {
     startQaLabServer.mockReset();
     startQaGatewayChild.mockReset();
     startQaProviderServer.mockReset();
+    createQaTransportAdapter.mockReset();
+    transport.buildAgentDelivery.mockClear();
 
     startQaLabServer.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
@@ -55,6 +71,7 @@ describe("runQaManualLane", () => {
       },
       stop: labStop,
     });
+    createQaTransportAdapter.mockReturnValue(transport);
 
     startQaGatewayChild.mockResolvedValue({
       call: vi
@@ -101,6 +118,12 @@ describe("runQaManualLane", () => {
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
     });
+    expect(createQaTransportAdapter).toHaveBeenCalledWith({
+      id: "qa-channel",
+      state: expect.objectContaining({
+        getSnapshot: expect.any(Function),
+      }),
+    });
     expect(result.reply).toBe("Protocol note: mock reply.");
     expect(gatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
@@ -122,6 +145,12 @@ describe("runQaManualLane", () => {
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
+    });
+    expect(createQaTransportAdapter).toHaveBeenCalledWith({
+      id: "qa-channel",
+      state: expect.objectContaining({
+        getSnapshot: expect.any(Function),
+      }),
     });
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
