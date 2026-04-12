@@ -101,6 +101,13 @@ const GENERATED_LOCALES = [
     tmFile: "pl.tm.jsonl",
     navMode: "clone-en",
   },
+  {
+    language: "vi",
+    dir: "vi-VN",
+    navFile: "vi-VN-navigation.json",
+    tmFile: "vi-VN.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function parseArgs(argv) {
