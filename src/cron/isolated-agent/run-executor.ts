@@ -70,6 +70,7 @@ export function createCronPromptExecutor(params: {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
     resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
   if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
     params.cronSession.sessionEntry.sessionFile = sessionFile;
   }
