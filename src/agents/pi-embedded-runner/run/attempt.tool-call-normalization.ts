@@ -6,6 +6,7 @@ import {
   isRedactedSessionsSpawnAttachment,
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 
@@ -626,7 +627,10 @@ export function wrapStreamFnTrimToolCallNames(
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  transcriptPolicy?: Pick<TranscriptPolicy, "validateGeminiTurns" | "validateAnthropicTurns">,
+  transcriptPolicy?: Pick<
+    TranscriptPolicy,
+    "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >,
 ): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -637,8 +641,14 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     const sanitized = sanitizeReplayToolCallInputs(
       messages as AgentMessage[],
       allowedToolNames,
-      transcriptPolicy?.validateAnthropicTurns === true &&
-        (model as { api?: unknown })?.api === "anthropic-messages",
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+        policy: {
+          validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
+          preserveSignatures: transcriptPolicy?.preserveSignatures === true,
+          dropThinkingBlocks: transcriptPolicy?.dropThinkingBlocks === true,
+        },
+      }),
     );
     if (sanitized.messages === messages) {
       return baseFn(model, context, options);
