@@ -496,7 +496,7 @@ function imgUrl(id,animated){
 }
 function langClass(lang){return{ja:'b-ja',en:'b-en','zh-tw':'b-zh',zh:'b-zh',th:'b-th'}[lang]||'b-uni';}
 function langLabel(lang){return lang==='universal'?'uni':lang;}
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 /* ── desc parse / build ── */
 function parseDesc(raw){
