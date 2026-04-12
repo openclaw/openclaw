@@ -974,4 +974,53 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("matches models case-insensitively when provider is given", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        provider: "qwen",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5-35B-A3B",
+            provider: "qwen",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("falls back to model-only case-insensitive search when provider is missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5-35B-A3B",
+            provider: "qwen",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("returns false when model-only fallback also finds no match", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "unknown/model",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5-35B-A3B",
+            provider: "qwen",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
 });
