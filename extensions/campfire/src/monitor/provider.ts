@@ -75,19 +75,7 @@ type CampfireGatewayContext = {
     warn?: (message: string) => void;
     error?: (message: string) => void;
   };
-  channelRuntime?: {
-    reply: {
-      finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
-      dispatchReplyWithBufferedBlockDispatcher: (params: {
-        ctx: Record<string, unknown>;
-        cfg: OpenClawConfig;
-        dispatcherOptions: {
-          deliver: (replyPayload: { text?: string; body?: string }) => Promise<void>;
-          onError?: (err: unknown, info: { kind: string }) => void;
-        };
-      }) => Promise<unknown>;
-    };
-  };
+  channelRuntime?: unknown;
 };
 
 type CampfireGatewayAdapter = {
@@ -95,6 +83,38 @@ type CampfireGatewayAdapter = {
 };
 
 type CampfireConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+
+type CampfireReplyRuntime = {
+  finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
+  dispatchReplyWithBufferedBlockDispatcher: (params: {
+    ctx: Record<string, unknown>;
+    cfg: OpenClawConfig;
+    dispatcherOptions: {
+      deliver: (replyPayload: { text?: string; body?: string }) => Promise<void>;
+      onError?: (err: unknown, info: { kind: string }) => void;
+    };
+  }) => Promise<unknown>;
+};
+
+function resolveCampfireReplyRuntime(channelRuntime: unknown): CampfireReplyRuntime | null {
+  if (!channelRuntime || typeof channelRuntime !== "object") {
+    return null;
+  }
+  const reply = (channelRuntime as { reply?: unknown }).reply;
+  if (!reply || typeof reply !== "object") {
+    return null;
+  }
+
+  const replyRecord = reply as Record<string, unknown>;
+  if (
+    typeof replyRecord.finalizeInboundContext !== "function" ||
+    typeof replyRecord.dispatchReplyWithBufferedBlockDispatcher !== "function"
+  ) {
+    return null;
+  }
+
+  return reply as CampfireReplyRuntime;
+}
 
 async function resolveCampfireInboundConfig(params: {
   fallback: OpenClawConfig;
@@ -138,8 +158,8 @@ export function createCampfireGateway(params?: {
         await waitUntilAbort(ctx.abortSignal);
         return;
       }
-      const channelRuntime = ctx.channelRuntime;
-      if (!channelRuntime) {
+      const replyRuntime = resolveCampfireReplyRuntime(ctx.channelRuntime);
+      if (!replyRuntime) {
         ctx.log?.warn?.(
           `[${ctx.account.accountId}] campfire channelRuntime is unavailable; inbound disabled`,
         );
@@ -203,7 +223,7 @@ export function createCampfireGateway(params?: {
           senderId: inbound.sender.id,
         });
 
-        const msgCtx = channelRuntime.reply.finalizeInboundContext({
+        const msgCtx = replyRuntime.finalizeInboundContext({
           Body: inbound.text,
           BodyForAgent: inbound.text,
           RawBody: inbound.text,
@@ -227,7 +247,7 @@ export function createCampfireGateway(params?: {
           CommandAuthorized: commandAuthorized,
         });
 
-        await channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher({
+        await replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
           ctx: msgCtx,
           cfg: currentCfg,
           dispatcherOptions: {
