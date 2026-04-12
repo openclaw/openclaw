@@ -1316,7 +1316,7 @@
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:sectriage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
-    "test:serial": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config vitest.config.ts",
+    "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
     "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
