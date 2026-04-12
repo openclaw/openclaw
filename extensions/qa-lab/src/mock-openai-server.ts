@@ -567,6 +567,19 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
+  if (toolOutput && /repo contract followthrough check/i.test(prompt)) {
+    if (
+      /successfully (?:wrote|created|updated|replaced)/i.test(toolOutput) ||
+      /status:\s*complete/i.test(toolOutput)
+    ) {
+      return [
+        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
+        "Wrote: repo-contract-summary.txt",
+        "Status: complete",
+      ].join("\n");
+    }
+    return "";
+  }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
@@ -890,6 +903,30 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
+  if (/repo contract followthrough check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "AGENT.md" });
+    }
+    if (toolOutput.includes("# Repo contract")) {
+      return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
+    }
+    if (toolOutput.includes("# Execution style")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_INPUT.md" });
+    }
+    if (
+      toolOutput.includes("Mission: prove you followed the repo contract.") &&
+      toolOutput.includes("Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "repo-contract-summary.txt",
+        content: [
+          "Mission: prove you followed the repo contract.",
+          "Evidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md",
+          "Status: complete",
+        ].join("\n"),
+      });
+    }
+  }
   if ((/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Inspect the QA workspace and return one concise protocol note.",
@@ -939,9 +976,10 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
 // baseline lane that exercises the same scenario logic without requiring
 // real Anthropic API keys.
 //
-// Scope: handles Anthropic Messages requests with text and tool_result
-// content blocks, including SSE streaming, which is what the QA suite uses
-// for the structural parity lane.
+// Scope: handles non-streaming Anthropic Messages requests with text and
+// tool_result content blocks, which is what the QA suite runner actually
+// sends. Streaming is intentionally out of scope for this mock because the
+// suite runner supports non-streaming fallback.
 
 function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],

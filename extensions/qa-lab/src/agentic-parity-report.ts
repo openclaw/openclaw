@@ -191,13 +191,11 @@ export function computeQaAgenticParityMetrics(
     if (scenarioHasPattern(scenario, SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS)) {
       return true;
     }
-    // Positive-tone patterns only fire on tool-backed scenarios that
-    // don't also show real tool-call evidence. Non-tool lanes like
-    // memory recall or image understanding can legitimately pass with
-    // short positive prose and should not be treated as fake successes
-    // just because they never emit `plannedToolName=...`.
+    // Positive-tone patterns only fire when the scenario doesn't also show
+    // real tool-call evidence. A legitimate tool-mediated pass with
+    // self-congratulatory prose stays clean; a prose-only pass with
+    // "Successfully completed the delegation" gets flagged.
     if (
-      toolBackedTitleSet.has(scenario.name) &&
       scenarioHasPattern(scenario, SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS) &&
       scenarioLacksToolCallEvidence(scenario)
     ) {
@@ -276,7 +274,7 @@ function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null 
   if (trimmed !== trimmed.toLowerCase()) {
     return null;
   }
-  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._/-]*)$/.exec(trimmed);
+  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
   if (!separatorMatch) {
     return null;
   }

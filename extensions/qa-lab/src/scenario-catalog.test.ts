@@ -128,6 +128,26 @@ describe("qa scenario catalog", () => {
     expect(imageRequestExpr).toContain("/debug/requests");
   });
 
+  it("adds a repo-instruction followthrough scenario to the parity pack", () => {
+    const scenario = readQaScenarioById("instruction-followthrough-repo-contract");
+    const config = readQaScenarioExecutionConfig("instruction-followthrough-repo-contract") as
+      | {
+          workspaceFiles?: Record<string, string>;
+          prompt?: string;
+          expectedReplyAll?: string[];
+        }
+      | undefined;
+
+    expect(config?.workspaceFiles?.["AGENT.md"]).toContain("Step order:");
+    expect(config?.workspaceFiles?.["SOUL.md"]).toContain("action-first");
+    expect(config?.workspaceFiles?.["FOLLOWTHROUGH_INPUT.md"]).toContain(
+      "Mission: prove you followed the repo contract.",
+    );
+    expect(config?.prompt).toContain("Repo contract followthrough check.");
+    expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
+    expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({
