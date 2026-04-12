@@ -712,7 +712,7 @@ async function deliverOutboundPayloadsCore(
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
         }) ||
-          (effectivePayload.sticker && handler.supportsStickerPayload))
+          effectivePayload.sticker)
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
@@ -724,11 +724,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
-        if (
-          effectivePayload.sticker &&
-          !handler.supportsStickerPayload &&
-          !payloadSummary.text.trim()
-        ) {
+        if (effectivePayload.sticker && !handler.sendPayload && !payloadSummary.text.trim()) {
           log.warn(
             "Sticker payload is not supported by channel outbound adapter; skipping delivery",
             {

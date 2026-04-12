@@ -1076,9 +1076,9 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
   });
 
-  it("does not use sendPayload for sticker-only payloads when sticker payloads are unsupported", async () => {
+  it("falls back to sendPayload for sticker-only payloads when supportsStickerPayload is not declared", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-skip" });
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-sticker" });
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
     const sendMedia = vi.fn();
     setActivePluginRegistry(
@@ -1101,7 +1101,48 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ sticker: { raw: "446:1988" } }],
     });
 
-    expect(sendPayload).not.toHaveBeenCalled();
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ sticker: { raw: "446:1988" } }),
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(logMocks.warn).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "!room:1",
+        success: true,
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-sticker" }]);
+  });
+
+  it("warns and skips sticker-only payloads when sendPayload is missing", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ sticker: { raw: "446:1988" } }],
+    });
+
     expect(sendText).not.toHaveBeenCalled();
     expect(logMocks.warn).toHaveBeenCalledWith(
       "Sticker payload is not supported by channel outbound adapter; skipping delivery",
