@@ -18,8 +18,6 @@
 
 #include "display_model.h"
 #include <string.h>
-#include <unistd.h>
-#include <stdio.h>
 
 /* ── HTTP probe labels ── */
 
@@ -238,6 +236,86 @@ void config_display_model_build(
 
 /* ── Environment check ── */
 
+static gchar* display_safe_path(const gchar *path) {
+    if (!path || path[0] == '\0') return NULL;
+    if (g_utf8_validate(path, -1, NULL)) {
+        return g_strdup(path);
+    }
+    return g_filename_display_name(path);
+}
+
+static void environment_check_row_set(EnvironmentCheckResult *out,
+                                      int index,
+                                      const char *label,
+                                      gboolean passed,
+                                      const gchar *detail)
+{
+    out->rows[index].label = label;
+    out->rows[index].passed = passed;
+    out->rows[index].detail = g_strdup(detail ? detail : "");
+}
+
+void runtime_path_status_build(
+    const gchar *runtime_config_path,
+    const gchar *runtime_state_dir,
+    const gchar *loaded_config_path,
+    RuntimePathStatus *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+
+    const gchar *effective_config_path = NULL;
+    gchar *config_dir_raw = NULL;
+    const gchar *state_dir_raw = NULL;
+
+    /* Precedence contract: loaded config path (gateway client) wins over
+     * runtime context path, which wins over unresolved state. */
+    if (loaded_config_path && loaded_config_path[0] != '\0') {
+        effective_config_path = loaded_config_path;
+    } else if (runtime_config_path && runtime_config_path[0] != '\0') {
+        effective_config_path = runtime_config_path;
+    }
+
+    if (effective_config_path) {
+        out->config_path_resolved = TRUE;
+        out->config_file_exists = g_file_test(effective_config_path, G_FILE_TEST_EXISTS);
+
+        config_dir_raw = g_path_get_dirname(effective_config_path);
+        if (config_dir_raw && config_dir_raw[0] != '\0') {
+            out->config_dir_exists = g_file_test(config_dir_raw, G_FILE_TEST_IS_DIR);
+        }
+
+        out->config_path = display_safe_path(effective_config_path);
+        out->config_dir = display_safe_path(config_dir_raw);
+    }
+
+    if (runtime_state_dir && runtime_state_dir[0] != '\0') {
+        state_dir_raw = runtime_state_dir;
+    } else if (config_dir_raw && config_dir_raw[0] != '\0') {
+        state_dir_raw = config_dir_raw;
+    }
+
+    if (state_dir_raw && state_dir_raw[0] != '\0') {
+        out->state_dir_resolved = TRUE;
+        out->state_dir_exists = g_file_test(state_dir_raw, G_FILE_TEST_IS_DIR);
+        out->state_dir = display_safe_path(state_dir_raw);
+    }
+
+    g_free(config_dir_raw);
+}
+
+void runtime_path_status_clear(RuntimePathStatus *status) {
+    if (!status) return;
+    g_clear_pointer(&status->config_path, g_free);
+    g_clear_pointer(&status->config_dir, g_free);
+    g_clear_pointer(&status->state_dir, g_free);
+    status->config_path_resolved = FALSE;
+    status->config_file_exists = FALSE;
+    status->config_dir_exists = FALSE;
+    status->state_dir_resolved = FALSE;
+    status->state_dir_exists = FALSE;
+}
+
 void environment_check_build(
     const SystemdState *sys,
     const char *config_path,
@@ -248,82 +326,90 @@ void environment_check_build(
     memset(out, 0, sizeof(*out));
     int i = 0;
 
+    RuntimePathStatus paths = {0};
+    runtime_path_status_build(config_path, state_dir, NULL, &paths);
+
     /* 1. User systemd session */
-    out->rows[i].label = "User systemd session";
     if (sys && !sys->systemd_unavailable) {
-        out->rows[i].passed = TRUE;
-        out->rows[i].detail = "Available";
+        environment_check_row_set(out, i, "User systemd session", TRUE, "Available");
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "Cannot connect to user systemd session bus.";
+        environment_check_row_set(out, i, "User systemd session", FALSE,
+                                  "Cannot connect to user systemd session bus.");
     }
     i++;
 
     /* 2. D-Bus session bus — if systemd works, D-Bus works */
-    out->rows[i].label = "D-Bus session bus";
-    out->rows[i].passed = (sys && !sys->systemd_unavailable);
-    out->rows[i].detail = out->rows[i].passed ? "Reachable" : "Not reachable";
+    gboolean dbus_reachable = (sys && !sys->systemd_unavailable);
+    environment_check_row_set(out, i, "D-Bus session bus", dbus_reachable,
+                              dbus_reachable ? "Reachable" : "Not reachable");
     i++;
 
     /* 3. Config path resolved */
-    out->rows[i].label = "Config file";
-    if (config_path && config_path[0] != '\0') {
-        out->rows[i].passed = TRUE;
-        out->rows[i].detail = config_path;
+    if (paths.config_path_resolved) {
+        environment_check_row_set(out, i, "Config file", TRUE, paths.config_path);
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "No config path resolved.";
+        environment_check_row_set(out, i, "Config file", FALSE, "No config path resolved.");
     }
     i++;
 
     /* 4. Config file exists */
-    out->rows[i].label = "Config exists";
-    if (config_path && config_path[0] != '\0') {
-        out->rows[i].passed = (access(config_path, F_OK) == 0);
-        out->rows[i].detail = out->rows[i].passed ? "Yes" : "No";
+    if (paths.config_path_resolved) {
+        environment_check_row_set(out, i, "Config exists", paths.config_file_exists,
+                                  paths.config_file_exists ? "Yes" : "No");
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "No (path unresolved)";
+        environment_check_row_set(out, i, "Config exists", FALSE, "No (path unresolved)");
     }
     i++;
 
-    /* 5. State directory resolved */
-    out->rows[i].label = "State directory";
-    if (state_dir && state_dir[0] != '\0') {
-        out->rows[i].passed = TRUE;
-        out->rows[i].detail = state_dir;
+    /* 5. Config directory exists */
+    if (paths.config_path_resolved && paths.config_dir && paths.config_dir[0] != '\0') {
+        environment_check_row_set(out, i, "Config dir exists", paths.config_dir_exists,
+                                  paths.config_dir_exists ? "Yes" : "No");
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "No state directory resolved.";
+        environment_check_row_set(out, i, "Config dir exists", FALSE, "No (path unresolved)");
     }
     i++;
 
-    /* 6. State directory exists */
-    out->rows[i].label = "State dir exists";
-    if (state_dir && state_dir[0] != '\0') {
-        out->rows[i].passed = (access(state_dir, F_OK) == 0);
-        out->rows[i].detail = out->rows[i].passed ? "Yes" : "No";
+    /* 6. State directory resolved */
+    if (paths.state_dir_resolved) {
+        environment_check_row_set(out, i, "State directory", TRUE, paths.state_dir);
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "No (path unresolved)";
+        environment_check_row_set(out, i, "State directory", FALSE, "No state directory resolved.");
     }
     i++;
 
-    /* 7. Expected systemd unit present */
-    out->rows[i].label = "Expected systemd unit";
+    /* 7. State directory exists */
+    if (paths.state_dir_resolved) {
+        environment_check_row_set(out, i, "State dir exists", paths.state_dir_exists,
+                                  paths.state_dir_exists ? "Yes" : "No");
+    } else {
+        environment_check_row_set(out, i, "State dir exists", FALSE, "No (path unresolved)");
+    }
+    i++;
+
+    /* 8. Expected systemd unit present */
     if (sys && sys->installed) {
-        out->rows[i].passed = TRUE;
-        out->rows[i].detail = sys->unit_name ? sys->unit_name : "Installed";
+        environment_check_row_set(out, i, "Expected systemd unit", TRUE,
+                                  sys->unit_name ? sys->unit_name : "Installed");
     } else if (sys && sys->systemd_unavailable) {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "Systemd unavailable";
+        environment_check_row_set(out, i, "Expected systemd unit", FALSE, "Systemd unavailable");
     } else {
-        out->rows[i].passed = FALSE;
-        out->rows[i].detail = "Not installed";
+        environment_check_row_set(out, i, "Expected systemd unit", FALSE, "Not installed");
     }
     i++;
 
     out->count = i;
+    runtime_path_status_clear(&paths);
+}
+
+void environment_check_result_clear(EnvironmentCheckResult *result) {
+    if (!result) return;
+    for (int i = 0; i < ENV_CHECK_MAX_ROWS; i++) {
+        g_clear_pointer(&result->rows[i].detail, g_free);
+        result->rows[i].label = NULL;
+        result->rows[i].passed = FALSE;
+    }
+    result->count = 0;
 }
 
 /* ── Onboarding routing ── */

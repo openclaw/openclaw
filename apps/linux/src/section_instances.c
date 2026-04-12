@@ -46,6 +46,25 @@ static GtkWidget *inst_pairing_box = NULL;
 static GtkWidget *inst_pairing_status_label = NULL;
 static GatewayPairingList *inst_pairing_cache = NULL;
 static gboolean inst_pairing_fetch_in_flight = FALSE;
+static guint inst_generation = 1;
+
+typedef struct {
+    guint generation;
+} InstancesRequestContext;
+
+static InstancesRequestContext* instances_request_context_new(void) {
+    InstancesRequestContext *ctx = g_new0(InstancesRequestContext, 1);
+    ctx->generation = inst_generation;
+    return ctx;
+}
+
+static gboolean instances_request_context_is_stale(const InstancesRequestContext *ctx) {
+    return !ctx || ctx->generation != inst_generation;
+}
+
+static void instances_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 /* Forward declarations */
 static void inst_rebuild_remote_nodes(void);
@@ -93,11 +112,17 @@ static void add_detail_row(GtkWidget *parent, const gchar *label, const gchar *v
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
-    if (!response->ok) {
+    InstancesRequestContext *ctx = (InstancesRequestContext *)user_data;
+    if (instances_request_context_is_stale(ctx)) {
+        instances_request_context_free(ctx);
+        return;
+    }
+    instances_request_context_free(ctx);
+
+    if (!response || !response->ok) {
         if (inst_remote_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(inst_remote_status_label), msg);
         }
     }
@@ -116,8 +141,10 @@ static void on_pair_approve(GtkButton *btn, gpointer user_data) {
     if (inst_pairing_status_label)
         gtk_label_set_text(GTK_LABEL(inst_pairing_status_label), "Approving\u2026");
 
-    g_autofree gchar *req = mutation_node_pair_approve(req_id, on_mutation_done, NULL);
+    InstancesRequestContext *ctx = instances_request_context_new();
+    g_autofree gchar *req = mutation_node_pair_approve(req_id, on_mutation_done, ctx);
     if (!req) {
+        instances_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (inst_pairing_status_label)
             gtk_label_set_text(GTK_LABEL(inst_pairing_status_label), "Failed to send request");
@@ -133,8 +160,10 @@ static void on_pair_reject(GtkButton *btn, gpointer user_data) {
     if (inst_pairing_status_label)
         gtk_label_set_text(GTK_LABEL(inst_pairing_status_label), "Rejecting\u2026");
 
-    g_autofree gchar *req = mutation_node_pair_reject(req_id, on_mutation_done, NULL);
+    InstancesRequestContext *ctx = instances_request_context_new();
+    g_autofree gchar *req = mutation_node_pair_reject(req_id, on_mutation_done, ctx);
     if (!req) {
+        instances_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (inst_pairing_status_label)
             gtk_label_set_text(GTK_LABEL(inst_pairing_status_label), "Failed to send request");
@@ -417,15 +446,21 @@ static void inst_rebuild_pairing(void) {
 /* ── RPC callbacks ───────────────────────────────────────────────── */
 
 static void on_nodes_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    InstancesRequestContext *ctx = (InstancesRequestContext *)user_data;
+    if (instances_request_context_is_stale(ctx)) {
+        instances_request_context_free(ctx);
+        return;
+    }
+    instances_request_context_free(ctx);
+
     inst_nodes_fetch_in_flight = FALSE;
 
     if (!inst_remote_box) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         if (inst_remote_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(inst_remote_status_label), msg);
         }
         return;
@@ -458,15 +493,21 @@ static void on_nodes_rpc_response(const GatewayRpcResponse *response, gpointer u
 }
 
 static void on_pairing_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    InstancesRequestContext *ctx = (InstancesRequestContext *)user_data;
+    if (instances_request_context_is_stale(ctx)) {
+        instances_request_context_free(ctx);
+        return;
+    }
+    instances_request_context_free(ctx);
+
     inst_pairing_fetch_in_flight = FALSE;
 
     if (!inst_pairing_box) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         if (inst_pairing_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(inst_pairing_status_label), msg);
         }
         return;
@@ -485,8 +526,10 @@ static void inst_fetch_pairing(void) {
     if (!gateway_rpc_is_ready()) return;
 
     inst_pairing_fetch_in_flight = TRUE;
-    g_autofree gchar *req = mutation_node_pair_list(on_pairing_rpc_response, NULL);
+    InstancesRequestContext *ctx = instances_request_context_new();
+    g_autofree gchar *req = mutation_node_pair_list(on_pairing_rpc_response, ctx);
     if (!req) {
+        instances_request_context_free(ctx);
         inst_pairing_fetch_in_flight = FALSE;
     }
 }
@@ -502,15 +545,19 @@ static void inst_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     inst_nodes_fetch_in_flight = TRUE;
+    InstancesRequestContext *nodes_ctx = instances_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "node.list", NULL, 0, on_nodes_rpc_response, NULL);
+        "node.list", NULL, 0, on_nodes_rpc_response, nodes_ctx);
     if (!req_id) {
+        instances_request_context_free(nodes_ctx);
         inst_nodes_fetch_in_flight = FALSE;
     }
 
     inst_pairing_fetch_in_flight = TRUE;
-    g_autofree gchar *req_id_pair = mutation_node_pair_list(on_pairing_rpc_response, NULL);
+    InstancesRequestContext *pair_ctx = instances_request_context_new();
+    g_autofree gchar *req_id_pair = mutation_node_pair_list(on_pairing_rpc_response, pair_ctx);
     if (!req_id_pair) {
+        instances_request_context_free(pair_ctx);
         inst_pairing_fetch_in_flight = FALSE;
     }
 }
@@ -678,9 +725,11 @@ static void instances_refresh(void) {
     }
 
     inst_nodes_fetch_in_flight = TRUE;
+    InstancesRequestContext *nodes_ctx = instances_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "node.list", NULL, 0, on_nodes_rpc_response, NULL);
+        "node.list", NULL, 0, on_nodes_rpc_response, nodes_ctx);
     if (!req_id) {
+        instances_request_context_free(nodes_ctx);
         inst_nodes_fetch_in_flight = FALSE;
         if (inst_remote_status_label)
             gtk_label_set_text(GTK_LABEL(inst_remote_status_label), "Failed to send request");
@@ -692,6 +741,8 @@ static void instances_refresh(void) {
 }
 
 static void instances_destroy(void) {
+    inst_generation++;
+
     inst_hostname_label = NULL;
     inst_platform_label = NULL;
     inst_version_label = NULL;

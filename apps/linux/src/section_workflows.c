@@ -16,6 +16,25 @@ static GtkWidget *workflows_status_label = NULL;
 static GtkWidget *workflows_list_box = NULL;
 static gboolean workflows_fetch_in_flight = FALSE;
 static gint64 workflows_last_fetch_us = 0;
+static guint workflows_generation = 1;
+
+typedef struct {
+    guint generation;
+} WorkflowsRequestContext;
+
+static WorkflowsRequestContext* workflows_request_context_new(void) {
+    WorkflowsRequestContext *ctx = g_new0(WorkflowsRequestContext, 1);
+    ctx->generation = workflows_generation;
+    return ctx;
+}
+
+static gboolean workflows_request_context_is_stale(const WorkflowsRequestContext *ctx) {
+    return !ctx || ctx->generation != workflows_generation;
+}
+
+static void workflows_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 static void workflows_clear(void) {
     if (!workflows_list_box) return;
@@ -97,14 +116,20 @@ static void workflows_render_from_config(const GatewayConfigSnapshot *cfg) {
 }
 
 static void on_workflows_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    WorkflowsRequestContext *ctx = (WorkflowsRequestContext *)user_data;
+    if (workflows_request_context_is_stale(ctx)) {
+        workflows_request_context_free(ctx);
+        return;
+    }
+    workflows_request_context_free(ctx);
+
     workflows_fetch_in_flight = FALSE;
 
     if (!workflows_status_label) return;
 
     workflows_clear();
 
-    if (!response->ok || !response->payload) {
+    if (!response || !response->ok || !response->payload) {
         gtk_label_set_text(GTK_LABEL(workflows_status_label), "Failed to load config.get");
         workflows_add_line("Unable to inspect bindings from gateway config.", TRUE);
         return;
@@ -155,15 +180,19 @@ static void workflows_refresh(void) {
     if (!section_is_stale(&workflows_last_fetch_us)) return;
 
     workflows_fetch_in_flight = TRUE;
+    WorkflowsRequestContext *ctx = workflows_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("config.get", NULL, 0,
-                                                on_workflows_response, NULL);
+                                                on_workflows_response, ctx);
     if (!rid) {
+        workflows_request_context_free(ctx);
         workflows_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(workflows_status_label), "Failed to request config.get");
     }
 }
 
 static void workflows_destroy(void) {
+    workflows_generation++;
+
     workflows_status_label = NULL;
     workflows_list_box = NULL;
     workflows_fetch_in_flight = FALSE;

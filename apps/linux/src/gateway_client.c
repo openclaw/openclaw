@@ -16,7 +16,9 @@
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "gateway_http.h"
+#include "gateway_rpc.h"
 #include "gateway_ws.h"
+#include "json_access.h"
 #include "state.h"
 #include "log.h"
 #include "test_seams.h"
@@ -27,6 +29,16 @@ typedef struct {
     guint generation;
     gchar *url;
 } GatewayHealthContext;
+
+typedef enum {
+    DEP_REFRESH_MODELS = 1,
+    DEP_REFRESH_AGENTS = 2,
+} DependencyRefreshKind;
+
+typedef struct {
+    guint generation;
+    DependencyRefreshKind kind;
+} DependencyRefreshContext;
 
 static GatewayConfig *current_config = NULL;
 static gchar *current_http_url = NULL;
@@ -39,6 +51,17 @@ static gboolean current_setup_detected = FALSE;
 static guint health_poll_timer_id = 0;
 #define HEALTH_POLL_INTERVAL_S 10
 
+static guint dependency_generation = 1;
+static gboolean dependency_models_in_flight = FALSE;
+static gboolean dependency_agents_in_flight = FALSE;
+static gint64 dependency_last_refresh_us = 0;
+static gboolean dependency_models_fresh = FALSE;
+static gboolean dependency_agents_fresh = FALSE;
+static gint64 dependency_models_last_success_us = 0;
+static gint64 dependency_agents_last_success_us = 0;
+#define DEPENDENCY_REFRESH_MIN_INTERVAL_US (2 * G_TIME_SPAN_SECOND)
+#define DEPENDENCY_REFRESH_STALE_AFTER_US (30 * G_TIME_SPAN_SECOND)
+
 /* Config monitor state for live config discovery/reload (Feature A) */
 static GFileMonitor *config_dir_monitor = NULL;
 static GFileMonitor *config_file_monitor = NULL;
@@ -50,6 +73,202 @@ static guint config_monitor_refresh_source_id = 0;
 static void do_health_check(void);
 static void config_monitor_clear(void);
 static void config_monitor_rearm(void);
+static void dependency_refresh_start(gboolean force);
+static void dependency_invalidate(gboolean invalidate_models,
+                                  gboolean invalidate_agents,
+                                  gboolean cancel_in_flight,
+                                  const gchar *reason);
+
+static DependencyRefreshContext* dependency_refresh_context_new(DependencyRefreshKind kind) {
+    DependencyRefreshContext *ctx = g_new0(DependencyRefreshContext, 1);
+    ctx->generation = dependency_generation;
+    ctx->kind = kind;
+    return ctx;
+}
+
+static gboolean dependency_refresh_context_is_stale(const DependencyRefreshContext *ctx) {
+    return !ctx || ctx->generation != dependency_generation;
+}
+
+static void dependency_refresh_context_free(gpointer data) {
+    g_free(data);
+}
+
+static gboolean gateway_can_refresh_dependencies(void) {
+    if (!current_config || !current_config->valid) return FALSE;
+    return gateway_rpc_is_ready();
+}
+
+static gboolean dependency_fact_is_stale(gboolean fresh,
+                                         gint64 last_success_us,
+                                         gint64 now_us) {
+    if (!fresh || last_success_us <= 0) {
+        return TRUE;
+    }
+    return (now_us - last_success_us) >= DEPENDENCY_REFRESH_STALE_AFTER_US;
+}
+
+static void dependency_invalidate(gboolean invalidate_models,
+                                  gboolean invalidate_agents,
+                                  gboolean cancel_in_flight,
+                                  const gchar *reason) {
+    if (!invalidate_models && !invalidate_agents) {
+        return;
+    }
+
+    if (cancel_in_flight) {
+        dependency_generation++;
+        dependency_models_in_flight = FALSE;
+        dependency_agents_in_flight = FALSE;
+    }
+
+    if (invalidate_models) {
+        dependency_models_fresh = FALSE;
+        dependency_models_last_success_us = 0;
+        state_set_model_catalog_fact(FALSE, 0, FALSE);
+    }
+    if (invalidate_agents) {
+        dependency_agents_fresh = FALSE;
+        dependency_agents_last_success_us = 0;
+        state_set_agents_fact(FALSE, 0);
+    }
+
+    dependency_last_refresh_us = 0;
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                 "dependency refresh invalidated models=%d agents=%d cancel_in_flight=%d reason=%s",
+                 invalidate_models,
+                 invalidate_agents,
+                 cancel_in_flight,
+                 reason ? reason : "(none)");
+}
+
+static void on_dependency_models_response(const GatewayRpcResponse *response, gpointer user_data) {
+    DependencyRefreshContext *ctx = (DependencyRefreshContext *)user_data;
+    if (dependency_refresh_context_is_stale(ctx)) {
+        dependency_refresh_context_free(ctx);
+        return;
+    }
+    dependency_refresh_context_free(ctx);
+    dependency_models_in_flight = FALSE;
+
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        dependency_models_fresh = FALSE;
+        dependency_models_last_success_us = 0;
+        state_set_model_catalog_fact(FALSE, 0, FALSE);
+        return;
+    }
+
+    JsonObject *obj = json_node_get_object(response->payload);
+    JsonNode *models_node = json_object_get_member(obj, "models");
+    if (!models_node || !JSON_NODE_HOLDS_ARRAY(models_node)) {
+        dependency_models_fresh = TRUE;
+        dependency_models_last_success_us = g_get_real_time();
+        state_set_model_catalog_fact(TRUE, 0, FALSE);
+        return;
+    }
+
+    JsonArray *arr = json_node_get_array(models_node);
+    guint model_count = json_array_get_length(arr);
+    gboolean selected_resolved = FALSE;
+    const gchar *default_model_id =
+        (current_config && current_config->configured_default_model_id)
+            ? current_config->configured_default_model_id
+            : NULL;
+    if (default_model_id && default_model_id[0] != '\0') {
+        for (guint i = 0; i < model_count; i++) {
+            JsonNode *n = json_array_get_element(arr, i);
+            if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
+            JsonObject *mo = json_node_get_object(n);
+            const gchar *id = oc_json_string_member(mo, "id");
+            if (id && g_strcmp0(id, default_model_id) == 0) {
+                selected_resolved = TRUE;
+                break;
+            }
+        }
+    }
+
+    dependency_models_fresh = TRUE;
+    dependency_models_last_success_us = g_get_real_time();
+    state_set_model_catalog_fact(TRUE, model_count, selected_resolved);
+}
+
+static void on_dependency_agents_response(const GatewayRpcResponse *response, gpointer user_data) {
+    DependencyRefreshContext *ctx = (DependencyRefreshContext *)user_data;
+    if (dependency_refresh_context_is_stale(ctx)) {
+        dependency_refresh_context_free(ctx);
+        return;
+    }
+    dependency_refresh_context_free(ctx);
+    dependency_agents_in_flight = FALSE;
+
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        dependency_agents_fresh = FALSE;
+        dependency_agents_last_success_us = 0;
+        state_set_agents_fact(FALSE, 0);
+        return;
+    }
+
+    JsonObject *obj = json_node_get_object(response->payload);
+    JsonNode *agents_node = json_object_get_member(obj, "agents");
+    if (!agents_node || !JSON_NODE_HOLDS_ARRAY(agents_node)) {
+        dependency_agents_fresh = TRUE;
+        dependency_agents_last_success_us = g_get_real_time();
+        state_set_agents_fact(TRUE, 0);
+        return;
+    }
+
+    JsonArray *arr = json_node_get_array(agents_node);
+    dependency_agents_fresh = TRUE;
+    dependency_agents_last_success_us = g_get_real_time();
+    state_set_agents_fact(TRUE, json_array_get_length(arr));
+}
+
+static void dependency_refresh_start(gboolean force) {
+    if (!gateway_can_refresh_dependencies()) return;
+    if (dependency_models_in_flight || dependency_agents_in_flight) return;
+
+    gint64 now_us = g_get_real_time();
+    if (!force) {
+        gboolean models_stale = dependency_fact_is_stale(
+            dependency_models_fresh, dependency_models_last_success_us, now_us);
+        gboolean agents_stale = dependency_fact_is_stale(
+            dependency_agents_fresh, dependency_agents_last_success_us, now_us);
+        gboolean freshness_refresh_needed = models_stale || agents_stale;
+
+        if (!freshness_refresh_needed &&
+            dependency_last_refresh_us > 0 &&
+            (now_us - dependency_last_refresh_us) < DEPENDENCY_REFRESH_MIN_INTERVAL_US) {
+            return;
+        }
+    }
+    dependency_last_refresh_us = now_us;
+
+    dependency_models_in_flight = TRUE;
+    dependency_agents_in_flight = TRUE;
+
+    DependencyRefreshContext *models_ctx = dependency_refresh_context_new(DEP_REFRESH_MODELS);
+    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0,
+                                                       on_dependency_models_response, models_ctx);
+    if (!models_rid) {
+        dependency_refresh_context_free(models_ctx);
+        dependency_models_in_flight = FALSE;
+        dependency_models_fresh = FALSE;
+        dependency_models_last_success_us = 0;
+        state_set_model_catalog_fact(FALSE, 0, FALSE);
+    }
+
+    DependencyRefreshContext *agents_ctx = dependency_refresh_context_new(DEP_REFRESH_AGENTS);
+    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0,
+                                                       on_dependency_agents_response, agents_ctx);
+    if (!agents_rid) {
+        dependency_refresh_context_free(agents_ctx);
+        dependency_agents_in_flight = FALSE;
+        dependency_agents_fresh = FALSE;
+        dependency_agents_last_success_us = 0;
+        state_set_agents_fact(FALSE, 0);
+    }
+}
 
 static GatewayConfig* load_config_with_context(void) {
     GatewayConfigContext ctx = {0};
@@ -94,6 +313,9 @@ static void publish_health_state(gboolean http_ok, HttpProbeResult http_probe_re
     hs.config_valid = current_config ? current_config->valid : FALSE;
     hs.setup_detected = current_setup_detected;
     hs.has_model_config = current_config ? current_config->has_model_config : FALSE;
+    hs.has_provider_config = current_config ? current_config->has_provider_config : FALSE;
+    hs.has_default_model_config = current_config ? current_config->has_default_model_config : FALSE;
+    hs.configured_default_model_id = current_config ? current_config->configured_default_model_id : NULL;
     
     /* Feature B: Wizard onboard marker fields */
     hs.has_wizard_onboard_marker = current_config ? current_config->has_wizard_onboard_marker : FALSE;
@@ -134,7 +356,9 @@ static void publish_invalid_config_state(void) {
     if (current_config) {
         hs.endpoint_host = g_strdup(current_config->host);
         hs.endpoint_port = current_config->port;
+        hs.configured_default_model_id = current_config->configured_default_model_id;
     }
+    state_reset_resolved_facts();
     state_update_health(&hs);
     g_free(hs.endpoint_host);
     g_free(hs.last_error);
@@ -189,6 +413,7 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
      */
     if (ws_connected) {
         do_health_check();
+        dependency_refresh_start(TRUE);
     }
 }
 
@@ -247,6 +472,10 @@ static void on_health_result(const GatewayHealthResult *result, gpointer user_da
         result->version,
         current ? current->auth_source : NULL,
         merged_error);
+
+    if (result->ok && ws_connected && current && current->rpc_ok && current->auth_ok) {
+        dependency_refresh_start(FALSE);
+    }
 }
 
 static void do_health_check(void) {
@@ -266,7 +495,8 @@ static gboolean on_health_poll_timer(gpointer user_data) {
     return G_SOURCE_CONTINUE;
 }
 
-static void teardown_transport(void) {
+static void teardown_transport(gboolean invalidate_models,
+                              gboolean invalidate_agents) {
     if (health_poll_timer_id) {
         g_source_remove(health_poll_timer_id);
         health_poll_timer_id = 0;
@@ -280,6 +510,11 @@ static void teardown_transport(void) {
     /* Reset health gate and increment generation so stale callbacks are ignored */
     health_in_flight = FALSE;
     current_health_generation++;
+    dependency_invalidate(invalidate_models,
+                          invalidate_agents,
+                          TRUE,
+                          "transport teardown");
+    state_reset_resolved_facts();
 }
 
 static void start_transport(void) {
@@ -607,6 +842,7 @@ void gateway_client_refresh(void) {
             /* Unchanged valid config — lightweight health refresh */
             gateway_config_free(new_config);
             do_health_check();
+            dependency_refresh_start(FALSE);
             return;
         }
         /* Unchanged invalid config — republish error state */
@@ -624,7 +860,19 @@ void gateway_client_refresh(void) {
               new_config ? (int)new_config->error_code : -1);
 
     /* Config changed — always replace stored config */
-    teardown_transport();
+    gboolean invalidate_models = TRUE;
+    gboolean invalidate_agents = TRUE;
+    if (current_config && new_config && current_config->valid && new_config->valid) {
+        gboolean model_context_changed =
+            current_config->has_provider_config != new_config->has_provider_config ||
+            current_config->has_default_model_config != new_config->has_default_model_config ||
+            g_strcmp0(current_config->configured_default_model_id,
+                      new_config->configured_default_model_id) != 0;
+        if (!model_context_changed) {
+            invalidate_models = FALSE;
+        }
+    }
+    teardown_transport(invalidate_models, invalidate_agents);
     gateway_config_free(current_config);
     current_config = new_config;
 
@@ -645,7 +893,7 @@ void gateway_client_shutdown(void) {
     /* Stop monitoring config file (Feature A) */
     config_monitor_clear();
 
-    teardown_transport();
+    teardown_transport(TRUE, TRUE);
     gateway_ws_shutdown();
     gateway_http_shutdown();
     gateway_config_free(current_config);
@@ -658,4 +906,16 @@ gboolean gateway_client_is_connected(void) {
 
 GatewayConfig* gateway_client_get_config(void) {
     return current_config;
+}
+
+void gateway_client_request_dependency_refresh(void) {
+    dependency_refresh_start(TRUE);
+}
+
+void gateway_client_invalidate_dependencies(gboolean invalidate_models,
+                                            gboolean invalidate_agents) {
+    dependency_invalidate(invalidate_models,
+                          invalidate_agents,
+                          FALSE,
+                          "explicit request");
 }

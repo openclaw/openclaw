@@ -31,3 +31,4 @@ void onboarding_show(void);
 void onboarding_refresh(void);
 void onboarding_reset(void);
 int onboarding_get_seen_version(void);
+gboolean onboarding_is_visible(void);

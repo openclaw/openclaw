@@ -125,7 +125,7 @@ void config_display_model_build(
 typedef struct {
     const char *label;
     gboolean passed;
-    const char *detail;            /* path or explanation */
+    gchar *detail;                 /* owned UTF-8 path or explanation */
 } EnvironmentCheckRow;
 
 #define ENV_CHECK_MAX_ROWS 8
@@ -135,11 +135,33 @@ typedef struct {
     int count;
 } EnvironmentCheckResult;
 
+typedef struct {
+    /* Display-safe UTF-8 values for rendering and diagnostics text. */
+    gchar *config_path;
+    gchar *config_dir;
+    gchar *state_dir;
+    gboolean config_path_resolved;
+    gboolean config_file_exists;
+    gboolean config_dir_exists;
+    gboolean state_dir_resolved;
+    gboolean state_dir_exists;
+} RuntimePathStatus;
+
+void runtime_path_status_build(
+    const gchar *runtime_config_path,
+    const gchar *runtime_state_dir,
+    const gchar *loaded_config_path,
+    RuntimePathStatus *out);
+
+void runtime_path_status_clear(RuntimePathStatus *status);
+
 void environment_check_build(
     const SystemdState *sys,
     const char *config_path,
     const char *state_dir,
     EnvironmentCheckResult *out);
+
+void environment_check_result_clear(EnvironmentCheckResult *result);
 
 /* ── Onboarding routing ── */
 

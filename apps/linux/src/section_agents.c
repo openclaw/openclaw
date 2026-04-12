@@ -8,9 +8,12 @@
 
 #include <adwaita.h>
 
-#include "format_utils.h"
+#include "gateway_data.h"
 #include "gateway_rpc.h"
 #include "json_access.h"
+#include "log.h"
+#include "format_utils.h"
+#include "ui_model_utils.h"
 
 typedef struct {
     gchar *id;
@@ -74,6 +77,41 @@ static gint agents_selected_index = -1;
 static gchar *agents_selected_agent_id = NULL;
 static gboolean agents_fetch_in_flight = FALSE;
 static gint64 agents_last_fetch_us = 0;
+static guint agents_generation = 1;
+
+typedef struct {
+    guint generation;
+} AgentsRequestContext;
+
+static AgentsRequestContext* agents_request_context_new(void) {
+    AgentsRequestContext *ctx = g_new0(AgentsRequestContext, 1);
+    ctx->generation = agents_generation;
+    return ctx;
+}
+
+static gboolean agents_request_context_is_stale(const AgentsRequestContext *ctx) {
+    return !ctx || ctx->generation != agents_generation;
+}
+
+static void agents_request_context_free(gpointer data) {
+    g_free(data);
+}
+
+static void agents_attach_dropdown_model(GtkStringList *new_model, guint selected, gboolean sensitive) {
+    if (!new_model) return;
+    ui_dropdown_replace_model(agents_model_dropdown,
+                              (gpointer *)&agents_model_dropdown_model,
+                              G_LIST_MODEL(new_model),
+                              selected,
+                              sensitive);
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: model attach selected=%u sensitive=%d", selected, sensitive);
+}
+
+static void agents_set_model_dropdown_placeholder(const gchar *label, gboolean sensitive) {
+    GtkStringList *placeholder = gtk_string_list_new(NULL);
+    gtk_string_list_append(placeholder, label && label[0] != '\0' ? label : "Session default");
+    agents_attach_dropdown_model(placeholder, 0, sensitive);
+}
 
 static const gchar* agents_selected_agent_model(void) {
     if (!agents_cache || agents_selected_index < 0 || (guint)agents_selected_index >= agents_cache->len) {
@@ -103,12 +141,7 @@ static void agents_rebuild_model_dropdown(const gchar *preferred_model) {
             selected = i + 1;
         }
     }
-    if (agents_model_dropdown) {
-        gtk_drop_down_set_model(GTK_DROP_DOWN(agents_model_dropdown), G_LIST_MODEL(new_model));
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(agents_model_dropdown), selected);
-    }
-    if (agents_model_dropdown_model) g_object_unref(agents_model_dropdown_model);
-    agents_model_dropdown_model = new_model;
+    agents_attach_dropdown_model(new_model, selected, TRUE);
 }
 
 static void agents_list_clear(void) {
@@ -146,7 +179,15 @@ static void agents_rebuild_files(const GPtrArray *files) {
 }
 
 static void on_agents_files_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
+    if (agents_request_context_is_stale(ctx)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale files callback dropped");
+        agents_request_context_free(ctx);
+        return;
+    }
+    agents_request_context_free(ctx);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: files callback ok=%d", response ? response->ok : 0);
     g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func((GDestroyNotify)agent_file_row_free);
 
     if (response->ok && response->payload && JSON_NODE_HOLDS_OBJECT(response->payload)) {
@@ -210,10 +251,13 @@ static void agents_request_files_for_selected(void) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    AgentsRequestContext *ctx = agents_request_context_new();
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.files.list");
     g_autofree gchar *rid = gateway_rpc_request("agents.files.list", params, 0,
-                                                on_agents_files_response, NULL);
+                                                on_agents_files_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        agents_request_context_free(ctx);
         agents_rebuild_files(NULL);
     }
 }
@@ -285,7 +329,14 @@ static void agents_rebuild_list(void) {
 }
 
 static void on_agents_update_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
+    if (agents_request_context_is_stale(ctx)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale update callback dropped");
+        agents_request_context_free(ctx);
+        return;
+    }
+    agents_request_context_free(ctx);
+
     if (!agents_status_label) return;
     if (response->ok) {
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Agent updated");
@@ -338,16 +389,27 @@ static void on_agents_save_clicked(GtkButton *button, gpointer user_data) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    AgentsRequestContext *ctx = agents_request_context_new();
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.update");
     g_autofree gchar *rid = gateway_rpc_request("agents.update", params, 0,
-                                                on_agents_update_response, NULL);
+                                                on_agents_update_response, ctx);
     json_node_unref(params);
     if (!rid && agents_status_label) {
+        agents_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Failed to send update");
     }
 }
 
 static void on_agents_list_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
+    if (agents_request_context_is_stale(ctx)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale agents.list callback dropped");
+        agents_request_context_free(ctx);
+        return;
+    }
+    agents_request_context_free(ctx);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: agents.list callback ok=%d", response ? response->ok : 0);
     agents_fetch_in_flight = FALSE;
 
     if (!agents_status_label) return;
@@ -439,19 +501,27 @@ static void on_agents_list_response(const GatewayRpcResponse *response, gpointer
 }
 
 static void on_agents_models_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
+    if (agents_request_context_is_stale(ctx)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale models.list callback dropped");
+        agents_request_context_free(ctx);
+        return;
+    }
+    agents_request_context_free(ctx);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: models.list callback ok=%d", response ? response->ok : 0);
     if (agent_models_cache) g_ptr_array_unref(agent_models_cache);
     agent_models_cache = g_ptr_array_new_with_free_func((GDestroyNotify)agent_model_choice_free);
 
     if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
-        agents_rebuild_model_dropdown(NULL);
+        agents_set_model_dropdown_placeholder("Models unavailable", FALSE);
         return;
     }
 
     JsonObject *obj = json_node_get_object(response->payload);
     JsonNode *mn = json_object_get_member(obj, "models");
     if (!mn || !JSON_NODE_HOLDS_ARRAY(mn)) {
-        agents_rebuild_model_dropdown(NULL);
+        agents_set_model_dropdown_placeholder("No models available", FALSE);
         return;
     }
 
@@ -475,10 +545,16 @@ static void on_agents_models_response(const GatewayRpcResponse *response, gpoint
         if (m->id) g_ptr_array_add(agent_models_cache, m); else agent_model_choice_free(m);
     }
 
-    agents_rebuild_model_dropdown(agents_selected_agent_model());
+    if (!agent_models_cache || agent_models_cache->len == 0) {
+        agents_set_model_dropdown_placeholder("No models available", FALSE);
+    } else {
+        agents_rebuild_model_dropdown(agents_selected_agent_model());
+    }
 }
 
 static GtkWidget* agents_build(void) {
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: build");
+
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -536,8 +612,9 @@ static GtkWidget* agents_build(void) {
     gtk_entry_set_placeholder_text(GTK_ENTRY(agents_avatar_entry), "Avatar URL or path");
     gtk_box_append(GTK_BOX(right), agents_avatar_entry);
 
-    agents_model_dropdown_model = gtk_string_list_new(NULL);
-    agents_model_dropdown = gtk_drop_down_new(G_LIST_MODEL(agents_model_dropdown_model), NULL);
+    agents_model_dropdown_model = NULL;
+    agents_model_dropdown = gtk_drop_down_new(NULL, NULL);
+    agents_set_model_dropdown_placeholder("Loading models…", FALSE);
     gtk_box_append(GTK_BOX(right), agents_model_dropdown);
 
     GtkWidget *save_btn = gtk_button_new_with_label("Save Agent");
@@ -563,6 +640,7 @@ static GtkWidget* agents_build(void) {
 }
 
 static void agents_refresh(void) {
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: refresh stale=%d inflight=%d", section_is_stale(&agents_last_fetch_us), agents_fetch_in_flight);
     if (!agents_status_label || agents_fetch_in_flight) return;
     if (!gateway_rpc_is_ready()) {
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Gateway not connected");
@@ -571,21 +649,32 @@ static void agents_refresh(void) {
     if (!section_is_stale(&agents_last_fetch_us)) return;
 
     agents_fetch_in_flight = TRUE;
+    AgentsRequestContext *list_ctx = agents_request_context_new();
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.list");
     g_autofree gchar *rid = gateway_rpc_request("agents.list", NULL, 0,
-                                                on_agents_list_response, NULL);
+                                                on_agents_list_response, list_ctx);
+    AgentsRequestContext *models_ctx = agents_request_context_new();
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request models.list");
     g_autofree gchar *mrid = gateway_rpc_request("models.list", NULL, 0,
-                                                 on_agents_models_response, NULL);
+                                                 on_agents_models_response, models_ctx);
     if (!rid) {
+        agents_request_context_free(list_ctx);
         agents_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Failed to request agents");
+    }
+    if (!mrid) {
+        agents_request_context_free(models_ctx);
+        agents_set_model_dropdown_placeholder("Models unavailable", FALSE);
     }
     (void)mrid;
 }
 
 static void agents_destroy(void) {
-    if (agents_model_dropdown) {
-        gtk_drop_down_set_model(GTK_DROP_DOWN(agents_model_dropdown), NULL);
-    }
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: destroy begin");
+    agents_generation++;
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: model detach");
+    ui_dropdown_detach_model(agents_model_dropdown, (gpointer *)&agents_model_dropdown_model);
 
     agents_status_label = NULL;
     agents_list_box = NULL;
@@ -594,7 +683,6 @@ static void agents_destroy(void) {
     agents_workspace_entry = NULL;
     agents_avatar_entry = NULL;
     agents_model_dropdown = NULL;
-    if (agents_model_dropdown_model) g_object_unref(agents_model_dropdown_model);
     agents_model_dropdown_model = NULL;
     agents_selected_label = NULL;
 
@@ -607,6 +695,7 @@ static void agents_destroy(void) {
     agents_selected_agent_id = NULL;
     agents_fetch_in_flight = FALSE;
     agents_last_fetch_us = 0;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: destroy end");
 }
 
 static void agents_invalidate(void) {

@@ -18,6 +18,7 @@
 #include "json_access.h"
 #include "section_controller.h"
 #include "test_seams.h"
+#include "ui_model_utils.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -25,10 +26,53 @@
 static GtkWidget *channels_list_box = NULL;
 static GtkWidget *channels_status_label = NULL;
 static GtkWidget *channels_filter_dropdown = NULL;
+static GtkStringList *channels_filter_model = NULL;
 static GatewayChannelsData *channels_data_cache = NULL;
 static gboolean channels_fetch_in_flight = FALSE;
 static gint64 channels_last_fetch_us = 0;
 static gint current_filter = 0; /* 0: All, 1: Configured, 2: Available */
+static guint channels_generation = 1;
+
+typedef struct {
+    guint generation;
+    gchar *channel_id;
+} ChannelsIdContext;
+
+typedef struct {
+    guint generation;
+} ChannelsRequestContext;
+
+static ChannelsRequestContext* channels_request_context_new(void) {
+    ChannelsRequestContext *ctx = g_new0(ChannelsRequestContext, 1);
+    ctx->generation = channels_generation;
+    return ctx;
+}
+
+static gboolean channels_request_context_is_stale(const ChannelsRequestContext *ctx) {
+    return !ctx || ctx->generation != channels_generation;
+}
+
+static void channels_request_context_free(gpointer data) {
+    g_free(data);
+}
+
+static ChannelsIdContext* channels_id_context_new(const gchar *channel_id) {
+    ChannelsIdContext *ctx = g_new0(ChannelsIdContext, 1);
+    ctx->generation = channels_generation;
+    ctx->channel_id = g_strdup(channel_id);
+    return ctx;
+}
+
+static gboolean channels_id_context_is_stale(const ChannelsIdContext *ctx) {
+    return !ctx || ctx->generation != channels_generation;
+}
+
+static void channels_id_context_free(gpointer data) {
+    ChannelsIdContext *ctx = (ChannelsIdContext *)data;
+    if (!ctx) return;
+    g_free(ctx->channel_id);
+    g_free(ctx);
+}
 
 /* Forward declarations */
 static void channels_rebuild_list(void);
@@ -37,12 +81,18 @@ static void channels_force_refresh(void);
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
+    if (channels_request_context_is_stale(ctx)) {
+        channels_request_context_free(ctx);
+        return;
+    }
+    channels_request_context_free(ctx);
+
     if (!channels_status_label) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         g_autofree gchar *msg = g_strdup_printf("Error: %s",
-            response->error_msg ? response->error_msg : "unknown");
+            response && response->error_msg ? response->error_msg : "unknown");
         gtk_label_set_text(GTK_LABEL(channels_status_label), msg);
     }
 
@@ -59,8 +109,10 @@ static void on_refresh_all_channels(GtkButton *btn, gpointer user_data) {
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Refreshing all channels…");
     }
 
-    g_autofree gchar *req = mutation_channels_status(TRUE, on_mutation_done, NULL);
+    ChannelsRequestContext *ctx = channels_request_context_new();
+    g_autofree gchar *req = mutation_channels_status(TRUE, on_mutation_done, ctx);
     if (!req) {
+        channels_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (channels_status_label)
             gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send refresh request");
@@ -75,6 +127,7 @@ typedef struct {
     JsonObject *full_config_obj;  /* Owned reference to full config object */
     gchar *base_hash;           /* Config hash for OCC */
     gchar *channel_id;          /* Channel being edited */
+    guint generation;
 } ConfigEditorSession;
 
 static void config_editor_session_free(ConfigEditorSession *session) {
@@ -92,11 +145,21 @@ static ConfigEditorSession* config_editor_session_new(JsonObject *full_config,
     session->full_config_obj = full_config ? json_object_ref(full_config) : NULL;
     session->base_hash = g_strdup(hash);
     session->channel_id = g_strdup(channel_id);
+    session->generation = channels_generation;
     return session;
+}
+
+static gboolean config_editor_session_is_stale(const ConfigEditorSession *session) {
+    return !session || session->generation != channels_generation;
 }
 
 static void on_config_save_done(const GatewayRpcResponse *response, gpointer user_data) {
     ConfigEditorSession *session = (ConfigEditorSession *)user_data;
+    if (config_editor_session_is_stale(session)) {
+        config_editor_session_free(session);
+        return;
+    }
+
     if (!response->ok && channels_status_label) {
         g_autofree gchar *msg = g_strdup_printf("Config Save Error: %s",
             response->error_msg ? response->error_msg : "unknown");
@@ -112,6 +175,11 @@ static void on_config_save_done(const GatewayRpcResponse *response, gpointer use
 static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpointer user_data) {
     AdwAlertDialog *dialog = ADW_ALERT_DIALOG(source);
     ConfigEditorSession *session = (ConfigEditorSession *)user_data;
+
+    if (config_editor_session_is_stale(session)) {
+        config_editor_session_free(session);
+        return;
+    }
 
     const gchar *response_id = adw_alert_dialog_choose_finish(dialog, result);
     if (g_strcmp0(response_id, "save") != 0) {
@@ -245,7 +313,13 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
 }
 
 static void on_config_get_done(const GatewayRpcResponse *response, gpointer user_data) {
-    gchar *channel_id = (gchar *)user_data;
+    ChannelsIdContext *ctx = (ChannelsIdContext *)user_data;
+    if (channels_id_context_is_stale(ctx)) {
+        channels_id_context_free(ctx);
+        return;
+    }
+    gchar *channel_id = g_strdup(ctx->channel_id);
+    channels_id_context_free(ctx);
     
     /* STRICT GUARDS: Check response state before any payload access */
     if (!response || !response->ok) {
@@ -254,7 +328,7 @@ static void on_config_get_done(const GatewayRpcResponse *response, gpointer user
                 response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(channels_status_label), msg);
         }
-        g_free(channel_id);
+        g_clear_pointer(&channel_id, g_free);
         return;
     }
     
@@ -354,7 +428,7 @@ static void on_config_get_done(const GatewayRpcResponse *response, gpointer user
     GtkWidget *toplevel = GTK_WIDGET(gtk_application_get_active_window(app));
     
     adw_alert_dialog_choose(dialog, toplevel, NULL, on_config_dialog_response, session);
-    g_free(channel_id);
+    g_clear_pointer(&channel_id, g_free);
 }
 
 static void on_edit_config(GtkButton *btn, gpointer user_data) {
@@ -369,8 +443,10 @@ static void on_edit_config(GtkButton *btn, gpointer user_data) {
      * Always returns full config document {hash, config: {...}}
      * We pass NULL for scope to comply with the empty params contract.
      */
-    g_autofree gchar *req = mutation_config_get(NULL, on_config_get_done, g_strdup(channel_id));
+    ChannelsIdContext *ctx = channels_id_context_new(channel_id);
+    g_autofree gchar *req = mutation_config_get(NULL, on_config_get_done, ctx);
     if (!req && channels_status_label) {
+        channels_id_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to request config");
     }
 }
@@ -378,7 +454,12 @@ static void on_edit_config(GtkButton *btn, gpointer user_data) {
 /* ── Web Login / QR Flow ─────────────────────────────────────────── */
 
 static void on_web_login_wait_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
+    if (channels_request_context_is_stale(ctx)) {
+        channels_request_context_free(ctx);
+        return;
+    }
+    channels_request_context_free(ctx);
     
     /* STRICT GUARDS: Check response state before any payload access */
     if (!response || !response->ok) {
@@ -440,7 +521,13 @@ static void on_web_login_wait_done(const GatewayRpcResponse *response, gpointer 
 }
 
 static void on_web_login_start_done(const GatewayRpcResponse *response, gpointer user_data) {
-    gchar *channel_id = (gchar *)user_data;
+    ChannelsIdContext *ctx = (ChannelsIdContext *)user_data;
+    if (channels_id_context_is_stale(ctx)) {
+        channels_id_context_free(ctx);
+        return;
+    }
+    gchar *channel_id = g_strdup(ctx->channel_id);
+    channels_id_context_free(ctx);
     
     /* STRICT GUARDS: Check response state before any payload access */
     if (!response || !response->ok) {
@@ -514,12 +601,14 @@ static void on_web_login_start_done(const GatewayRpcResponse *response, gpointer
 
     /* Begin waiting for the actual login resolution */
     /* 120s timeout, null account_id since we are linking a primary account */
-    g_autofree gchar *req = mutation_web_login_wait(120000, NULL, on_web_login_wait_done, NULL);
+    ChannelsRequestContext *wait_ctx = channels_request_context_new();
+    g_autofree gchar *req = mutation_web_login_wait(120000, NULL, on_web_login_wait_done, wait_ctx);
     if (!req && channels_status_label) {
+        channels_request_context_free(wait_ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send wait request");
     }
     
-    g_free(channel_id);
+    g_clear_pointer(&channel_id, g_free);
 }
 
 static void on_start_web_login(GtkButton *btn, gpointer user_data) {
@@ -530,8 +619,10 @@ static void on_start_web_login(GtkButton *btn, gpointer user_data) {
     if (channels_status_label)
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Starting login flow\u2026");
 
-    g_autofree gchar *req = mutation_web_login_start(on_web_login_start_done, g_strdup(channel_id));
+    ChannelsIdContext *ctx = channels_id_context_new(channel_id);
+    g_autofree gchar *req = mutation_web_login_start(on_web_login_start_done, ctx);
     if (!req && channels_status_label) {
+        channels_id_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to start login");
     }
 }
@@ -551,8 +642,10 @@ static void on_logout_dialog_response(GObject *source, GAsyncResult *result, gpo
     if (channels_status_label)
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Logging out\u2026");
 
-    g_autofree gchar *req = mutation_channels_logout(channel_id, account_id, on_mutation_done, NULL);
+    ChannelsRequestContext *ctx = channels_request_context_new();
+    g_autofree gchar *req = mutation_channels_logout(channel_id, account_id, on_mutation_done, ctx);
     if (!req && channels_status_label) {
+        channels_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");
     }
 }
@@ -764,15 +857,21 @@ static void channels_rebuild_list(void) {
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_channels_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
+    if (channels_request_context_is_stale(ctx)) {
+        channels_request_context_free(ctx);
+        return;
+    }
+    channels_request_context_free(ctx);
+
     channels_fetch_in_flight = FALSE;
 
     if (!channels_list_box) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         if (channels_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(channels_status_label), msg);
         }
         return;
@@ -811,9 +910,11 @@ static void channels_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     channels_fetch_in_flight = TRUE;
+    ChannelsRequestContext *ctx = channels_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "channels.status", NULL, 0, on_channels_rpc_response, NULL);
+        "channels.status", NULL, 0, on_channels_rpc_response, ctx);
     if (!req_id) {
+        channels_request_context_free(ctx);
         channels_fetch_in_flight = FALSE;
     }
 }
@@ -840,12 +941,14 @@ static GtkWidget* channels_build(void) {
     gtk_widget_set_hexpand(title, TRUE);
     gtk_box_append(GTK_BOX(hdr), title);
 
-    GtkStringList *filter_model = gtk_string_list_new((const char * const[]){
+    GtkStringList *new_filter_model = gtk_string_list_new((const char * const[]){
         "All", "Configured", "Available", NULL
     });
     channels_filter_dropdown = adw_combo_row_new();
-    adw_combo_row_set_model(ADW_COMBO_ROW(channels_filter_dropdown), G_LIST_MODEL(filter_model));
-    adw_combo_row_set_selected(ADW_COMBO_ROW(channels_filter_dropdown), current_filter);
+    ui_combo_row_replace_model(channels_filter_dropdown,
+                               (gpointer *)&channels_filter_model,
+                               G_LIST_MODEL(new_filter_model),
+                               current_filter);
     g_signal_connect(channels_filter_dropdown, "notify::selected", G_CALLBACK(on_filter_changed), NULL);
     gtk_widget_set_valign(channels_filter_dropdown, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(hdr), channels_filter_dropdown);
@@ -884,9 +987,11 @@ static void channels_refresh(void) {
     }
 
     channels_fetch_in_flight = TRUE;
+    ChannelsRequestContext *ctx = channels_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "channels.status", NULL, 0, on_channels_rpc_response, NULL);
+        "channels.status", NULL, 0, on_channels_rpc_response, ctx);
     if (!req_id) {
+        channels_request_context_free(ctx);
         channels_fetch_in_flight = FALSE;
         if (channels_status_label)
             gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");
@@ -894,9 +999,13 @@ static void channels_refresh(void) {
 }
 
 static void channels_destroy(void) {
+    channels_generation++;
+
     channels_list_box = NULL;
     channels_status_label = NULL;
+    ui_combo_row_detach_model(channels_filter_dropdown, (gpointer *)&channels_filter_model);
     channels_filter_dropdown = NULL;
+    channels_filter_model = NULL;
     channels_fetch_in_flight = FALSE;
     gateway_channels_data_free(channels_data_cache);
     channels_data_cache = NULL;

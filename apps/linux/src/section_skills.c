@@ -15,6 +15,7 @@
 #include "gateway_rpc.h"
 #include "gateway_data.h"
 #include "gateway_mutations.h"
+#include "ui_model_utils.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -22,10 +23,30 @@
 static GtkWidget *skills_list_box = NULL;
 static GtkWidget *skills_status_label = NULL;
 static GtkWidget *skills_filter_dropdown = NULL;
+static GtkStringList *skills_filter_model = NULL;
 static GatewaySkillsData *skills_data_cache = NULL;
 static gboolean skills_fetch_in_flight = FALSE;
 static gint64 skills_last_fetch_us = 0;
 static gint current_filter = 0; /* 0: All, 1: Ready, 2: Needs Setup, 3: Disabled */
+static guint skills_generation = 1;
+
+typedef struct {
+    guint generation;
+} SkillsRequestContext;
+
+static SkillsRequestContext* skills_request_context_new(void) {
+    SkillsRequestContext *ctx = g_new0(SkillsRequestContext, 1);
+    ctx->generation = skills_generation;
+    return ctx;
+}
+
+static gboolean skills_request_context_is_stale(const SkillsRequestContext *ctx) {
+    return !ctx || ctx->generation != skills_generation;
+}
+
+static void skills_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 /* Forward declarations */
 static void skills_rebuild_list(void);
@@ -34,12 +55,18 @@ static void skills_force_refresh(void);
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    SkillsRequestContext *ctx = (SkillsRequestContext *)user_data;
+    if (skills_request_context_is_stale(ctx)) {
+        skills_request_context_free(ctx);
+        return;
+    }
+    skills_request_context_free(ctx);
+
     if (!skills_status_label) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         g_autofree gchar *msg = g_strdup_printf("Error: %s",
-            response->error_msg ? response->error_msg : "unknown");
+            response && response->error_msg ? response->error_msg : "unknown");
         gtk_label_set_text(GTK_LABEL(skills_status_label), msg);
     }
 
@@ -57,8 +84,10 @@ static void on_toggle_enable(GtkButton *btn, gpointer user_data) {
     if (!key) return;
 
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
-    g_autofree gchar *req = mutation_skills_enable(key, !currently_enabled, on_mutation_done, NULL);
+    SkillsRequestContext *ctx = skills_request_context_new();
+    g_autofree gchar *req = mutation_skills_enable(key, !currently_enabled, on_mutation_done, ctx);
     if (!req) {
+        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send request");
@@ -76,8 +105,10 @@ static void on_install(GtkButton *btn, gpointer user_data) {
     if (skills_status_label)
         gtk_label_set_text(GTK_LABEL(skills_status_label), "Installing\u2026");
 
-    g_autofree gchar *req = mutation_skills_install(name, install_id, on_mutation_done, NULL);
+    SkillsRequestContext *ctx = skills_request_context_new();
+    g_autofree gchar *req = mutation_skills_install(name, install_id, on_mutation_done, ctx);
     if (!req) {
+        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send install request");
@@ -93,8 +124,10 @@ static void on_update(GtkButton *btn, gpointer user_data) {
     if (skills_status_label)
         gtk_label_set_text(GTK_LABEL(skills_status_label), "Updating\u2026");
 
-    g_autofree gchar *req = mutation_skills_update(key, on_mutation_done, NULL);
+    SkillsRequestContext *ctx = skills_request_context_new();
+    g_autofree gchar *req = mutation_skills_update(key, on_mutation_done, ctx);
     if (!req) {
+        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send update request");
@@ -105,6 +138,11 @@ static void on_update(GtkButton *btn, gpointer user_data) {
 static void on_env_dialog_response(GObject *source, GAsyncResult *result, gpointer user_data) {
     AdwAlertDialog *dialog = ADW_ALERT_DIALOG(source);
     (void)user_data;
+
+    guint dialog_generation = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(dialog), "skills-generation"));
+    if (dialog_generation != skills_generation) {
+        return;
+    }
 
     const gchar *response_id = adw_alert_dialog_choose_finish(dialog, result);
     if (g_strcmp0(response_id, "save") != 0) return;
@@ -123,9 +161,13 @@ static void on_env_dialog_response(GObject *source, GAsyncResult *result, gpoint
 
     g_autofree gchar *req = NULL;
     if (is_api_key) {
-        req = mutation_skills_update_api_key(key, value, on_mutation_done, NULL);
+        SkillsRequestContext *ctx = skills_request_context_new();
+        req = mutation_skills_update_api_key(key, value, on_mutation_done, ctx);
+        if (!req) skills_request_context_free(ctx);
     } else {
-        req = mutation_skills_update_env(key, env_name, value, on_mutation_done, NULL);
+        SkillsRequestContext *ctx = skills_request_context_new();
+        req = mutation_skills_update_env(key, env_name, value, on_mutation_done, ctx);
+        if (!req) skills_request_context_free(ctx);
     }
     
     if (!req && skills_status_label) {
@@ -169,6 +211,7 @@ static void on_set_env(GtkButton *btn, gpointer user_data) {
     g_object_set_data_full(G_OBJECT(dialog), "env-name", g_strdup(env_name), g_free);
     g_object_set_data(G_OBJECT(dialog), "env-entry", entry);
     g_object_set_data(G_OBJECT(dialog), "is-api-key", GINT_TO_POINTER(is_api_key));
+    g_object_set_data(G_OBJECT(dialog), "skills-generation", GUINT_TO_POINTER(skills_generation));
 
     GtkWidget *toplevel = GTK_WIDGET(gtk_widget_get_root(GTK_WIDGET(btn)));
     adw_alert_dialog_choose(dialog, toplevel, NULL,
@@ -427,15 +470,21 @@ static void skills_rebuild_list(void) {
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_skills_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    SkillsRequestContext *ctx = (SkillsRequestContext *)user_data;
+    if (skills_request_context_is_stale(ctx)) {
+        skills_request_context_free(ctx);
+        return;
+    }
+    skills_request_context_free(ctx);
+
     skills_fetch_in_flight = FALSE;
 
     if (!skills_list_box) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         if (skills_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(skills_status_label), msg);
         }
         return;
@@ -475,9 +524,11 @@ static void skills_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     skills_fetch_in_flight = TRUE;
+    SkillsRequestContext *ctx = skills_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "skills.status", NULL, 0, on_skills_rpc_response, NULL);
+        "skills.status", NULL, 0, on_skills_rpc_response, ctx);
     if (!req_id) {
+        skills_request_context_free(ctx);
         skills_fetch_in_flight = FALSE;
     }
 }
@@ -511,12 +562,14 @@ static GtkWidget* skills_build(void) {
     gtk_widget_set_hexpand(title, TRUE);
     gtk_box_append(GTK_BOX(hdr), title);
 
-    GtkStringList *filter_model = gtk_string_list_new((const char * const[]){
+    GtkStringList *new_filter_model = gtk_string_list_new((const char * const[]){
         "All", "Ready", "Needs Setup", "Disabled", NULL
     });
     skills_filter_dropdown = adw_combo_row_new();
-    adw_combo_row_set_model(ADW_COMBO_ROW(skills_filter_dropdown), G_LIST_MODEL(filter_model));
-    adw_combo_row_set_selected(ADW_COMBO_ROW(skills_filter_dropdown), current_filter);
+    ui_combo_row_replace_model(skills_filter_dropdown,
+                               (gpointer *)&skills_filter_model,
+                               G_LIST_MODEL(new_filter_model),
+                               current_filter);
     g_signal_connect(skills_filter_dropdown, "notify::selected", G_CALLBACK(on_filter_changed), NULL);
     gtk_widget_set_valign(skills_filter_dropdown, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(hdr), skills_filter_dropdown);
@@ -549,9 +602,11 @@ static void skills_refresh(void) {
     if (!section_is_stale(&skills_last_fetch_us)) return;
 
     skills_fetch_in_flight = TRUE;
+    SkillsRequestContext *ctx = skills_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "skills.status", NULL, 0, on_skills_rpc_response, NULL);
+        "skills.status", NULL, 0, on_skills_rpc_response, ctx);
     if (!req_id) {
+        skills_request_context_free(ctx);
         skills_fetch_in_flight = FALSE;
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send request");
@@ -559,9 +614,13 @@ static void skills_refresh(void) {
 }
 
 static void skills_destroy(void) {
+    skills_generation++;
+
     skills_list_box = NULL;
     skills_status_label = NULL;
+    ui_combo_row_detach_model(skills_filter_dropdown, (gpointer *)&skills_filter_model);
     skills_filter_dropdown = NULL;
+    skills_filter_model = NULL;
     skills_fetch_in_flight = FALSE;
     gateway_skills_data_free(skills_data_cache);
     skills_data_cache = NULL;

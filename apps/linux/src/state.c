@@ -27,6 +27,18 @@ static AppState current_state = STATE_NEEDS_SETUP;
 static RuntimeMode current_runtime_mode = RUNTIME_NONE;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
+static DesktopReadinessSnapshot current_readiness_snapshot = {0};
+
+typedef struct {
+    gboolean models_fetch_succeeded;
+    guint models_count;
+    gboolean selected_model_resolved;
+    gboolean agents_fetch_succeeded;
+    guint agents_count;
+} DesktopResolvedFacts;
+
+static DesktopResolvedFacts current_resolved_facts = {0};
+
 static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
 static gboolean initial_refresh_fired = FALSE;
@@ -45,7 +57,81 @@ static gboolean config_requires_onboarding(const HealthState *health) {
     if (!health || !health->config_valid) {
         return FALSE;
     }
+
     return !health->has_wizard_onboard_marker;
+}
+
+static void recompute_resolved_health_fields(void) {
+    const gboolean has_health_data = (current_health_state.last_updated > 0);
+    const gboolean provider_configured = has_health_data && current_health_state.has_provider_config;
+    const gboolean default_model_configured = has_health_data && current_health_state.has_default_model_config;
+
+    current_health_state.model_catalog_available =
+        provider_configured &&
+        current_resolved_facts.models_fetch_succeeded &&
+        current_resolved_facts.models_count > 0;
+
+    current_health_state.selected_model_resolved =
+        default_model_configured &&
+        current_health_state.model_catalog_available &&
+        current_resolved_facts.selected_model_resolved;
+
+    current_health_state.agents_available =
+        current_resolved_facts.agents_fetch_succeeded &&
+        current_resolved_facts.agents_count > 0;
+}
+
+static void compute_readiness_snapshot(void) {
+    DesktopReadinessSnapshot snap = {0};
+
+    const gboolean has_health_data = (current_health_state.last_updated > 0);
+    const gboolean has_setup = has_health_data && current_health_state.setup_detected;
+
+    snap.config_present = has_setup;
+    snap.config_valid = has_health_data && current_health_state.config_valid;
+    snap.wizard_completed = snap.config_valid && current_health_state.has_wizard_onboard_marker;
+    snap.service_installed = current_sys_state.installed;
+    snap.service_active = current_sys_state.active;
+    snap.gateway_http_ok = has_health_data && current_health_state.http_ok;
+    snap.gateway_ws_ok = has_health_data && current_health_state.ws_connected;
+    snap.gateway_rpc_ok = has_health_data && current_health_state.rpc_ok;
+    snap.gateway_auth_ok = has_health_data && current_health_state.auth_ok;
+    snap.provider_configured = has_health_data && current_health_state.has_provider_config;
+    snap.default_model_configured = has_health_data && current_health_state.has_default_model_config;
+    snap.model_catalog_available = has_health_data && current_health_state.model_catalog_available;
+    snap.selected_model_resolved = has_health_data && current_health_state.selected_model_resolved;
+    snap.agents_available = has_health_data && current_health_state.agents_available;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_UNKNOWN;
+
+    if (!snap.config_present) {
+        snap.chat_block_reason = CHAT_BLOCK_NO_CONFIG;
+    } else if (!snap.config_valid) {
+        snap.chat_block_reason = CHAT_BLOCK_CONFIG_INVALID;
+    } else if (!snap.wizard_completed) {
+        snap.chat_block_reason = CHAT_BLOCK_BOOTSTRAP_INCOMPLETE;
+    } else if (!snap.service_active) {
+        snap.chat_block_reason = CHAT_BLOCK_SERVICE_INACTIVE;
+    } else if (!snap.gateway_http_ok || !snap.gateway_ws_ok || !snap.gateway_rpc_ok) {
+        snap.chat_block_reason = CHAT_BLOCK_GATEWAY_UNREACHABLE;
+    } else if (!snap.gateway_auth_ok) {
+        snap.chat_block_reason = CHAT_BLOCK_AUTH_INVALID;
+    } else if (!snap.provider_configured) {
+        snap.chat_block_reason = CHAT_BLOCK_PROVIDER_MISSING;
+    } else if (!snap.default_model_configured) {
+        snap.chat_block_reason = CHAT_BLOCK_DEFAULT_MODEL_MISSING;
+    } else if (!snap.model_catalog_available) {
+        snap.chat_block_reason = CHAT_BLOCK_MODEL_CATALOG_EMPTY;
+    } else if (!snap.selected_model_resolved) {
+        snap.chat_block_reason = CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED;
+    } else if (!snap.agents_available) {
+        snap.chat_block_reason = CHAT_BLOCK_AGENTS_UNAVAILABLE;
+    } else {
+        snap.chat_block_reason = CHAT_BLOCK_NONE;
+        snap.desktop_chat_ready = TRUE;
+    }
+
+    current_readiness_snapshot = snap;
 }
 
 gboolean state_connection_transition_step(GatewayConnectionTransitionTracker *tracker,
@@ -169,10 +255,13 @@ static AppState compute_state(void) {
 void state_init(void) {
     current_state = STATE_NEEDS_SETUP;
     current_runtime_mode = RUNTIME_NONE;
+    memset(&current_readiness_snapshot, 0, sizeof(current_readiness_snapshot));
+    current_readiness_snapshot.chat_block_reason = CHAT_BLOCK_UNKNOWN;
     initial_hydration_done = FALSE;
     initial_refresh_fired = FALSE;
     connection_transition_tracker.initialized = FALSE;
     connection_transition_tracker.connected = FALSE;
+    memset(&current_resolved_facts, 0, sizeof(current_resolved_facts));
 
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
@@ -252,6 +341,7 @@ void health_state_clear(HealthState *hs) {
     g_free(hs->gateway_version);
     g_free(hs->auth_source);
     g_free(hs->last_error);
+    g_free(hs->configured_default_model_id);
     g_free(hs->wizard_last_run_command);
     g_free(hs->wizard_last_run_at);
     g_free(hs->wizard_last_run_mode);
@@ -291,6 +381,7 @@ void state_update_systemd(const SystemdState *sys_state) {
 
     AppState new_state = compute_state();
     current_runtime_mode = runtime_mode_compute(&current_sys_state, &current_health_state);
+    compute_readiness_snapshot();
 
     gboolean should_trigger_refresh = (!initial_refresh_fired || became_active || became_inactive || unit_changed);
     if (should_trigger_refresh) {
@@ -308,6 +399,8 @@ void state_update_health(const HealthState *health_state) {
     current_health_state.config_audit_ok = health_state->config_audit_ok;
     current_health_state.config_issues_count = health_state->config_issues_count;
     current_health_state.has_model_config = health_state->has_model_config;
+    current_health_state.has_provider_config = health_state->has_provider_config;
+    current_health_state.has_default_model_config = health_state->has_default_model_config;
 
     /* Feature B: Wizard onboard marker fields */
     current_health_state.has_wizard_onboard_marker = health_state->has_wizard_onboard_marker;
@@ -317,6 +410,7 @@ void state_update_health(const HealthState *health_state) {
     g_free(current_health_state.gateway_version);
     g_free(current_health_state.auth_source);
     g_free(current_health_state.last_error);
+    g_free(current_health_state.configured_default_model_id);
     g_free(current_health_state.wizard_last_run_command);
     g_free(current_health_state.wizard_last_run_at);
     g_free(current_health_state.wizard_last_run_mode);
@@ -326,6 +420,7 @@ void state_update_health(const HealthState *health_state) {
     current_health_state.gateway_version = g_strdup(health_state->gateway_version);
     current_health_state.auth_source = g_strdup(health_state->auth_source);
     current_health_state.last_error = g_strdup(health_state->last_error);
+    current_health_state.configured_default_model_id = g_strdup(health_state->configured_default_model_id);
     current_health_state.wizard_last_run_command = g_strdup(health_state->wizard_last_run_command);
     current_health_state.wizard_last_run_at = g_strdup(health_state->wizard_last_run_at);
     current_health_state.wizard_last_run_mode = g_strdup(health_state->wizard_last_run_mode);
@@ -339,12 +434,61 @@ void state_update_health(const HealthState *health_state) {
     current_health_state.rpc_ok = health_state->rpc_ok;
     current_health_state.auth_ok = health_state->auth_ok;
 
+    if (health_state->model_catalog_available) {
+        current_resolved_facts.models_fetch_succeeded = TRUE;
+        if (current_resolved_facts.models_count == 0) {
+            current_resolved_facts.models_count = 1;
+        }
+    }
+    if (health_state->selected_model_resolved) {
+        current_resolved_facts.selected_model_resolved = TRUE;
+    }
+    if (health_state->agents_available) {
+        current_resolved_facts.agents_fetch_succeeded = TRUE;
+        if (current_resolved_facts.agents_count == 0) {
+            current_resolved_facts.agents_count = 1;
+        }
+    }
+
+    recompute_resolved_health_fields();
+
     current_health_generation++;
     OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE, "health updated: gen=%" G_GUINT64_FORMAT " ok=%d ws=%d",
               current_health_generation, health_state->http_ok, health_state->ws_connected);
     AppState new_state = compute_state();
     current_runtime_mode = runtime_mode_compute(&current_sys_state, &current_health_state);
+    compute_readiness_snapshot();
     trigger_updates(new_state);
+}
+
+void state_set_model_catalog_fact(gboolean fetch_succeeded,
+                                  guint model_count,
+                                  gboolean selected_model_resolved) {
+    current_resolved_facts.models_fetch_succeeded = fetch_succeeded;
+    current_resolved_facts.models_count = fetch_succeeded ? model_count : 0;
+    current_resolved_facts.selected_model_resolved =
+        fetch_succeeded && model_count > 0 && selected_model_resolved;
+
+    recompute_resolved_health_fields();
+    compute_readiness_snapshot();
+    trigger_updates(current_state);
+}
+
+void state_set_agents_fact(gboolean fetch_succeeded,
+                           guint agent_count) {
+    current_resolved_facts.agents_fetch_succeeded = fetch_succeeded;
+    current_resolved_facts.agents_count = fetch_succeeded ? agent_count : 0;
+
+    recompute_resolved_health_fields();
+    compute_readiness_snapshot();
+    trigger_updates(current_state);
+}
+
+void state_reset_resolved_facts(void) {
+    memset(&current_resolved_facts, 0, sizeof(current_resolved_facts));
+    recompute_resolved_health_fields();
+    compute_readiness_snapshot();
+    trigger_updates(current_state);
 }
 
 AppState state_get_current(void) {
@@ -384,4 +528,8 @@ guint64 state_get_health_generation(void) {
 
 HealthState* state_get_health(void) {
     return &current_health_state;
+}
+
+const DesktopReadinessSnapshot* state_get_readiness_snapshot(void) {
+    return &current_readiness_snapshot;
 }

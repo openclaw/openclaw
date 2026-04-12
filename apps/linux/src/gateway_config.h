@@ -64,7 +64,10 @@ typedef struct {
     gboolean valid;        /* whether config was loaded successfully */
     GatewayConfigError error_code; /* stable error discriminator */
     gchar *error;          /* human-readable error message */
-    gboolean has_model_config; /* diagnostic only: config has model/provider for runtime */
+    gboolean has_model_config; /* compatibility aggregate: provider/default model present */
+    gboolean has_provider_config; /* config declares at least one provider */
+    gboolean has_default_model_config; /* config declares a default/primary model */
+    gchar *configured_default_model_id; /* parsed default model id when present */
 
     /* Feature B: Wizard onboard marker fields */
     gboolean has_wizard_onboard_marker;

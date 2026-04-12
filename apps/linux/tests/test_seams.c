@@ -59,6 +59,34 @@ static void test_monitor_skip_dir_changed(void) {
     g_assert_false(skip);
 }
 
+/* ── Tray dispatch decision tests ── */
+
+static void test_tray_dispatch_settings_onboarding_visible(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, TRUE);
+    g_assert_cmpint(action, ==, TRAY_UI_ACTION_SHOW_SETTINGS);
+}
+
+static void test_tray_dispatch_settings_onboarding_hidden(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, FALSE);
+    g_assert_cmpint(action, ==, TRAY_UI_ACTION_SHOW_SETTINGS);
+}
+
+static void test_tray_dispatch_diagnostics_onboarding_visible(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_DIAGNOSTICS, TRUE);
+    g_assert_cmpint(action, ==, TRAY_UI_ACTION_SHOW_DIAGNOSTICS);
+}
+
+static void test_tray_dispatch_repeated_requests_safe(void) {
+    for (int i = 0; i < 10; i++) {
+        TrayUiAction settings_action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, TRUE);
+        TrayUiAction diagnostics_action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_DIAGNOSTICS, TRUE);
+        TrayUiAction startup_action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, FALSE);
+        g_assert_cmpint(settings_action, ==, TRAY_UI_ACTION_SHOW_SETTINGS);
+        g_assert_cmpint(diagnostics_action, ==, TRAY_UI_ACTION_SHOW_DIAGNOSTICS);
+        g_assert_cmpint(startup_action, ==, TRAY_UI_ACTION_SHOW_SETTINGS);
+    }
+}
+
 /* ── QR Payload Typed Access Tests ── */
 
 static JsonNode* parse_json_node(const gchar *json_str) {
@@ -125,6 +153,12 @@ int main(int argc, char **argv) {
     /* QR payload typed-access tests */
     g_test_add_func("/seams/web_login_start_payload_has_qr/valid_string", test_web_login_start_payload_has_qr_valid_string);
     g_test_add_func("/seams/web_login_start_payload_has_qr/wrong_type", test_web_login_start_payload_has_qr_wrong_type);
+
+    /* tray dispatch decision tests */
+    g_test_add_func("/seams/tray_dispatch/settings_onboarding_visible", test_tray_dispatch_settings_onboarding_visible);
+    g_test_add_func("/seams/tray_dispatch/settings_onboarding_hidden", test_tray_dispatch_settings_onboarding_hidden);
+    g_test_add_func("/seams/tray_dispatch/diagnostics_onboarding_visible", test_tray_dispatch_diagnostics_onboarding_visible);
+    g_test_add_func("/seams/tray_dispatch/repeated_requests_safe", test_tray_dispatch_repeated_requests_safe);
 
     return g_test_run();
 }

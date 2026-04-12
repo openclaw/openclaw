@@ -62,4 +62,18 @@ gboolean config_monitor_can_skip_rearm(
  */
 gchar* find_nearest_existing_ancestor(const gchar *path);
 
+/* ── Tray dispatch decisions (from tray.c) ────────────────────────── */
+
+typedef enum {
+    TRAY_UI_REQUEST_SETTINGS = 0,
+    TRAY_UI_REQUEST_DIAGNOSTICS = 1,
+} TrayUiRequest;
+
+typedef enum {
+    TRAY_UI_ACTION_SHOW_SETTINGS = 0,
+    TRAY_UI_ACTION_SHOW_DIAGNOSTICS = 1,
+} TrayUiAction;
+
+TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_visible);
+
 #endif /* TEST_SEAMS_H */

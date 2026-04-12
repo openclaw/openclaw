@@ -81,6 +81,12 @@ typedef struct {
     int config_issues_count;
 
     gboolean has_model_config; /* diagnostic only: config has model/provider for runtime */
+    gboolean has_provider_config;
+    gboolean has_default_model_config;
+    gchar *configured_default_model_id;
+    gboolean model_catalog_available;
+    gboolean selected_model_resolved;
+    gboolean agents_available;
 
     /* Feature B: Wizard onboard marker fields */
     gboolean has_wizard_onboard_marker;
@@ -121,10 +127,51 @@ typedef struct {
     gboolean connected;
 } GatewayConnectionTransitionTracker;
 
+typedef enum {
+    CHAT_BLOCK_NONE = 0,
+    CHAT_BLOCK_NO_CONFIG,
+    CHAT_BLOCK_CONFIG_INVALID,
+    CHAT_BLOCK_BOOTSTRAP_INCOMPLETE,
+    CHAT_BLOCK_SERVICE_INACTIVE,
+    CHAT_BLOCK_GATEWAY_UNREACHABLE,
+    CHAT_BLOCK_AUTH_INVALID,
+    CHAT_BLOCK_PROVIDER_MISSING,
+    CHAT_BLOCK_DEFAULT_MODEL_MISSING,
+    CHAT_BLOCK_MODEL_CATALOG_EMPTY,
+    CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED,
+    CHAT_BLOCK_AGENTS_UNAVAILABLE,
+    CHAT_BLOCK_UNKNOWN,
+} ChatBlockReason;
+
+typedef struct {
+    gboolean config_present;
+    gboolean config_valid;
+    gboolean wizard_completed;
+    gboolean service_installed;
+    gboolean service_active;
+    gboolean gateway_http_ok;
+    gboolean gateway_ws_ok;
+    gboolean gateway_rpc_ok;
+    gboolean gateway_auth_ok;
+    gboolean provider_configured;
+    gboolean default_model_configured;
+    gboolean model_catalog_available;
+    gboolean selected_model_resolved;
+    gboolean agents_available;
+    gboolean desktop_chat_ready;
+    ChatBlockReason chat_block_reason;
+} DesktopReadinessSnapshot;
+
 void state_init(void);
 void health_state_clear(HealthState *hs);
 void state_update_systemd(const SystemdState *sys_state);
 void state_update_health(const HealthState *health_state);
+void state_set_model_catalog_fact(gboolean fetch_succeeded,
+                                  guint model_count,
+                                  gboolean selected_model_resolved);
+void state_set_agents_fact(gboolean fetch_succeeded,
+                           guint agent_count);
+void state_reset_resolved_facts(void);
 
 AppState state_get_current(void);
 const char* state_get_current_string(void);
@@ -136,6 +183,7 @@ void runtime_mode_describe(RuntimeMode mode, RuntimeModePresentation *out);
 gboolean state_connection_transition_step(GatewayConnectionTransitionTracker *tracker,
                                           gboolean connected_now,
                                           gboolean *out_connected_now);
+const DesktopReadinessSnapshot* state_get_readiness_snapshot(void);
 
 SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);

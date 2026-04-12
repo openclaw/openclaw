@@ -408,36 +408,149 @@ static gboolean validate_auth(GatewayConfig *config) {
  * Feature B: onboarding detection based on agents.default.model or
  * agents.default.modelProvider presence.
  */
-static gboolean detect_has_model_config(JsonObject *root_obj) {
+static gboolean detect_has_provider_config(JsonObject *root_obj) {
     if (!root_obj) return FALSE;
 
-    /* Check agents.default object for model or modelProvider */
+    if (json_object_has_member(root_obj, "models")) {
+        JsonNode *models_node = json_object_get_member(root_obj, "models");
+        if (JSON_NODE_HOLDS_OBJECT(models_node)) {
+            JsonObject *models_obj = json_node_get_object(models_node);
+            if (json_object_has_member(models_obj, "providers")) {
+                JsonNode *providers_node = json_object_get_member(models_obj, "providers");
+                if (JSON_NODE_HOLDS_OBJECT(providers_node) &&
+                    json_object_get_size(json_node_get_object(providers_node)) > 0) {
+                    return TRUE;
+                }
+            }
+        }
+    }
+
     if (json_object_has_member(root_obj, "agents")) {
         JsonNode *agents_node = json_object_get_member(root_obj, "agents");
         if (JSON_NODE_HOLDS_OBJECT(agents_node)) {
             JsonObject *agents_obj = json_node_get_object(agents_node);
-            if (json_object_has_member(agents_obj, "default")) {
+            JsonObject *defaults_obj = NULL;
+            if (json_object_has_member(agents_obj, "defaults")) {
+                JsonNode *defaults_node = json_object_get_member(agents_obj, "defaults");
+                if (JSON_NODE_HOLDS_OBJECT(defaults_node)) {
+                    defaults_obj = json_node_get_object(defaults_node);
+                }
+            }
+            if (!defaults_obj && json_object_has_member(agents_obj, "default")) {
                 JsonNode *default_node = json_object_get_member(agents_obj, "default");
                 if (JSON_NODE_HOLDS_OBJECT(default_node)) {
-                    JsonObject *default_obj = json_node_get_object(default_node);
-                    /* Presence of model or modelProvider indicates onboarding completed */
-                    if (json_object_has_member(default_obj, "model")) {
-                        JsonNode *model_node = json_object_get_member(default_obj, "model");
-                        if (json_node_get_value_type(model_node) == G_TYPE_STRING) {
-                            const gchar *model = json_node_get_string(model_node);
-                            if (model && model[0] != '\0') {
-                                return TRUE;
+                    defaults_obj = json_node_get_object(default_node);
+                }
+            }
+            if (defaults_obj && json_object_has_member(defaults_obj, "modelProvider")) {
+                JsonNode *provider_node = json_object_get_member(defaults_obj, "modelProvider");
+                if (JSON_NODE_HOLDS_VALUE(provider_node) &&
+                    json_node_get_value_type(provider_node) == G_TYPE_STRING) {
+                    const gchar *provider = json_node_get_string(provider_node);
+                    if (provider && provider[0] != '\0') {
+                        return TRUE;
+                    }
+                }
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+static gchar* extract_configured_default_model_id(JsonObject *root_obj) {
+    if (!root_obj || !json_object_has_member(root_obj, "agents")) return NULL;
+
+    JsonNode *agents_node = json_object_get_member(root_obj, "agents");
+    if (!JSON_NODE_HOLDS_OBJECT(agents_node)) return NULL;
+
+    JsonObject *agents_obj = json_node_get_object(agents_node);
+    JsonObject *defaults_obj = NULL;
+    if (json_object_has_member(agents_obj, "defaults")) {
+        JsonNode *defaults_node = json_object_get_member(agents_obj, "defaults");
+        if (JSON_NODE_HOLDS_OBJECT(defaults_node)) {
+            defaults_obj = json_node_get_object(defaults_node);
+        }
+    }
+    if (!defaults_obj && json_object_has_member(agents_obj, "default")) {
+        JsonNode *default_node = json_object_get_member(agents_obj, "default");
+        if (JSON_NODE_HOLDS_OBJECT(default_node)) {
+            defaults_obj = json_node_get_object(default_node);
+        }
+    }
+    if (!defaults_obj || !json_object_has_member(defaults_obj, "model")) {
+        return NULL;
+    }
+
+    JsonNode *model_node = json_object_get_member(defaults_obj, "model");
+    if (JSON_NODE_HOLDS_VALUE(model_node) && json_node_get_value_type(model_node) == G_TYPE_STRING) {
+        const gchar *model = json_node_get_string(model_node);
+        return (model && model[0] != '\0') ? g_strdup(model) : NULL;
+    }
+    if (JSON_NODE_HOLDS_OBJECT(model_node)) {
+        JsonObject *model_obj = json_node_get_object(model_node);
+        if (model_obj && json_object_has_member(model_obj, "primary")) {
+            JsonNode *primary_node = json_object_get_member(model_obj, "primary");
+            if (JSON_NODE_HOLDS_VALUE(primary_node) &&
+                json_node_get_value_type(primary_node) == G_TYPE_STRING) {
+                const gchar *primary = json_node_get_string(primary_node);
+                return (primary && primary[0] != '\0') ? g_strdup(primary) : NULL;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static gboolean detect_has_default_model_config(JsonObject *root_obj) {
+    if (!root_obj) return FALSE;
+
+    /* Check agents.defaults/default object for model/provider metadata. */
+    if (json_object_has_member(root_obj, "agents")) {
+        JsonNode *agents_node = json_object_get_member(root_obj, "agents");
+        if (JSON_NODE_HOLDS_OBJECT(agents_node)) {
+            JsonObject *agents_obj = json_node_get_object(agents_node);
+            JsonObject *defaults_obj = NULL;
+            if (json_object_has_member(agents_obj, "defaults")) {
+                JsonNode *defaults_node = json_object_get_member(agents_obj, "defaults");
+                if (JSON_NODE_HOLDS_OBJECT(defaults_node)) {
+                    defaults_obj = json_node_get_object(defaults_node);
+                }
+            }
+            if (!defaults_obj && json_object_has_member(agents_obj, "default")) {
+                JsonNode *default_node = json_object_get_member(agents_obj, "default");
+                if (JSON_NODE_HOLDS_OBJECT(default_node)) {
+                    defaults_obj = json_node_get_object(default_node);
+                }
+            }
+
+            if (defaults_obj) {
+                if (json_object_has_member(defaults_obj, "model")) {
+                    JsonNode *model_node = json_object_get_member(defaults_obj, "model");
+                    if (JSON_NODE_HOLDS_VALUE(model_node) && json_node_get_value_type(model_node) == G_TYPE_STRING) {
+                        const gchar *model = json_node_get_string(model_node);
+                        if (model && model[0] != '\0') {
+                            return TRUE;
+                        }
+                    } else if (JSON_NODE_HOLDS_OBJECT(model_node)) {
+                        JsonObject *model_obj = json_node_get_object(model_node);
+                        if (model_obj && json_object_has_member(model_obj, "primary")) {
+                            JsonNode *primary_node = json_object_get_member(model_obj, "primary");
+                            if (JSON_NODE_HOLDS_VALUE(primary_node) &&
+                                json_node_get_value_type(primary_node) == G_TYPE_STRING) {
+                                const gchar *primary = json_node_get_string(primary_node);
+                                if (primary && primary[0] != '\0') {
+                                    return TRUE;
+                                }
                             }
                         }
                     }
-                    if (json_object_has_member(default_obj, "modelProvider")) {
-                        JsonNode *provider_node = json_object_get_member(default_obj, "modelProvider");
-                        if (json_node_get_value_type(provider_node) == G_TYPE_STRING) {
-                            const gchar *provider = json_node_get_string(provider_node);
-                            if (provider && provider[0] != '\0') {
-                                return TRUE;
-                            }
-                        }
+                }
+                if (json_object_has_member(defaults_obj, "models")) {
+                    JsonNode *models_node = json_object_get_member(defaults_obj, "models");
+                    if (JSON_NODE_HOLDS_OBJECT(models_node) &&
+                        json_object_get_size(json_node_get_object(models_node)) > 0) {
+                        return TRUE;
                     }
                 }
             }
@@ -697,7 +810,10 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     config->error_code = GW_CFG_OK;
 
     /* Feature B: Detect if config has model/provider (diagnostic only) */
-    config->has_model_config = detect_has_model_config(root_obj);
+    config->has_provider_config = detect_has_provider_config(root_obj);
+    config->has_default_model_config = detect_has_default_model_config(root_obj);
+    config->has_model_config = (config->has_provider_config || config->has_default_model_config);
+    config->configured_default_model_id = extract_configured_default_model_id(root_obj);
 
     /* Feature B: Detect if wizard onboarding is complete */
     if (json_object_has_member(root_obj, "wizard")) {
@@ -767,6 +883,7 @@ void gateway_config_free(GatewayConfig *config) {
     g_free(config->control_ui_base_path);
     g_free(config->config_path);
     g_free(config->error);
+    g_free(config->configured_default_model_id);
 
     g_free(config->wizard_last_run_command);
     g_free(config->wizard_last_run_at);
@@ -836,6 +953,9 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
 
     /* Feature B: Wizard fields */
     if (a->has_model_config != b->has_model_config) return FALSE;
+    if (a->has_provider_config != b->has_provider_config) return FALSE;
+    if (a->has_default_model_config != b->has_default_model_config) return FALSE;
+    if (g_strcmp0(a->configured_default_model_id, b->configured_default_model_id) != 0) return FALSE;
     if (a->has_wizard_onboard_marker != b->has_wizard_onboard_marker) return FALSE;
     if (a->wizard_is_local != b->wizard_is_local) return FALSE;
     if (g_strcmp0(a->wizard_last_run_command, b->wizard_last_run_command) != 0) return FALSE;
