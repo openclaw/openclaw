@@ -67,8 +67,14 @@ export function createProfileAvailability({
       remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
     });
 
-  const cdpReachabilityPolicy =
-    !capabilities.isRemote && profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy;
+  const getCdpReachabilityPolicy = () => {
+    const allowLoopbackSsrfBypass =
+      capabilities.mode === "local-managed" &&
+      profile.cdpIsLoopback &&
+      !profile.attachOnly &&
+      profile.driver === "openclaw";
+    return allowLoopbackSsrfBypass ? undefined : state().resolved.ssrfPolicy;
+  };
 
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
@@ -81,7 +87,7 @@ export function createProfileAvailability({
       profile.cdpUrl,
       httpTimeoutMs,
       wsTimeoutMs,
-      cdpReachabilityPolicy,
+      getCdpReachabilityPolicy(),
     );
   };
 
@@ -90,7 +96,7 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, cdpReachabilityPolicy);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
