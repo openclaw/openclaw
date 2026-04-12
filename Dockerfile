@@ -161,6 +161,28 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       procps hostname curl git lsof openssl
 
+# Install 1Password CLI
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl && \
+    curl -fsSL https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor > /tmp/1password.gpg && \
+    mkdir -p /etc/apt/keyrings && \
+    mv /tmp/1password.gpg /etc/apt/keyrings/ && \
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/1password.gpg] https://downloads.1password.com/linux/debian/amd64 stable main\n' \
+      "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/1password.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 1password-cli
+
+# Install Homebrew
+RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install gogcli from GitHub releases
+RUN curl -fsSL https://api.github.com/repos/steipete/gogcli/releases/latest | grep -o '"browser_download_url": "[^"]*linux[^"]*"' | head -1 | cut -d'"' -f4 | xargs curl -fsSL -o /tmp/gogcli && \
+    chmod +x /tmp/gogcli && \
+    mv /tmp/gogcli /usr/local/bin/gogcli
+
 RUN chown node:node /app
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
