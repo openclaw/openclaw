@@ -87,30 +87,39 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
-  }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
-}
-
-function resolveMergedAssistantText(params: {
+/**
+ * Merge an incoming assistant stream frame into the running buffer for a
+ * single chat run.
+ *
+ * Contract with adapters:
+ * - `nextText`, when non-empty, is the adapter's current cumulative view of
+ *   the assistant's visible text.  It is authoritative: extensions, rewinds,
+ *   and replacements declared by the adapter are all honored verbatim.
+ * - `nextDelta` is a plain incremental chunk produced since the previous
+ *   frame.  It is appended verbatim when `nextText` is not provided.
+ * - `previousText` is whatever we merged last time for this run.
+ *
+ * Important: this function is called for every chat.delta broadcast.  It
+ * MUST be lossless.
+ *
+ * History: an earlier implementation routed the `nextDelta` branch through
+ * a helper called `appendUniqueSuffix` which tried to de-duplicate suffix
+ * overlaps ("if base ends with suffix, drop the new suffix"; "otherwise,
+ * slice off the longest base-tail/suffix-head overlap before appending").
+ * That heuristic silently dropped legitimate repeated markdown structural
+ * tokens whenever the LLM emitted them as individual chunks: GFM table
+ * separator rows lost cells, horizontal rules collapsed, code fences were
+ * truncated.  The bug was unconditional (not gated on any config) and hit
+ * every client subscribed to the chat WebSocket on the affected runs.  See
+ * `server-chat.stream-text-merge.test.ts` for the reproducers.
+ *
+ * Exported for unit testing.
+ */
+export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
-}) {
+}): string {
   const { previousText, nextText, nextDelta } = params;
   if (nextText && previousText) {
     if (nextText.startsWith(previousText)) {
@@ -121,7 +130,7 @@ function resolveMergedAssistantText(params: {
     }
   }
   if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
+    return previousText + nextDelta;
   }
   if (nextText) {
     return nextText;
