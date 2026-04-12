@@ -380,7 +380,7 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
-  it("preserves assistant turns that include thinking blocks", () => {
+  it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -405,13 +405,37 @@ describe("sanitizeToolCallInputs", () => {
 
     const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
 
-    expect(out).toBe(input);
-    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const types = Array.isArray(assistant.content)
-      ? assistant.content.map((block) => (block as { type?: unknown }).type)
-      : [];
-    expect(types).toEqual(["thinking", "toolCall"]);
-    expect((assistant.content?.[1] as { name?: unknown })?.name).toBe("gateway");
+    expect(out).toEqual([]);
+  });
+
+  it("drops signed-thinking assistant turns that would require attachment redaction", () => {
+    const secret = "SIGNED_THINKING_ATTACHMENT_SECRET"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me spawn a helper.",
+            thinkingSignature: "sig_spawn",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: secret }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["sessions_spawn"] });
+
+    expect(out).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(secret);
   });
 
   it.each([
