@@ -343,6 +343,8 @@ export function createFollowupRunner(params: {
         cfg: runtimeConfig,
         payloads: sanitizedPayloads,
         messageProvider: run.messageProvider,
+        messageId: queued.messageId,
+        collectedMessageIds: queued.collectedMessageIds,
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,

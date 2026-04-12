@@ -1,5 +1,8 @@
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizePluginChannelId,
+} from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
-import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -28,7 +31,7 @@ export function resolveConfiguredReplyToMode(
   channel?: OriginatingChannelType,
   chatType?: string | null,
 ): ReplyToMode {
-  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const provider = normalizePluginChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
     return "all";
   }
@@ -84,16 +87,18 @@ export function createReplyToModeFilter(
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
+    if (mode === "auto") {
+      // "auto" should be resolved to "off", "first", or "all" before reaching
+      // the filter. If it leaks through unresolved, default to "off".
+      return { ...payload, replyToId: undefined };
+    }
     if (!payload.replyToId) {
       return payload;
     }
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      // Compaction notices must never be threaded when replyToMode=off — even
-      // if they carry explicit reply tags (replyToCurrent).  Honouring the
-      // explicit tag here would make status notices appear in-thread while
-      // normal assistant replies stay off-thread, contradicting the off-mode
-      // expectation.  Strip replyToId unconditionally for compaction payloads.
+      // Compaction notices must stay off-thread in off mode even when they
+      // carry an explicit reply tag.
       if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
         return payload;
       }
@@ -152,11 +157,12 @@ export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
 ) {
-  const normalized = normalizeOptionalLowercaseString(channel);
-  const isWebchat = normalized === "webchat";
-  // Default: allow explicit reply tags/directives even when replyToMode is "off".
-  // Unknown channels fail closed; internal webchat stays allowed.
-  const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
+  const normalized = normalizePluginChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const threading = normalized ? getChannelPlugin(normalized)?.threading : undefined;
+  const resolvedAllowExplicitReplyTagsWhenOff =
+    threading?.allowExplicitReplyTagsWhenOff ?? threading?.allowTagsWhenOff;
+  const allowExplicitReplyTagsWhenOff =
+    resolvedAllowExplicitReplyTagsWhenOff ?? (normalized === "slack" ? false : Boolean(normalized));
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,
   });

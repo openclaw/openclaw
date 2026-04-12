@@ -195,6 +195,8 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /** True when the inbound message was debounce-batched or waited in the sequential processing queue. */
+  WasQueued?: boolean;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   parseInlineDirectives,
+  splitByReplyToTags,
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -206,6 +207,66 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(
       [`literal ${sentinelLikeText} text`, "```ts", "    const value = 1;", "```"].join("\n"),
     );
+  });
+});
+
+describe("splitByReplyToTags", () => {
+  test("returns single segment when no tags present", () => {
+    const result = splitByReplyToTags("hello world");
+    expect(result).toEqual([{ text: "hello world" }]);
+  });
+
+  test("returns single segment when only one tag present", () => {
+    const result = splitByReplyToTags("[[reply_to:123]] hello");
+    expect(result).toEqual([{ text: "[[reply_to:123]] hello" }]);
+  });
+
+  test("splits into two segments for two explicit reply_to tags", () => {
+    const result = splitByReplyToTags(
+      "[[reply_to:123]] Weather answer\n[[reply_to:456]] Meeting summary",
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ text: "Weather answer", replyToId: "123" });
+    expect(result[1]).toEqual({ text: "Meeting summary", replyToId: "456" });
+  });
+
+  test("prepends text before first tag into first segment", () => {
+    const result = splitByReplyToTags(
+      "Hi everyone!\n[[reply_to:123]] First answer\n[[reply_to:456]] Second answer",
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0].text).toContain("Hi everyone!");
+    expect(result[0].text).toContain("First answer");
+    expect(result[0].replyToId).toBe("123");
+    expect(result[1]).toEqual({ text: "Second answer", replyToId: "456" });
+  });
+
+  test("handles reply_to_current tags", () => {
+    const result = splitByReplyToTags(
+      "[[reply_to_current]] Current reply\n[[reply_to:789]] Explicit reply",
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      text: "Current reply",
+      replyToId: undefined,
+      replyToCurrent: true,
+    });
+    expect(result[1]).toEqual({ text: "Explicit reply", replyToId: "789" });
+  });
+
+  test("handles whitespace inside tags", () => {
+    const result = splitByReplyToTags("[[ reply_to : 123 ]] First\n[[ reply_to : 456 ]] Second");
+    expect(result).toHaveLength(2);
+    expect(result[0].replyToId).toBe("123");
+    expect(result[1].replyToId).toBe("456");
+  });
+
+  test("trims whitespace from segment bodies", () => {
+    const result = splitByReplyToTags(
+      "[[reply_to:1]]   padded answer   \n[[reply_to:2]]   another   ",
+    );
+    expect(result[0].text).toBe("padded answer");
+    expect(result[1].text).toBe("another");
   });
 });
 

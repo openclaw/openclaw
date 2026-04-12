@@ -134,6 +134,62 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   return { ...message, content: cleaned };
 }
 
+export type ReplyToSegment = {
+  text: string;
+  replyToId?: string;
+  replyToCurrent?: boolean;
+};
+
+/**
+ * Split text at `[[reply_to:<id>]]` / `[[reply_to_current]]` boundaries.
+ *
+ * Returns one segment per tag. Text before the first tag is merged into the
+ * first segment.  If the text contains zero or one tag the entire string is
+ * returned as a single segment (no splitting).
+ */
+export function splitByReplyToTags(text: string): ReplyToSegment[] {
+  const tagRe = new RegExp(REPLY_TAG_RE.source, REPLY_TAG_RE.flags);
+  const matches: { index: number; length: number; id?: string; isCurrent: boolean }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(text)) !== null) {
+    const idRaw = m[1]?.trim();
+    matches.push({
+      index: m.index,
+      length: m[0].length,
+      id: idRaw || undefined,
+      isCurrent: idRaw === undefined,
+    });
+  }
+
+  if (matches.length <= 1) {
+    return [{ text }];
+  }
+
+  const segments: ReplyToSegment[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const tag = matches[i];
+    const nextTag = matches[i + 1];
+    const bodyStart = tag.index + tag.length;
+    const bodyEnd = nextTag ? nextTag.index : text.length;
+    let body = text.slice(bodyStart, bodyEnd).trim();
+
+    if (i === 0) {
+      const prefix = text.slice(0, tag.index).trim();
+      if (prefix) {
+        body = body ? `${prefix}\n\n${body}` : prefix;
+      }
+    }
+
+    segments.push({
+      text: body,
+      replyToId: tag.id,
+      replyToCurrent: tag.isCurrent || undefined,
+    });
+  }
+
+  return segments;
+}
+
 export function parseInlineDirectives(
   text?: string,
   options: InlineDirectiveParseOptions = {},

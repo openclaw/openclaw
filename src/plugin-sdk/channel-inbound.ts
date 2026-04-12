@@ -3,6 +3,7 @@ export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+export type { InboundEnrichReason } from "../auto-reply/inbound-debounce.js";
 export {
   createDirectDmPreCryptoGuardPolicy,
   dispatchInboundDirectDmWithRuntime,

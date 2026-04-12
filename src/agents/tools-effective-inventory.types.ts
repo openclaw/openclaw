@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ReplyToMode } from "../config/types.base.js";
 
 export type EffectiveToolSource = "core" | "plugin" | "channel";
 
@@ -46,7 +47,7 @@ export type ResolveEffectiveToolInventoryParams = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

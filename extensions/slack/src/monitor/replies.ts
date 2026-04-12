@@ -1,4 +1,4 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -29,7 +29,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
@@ -110,7 +110,7 @@ export type SlackRespondFn = (payload: {
  * - "all": all replies go to thread
  */
 export function resolveSlackThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
@@ -132,7 +132,7 @@ type SlackReplyDeliveryPlan = {
 };
 
 function createSlackReplyReferencePlanner(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
@@ -154,7 +154,7 @@ function createSlackReplyReferencePlanner(params: {
 }
 
 export function createSlackReplyDeliveryPlan(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };

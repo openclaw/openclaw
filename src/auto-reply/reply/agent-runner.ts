@@ -268,12 +268,14 @@ export async function runReplyAgent(params: {
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Surface ?? sessionCtx.Provider,
   }) as OriginatingChannelType | undefined;
-  const replyToMode = resolveReplyToMode(
+  const rawReplyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
     sessionCtx.AccountId,
     sessionCtx.ChatType,
   );
+  const replyToMode =
+    rawReplyToMode === "auto" ? (sessionCtx.WasQueued ? "first" : "off") : rawReplyToMode;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({

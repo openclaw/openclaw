@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -19,7 +19,6 @@ import type {
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (

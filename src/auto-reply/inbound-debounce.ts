@@ -44,12 +44,16 @@ type DebounceBuffer<T> = {
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 
+export type InboundEnrichReason = "batched" | "queued";
+
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   maxTrackedKeys?: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  /** Called when the debouncer detects batching or queueing. Return the enriched item. */
+  onEnrich?: (item: T, reason: InboundEnrichReason) => T;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 };
@@ -68,16 +72,51 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
-  const runFlush = async (items: T[]) => {
+  const reportError = (err: unknown, items: T[]) => {
     try {
-      await params.onFlush(items);
+      params.onError?.(err, items);
+    } catch {
+      // Flush failures are reported via onError, but this helper stays
+      // non-throwing so keyed chains can continue processing later items.
+    }
+  };
+
+  const tryEnrichItem = (
+    item: T,
+    reason: InboundEnrichReason,
+  ): { ok: true; item: T } | { ok: false; error: unknown } => {
+    if (!params.onEnrich) {
+      return { ok: true, item };
+    }
+    try {
+      return { ok: true, item: params.onEnrich(item, reason) };
     } catch (err) {
-      try {
-        params.onError?.(err, items);
-      } catch {
-        // Flush failures are reported via onError, but this helper stays
-        // non-throwing so keyed chains can continue processing later items.
+      return { ok: false, error: err };
+    }
+  };
+
+  const runFlush = async (items: T[]) => {
+    let enrichedItems = items;
+    try {
+      if (params.onEnrich && items.length > 1) {
+        const nextItems: T[] = [];
+        let fellBackToOriginal = false;
+        for (const item of items) {
+          const enriched = tryEnrichItem(item, "batched");
+          if (!enriched.ok) {
+            reportError(enriched.error, items);
+            fellBackToOriginal = true;
+            break;
+          }
+          nextItems.push(enriched.item);
+        }
+        if (!fellBackToOriginal) {
+          enrichedItems = nextItems;
+        }
       }
+      await params.onFlush(enrichedItems);
+    } catch (err) {
+      reportError(err, enrichedItems);
     }
   };
 
@@ -170,6 +209,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (!canDebounce || !key) {
       if (key) {
         if (buffers.has(key)) {
+          if (params.onEnrich && keyChains.has(key)) {
+            const enriched = tryEnrichItem(item, "queued");
+            if (!enriched.ok) {
+              reportError(enriched.error, [item]);
+            } else {
+              item = enriched.item;
+            }
+          }
           // Reserve the keyed immediate slot before forcing the pending buffer
           // to flush so fire-and-forget callers cannot be overtaken.
           const reservedTask = enqueueReservedKeyTask(key, async () => {
@@ -184,6 +231,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           return;
         }
         if (keyChains.has(key)) {
+          if (params.onEnrich) {
+            const enriched = tryEnrichItem(item, "queued");
+            if (!enriched.ok) {
+              reportError(enriched.error, [item]);
+            } else {
+              item = enriched.item;
+            }
+          }
           await enqueueKeyTask(key, async () => {
             await runFlush([item]);
           });

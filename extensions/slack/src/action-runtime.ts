@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
@@ -77,7 +78,7 @@ export type SlackActionContext = {
   /** Current thread timestamp for auto-threading. */
   currentThreadTs?: string;
   /** Reply-to mode for auto-threading. */
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   /** Mutable ref to track if a reply was sent for single-use reply modes. */
   hasRepliedRef?: { value: boolean };
   /** Allowed local media directories for file uploads. */

@@ -1221,6 +1221,108 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 });
 
+describe("createFollowupRunner reply-to auto resolution", () => {
+  async function runReplyToAutoCase(params: {
+    payloads: Array<{ text?: string; replyToId?: string; replyToCurrent?: boolean }>;
+    queued: FollowupRun;
+  }) {
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: params.payloads,
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(params.queued);
+
+    return onBlockReply.mock.calls.map(
+      (call: unknown[]) =>
+        call[0] as {
+          text?: string;
+          replyToId?: string;
+          replyToCurrent?: boolean;
+        },
+    );
+  }
+
+  it("enriches collected payloads with collected message ids and keeps all threaded in auto mode", async () => {
+    const deliveredPayloads = await runReplyToAutoCase({
+      payloads: [{ text: "First reply" }, { text: "Second reply" }],
+      queued: createQueuedRun({
+        messageId: "trigger-1",
+        collectedMessageIds: ["collected-1", "collected-2"],
+        run: {
+          messageProvider: "whatsapp",
+          config: {
+            channels: {
+              whatsapp: { replyToMode: "auto" },
+            },
+          } as OpenClawConfig,
+        },
+      }),
+    });
+
+    expect(deliveredPayloads).toHaveLength(2);
+    expect(deliveredPayloads[0]).toEqual(
+      expect.objectContaining({
+        text: "First reply",
+        replyToId: "collected-1",
+        replyToCurrent: true,
+      }),
+    );
+    expect(deliveredPayloads[1]).toEqual(
+      expect.objectContaining({
+        text: "Second reply",
+        replyToId: "collected-2",
+        replyToCurrent: true,
+      }),
+    );
+  });
+
+  it("splits multi-tag payloads and preserves every explicit reply target when auto mode resolves to all", async () => {
+    const deliveredPayloads = await runReplyToAutoCase({
+      payloads: [
+        {
+          text: "[[reply_to:msg-1]] First reply\n[[reply_to:msg-2]] Second reply",
+        },
+      ],
+      queued: createQueuedRun({
+        messageId: "trigger-1",
+        run: {
+          messageProvider: "whatsapp",
+          config: {
+            channels: {
+              whatsapp: { replyToMode: "auto" },
+            },
+          } as OpenClawConfig,
+        },
+      }),
+    });
+
+    expect(deliveredPayloads).toHaveLength(2);
+    expect(deliveredPayloads[0]).toEqual(
+      expect.objectContaining({
+        text: "First reply",
+        replyToId: "msg-1",
+      }),
+    );
+    expect(deliveredPayloads[1]).toEqual(
+      expect.objectContaining({
+        text: "Second reply",
+        replyToId: "msg-2",
+      }),
+    );
+    expect(deliveredPayloads[0]?.text).not.toContain("[[reply_to");
+    expect(deliveredPayloads[1]?.text).not.toContain("[[reply_to");
+  });
+});
+
 describe("createFollowupRunner typing cleanup", () => {
   async function runTypingCase(agentResult: Record<string, unknown>) {
     const typing = createMockTypingController();

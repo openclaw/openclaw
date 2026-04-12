@@ -65,6 +65,30 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("splits a single assistant text with multiple reply_to tags into separate payloads", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["[[reply_to:123]] First reply\n[[reply_to:456]] Second reply"],
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toEqual(
+      expect.objectContaining({
+        text: "First reply",
+        replyToId: "123",
+        replyToTag: true,
+      }),
+    );
+    expect(payloads[1]).toEqual(
+      expect.objectContaining({
+        text: "Second reply",
+        replyToId: "456",
+        replyToTag: true,
+      }),
+    );
+    expect(payloads[0]?.text).not.toContain("[[reply_to");
+    expect(payloads[1]?.text).not.toContain("[[reply_to");
+  });
+
   it("suppresses exec tool errors when verbose mode is off", () => {
     expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },

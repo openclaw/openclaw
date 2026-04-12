@@ -1,3 +1,4 @@
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -13,7 +14,7 @@ export type PreparedSlackMessage = {
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   isDirectMessage: boolean;
   isRoomish: boolean;
   historyKey: string;

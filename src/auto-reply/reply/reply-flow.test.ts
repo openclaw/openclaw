@@ -167,6 +167,11 @@ describe("createReplyToModeFilter", () => {
         expectedReplyToId: undefined,
       },
       {
+        filter: createReplyToModeFilter("off"),
+        input: { text: "hi", replyToId: "1", replyToTag: true },
+        expectedReplyToId: undefined,
+      },
+      {
         filter: createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true }),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",

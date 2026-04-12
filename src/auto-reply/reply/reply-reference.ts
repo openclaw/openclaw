@@ -34,7 +34,9 @@ export function createReplyReferencePlanner(options: {
     if (!allowReference) {
       return undefined;
     }
-    if (options.replyToMode === "off") {
+    if (options.replyToMode === "off" || options.replyToMode === "auto") {
+      // "auto" should be resolved to "off"/"first"/"all" upstream; if it
+      // reaches the planner unresolved, fall back to "off" (no quoting).
       return undefined;
     }
     const id = existingId ?? startId;

@@ -23,6 +23,12 @@ export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /**
+   * Message IDs from all collected items in a batched drain.
+   * Used for 1:1 payload-to-message quoting when auto replyToMode
+   * produces one response per collected message.
+   */
+  collectedMessageIds?: string[];
   summaryLine?: string;
   enqueuedAt: number;
   /**

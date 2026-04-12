@@ -2,6 +2,7 @@ import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
+  ReplyToMode,
   SlackReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
@@ -55,7 +56,7 @@ export type SlackMonitorContext = {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   threadRequireExplicitMention: boolean;

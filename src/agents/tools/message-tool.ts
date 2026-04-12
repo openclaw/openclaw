@@ -14,6 +14,7 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
@@ -405,7 +406,7 @@ type MessageToolOptions = {
   currentChannelProvider?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;

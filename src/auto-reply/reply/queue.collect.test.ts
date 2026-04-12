@@ -89,9 +89,41 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain("[2 queued messages");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("passes messageId through single-item collect drains", async () => {
+    const key = `test-collect-single-message-id-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        messageId: "msg-1",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls[0]?.messageId).toBe("msg-1");
+    expect(calls[0]?.collectedMessageIds).toBeUndefined();
   });
 
   it("collects Slack messages in same thread and preserves string thread id", async () => {
@@ -132,7 +164,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain("[2 queued messages");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
