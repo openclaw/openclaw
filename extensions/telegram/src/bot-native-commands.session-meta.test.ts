@@ -496,6 +496,40 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("sends a fallback when native command dispatch produces no outbound reply", async () => {
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "No response generated. Please try again." })],
+      }),
+    );
+  });
+
+  it("does not send a fallback when native command replies are skipped silently", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
+        dispatcherOptions.onSkip?.({ text: "hidden" }, { kind: "final", reason: "silent" });
+        return dispatchReplyResult;
+      },
+    );
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {
+        channels: {
+          telegram: {
+            silentErrorReplies: true,
+          },
+        },
+      },
+      telegramCfg: { silentErrorReplies: true },
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("sends native command error replies silently when silentErrorReplies is enabled", async () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {

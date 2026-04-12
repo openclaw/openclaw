@@ -912,6 +912,7 @@ export const registerTelegramNativeCommands = ({
           resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
+          skippedTotal: 0,
           skippedNonSilent: 0,
         };
 
@@ -957,6 +958,7 @@ export const registerTelegramNativeCommands = ({
               }
             },
             onSkip: (_payload, info) => {
+              deliveryState.skippedTotal += 1;
               if (info.reason !== "silent") {
                 deliveryState.skippedNonSilent += 1;
               }
@@ -971,7 +973,10 @@ export const registerTelegramNativeCommands = ({
             onModelSelected,
           },
         });
-        if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+        if (
+          !deliveryState.delivered &&
+          (deliveryState.skippedNonSilent > 0 || deliveryState.skippedTotal === 0)
+        ) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
             ...deliveryBaseOptions,
