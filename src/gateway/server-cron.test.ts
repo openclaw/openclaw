@@ -260,4 +260,77 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("preserves explicit isolated agent workspace when runtime reload config is stale", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-agent-workspace-${Date.now()}`);
+    const startupCfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+      agents: {
+        defaults: {
+          workspace: path.join(tmpDir, "workspace"),
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "yinze", workspace: path.join(tmpDir, "workspace-yinze") },
+        ],
+      },
+    } as OpenClawConfig;
+    const reloadedCfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+      agents: {
+        defaults: {
+          workspace: path.join(tmpDir, "workspace"),
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(reloadedCfg);
+
+    const state = buildGatewayCronService({
+      cfg: startupCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-subagent-workspace",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        agentId: "yinze",
+        payload: { kind: "agentTurn", message: "read SOW.md" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "yinze",
+          cfg: expect.objectContaining({
+            agents: expect.objectContaining({
+              list: expect.arrayContaining([
+                expect.objectContaining({
+                  id: "yinze",
+                  workspace: path.join(tmpDir, "workspace-yinze"),
+                }),
+              ]),
+            }),
+          }),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
 });
