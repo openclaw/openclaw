@@ -104,6 +104,7 @@ export function buildInboundUserContextPrefix(
     directChannelValue && directChannelValue !== "webchat",
   );
   const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+  const shouldIncludeSenderInfo = !(isDirect && directChannelValue === "webchat");
 
   const messageId = normalizeOptionalString(ctx.MessageSid);
   const messageIdFull = normalizeOptionalString(ctx.MessageSidFull);
@@ -163,7 +164,7 @@ export function buildInboundUserContextPrefix(
     tag: normalizeOptionalString(ctx.SenderTag),
     e164: normalizeOptionalString(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (shouldIncludeSenderInfo && senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",
