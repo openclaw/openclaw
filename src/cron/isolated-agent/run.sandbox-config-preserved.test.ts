@@ -69,6 +69,44 @@ function expectDefaultSandboxPreserved(
 }
 
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
+  it("preserves heartbeat defaults while layering agent heartbeat overrides", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          heartbeat: {
+            model: "minimax",
+            every: "5m",
+            target: "feishu",
+          },
+          model: {
+            primary: "minimax",
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    };
+    const agentDefaults = buildCronAgentDefaultsConfig({
+      defaults: cfg.agents.defaults as never,
+      agentConfigOverride: {
+        heartbeat: {
+          accountId: "default",
+        },
+        model: "cli-sonnet",
+      } as never,
+    });
+
+    expect(agentDefaults.heartbeat).toEqual({
+      model: "minimax",
+      every: "5m",
+      target: "feishu",
+      accountId: "default",
+    });
+    expect(agentDefaults.model).toEqual({
+      primary: "cli-sonnet",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+  });
+
   it("preserves default sandbox config when agent entry omits sandbox", async () => {
     const runCfg = buildRunCfg("worker", {
       name: "worker",

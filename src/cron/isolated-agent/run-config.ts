@@ -3,6 +3,28 @@ import type { AgentDefaultsConfig } from "../../config/types.js";
 
 type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function mergeNestedDefinedOverrides<T extends Record<string, unknown>>(
+  base: T,
+  overrides: Partial<T>,
+): T {
+  const next: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      continue;
+    }
+    const existing = next[key];
+    next[key] =
+      isPlainObject(existing) && isPlainObject(value)
+        ? mergeNestedDefinedOverrides(existing, value)
+        : value;
+  }
+  return next as T;
+}
+
 function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
   const {
     model: overrideModel,
@@ -44,7 +66,7 @@ export function buildCronAgentDefaultsConfig(params: {
   // copying the agent sandbox into defaults clobbers global defaults and can
   // double-apply nested agent overrides during isolated cron runs.
   return mergeCronAgentModelOverride({
-    defaults: Object.assign({}, params.defaults, definedOverrides),
+    defaults: mergeNestedDefinedOverrides(params.defaults ?? {}, definedOverrides),
     overrideModel,
   });
 }
