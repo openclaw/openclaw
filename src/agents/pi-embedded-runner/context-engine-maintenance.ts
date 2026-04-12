@@ -17,6 +17,7 @@ import {
 } from "../../tasks/task-executor.js";
 import {
   findTaskByRunId,
+  markTaskTerminalById,
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "../../tasks/task-registry.js";
@@ -155,7 +156,7 @@ async function executeContextEngineMaintenance(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
-      sessionManager: params.sessionManager,
+      sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
       allowDeferredCompactionExecution: params.executionMode === "background",
     }),
@@ -205,11 +206,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
 
     while (getQueueSize(sessionLane) > 0) {
       const now = Date.now();
-      if (
-        lastWaitNoticeAt === 0 ||
-        now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS ||
-        now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS
-      ) {
+      if (lastWaitNoticeAt === 0 || now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
         lastWaitNoticeAt = now;
         if (now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
           surfaceMaintenanceUpdate(
@@ -322,13 +319,26 @@ function scheduleDeferredTurnMaintenance(params: {
     runtime: "acp",
     taskKind: TURN_MAINTENANCE_TASK_KIND,
   });
+  const reusableTask = existingTask?.runId?.trim() ? existingTask : undefined;
+  if (existingTask && !reusableTask) {
+    updateTaskNotifyPolicyById({
+      taskId: existingTask.taskId,
+      notifyPolicy: "silent",
+    });
+    markTaskTerminalById({
+      taskId: existingTask.taskId,
+      status: "cancelled",
+      endedAt: Date.now(),
+      terminalSummary: "Superseded by refreshed deferred maintenance task.",
+    });
+  }
   const task =
-    existingTask ??
+    reusableTask ??
     buildTurnMaintenanceTaskDescriptor({
       sessionKey,
     });
   log.info(
-    `[context-engine] deferred turn maintenance ${existingTask ? "resuming" : "queued"} ` +
+    `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
   );
 
@@ -342,7 +352,7 @@ function scheduleDeferredTurnMaintenance(params: {
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
-        runId: task.runId ?? task.taskId,
+        runId: task.runId!,
       }),
   );
   const trackedPromise = runPromise

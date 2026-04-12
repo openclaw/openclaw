@@ -58,4 +58,24 @@ describe("backoff helpers", () => {
       vi.useRealTimers();
     }
   });
+
+  it("rejects if the signal aborts during listener registration", async () => {
+    let aborted = false;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      get reason() {
+        return new Error("listener-registration-race");
+      },
+      addEventListener(_event: string, _listener: EventListenerOrEventListenerObject) {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+
+    await expect(sleepWithAbort(50, signal)).rejects.toMatchObject({
+      message: "aborted",
+    });
+  });
 });

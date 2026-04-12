@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   enqueueCommandInLane,
   resetCommandQueueStateForTest,
 } from "../../process/command-queue.js";
+import { createQueuedTaskRun } from "../../tasks/task-executor.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
   getTaskById,
@@ -27,6 +29,8 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
 }));
 let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
+// Keep this literal aligned with the production module; tests use dynamic
+// import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 
 async function flushAsyncWork(times = 4): Promise<void> {
@@ -196,6 +200,55 @@ describe("runContextEngineMaintenance", () => {
     expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
   });
 
+  it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+    const maintain = vi.fn(async (params?: unknown) => {
+      await (params as { runtimeContext?: ContextEngineRuntimeContext } | undefined)?.runtimeContext?.rewriteTranscriptEntries?.({
+        replacements: [
+          { entryId: "entry-1", message: { role: "assistant", content: "done", timestamp: 2 } },
+        ],
+      });
+      return {
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      };
+    });
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-background-file-rewrite",
+      sessionKey: "agent:main:session-background-file-rewrite",
+      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+      reason: "turn",
+      executionMode: "background",
+      sessionManager,
+    });
+
+    expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+      sessionId: "session-background-file-rewrite",
+      sessionKey: "agent:main:session-background-file-rewrite",
+      request: {
+        replacements: [
+          {
+            entryId: "entry-1",
+            message: { role: "assistant", content: "done", timestamp: 2 },
+          },
+        ],
+      },
+    });
+  });
+
   it("defers turn maintenance to a hidden background task when enabled", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
@@ -354,6 +407,71 @@ describe("runContextEngineMaintenance", () => {
         });
 
         await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("replaces legacy active maintenance tasks that are missing a runId", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-legacy";
+        const legacyTask = createQueuedTaskRun({
+          runtime: "acp",
+          taskKind: TURN_MAINTENANCE_TASK_KIND,
+          sourceId: TURN_MAINTENANCE_TASK_KIND,
+          requesterSessionKey: sessionKey,
+          ownerKey: sessionKey,
+          scopeKind: "session",
+          label: "Context engine turn maintenance",
+          task: "Deferred context-engine maintenance after turn.",
+          notifyPolicy: "silent",
+          deliveryStatus: "pending",
+          preferMetadata: true,
+        });
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-legacy",
+          sessionKey,
+          sessionFile: "/tmp/session-legacy.jsonl",
+          reason: "turn",
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(2);
+        expect(getTaskById(legacyTask.taskId)).toMatchObject({
+          status: "cancelled",
+          notifyPolicy: "silent",
+        });
+        expect(tasks.some((task) => task.runId?.startsWith("turn-maint:"))).toBe(true);
       } finally {
         vi.useRealTimers();
       }
@@ -552,6 +670,80 @@ describe("runContextEngineMaintenance", () => {
           ),
         );
 
+        await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("throttles deferred wait notices while the session lane stays busy", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const sessionKey = "agent:main:session-throttle";
+        const sessionLane = resolveSessionLane(sessionKey);
+        let releaseForeground!: () => void;
+        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
+          await new Promise<void>((resolve) => {
+            releaseForeground = resolve;
+          });
+        });
+        await Promise.resolve();
+
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain: vi.fn(async () => ({
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          })),
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-throttle",
+          sessionKey,
+          sessionFile: "/tmp/session-throttle.jsonl",
+          reason: "turn",
+        });
+
+        await vi.advanceTimersByTimeAsync(11_000);
+        await waitForAssertion(() =>
+          expect(
+            peekSystemEvents(sessionKey).filter((event) =>
+              event.includes("Background task update: Context engine turn maintenance."),
+            ),
+          ).toHaveLength(1),
+        );
+
+        await vi.advanceTimersByTimeAsync(9_000);
+        expect(
+          peekSystemEvents(sessionKey).filter((event) =>
+            event.includes("Background task update: Context engine turn maintenance."),
+          ),
+        ).toHaveLength(2);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(
+          peekSystemEvents(sessionKey).filter((event) =>
+            event.includes("Background task update: Context engine turn maintenance."),
+          ),
+        ).toHaveLength(2);
+
+        releaseForeground();
         await foregroundTurn;
       } finally {
         vi.useRealTimers();

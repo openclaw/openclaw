@@ -15,21 +15,9 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
   if (ms <= 0) {
     return;
   }
-  if (abortSignal?.aborted) {
-    throw new Error("aborted", { cause: abortSignal.reason ?? new Error("aborted") });
-  }
-
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      settled = true;
-      if (abortSignal) {
-        abortSignal.removeEventListener("abort", onAbort);
-      }
-      timer = null;
-      resolve();
-    }, ms);
-
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const onAbort = () => {
       if (settled) {
         return;
@@ -47,6 +35,25 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
 
     if (abortSignal) {
       abortSignal.addEventListener("abort", onAbort, { once: true });
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+    }
+
+    timer = setTimeout(() => {
+      settled = true;
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      timer = null;
+      resolve();
+    }, ms);
+
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+      }
     }
   });
 }
