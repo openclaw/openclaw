@@ -11,6 +11,7 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "tokenfield",
   "tokenlimit",
   "tokens",
+  "credentialscope",
 ]);
 
 function normalizeFieldName(value: string): string {
@@ -30,9 +31,12 @@ function isCredentialFieldName(key: string): boolean {
     normalized.endsWith("password") ||
     normalized.endsWith("passwd") ||
     normalized.endsWith("passphrase") ||
+    normalized.endsWith("privatekey") ||
     normalized.endsWith("secret") ||
     normalized.endsWith("secretkey") ||
-    normalized.endsWith("token")
+    normalized.endsWith("token") ||
+    normalized === "credential" ||
+    normalized === "credentials"
   );
 }
 

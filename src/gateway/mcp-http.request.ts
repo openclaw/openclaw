@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -55,7 +56,10 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  if (authHeader !== `Bearer ${params.token}`) {
+  // Use timing-safe comparison to avoid leaking token length/content via
+  // response-time side-channels. Matches the safeEqualSecret approach used
+  // by the main gateway auth path.
+  if (!safeEqualSecret(authHeader, `Bearer ${params.token}`)) {
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
     return false;
