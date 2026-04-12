@@ -283,6 +283,7 @@ describe("memory plugin e2e", () => {
         }),
       );
       await expect(result.manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      expect(embeddingsCreate).not.toHaveBeenCalled();
       await expect(result.manager.probeVectorAvailability()).resolves.toBe(true);
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/runtime-env");

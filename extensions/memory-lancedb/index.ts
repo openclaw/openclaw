@@ -386,6 +386,9 @@ export default definePluginEntry({
               };
             },
             async probeEmbeddingAvailability() {
+              // Keep doctor/status probes lightweight: this only confirms that an
+              // embedding credential is configured. Real search/embed operations
+              // still validate the key and endpoint when they execute.
               return {
                 ok: typeof apiKey === "string" && apiKey.trim().length > 0,
                 error:
