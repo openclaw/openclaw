@@ -270,4 +270,79 @@ describe("gateway node pairing authorization", () => {
       expectedVisibleCommands: [],
     });
   });
+
+  test("keeps commands hidden before any node pairing approval exists", async () => {
+    const started = await startServerWithClient("secret");
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-device-paired-only",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    const operator = await issueOperatorToken({
+      name: "node-device-paired-only-operator",
+      approvedScopes: ["operator.write"],
+      tokenScopes: ["operator.write"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let controlWs: WebSocket | undefined;
+    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      controlWs = await openTrackedWs(started.port);
+      await connectOk(controlWs, {
+        skipDefaultAuth: true,
+        deviceToken: operator.token,
+        deviceIdentityPath: operator.identityPath,
+        scopes: ["operator.write"],
+      });
+
+      nodeClient = await connectNodeClient({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["system.run"],
+      });
+
+      const deadline = Date.now() + 2_000;
+      let connectedNode:
+        | { nodeId: string; connected?: boolean; commands?: string[]; displayName?: string }
+        | undefined;
+      while (Date.now() < deadline) {
+        const list = await rpcReq<{
+          nodes?: Array<{
+            nodeId: string;
+            connected?: boolean;
+            commands?: string[];
+            displayName?: string;
+          }>;
+        }>(controlWs, "node.list", {});
+        connectedNode = (list.payload?.nodes ?? []).find(
+          (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
+        );
+        if (connectedNode) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      expect(connectedNode?.commands ?? []).toEqual([]);
+
+      const invoke = await rpcReq(controlWs, "node.invoke", {
+        nodeId: pairedNode.identity.deviceId,
+        command: "system.run",
+        params: { command: "echo blocked" },
+        idempotencyKey: "node-unpaired-system-run",
+      });
+      expect(invoke.ok).toBe(false);
+      expect(invoke.error?.message ?? "").toContain("node command not allowed");
+    } finally {
+      controlWs?.close();
+      await nodeClient?.stopAndWait();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
 });

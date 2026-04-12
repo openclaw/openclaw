@@ -81,7 +81,7 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
-      effectiveCommands: declared,
+      effectiveCommands: [],
       pendingPairing,
     };
   }

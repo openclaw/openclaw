@@ -410,7 +410,7 @@ describe("gateway node command allowlist", () => {
     }
   });
 
-  test("keeps allowlisted declared commands available before node pairing exists", async () => {
+  test("keeps pending pairing commands hidden before node pairing exists", async () => {
     const displayName = "node-device-paired-only";
     let nodeClient: GatewayClient | undefined;
 
@@ -428,13 +428,22 @@ describe("gateway node command allowlist", () => {
           const node = await findConnectedNodeByDisplayName(displayName);
           return node?.commands?.toSorted() ?? [];
         }, FAST_WAIT_OPTS)
-        .toEqual(["canvas.snapshot", "system.run"]);
+        .toEqual([]);
 
       const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = node?.nodeId ?? "";
       expect(nodeId).toBeTruthy();
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
+
+      const blockedInvoke = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: { command: "echo blocked" },
+        idempotencyKey: "allowlist-pending-node-pairing",
+      });
+      expect(blockedInvoke.ok).toBe(false);
+      expect(blockedInvoke.error?.message ?? "").toContain("node command not allowed");
     } finally {
       await nodeClient?.stopAndWait();
     }
