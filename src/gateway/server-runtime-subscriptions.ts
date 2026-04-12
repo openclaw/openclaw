@@ -66,14 +66,13 @@ export function startGatewayEventSubscriptions(params: {
         }),
       );
 
-  const lifecycleUnsub = params.minimalTestGateway
-    ? null
-    : onSessionLifecycleEvent(
-        createLifecycleEventBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-        }),
-      );
+  const lifecycleUnsub = onSessionLifecycleEvent(
+    createLifecycleEventBroadcastHandler({
+      broadcastToConnIds: params.broadcastToConnIds,
+      sessionEventSubscribers: params.sessionEventSubscribers,
+      sessionMessageSubscribers: params.sessionMessageSubscribers,
+    }),
+  );
 
   return {
     agentUnsub,

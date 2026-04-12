@@ -148,12 +148,28 @@ export function createTranscriptUpdateBroadcastHandler(params: {
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
+  sessionMessageSubscribers: SessionMessageSubscribers;
 }) {
   return (event: SessionLifecycleEvent): void => {
-    const connIds = params.sessionEventSubscribers.getAll();
+    const evSubs = params.sessionEventSubscribers.getAll();
+    const msgSubs = params.sessionMessageSubscribers.get(event.sessionKey);
+    const connIds = new Set<string>([...evSubs, ...msgSubs]);
     if (connIds.size === 0) {
       return;
     }
+
+    // Always emit socket.drain first for major lifecycle events.
+    // If sessions.changed is large, sending it first could fill the ws buffer
+    // and cause socket.drain to drop if it also specifies dropIfSlow.
+    if (event.reason === "reset" || event.reason === "deleted" || event.reason === "new") {
+      params.broadcastToConnIds(
+        "socket.drain",
+        { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
+        connIds,
+        { dropIfSlow: false },
+      );
+    }
+
     params.broadcastToConnIds(
       "sessions.changed",
       {
@@ -173,13 +189,5 @@ export function createLifecycleEventBroadcastHandler(params: {
       connIds,
       { dropIfSlow: true },
     );
-    if (event.reason === "reset" || event.reason === "deleted" || event.reason === "new") {
-      params.broadcastToConnIds(
-        "socket.drain",
-        { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
-        connIds,
-        { dropIfSlow: true },
-      );
-    }
   };
 }
