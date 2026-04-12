@@ -6,8 +6,8 @@ import {
   isRedactedSessionsSpawnAttachment,
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 
 function resolveCaseInsensitiveAllowedToolName(
@@ -231,6 +231,9 @@ type ReplayToolCallSanitizeReport = {
 type AnthropicToolResultContentBlock = {
   type?: unknown;
   toolUseId?: unknown;
+  toolCallId?: unknown;
+  tool_use_id?: unknown;
+  tool_call_id?: unknown;
 };
 
 function isThinkingLikeReplayBlock(block: unknown): boolean {
@@ -263,15 +266,12 @@ function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): bool
   return false;
 }
 
-function isReplaySafeThinkingTurn(
-  content: unknown[],
-  allowedToolNames?: Set<string>,
-): boolean {
+function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
   for (const block of content) {
     if (!isReplayToolCallBlock(block)) {
       continue;
     }
-    const replayBlock = block as ReplayToolCallBlock;
+    const replayBlock = block;
     if (
       !replayToolCallHasInput(replayBlock) ||
       !replayToolCallNonEmptyString(replayBlock.id) ||
@@ -409,9 +409,30 @@ function sanitizeReplayToolCallInputs(
   };
 }
 
-function sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMessage[] {
+function extractAnthropicReplayToolResultIds(block: AnthropicToolResultContentBlock): string[] {
+  const ids: string[] = [];
+  for (const value of [block.toolUseId, block.toolCallId, block.tool_use_id, block.tool_call_id]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || ids.includes(trimmed)) {
+      continue;
+    }
+    ids.push(trimmed);
+  }
+  return ids;
+}
+
+function sanitizeAnthropicReplayToolResults(
+  messages: AgentMessage[],
+  options?: {
+    allowEmbeddedUserToolResults?: boolean;
+  },
+): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
+  const allowEmbeddedUserToolResults = options?.allowEmbeddedUserToolResults !== false;
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
@@ -450,10 +471,19 @@ function sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMess
         return true;
       }
       const typedBlock = block as AnthropicToolResultContentBlock;
-      if (typedBlock.type !== "toolResult" || typeof typedBlock.toolUseId !== "string") {
+      if (typedBlock.type !== "toolResult" && typedBlock.type !== "tool") {
         return true;
       }
-      return validToolUseIds.size > 0 && validToolUseIds.has(typedBlock.toolUseId);
+      if (!allowEmbeddedUserToolResults) {
+        changed = true;
+        return false;
+      }
+      const resultIds = extractAnthropicReplayToolResultIds(typedBlock);
+      if (resultIds.length === 0) {
+        changed = true;
+        return false;
+      }
+      return validToolUseIds.size > 0 && resultIds.some((id) => validToolUseIds.has(id));
     });
 
     if (nextContent.length === message.content.length) {
@@ -638,24 +668,30 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
+    const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+      modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+      policy: {
+        validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
+        preserveSignatures: transcriptPolicy?.preserveSignatures === true,
+        dropThinkingBlocks: transcriptPolicy?.dropThinkingBlocks === true,
+      },
+    });
     const sanitized = sanitizeReplayToolCallInputs(
       messages as AgentMessage[],
       allowedToolNames,
-      shouldAllowProviderOwnedThinkingReplay({
-        modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-        policy: {
-          validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
-          preserveSignatures: transcriptPolicy?.preserveSignatures === true,
-          dropThinkingBlocks: transcriptPolicy?.dropThinkingBlocks === true,
-        },
-      }),
+      allowProviderOwnedThinkingReplay,
     );
-    if (sanitized.messages === messages) {
-      return baseFn(model, context, options);
-    }
-    let nextMessages = sanitizeToolUseResultPairing(sanitized.messages);
+    const replayInputsChanged = sanitized.messages !== messages;
+    let nextMessages = replayInputsChanged
+      ? sanitizeToolUseResultPairing(sanitized.messages)
+      : sanitized.messages;
     if (transcriptPolicy?.validateAnthropicTurns) {
-      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages);
+      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
+        allowEmbeddedUserToolResults: !allowProviderOwnedThinkingReplay,
+      });
+    }
+    if (nextMessages === messages) {
+      return baseFn(model, context, options);
     }
     if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
       if (transcriptPolicy?.validateGeminiTurns) {
