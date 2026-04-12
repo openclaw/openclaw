@@ -10,6 +10,7 @@ import {
   buildBackfillDiaryEntry,
   buildDiaryEntry,
   buildNarrativePrompt,
+  dedupeDreamDiaryEntries,
   extractNarrativeText,
   formatNarrativeDate,
   formatBackfillDiaryDate,
@@ -356,6 +357,51 @@ describe("appendNarrativeEntry", () => {
 
     const stat = await fs.stat(dreamsPath);
     expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:00 AM*",
+        "",
+        "<!-- transient comment -->",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "---",
+        "",
+        "*April 11, 2026, 8:30 AM*",
+        "",
+        "The server room smelled like rain.",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = await dedupeDreamDiaryEntries({ workspaceDir });
+
+    expect(result.removed).toBe(1);
+    expect(result.kept).toBe(2);
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(2);
+    expect(content).toContain("*April 11, 2026, 8:00 AM*");
+    expect(content).toContain("*April 11, 2026, 8:30 AM*");
   });
 
   it("surfaces temp cleanup failure after atomic replace error", async () => {

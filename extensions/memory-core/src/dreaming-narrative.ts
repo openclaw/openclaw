@@ -291,6 +291,31 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .filter((block) => block.length > 0);
 }
 
+function normalizeDiaryBlockFingerprint(block: string): string {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  let dateLine = "";
+  const bodyLines: string[] = [];
+  for (const line of lines) {
+    if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
+      dateLine = line.slice(1, -1).trim();
+      continue;
+    }
+    if (line.startsWith("<!--") || line.startsWith("#")) {
+      continue;
+    }
+    bodyLines.push(line);
+  }
+  const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
+  const normalizedBody = bodyLines
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+  return `${normalizedDate}\n${normalizedBody}`;
+}
+
 function joinDiaryBlocks(blocks: string[]): string {
   if (blocks.length === 0) {
     return "";
@@ -451,6 +476,45 @@ export async function removeBackfillDiaryEntries(params: {
   return {
     dreamsPath,
     removed: stripped.removed,
+  };
+}
+
+export async function dedupeDreamDiaryEntries(params: {
+  workspaceDir: string;
+}): Promise<{ dreamsPath: string; removed: number; kept: number }> {
+  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+  const existing = await readDreamsFile(dreamsPath);
+  const ensured = ensureDiarySection(existing);
+  const startIdx = ensured.indexOf(DIARY_START_MARKER);
+  const endIdx = ensured.indexOf(DIARY_END_MARKER);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return { dreamsPath, removed: 0, kept: 0 };
+  }
+  const inner = ensured.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+  const blocks = splitDiaryBlocks(inner);
+  const seen = new Set<string>();
+  const keptBlocks: string[] = [];
+  let removed = 0;
+  for (const block of blocks) {
+    const fingerprint = normalizeDiaryBlockFingerprint(block);
+    if (seen.has(fingerprint)) {
+      removed += 1;
+      continue;
+    }
+    seen.add(fingerprint);
+    keptBlocks.push(block);
+  }
+  if (removed > 0 || existing.length > 0) {
+    await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+    await writeDreamsFileAtomic(
+      dreamsPath,
+      replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
+    );
+  }
+  return {
+    dreamsPath,
+    removed,
+    kept: keptBlocks.length,
   };
 }
 

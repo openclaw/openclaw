@@ -97,7 +97,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  drainSystemEventEntries,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -892,6 +896,13 @@ export async function runHeartbeatOnce(opts: {
     await saveSessionStore(storePath, store);
   };
 
+  const consumeInspectedSystemEvents = () => {
+    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+      return;
+    }
+    drainSystemEventEntries(sessionKey);
+  };
+
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -995,6 +1006,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1031,6 +1043,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1067,6 +1080,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1088,6 +1102,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1108,6 +1123,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -1183,6 +1199,7 @@ export async function runHeartbeatOnce(opts: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
+    consumeInspectedSystemEvents();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
