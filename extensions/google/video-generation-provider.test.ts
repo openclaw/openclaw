@@ -24,6 +24,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 describe("google video generation provider", () => {
@@ -32,6 +33,10 @@ describe("google video generation provider", () => {
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
     GoogleGenAIMock.mockClear();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildGoogleVideoGenerationProvider());
   });
 
   it("submits generation and returns inline video bytes", async () => {
