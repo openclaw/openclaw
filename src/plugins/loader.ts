@@ -1521,7 +1521,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (!shouldLoadModules && registrationMode === "full") {
-        if (pluginId !== dreamingEngineId) {
+        if (
+          pluginId === dreamingEngineId &&
+          hasKind(record.kind, "memory") &&
+          memorySlot === pluginId
+        ) {
+          // Dreaming engine is also the configured slot — mark it selected so
+          // memorySlotMatched stays accurate on loadModules:false load paths.
+          selectedMemoryPluginId = record.id;
+          memorySlotMatched = true;
+          record.memorySlotSelected = true;
+        } else if (pluginId !== dreamingEngineId) {
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: record.kind,
