@@ -478,7 +478,7 @@ describe("discord component interactions", () => {
   async function expectBlockedGuildButton(params: {
     guildId: string;
     interactionId: string;
-    guildEntries: Record<string, unknown>;
+    guildEntries: Record<string, DiscordGuildEntryResolved>;
   }) {
     registerDiscordComponentEntries({
       entries: [createButtonEntry()],
