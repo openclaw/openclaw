@@ -521,7 +521,15 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         root: options.root,
         containerWorkdir: options.containerWorkdir,
       });
-      if (resolvedPath !== allowedAbsolutePath) {
+      // Normalize paths for case-insensitive filesystems (macOS/Windows).
+      const caseInsensitive = process.platform === "darwin" || process.platform === "win32";
+      const normResolved = caseInsensitive
+        ? path.normalize(resolvedPath).toLowerCase()
+        : path.normalize(resolvedPath);
+      const normAllowed = caseInsensitive
+        ? path.normalize(allowedAbsolutePath).toLowerCase()
+        : path.normalize(allowedAbsolutePath);
+      if (normResolved !== normAllowed) {
         throw new Error(
           `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
         );
