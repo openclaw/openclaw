@@ -394,7 +394,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      if (vectorResults.length > 0) {
+        return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      }
+      const fallbackResults = await this.searchKeywordFallback(cleaned, candidates);
+      return this.selectScoredResults(fallbackResults, maxResults, minScore, 0);
     }
 
     const merged = await this.mergeHybridResults({
@@ -410,24 +414,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
-    const keywordKeys = new Set(
-      keywordResults.map(
-        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
-      ),
-    );
-    return this.selectScoredResults(
-      merged.filter((entry) =>
-        keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
-      ),
-      maxResults,
-      minScore,
-      relaxedMinScore,
-    );
+    // If weighted hybrid scoring still falls below minScore, preserve the
+    // raw keyword hits instead of dropping them entirely. This keeps exact
+    // lexical matches available even when textWeight is low.
+    return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
