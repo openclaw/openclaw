@@ -253,4 +253,22 @@ describe("sessionsCommand", () => {
     expect(logs.find((line) => line.includes("Subagent role"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
   });
+
+  it("allows explain with an explicit store even if agent resolution would fail", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-explain-invalid-agent",
+    );
+
+    const payload = await runSessionsJson<{ key: string }>(sessionsCommand, store, {
+      explain: "agent:main:main",
+    });
+
+    expect(payload.key).toBe("agent:main:main");
+  });
 });

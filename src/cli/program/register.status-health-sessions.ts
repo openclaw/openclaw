@@ -174,9 +174,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         | {
             store?: string;
             agent?: string;
+            verbose?: boolean;
           }
         | undefined;
-      setVerbose(Boolean(command.parent?.opts()?.verbose));
+      setVerbose(Boolean(parentOpts?.verbose));
       await sessionsCommand(
         {
           json: Boolean(opts.json),

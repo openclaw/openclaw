@@ -112,19 +112,6 @@ export async function sessionsCommand(
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(displayDefaults.model) ??
     DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-  });
-  if (!targets) {
-    return;
-  }
-
   if (opts.explain) {
     const initialStore = opts.store ? loadSessionStore(opts.store) : undefined;
     const target = resolveGatewaySessionStoreTarget({
@@ -311,6 +298,19 @@ export async function sessionsCommand(
         `${label(`Tools ${group.id}`)}${muted(": ")}${infoLabel(`${group.count} [${group.tools.join(", ")}]`)}`,
       );
     }
+    return;
+  }
+
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: opts.allAgents,
+    },
+    runtime,
+  });
+  if (!targets) {
     return;
   }
 
