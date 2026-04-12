@@ -84,13 +84,14 @@ describe("getProxyEnvDefaults", () => {
     process.env.http_proxy = "http://lower-http:3128";
 
     const result = getProxyEnvDefaults();
-    // Only uppercase should survive when both are present
+    // Only lowercase should survive when both are present (lowercase
+    // takes precedence per src/infra/net/proxy-env.ts convention)
     expect(result).toEqual({
-      HTTPS_PROXY: "http://upper:3128",
-      HTTP_PROXY: "http://upper-http:3128",
+      https_proxy: "http://lower:3128",
+      http_proxy: "http://lower-http:3128",
     });
-    expect(result).not.toHaveProperty("https_proxy");
-    expect(result).not.toHaveProperty("http_proxy");
+    expect(result).not.toHaveProperty("HTTPS_PROXY");
+    expect(result).not.toHaveProperty("HTTP_PROXY");
   });
 
   it("keeps lowercase when only lowercase is set", () => {
@@ -119,6 +120,23 @@ describe("getProxyEnvDefaults", () => {
 
   it("strips --inspect-port=N from NODE_OPTIONS", () => {
     process.env.NODE_OPTIONS = "--require /patch.js --inspect-port=9230";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
+  });
+
+  it("strips --inspect-publish-uid=stderr from NODE_OPTIONS", () => {
+    process.env.NODE_OPTIONS = "--require /patch.js --inspect-publish-uid=stderr";
+
+    expect(getProxyEnvDefaults()).toEqual({
+      NODE_OPTIONS: "--require /patch.js",
+    });
+  });
+
+  it("strips all --inspect* variants from NODE_OPTIONS at once", () => {
+    process.env.NODE_OPTIONS =
+      "--inspect --inspect-brk --inspect-port=9230 --inspect-publish-uid=stderr --require /patch.js";
 
     expect(getProxyEnvDefaults()).toEqual({
       NODE_OPTIONS: "--require /patch.js",

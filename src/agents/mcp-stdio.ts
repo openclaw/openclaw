@@ -44,21 +44,22 @@ const PROXY_CASE_PAIRS: ReadonlyArray<[uppercase: string, lowercase: string]> = 
 ];
 
 /**
- * Regex that matches `--inspect`, `--inspect-brk`, and `--inspect-port=…`
- * tokens inside a NODE_OPTIONS string.  If the gateway process is running
- * under a debugger these flags would cause every MCP child to hang waiting
- * for its own debugger connection.
+ * Regex that matches ALL `--inspect*` flags inside a NODE_OPTIONS string.
+ * This covers `--inspect`, `--inspect-brk`, `--inspect-port=…`,
+ * `--inspect-publish-uid=…`, and any future `--inspect-*` variants.
+ * If the gateway process is running under a debugger these flags would cause
+ * every MCP child to hang waiting for its own debugger connection.
  */
-const INSPECT_FLAG_RE = /--inspect(?:-brk|-port(?:=\S*)?)?(?:\s+\d+)?/g;
+const INSPECT_FLAG_RE = /--inspect[-\w]*(=\S+)?/g;
 
 /**
  * Collect proxy-related env vars from the current process so they can be
  * forwarded to MCP stdio child processes as lowest-priority defaults.
  *
  * Case-dedup: when the gateway has both `HTTPS_PROXY` and `https_proxy` set,
- * only the uppercase variant is forwarded.  This avoids a subtle bug where
- * both keys reach the child and the lowercase one silently wins (per
- * convention), overriding any explicit user config for the uppercase key.
+ * only the lowercase variant is forwarded.  Lowercase takes precedence per
+ * convention (see `src/infra/net/proxy-env.ts`), so forwarding the lowercase
+ * variant preserves the documented precedence order for MCP children.
  *
  * NODE_OPTIONS: `--inspect*` flags are stripped so that MCP child processes
  * don't hang waiting for a debugger connection when the gateway itself is
@@ -75,10 +76,11 @@ export function getProxyEnvDefaults(): Record<string, string> {
     }
   }
 
-  // Case-insensitive dedup: when both cases are present, keep only uppercase.
+  // Case-insensitive dedup: when both cases are present, keep only lowercase.
+  // Lowercase takes precedence per convention (src/infra/net/proxy-env.ts).
   for (const [upper, lower] of PROXY_CASE_PAIRS) {
     if (defaults[upper] !== undefined && defaults[lower] !== undefined) {
-      delete defaults[lower];
+      delete defaults[upper];
     }
   }
 
