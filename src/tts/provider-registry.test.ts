@@ -1,13 +1,25 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 
 const resolveRuntimePluginRegistryMock = vi.fn();
+const loadPluginManifestRegistryMock = vi.fn(() => ({
+  plugins: [
+    { id: "elevenlabs", origin: "bundled", contracts: { speechProviders: [{}] } },
+    { id: "microsoft", origin: "bundled", contracts: { speechProviders: [{}] } },
+    { id: "openai", origin: "bundled", contracts: { speechProviders: [{}] } },
+  ],
+}));
 
 vi.mock("../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: (...args: Parameters<typeof resolveRuntimePluginRegistryMock>) =>
     resolveRuntimePluginRegistryMock(...args),
+}));
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: Parameters<typeof loadPluginManifestRegistryMock>) =>
+    loadPluginManifestRegistryMock(...args),
 }));
 
 let getSpeechProvider: typeof import("./provider-registry.js").getSpeechProvider;
@@ -43,10 +55,8 @@ describe("speech provider registry", () => {
   beforeEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    loadPluginManifestRegistryMock.mockClear();
   });
-
-  afterEach(() => {});
-
   it("uses active plugin speech providers without reloading plugins", () => {
     resolveRuntimePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),

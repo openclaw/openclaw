@@ -10,19 +10,31 @@ import {
 } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: async () => {},
+  })),
   verifyIdToken: vi.fn(),
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
 vi.mock("google-auth-library", () => ({
-  GoogleAuth: class {},
+  GoogleAuth: function GoogleAuth() {},
   OAuth2Client: class {
     verifyIdToken = mocks.verifyIdToken;
   },
 }));
 
-vi.mock("./auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auth.js")>();
+vi.mock("./auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
   return {
     ...actual,
     getGoogleChatAccessToken: mocks.getGoogleChatAccessToken,
@@ -94,7 +106,6 @@ describe("googlechat group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
@@ -127,6 +138,7 @@ describe("isSenderAllowed", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -166,6 +178,7 @@ describe("downloadGoogleChatMedia", () => {
 
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 

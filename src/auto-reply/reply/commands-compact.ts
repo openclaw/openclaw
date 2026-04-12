@@ -1,21 +1,13 @@
-import {
-  abortEmbeddedPiRun,
-  compactEmbeddedPiSession,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { incrementCompactionCount } from "./session-updates.js";
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -32,7 +24,7 @@ function extractCompactInstructions(params: {
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
   if (!prefix) {
     return undefined;
@@ -45,7 +37,7 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = reason?.trim().toLowerCase() ?? "";
+  const text = normalizeOptionalLowercaseString(reason) ?? "";
   return (
     text.includes("nothing to compact") ||
     text.includes("below threshold") ||
@@ -55,12 +47,12 @@ function isCompactionSkipReason(reason?: string): boolean {
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
-  const text = reason?.trim();
+  const text = normalizeOptionalString(reason);
   if (!text) {
     return undefined;
   }
 
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (lower.includes("nothing to compact")) {
     return "nothing compactable in this session yet";
   }
@@ -89,45 +81,59 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
-  const sessionId = params.sessionEntry.sessionId;
-  if (isEmbeddedPiRunActive(sessionId)) {
-    abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  const runtime = await import("./commands-compact.runtime.js");
+  const sessionId = targetSessionEntry.sessionId;
+  if (runtime.isEmbeddedPiRunActive(sessionId)) {
+    runtime.abortEmbeddedPiRun(sessionId);
+    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const sessionAgentDir =
+    sessionAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
-    agentId: params.agentId,
+    agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
-  const result = await compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
-    groupId: params.sessionEntry.groupId,
-    groupChannel: params.sessionEntry.groupChannel,
-    groupSpace: params.sessionEntry.space,
-    spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(
+    groupId: targetSessionEntry.groupId,
+    groupChannel: targetSessionEntry.groupChannel,
+    groupSpace: targetSessionEntry.space,
+    spawnedBy: targetSessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    sessionFile: runtime.resolveSessionFilePath(
       sessionId,
-      params.sessionEntry,
-      resolveSessionFilePathOptions({
-        agentId: params.agentId,
+      targetSessionEntry,
+      runtime.resolveSessionFilePathOptions({
+        agentId: sessionAgentId,
         storePath: params.storePath,
       }),
     ),
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
+    agentDir: sessionAgentDir,
     config: params.cfg,
-    skillsSnapshot: params.sessionEntry.skillsSnapshot,
+    skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
@@ -146,15 +152,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     result.ok || isCompactionSkipReason(result.reason)
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
           : result.result?.tokensBefore
-            ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (result.ok && result.compacted) {
-    await incrementCompactionCount({
-      sessionEntry: params.sessionEntry,
+    await runtime.incrementCompactionCount({
+      cfg: params.cfg,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -164,15 +171,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
-  const contextSummary = formatContextUsageShort(
+  const totalTokens =
+    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+    params.contextTokens ?? targetSessionEntry.contextTokens ?? null,
   );
   const reason = formatCompactionReason(result.reason);
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
-  enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
 };

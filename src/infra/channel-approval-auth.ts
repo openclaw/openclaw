@@ -1,5 +1,5 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { getChannelPlugin, resolveChannelApprovalCapability } from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ApprovalCommandAuthorization = {
@@ -19,8 +19,8 @@ export function resolveApprovalCommandAuthorization(params: {
   if (!channel) {
     return { authorized: true, explicit: false };
   }
-  const channelPlugin = getChannelPlugin(channel);
-  const resolved = channelPlugin?.auth?.authorizeActorAction?.({
+  const approvalCapability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  const resolved = approvalCapability?.authorizeActorAction?.({
     cfg: params.cfg,
     accountId: params.accountId,
     senderId: params.senderId,
@@ -30,10 +30,11 @@ export function resolveApprovalCommandAuthorization(params: {
   if (!resolved) {
     return { authorized: true, explicit: false };
   }
-  const availability = channelPlugin?.auth?.getActionAvailabilityState?.({
+  const availability = approvalCapability?.getActionAvailabilityState?.({
     cfg: params.cfg,
     accountId: params.accountId,
     action: "approve",
+    approvalKind: params.kind,
   });
   return {
     authorized: resolved.authorized,

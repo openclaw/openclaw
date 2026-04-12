@@ -1,9 +1,9 @@
 export {
-  SEARCH_PROVIDER_OPTIONS,
   applySearchKey,
   applySearchProviderSelection,
   hasExistingKey,
   hasKeyInEnv,
+  listSearchProviderOptions,
   resolveExistingKey,
   resolveSearchProviderOptions,
   runSearchSetupFlow as setupSearch,

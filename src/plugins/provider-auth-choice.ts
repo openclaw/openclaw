@@ -6,13 +6,13 @@ import {
 } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "./provider-auth-choice-helpers.js";
@@ -78,9 +78,30 @@ function restoreConfiguredPrimaryModel(
   };
 }
 
+type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
+
+const defaultProviderAuthChoiceDeps = {
+  loadPluginProviderRuntime: async (): Promise<ProviderAuthChoiceRuntime> =>
+    import("./provider-auth-choice.runtime.js"),
+};
+
+let providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
+
 async function loadPluginProviderRuntime() {
-  return import("./provider-auth-choice.runtime.js");
+  return await providerAuthChoiceDeps.loadPluginProviderRuntime();
 }
+
+export const __testing = {
+  resetDepsForTest(): void {
+    providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
+  },
+  setDepsForTest(deps: Partial<typeof defaultProviderAuthChoiceDeps>): void {
+    providerAuthChoiceDeps = {
+      ...defaultProviderAuthChoiceDeps,
+      ...deps,
+    };
+  },
+} as const;
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
@@ -129,7 +150,7 @@ export async function runProviderPluginAuthMethod(params: {
 
   let nextConfig = params.config;
   if (result.configPatch) {
-    nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
+    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch);
   }
 
   for (const profile of result.profiles) {
@@ -174,8 +195,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     config: params.config,
     workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const resolved = resolveProviderPluginChoice({
     providers,
@@ -256,8 +276,7 @@ export async function applyAuthChoicePluginProvider(
     config: nextConfig,
     workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {

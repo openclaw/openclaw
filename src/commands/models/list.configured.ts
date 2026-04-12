@@ -4,11 +4,11 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
 
@@ -57,7 +57,7 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   const imagePrimary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
 
   modelFallbacks.forEach((raw, idx) => {
-    addResolvedModelRef(String(raw ?? ""), `fallback#${idx + 1}`);
+    addResolvedModelRef(raw, `fallback#${idx + 1}`);
   });
 
   if (imagePrimary) {
@@ -65,11 +65,11 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   }
 
   imageFallbacks.forEach((raw, idx) => {
-    addResolvedModelRef(String(raw ?? ""), `img-fallback#${idx + 1}`);
+    addResolvedModelRef(raw, `img-fallback#${idx + 1}`);
   });
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-    const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(key, DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }

@@ -1,6 +1,7 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
@@ -127,17 +128,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  if (authChoice === "setup-token") {
-    runtime.error(
-      [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
     nextConfig,
     authChoice,
@@ -154,6 +144,17 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (pluginProviderChoice !== undefined) {
     return pluginProviderChoice;
+  }
+
+  if (authChoice === "setup-token" || authChoice === "token") {
+    runtime.error(
+      [
+        `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
   }
 
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
@@ -233,7 +234,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime.exit(1);
         return null;
       }
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       runtime.error(`Invalid custom provider config: ${reason}`);
       runtime.exit(1);
       return null;
@@ -246,7 +247,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
+    runtime.error(
+      authChoice === "oauth"
+        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
+        : "OAuth requires interactive mode.",
+    );
     runtime.exit(1);
     return null;
   }

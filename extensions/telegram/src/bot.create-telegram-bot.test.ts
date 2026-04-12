@@ -1,7 +1,7 @@
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const EYES_EMOJI = "\u{1F440}";
 const {
@@ -2388,6 +2388,7 @@ describe("createTelegramBot", () => {
   });
   it("threads native command replies inside topics", async () => {
     commandSpy.mockClear();
+    sendMessageSpy.mockClear();
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
@@ -2396,6 +2397,7 @@ describe("createTelegramBot", () => {
         telegram: {
           dmPolicy: "open",
           allowFrom: ["*"],
+          replyToMode: "first",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -2413,7 +2415,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       "-1001234567890",
       expect.any(String),
-      expect.objectContaining({ message_thread_id: 99 }),
+      expect.objectContaining({ message_thread_id: 99, reply_to_message_id: 42 }),
     );
   });
   it("reloads native command routing bindings between invocations without recreating the bot", async () => {

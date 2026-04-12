@@ -1,21 +1,21 @@
+import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
+  decodeHtmlEntitiesInObject,
   prependSystemPromptAddition,
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
   resolveAttemptFsWorkspaceOnly,
+  resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  decodeHtmlEntitiesInObject,
+  shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -25,21 +25,6 @@ type FakeWrappedStream = {
   result: () => Promise<unknown>;
   [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
 };
-
-function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        ollama: {
-          baseUrl: "http://127.0.0.1:11434/v1",
-          api: "openai-completions",
-          injectNumCtxForOpenAICompat,
-          models: [],
-        },
-      },
-    },
-  };
-}
 
 function createFakeStream(params: {
   events: unknown[];
@@ -158,6 +143,16 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("prepend\n\nbase system\n\nappend");
   });
 
+  it("normalizes hook system context line endings and trailing whitespace", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend line  \r\nsecond line\t\r\n",
+        appendSystemContext: "  append  \t\r\n",
+      }),
+    ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
+  });
+
   it("avoids blank separators when base system prompt is empty", () => {
     expect(
       composeSystemPromptWithHookContext({
@@ -218,6 +213,120 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldWarnOnOrphanedUserRepair", () => {
+  it("warns for user and manual runs", () => {
+    expect(shouldWarnOnOrphanedUserRepair("user")).toBe(true);
+    expect(shouldWarnOnOrphanedUserRepair("manual")).toBe(true);
+  });
+
+  it("does not warn for background triggers", () => {
+    expect(shouldWarnOnOrphanedUserRepair("heartbeat")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("cron")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("memory")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("overflow")).toBe(false);
+  });
+});
+
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("reuses the session's original base stream across later wrapper mutations", () => {
+    resetEmbeddedAgentBaseStreamFnCacheForTest();
+    const baseStreamFn = vi.fn();
+    const wrapperStreamFn = vi.fn();
+    const session = {
+      agent: {
+        streamFn: baseStreamFn,
+      },
+    };
+
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
+    session.agent.streamFn = wrapperStreamFn;
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
+  });
+
+  it("injects authStorage api keys into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+      authStorage: {
+        getApiKey: vi.fn(async () => "demo-runtime-key"),
+      },
+    });
+
+    await expect(
+      streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      apiKey: "demo-runtime-key",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips the internal cache boundary before provider-owned stream calls", async () => {
+    const providerStreamFn = vi.fn(async (_model, context) => context);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+    });
+
+    await expect(
+      streamFn(
+        { provider: "demo-provider", id: "demo-model" } as never,
+        {
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        } as never,
+        {},
+      ),
+    ).resolves.toMatchObject({
+      systemPrompt: "Stable prefix\nDynamic suffix",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+  it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("keeps explicit custom currentStreamFn values unchanged", () => {
+    const currentStreamFn = vi.fn();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).toBe(currentStreamFn);
   });
 });
 
@@ -798,7 +907,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -826,7 +939,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -835,6 +952,301 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
+  });
+
+  it("drops signed thinking turns when sibling replay tool calls are not allowlisted", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops signed thinking turns for bedrock claude replay when sibling tool calls are not replay-safe", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "bedrock-converse-stream" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops signed thinking turns when sibling replay tool calls reuse an id", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "functionCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops signed thinking turns when replay would expose inline sessions_spawn attachments", async () => {
+    const attachmentContent = "SIGNED_THINKING_INLINE_ATTACHMENT";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["sessions_spawn"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops signed thinking turns when replay would expose non-content attachment payload fields", async () => {
+    const attachmentContent = "SIGNED_THINKING_NESTED_ATTACHMENT";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [
+                {
+                  name: "snapshot.txt",
+                  mimeType: "text/plain",
+                  data: attachmentContent,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["sessions_spawn"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("keeps mutable thinking turns outside anthropic replay-only preservation", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+    } as never);
+    const stream = wrapped(
+      { api: "openai-completions" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+        isError: true,
+        timestamp: expect.any(Number),
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
   });
 
   it("preserves sessions_spawn attachment payloads on replay", async () => {
@@ -862,6 +1274,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
       baseFn as never,
       new Set(["sessions_spawn"]),
+      { validateAnthropicTurns: true } as never,
     );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
@@ -878,6 +1291,40 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     };
     expect(toolCall.name).toBe("sessions_spawn");
     expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
+  });
+
+  it("keeps non-Anthropic thinking turns mutable when Anthropic replay validation is off", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_read", name: " read ", arguments: { path: "README.md" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: unknown[] }>;
+    };
+    expect(seenContext.messages[0]?.content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "call_read", name: "read", arguments: { path: "README.md" } },
+    ]);
   });
 
   it("preserves allowlisted tool names that contain punctuation", async () => {
@@ -1212,6 +1659,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
+      preserveSignatures: false,
+      dropThinkingBlocks: false,
     });
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
@@ -1257,6 +1706,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
+      preserveSignatures: false,
+      dropThinkingBlocks: false,
     });
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
@@ -1278,6 +1729,145 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
     ]);
   });
+
+  it("drops embedded Anthropic user tool_result blocks when signed-thinking replay must stay provider-owned", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "call_1", name: "read", input: { path: "." } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call_1",
+            content: [{ type: "text", text: "embedded result" }],
+          },
+          { type: "text", text: "retry" },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    });
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[tool calls omitted]" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call_1",
+            content: [{ type: "text", text: "kept result" }],
+          },
+          { type: "text", text: "retry" },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    });
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual(messages);
+  });
+
+  it.each(["toolCall", "functionCall"] as const)(
+    "preserves matching Anthropic user tool_result blocks after %s replay turns",
+    async (toolCallType) => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: toolCallType, id: "call_1", name: "read", arguments: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "toolResult",
+              toolUseId: "call_1",
+              content: [{ type: "text", text: "kept result" }],
+            },
+            { type: "text", text: "retry" },
+          ],
+        },
+      ];
+      const baseFn = vi.fn((_model, _context) =>
+        createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+      );
+
+      const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
+      });
+      const stream = wrapped({} as never, { messages } as never, {} as never) as
+        | FakeWrappedStream
+        | Promise<FakeWrappedStream>;
+      await Promise.resolve(stream);
+
+      expect(baseFn).toHaveBeenCalledTimes(1);
+      const seenContext = baseFn.mock.calls[0]?.[1] as {
+        messages: Array<{ role?: string; content?: unknown[] }>;
+      };
+      expect(seenContext.messages).toEqual(messages);
+    },
+  );
 
   it("drops orphaned Anthropic user tool_result blocks after dropping an assistant replay turn", async () => {
     const messages = [
@@ -1305,6 +1895,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
+      preserveSignatures: false,
+      dropThinkingBlocks: false,
     });
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
@@ -1646,139 +2238,42 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
   });
-});
 
-describe("isOllamaCompatProvider", () => {
-  it("detects native ollama provider id", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "ollama",
-        api: "openai-completions",
-        baseUrl: "https://example.com/v1",
+  it("preserves preexisting tool arguments when later reevaluation fails", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/etc/hosts" },
+    };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
       }),
-    ).toBe(true);
-  });
+    );
 
-  it("detects localhost Ollama OpenAI-compatible endpoint", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "custom",
-        api: "openai-completions",
-        baseUrl: "http://127.0.0.1:11434/v1",
-      }),
-    ).toBe(true);
-  });
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
 
-  it("does not misclassify non-local OpenAI-compatible providers", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "custom",
-        api: "openai-completions",
-        baseUrl: "https://api.openrouter.ai/v1",
-      }),
-    ).toBe(false);
-  });
-
-  it("detects remote Ollama-compatible endpoint when provider id hints ollama", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "my-ollama",
-        api: "openai-completions",
-        baseUrl: "http://ollama-host:11434/v1",
-      }),
-    ).toBe(true);
-  });
-
-  it("detects IPv6 loopback Ollama OpenAI-compatible endpoint", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "custom",
-        api: "openai-completions",
-        baseUrl: "http://[::1]:11434/v1",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not classify arbitrary remote hosts on 11434 without ollama provider hint", () => {
-    expect(
-      isOllamaCompatProvider({
-        provider: "custom",
-        api: "openai-completions",
-        baseUrl: "http://example.com:11434/v1",
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("wrapOllamaCompatNumCtx", () => {
-  it("injects num_ctx and preserves downstream onPayload hooks", () => {
-    let payloadSeen: Record<string, unknown> | undefined;
-    const baseFn = vi.fn((_model, _context, options) => {
-      const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      options?.onPayload?.(payload, _model);
-      payloadSeen = payload;
-      return {} as never;
-    });
-    const downstream = vi.fn();
-
-    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 202752);
-    void wrapped({} as never, {} as never, { onPayload: downstream } as never);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
-    expect(downstream).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("resolveOllamaCompatNumCtxEnabled", () => {
-  it("defaults to true when config is missing", () => {
-    expect(resolveOllamaCompatNumCtxEnabled({ providerId: "ollama" })).toBe(true);
-  });
-
-  it("defaults to true when provider config is missing", () => {
-    expect(
-      resolveOllamaCompatNumCtxEnabled({
-        config: { models: { providers: {} } },
-        providerId: "ollama",
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false when provider flag is explicitly disabled", () => {
-    expect(
-      resolveOllamaCompatNumCtxEnabled({
-        config: createOllamaProviderConfig(false),
-        providerId: "ollama",
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldInjectOllamaCompatNumCtx", () => {
-  it("requires openai-completions adapter", () => {
-    expect(
-      shouldInjectOllamaCompatNumCtx({
-        model: {
-          provider: "ollama",
-          api: "openai-responses",
-          baseUrl: "http://127.0.0.1:11434/v1",
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("respects provider flag disablement", () => {
-    expect(
-      shouldInjectOllamaCompatNumCtx({
-        model: {
-          provider: "ollama",
-          api: "openai-completions",
-          baseUrl: "http://127.0.0.1:11434/v1",
-        },
-        config: createOllamaProviderConfig(false),
-        providerId: "ollama",
-      }),
-    ).toBe(false);
+    expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
+    expect(streamedToolCall.arguments).toEqual({});
   });
 });
 

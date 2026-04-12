@@ -1,5 +1,4 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -7,6 +6,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
+  ctx.state.livenessState = "paused";
   ctx.ensureCompactionPromise();
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -68,6 +68,9 @@ export function handleAutoCompactionEnd(
     ctx.resetForCompactionRetry();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
+    if (!wasAborted) {
+      ctx.state.livenessState = "working";
+    }
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
   }
@@ -108,27 +111,9 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { sessionKey, agentId, configStore, observedCompactionCount, now = Date.now() } = params;
-  if (!sessionKey || observedCompactionCount <= 0) {
-    return undefined;
-  }
-  const storePath = resolveStorePath(configStore, { agentId });
-  const nextEntry = await updateSessionStoreEntry({
-    storePath,
-    sessionKey,
-    update: async (entry) => {
-      const currentCount = Math.max(0, entry.compactionCount ?? 0);
-      const nextCount = Math.max(currentCount, observedCompactionCount);
-      if (nextCount === currentCount) {
-        return null;
-      }
-      return {
-        compactionCount: nextCount,
-        updatedAt: Math.max(entry.updatedAt ?? 0, now),
-      };
-    },
-  });
-  return nextEntry?.compactionCount;
+  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+    await import("./pi-embedded-subscribe.handlers.compaction.runtime.js");
+  return reconcile(params);
 }
 
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeContext): void {

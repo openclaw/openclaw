@@ -1,13 +1,11 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    isWSL2Sync: vi.fn(() => false),
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  isTruthyEnvValue: (value: string | undefined) =>
+    typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim()),
+  isWSL2Sync: vi.fn(() => false),
+}));
 
 let isWSL2Sync: typeof import("openclaw/plugin-sdk/runtime-env").isWSL2Sync;
 let resetTelegramNetworkConfigStateForTests: typeof import("./network-config.js").resetTelegramNetworkConfigStateForTests;
@@ -189,9 +187,7 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     },
     {
       name: "normalizes trimmed config values",
-      network: { dnsResultOrder: "  Verbatim  " } as TelegramNetworkConfig & {
-        dnsResultOrder: string;
-      },
+      network: { dnsResultOrder: "  Verbatim  " } as unknown as TelegramNetworkConfig,
       nodeMajor: 20,
       expected: { value: "verbatim", source: "config" },
     },
@@ -205,14 +201,14 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     {
       name: "ignores invalid env and config values before applying Node 22 default",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
-      network: { dnsResultOrder: "invalid" } as TelegramNetworkConfig & { dnsResultOrder: string },
+      network: { dnsResultOrder: "invalid" } as unknown as TelegramNetworkConfig,
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
     },
   ] satisfies Array<{
     name: string;
     env?: NodeJS.ProcessEnv;
-    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    network?: TelegramNetworkConfig;
     nodeMajor: number;
     expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
   }>)("$name", ({ env, network, nodeMajor, expected }) => {

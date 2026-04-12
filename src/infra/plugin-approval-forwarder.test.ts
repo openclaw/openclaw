@@ -106,7 +106,7 @@ describe("plugin approval forwarding", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin-req-1 always",
+                value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
@@ -178,10 +178,10 @@ describe("plugin approval forwarding", () => {
       const mockPayload = { text: "custom adapter payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
+        "id" | "meta" | "capabilities" | "config" | "approvalCapability"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
+        approvalCapability: {
           render: {
             plugin: {
               buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
@@ -234,10 +234,10 @@ describe("plugin approval forwarding", () => {
       const mockPayload = { text: "custom resolved payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
+        "id" | "meta" | "capabilities" | "config" | "approvalCapability"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
+        approvalCapability: {
           render: {
             plugin: {
               buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),

@@ -2,8 +2,9 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function parseTelegramTargetForTest(raw: string): {
@@ -34,7 +35,7 @@ function normalizeWhatsAppTargetForTest(raw: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.endsWith("@g.us")) {
     const normalized = lowered.replace(/\s+/gu, "");
     return /^\d+@g\.us$/u.test(normalized) ? normalized : null;

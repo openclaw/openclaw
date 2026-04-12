@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   isLoopbackHost,
   isWebSocketUrl,
@@ -77,8 +78,8 @@ export async function captureScreenshot(opts: {
         contentSize?: { width?: number; height?: number };
       };
       const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const contentWidth = Number(size?.width ?? 0);
-      const contentHeight = Number(size?.height ?? 0);
+      const contentWidth = size?.width ?? 0;
+      const contentHeight = size?.height ?? 0;
       if (contentWidth > 0 && contentHeight > 0) {
         const vpResult = (await send("Runtime.evaluate", {
           expression:
@@ -90,14 +91,14 @@ export async function captureScreenshot(opts: {
           };
         };
         const v = vpResult?.result?.value;
-        const currentW = Number(v?.w ?? 0);
-        const currentH = Number(v?.h ?? 0);
+        const currentW = v?.w ?? 0;
+        const currentH = v?.h ?? 0;
         savedVp = {
           w: currentW,
           h: currentH,
-          dpr: Number(v?.dpr ?? 1),
-          sw: Number(v?.sw ?? currentW),
-          sh: Number(v?.sh ?? currentH),
+          dpr: v?.dpr ?? 1,
+          sw: v?.sw ?? currentW,
+          sh: v?.sh ?? currentH,
         };
         // mobile: false is the safe default — CDP provides no way to query
         // the active mobile flag, and inferring from navigator.maxTouchPoints
@@ -118,13 +119,13 @@ export async function captureScreenshot(opts: {
       format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
     try {
-      // fromSurface: false avoids a Chromium compositor bug where cross-origin
-      // image textures are lost when fromSurface: true + captureBeyondViewport: true
-      // extends the capture surface (see https://issues.chromium.org/40760789).
+      // Chromium bug 40760789 (cross-origin textures missing with
+      // fromSurface: true + captureBeyondViewport: true) was fixed around
+      // Chrome 130. Chrome 146+ managed/headful browsers now reject
+      // fromSurface: false, so we omit it and keep captureBeyondViewport: true.
       const result = (await send("Page.captureScreenshot", {
         format,
         ...(quality !== undefined ? { quality } : {}),
-        fromSurface: false,
         captureBeyondViewport: true,
       })) as { data?: string };
 
@@ -147,11 +148,7 @@ export async function captureScreenshot(opts: {
             returnByValue: true,
           })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
           const p = postResult?.result?.value;
-          if (
-            Number(p?.w) !== savedVp.w ||
-            Number(p?.h) !== savedVp.h ||
-            Number(p?.dpr) !== savedVp.dpr
-          ) {
+          if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
             await send("Emulation.setDeviceMetricsOverride", {
               width: savedVp.w,
               height: savedVp.h,
@@ -182,25 +179,29 @@ export async function createTargetViaCdp(opts: {
   let wsUrl: string;
   if (isWebSocketUrl(opts.cdpUrl)) {
     // Direct WebSocket URL — skip /json/version discovery.
+    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
       1500,
+      undefined,
+      opts.ssrfPolicy,
     );
-    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
+    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
     wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
+    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
   return await withCdpSocket(wsUrl, async (send) => {
     const created = (await send("Target.createTarget", { url: opts.url })) as {
       targetId?: string;
     };
-    const targetId = String(created?.targetId ?? "").trim();
+    const targetId = created?.targetId?.trim() ?? "";
     if (!targetId) {
       throw new Error("CDP Target.createTarget returned no targetId");
     }
@@ -376,6 +377,7 @@ export async function snapshotDom(opts: {
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxTextChars)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const nodes = [];
     const root = document.documentElement;
     if (!root) return { nodes };
@@ -385,7 +387,7 @@ export async function snapshotDom(opts: {
       const el = cur.el;
       if (!el || el.nodeType !== 1) continue;
       const ref = "n" + String(nodes.length + 1);
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
@@ -506,9 +508,10 @@ export async function querySelector(opts: {
     const lim = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxText)};
     const maxHtml = ${JSON.stringify(maxHtml)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
     return els.map((el, i) => {
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       let text = "";

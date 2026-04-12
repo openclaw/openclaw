@@ -2,12 +2,14 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -20,6 +22,7 @@ import type {
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -261,10 +264,7 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
-  if (typeof input !== "string") {
-    return undefined;
-  }
-  const channel = input.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(input);
   return channel ? (channel as CronMessageChannel) : undefined;
 }
 
@@ -561,6 +561,7 @@ export function applyJobResult(
 }
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+  clearCronJobActive(result.jobId);
   tryFinishCronTaskRun(state, result);
   const store = state.store;
   if (!store) {
@@ -606,12 +607,8 @@ export function armTimer(state: CronServiceState) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
     const withNextRun =
-      state.store?.jobs.filter(
-        (j) =>
-          j.enabled &&
-          typeof j.state.nextRunAtMs === "number" &&
-          Number.isFinite(j.state.nextRunAtMs),
-      ).length ?? 0;
+      state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
+        .length ?? 0;
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
@@ -716,6 +713,7 @@ export async function onTimer(state: CronServiceState) {
       const { id, job } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
+      markCronJobActive(job.id);
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
@@ -864,15 +862,10 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  if (typeof next === "number" && Number.isFinite(next) && nowMs >= next) {
+  if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
     return true;
   }
-  if (
-    typeof next === "number" &&
-    Number.isFinite(next) &&
-    next > nowMs &&
-    isErrorBackoffPending(job, nowMs)
-  ) {
+  if (hasScheduledNextRunAtMs(next) && next > nowMs && isErrorBackoffPending(job, nowMs)) {
     // Respect active retry backoff windows on restart, but allow missed-slot
     // replay once the backoff window has elapsed.
     return false;
@@ -1299,6 +1292,7 @@ export async function executeJob(
   const startedAt = state.deps.nowMs();
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
+  markCronJobActive(job.id);
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
   let coreResult: {
@@ -1307,7 +1301,7 @@ export async function executeJob(
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
-    coreResult = await executeJobCore(state, job);
+    coreResult = await executeJobCoreWithTimeout(state, job);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
@@ -1327,6 +1321,7 @@ export async function executeJob(
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
     emit(state, { jobId: job.id, action: "removed" });
   }
+  clearCronJobActive(job.id);
 }
 
 function emitJobFinished(

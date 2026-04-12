@@ -1,7 +1,9 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
@@ -28,12 +30,15 @@ export type SubsystemLogger = {
 };
 
 function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
@@ -72,7 +77,7 @@ function formatRuntimeArg(arg: unknown): string {
 }
 
 function isRichConsoleEnv(): boolean {
-  const term = (process.env.TERM ?? "").toLowerCase();
+  const term = normalizeLowercaseStringOrEmpty(process.env.TERM);
   if (process.env.COLORTERM || process.env.TERM_PROGRAM) {
     return true;
   }
@@ -87,7 +92,7 @@ function getColorForConsole(): ChalkInstance {
   if (process.env.NO_COLOR && !hasForceColor) {
     return new Chalk({ level: 0 });
   }
-  const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
+  const hasTty = process.stdout.isTTY || process.stderr.isTTY;
   return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
 }
 
@@ -97,17 +102,14 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-// Keep local to avoid importing channel registry into hot logging paths.
-const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>([
-  "telegram",
-  "whatsapp",
-  "discord",
-  "irc",
-  "googlechat",
-  "slack",
-  "signal",
-  "imessage",
-]);
+
+function isChannelSubsystemPrefix(value: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return false;
+  }
+  return normalizeChatChannelId(normalized) === normalized || normalized === "webchat";
+}
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -135,7 +137,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (isChannelSubsystemPrefix(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -157,7 +159,10 @@ export function stripRedundantSubsystemPrefixForConsole(
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
       const bracketTag = message.slice(1, closeIdx);
-      if (bracketTag.toLowerCase() === displaySubsystem.toLowerCase()) {
+      if (
+        normalizeLowercaseStringOrEmpty(bracketTag) ===
+        normalizeLowercaseStringOrEmpty(displaySubsystem)
+      ) {
         let i = closeIdx + 1;
         while (message[i] === " ") {
           i += 1;
@@ -168,7 +173,9 @@ export function stripRedundantSubsystemPrefixForConsole(
   }
 
   const prefix = message.slice(0, displaySubsystem.length);
-  if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(prefix) !== normalizeLowercaseStringOrEmpty(displaySubsystem)
+  ) {
     return message;
   }
 
@@ -308,6 +315,58 @@ function logToFile(
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
 
+  const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+    const consoleSettings = getConsoleSettings();
+    const consoleEnabled =
+      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      shouldLogSubsystemToConsole(subsystem);
+    const fileEnabled = isFileLogLevelEnabled(level);
+    if (!consoleEnabled && !fileEnabled) {
+      return;
+    }
+    let consoleMessageOverride: string | undefined;
+    let fileMeta = meta;
+    if (meta && Object.keys(meta).length > 0) {
+      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
+        consoleMessage?: unknown;
+      };
+      if (typeof consoleMessage === "string") {
+        consoleMessageOverride = consoleMessage;
+      }
+      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+    if (fileEnabled) {
+      if (!fileLogger) {
+        fileLogger = getChildLogger({ subsystem });
+      }
+      logToFile(fileLogger, level, message, fileMeta);
+    }
+    if (!consoleEnabled) {
+      return;
+    }
+    const consoleMessage = consoleMessageOverride ?? message;
+    if (
+      shouldSuppressProbeConsoleLine({
+        level,
+        subsystem,
+        message: consoleMessage,
+        meta: fileMeta,
+      })
+    ) {
+      return;
+    }
+    writeConsoleLine(
+      level,
+      formatConsoleLine({
+        level,
+        subsystem,
+        message: consoleSettings.style === "json" ? message : consoleMessage,
+        style: consoleSettings.style,
+        meta: fileMeta,
+      }),
+    );
+  };
+
   const logger: SubsystemLogger = {
     subsystem,
     isEnabled(level, target = "any") {
@@ -324,316 +383,22 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       return isConsoleEnabled || isFileEnabled;
     },
     trace(message, meta) {
-      const level: LogLevel = "trace";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("trace", message, meta);
     },
     debug(message, meta) {
-      const level: LogLevel = "debug";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("debug", message, meta);
     },
     info(message, meta) {
-      const level: LogLevel = "info";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("info", message, meta);
     },
     warn(message, meta) {
-      const level: LogLevel = "warn";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("warn", message, meta);
     },
     error(message, meta) {
-      const level: LogLevel = "error";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("error", message, meta);
     },
     fatal(message, meta) {
-      const level: LogLevel = "fatal";
-      const consoleSettings = getConsoleSettings();
-      const consoleEnabled =
-        shouldLogToConsole(level, { level: consoleSettings.level }) &&
-        shouldLogSubsystemToConsole(subsystem);
-      const fileEnabled = isFileLogLevelEnabled(level);
-      if (!consoleEnabled && !fileEnabled) {
-        return;
-      }
-      let consoleMessageOverride: string | undefined;
-      let fileMeta = meta;
-      if (meta && Object.keys(meta).length > 0) {
-        const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-          consoleMessage?: unknown;
-        };
-        if (typeof consoleMessage === "string") {
-          consoleMessageOverride = consoleMessage;
-        }
-        fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
-      }
-      if (!consoleEnabled) {
-        return;
-      }
-      const consoleMessage = consoleMessageOverride ?? message;
-      if (
-        shouldSuppressProbeConsoleLine({
-          level,
-          subsystem,
-          message: consoleMessage,
-          meta: fileMeta,
-        })
-      ) {
-        return;
-      }
-      writeConsoleLine(
-        level,
-        formatConsoleLine({
-          level,
-          subsystem,
-          message: consoleSettings.style === "json" ? message : consoleMessage,
-          style: consoleSettings.style,
-          meta: fileMeta,
-        }),
-      );
+      emitLog("fatal", message, meta);
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {

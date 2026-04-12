@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import {
+  drainSystemEvents,
+  peekSystemEventEntries,
+  peekSystemEvents,
+} from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
@@ -244,6 +248,44 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("queues direct and mapped wake payloads as untrusted system events", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-wake" },
+          action: "wake",
+          textTemplate: "Mapped wake: {{payload.subject}}",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
+      expect(direct.status).toBe(200);
+      await waitForSystemEvent();
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
+        expect.objectContaining({
+          text: "Direct wake",
+          trusted: false,
+        }),
+      ]);
+      drainSystemEvents(resolveMainKey());
+
+      const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
+      expect(mapped.status).toBe(200);
+      await waitForSystemEvent();
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
+        expect.objectContaining({
+          text: "Mapped wake: Email",
+          trusted: false,
+        }),
+      ]);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
@@ -401,6 +443,32 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
         sessionKey: "agent:main:slack:channel:c123",
       });
+      expect(denied.status).toBe(400);
+      const body = (await denied.json()) as { error?: string };
+      expect(body.error).toContain("sessionKey must start with one of");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
+  test("rejects mapped hook session rebinding into a disallowed target-agent prefix", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:main:"],
+      mappings: [
+        {
+          match: { path: "mapped-rebind-denied" },
+          action: "agent",
+          agentId: "hooks",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:slack:channel:c123",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/mapped-rebind-denied", { subject: "hello" });
       expect(denied.status).toBe(400);
       const body = (await denied.json()) as { error?: string };
       expect(body.error).toContain("sessionKey must start with one of");

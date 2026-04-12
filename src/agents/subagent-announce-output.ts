@@ -1,26 +1,32 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  captureSubagentCompletionReplyUsing,
+  readLatestSubagentOutputWithRetryUsing,
+} from "./subagent-announce-capture.js";
+import {
+  callGateway,
+  loadConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
+} from "./subagent-announce.runtime.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
-import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
-import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
+  readLatestAssistantReply: typeof readLatestAssistantReply;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   loadConfig,
+  readLatestAssistantReply,
 };
 
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
@@ -117,17 +123,7 @@ function extractSubagentOutputText(message: unknown): string {
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
   if (role === "assistant") {
-    const assistantText = extractAssistantText(message);
-    if (assistantText) {
-      return assistantText;
-    }
-    if (typeof content === "string") {
-      return sanitizeTextContent(content);
-    }
-    if (Array.isArray(content)) {
-      return extractInlineTextContent(content);
-    }
-    return "";
+    return extractAssistantText(message) ?? "";
   }
   if (role === "toolResult" || role === "tool") {
     return extractToolResultText((message as ToolResultMessage).content);
@@ -245,7 +241,7 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await subagentAnnounceOutputDeps.callGateway<{ messages?: Array<unknown> }>({
+  const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
   });
@@ -254,7 +250,10 @@ export async function readSubagentOutput(
   if (selected?.trim()) {
     return selected;
   }
-  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+  const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
+    sessionKey,
+    limit: 100,
+  });
   return latestAssistant?.trim() ? latestAssistant : undefined;
 }
 
@@ -263,24 +262,13 @@ export async function readLatestSubagentOutputWithRetry(params: {
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  const retryIntervalMs = isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
-  const maxWaitMs = Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  let waitedMs = 0;
-  let result: string | undefined;
-  while (waitedMs < maxWaitMs) {
-    result = await readSubagentOutput(params.sessionKey, params.outcome);
-    if (result?.trim()) {
-      return result;
-    }
-    const remainingMs = maxWaitMs - waitedMs;
-    if (remainingMs <= 0) {
-      break;
-    }
-    const sleepMs = Math.min(retryIntervalMs, remainingMs);
-    await new Promise((resolve) => setTimeout(resolve, sleepMs));
-    waitedMs += sleepMs;
-  }
-  return result;
+  return await readLatestSubagentOutputWithRetryUsing({
+    sessionKey: params.sessionKey,
+    maxWaitMs: params.maxWaitMs,
+    outcome: params.outcome,
+    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    readSubagentOutput,
+  });
 }
 
 export async function waitForSubagentRunOutcome(
@@ -288,7 +276,7 @@ export async function waitForSubagentRunOutcome(
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await subagentAnnounceOutputDeps.callGateway<AgentWaitResult>({
+  return await subagentAnnounceOutputDeps.callGateway({
     method: "agent.wait",
     params: {
       runId,
@@ -328,14 +316,14 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
+  options?: { waitForReply?: boolean },
 ): Promise<string | undefined> {
-  const immediate = await readSubagentOutput(sessionKey);
-  if (immediate?.trim()) {
-    return immediate;
-  }
-  return await readLatestSubagentOutputWithRetry({
+  return await captureSubagentCompletionReplyUsing({
     sessionKey,
+    waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
+    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    readSubagentOutput: async (nextSessionKey) => await readSubagentOutput(nextSessionKey),
   });
 }
 
