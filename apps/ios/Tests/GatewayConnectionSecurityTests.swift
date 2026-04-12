@@ -144,3 +144,66 @@ import Testing
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
 }
+
+    // MARK: - LAN host TLS override tests (#47887)
+
+    @Test @MainActor func localNetworkHost_rfc1918_10x() async {
+        let c = makeController()
+        #expect(c._test_isLocalNetworkHost("10.0.0.1"))
+        #expect(c._test_isLocalNetworkHost("10.255.255.255"))
+    }
+
+    @Test @MainActor func localNetworkHost_rfc1918_172() async {
+        let c = makeController()
+        #expect(c._test_isLocalNetworkHost("172.16.0.1"))
+        #expect(c._test_isLocalNetworkHost("172.31.255.255"))
+        #expect(!c._test_isLocalNetworkHost("172.15.0.1"))   // outside range
+        #expect(!c._test_isLocalNetworkHost("172.32.0.1"))   // outside range
+    }
+
+    @Test @MainActor func localNetworkHost_rfc1918_192168() async {
+        let c = makeController()
+        #expect(c._test_isLocalNetworkHost("192.168.1.1"))
+        #expect(c._test_isLocalNetworkHost("192.168.0.1"))
+    }
+
+    @Test @MainActor func localNetworkHost_mDNS() async {
+        let c = makeController()
+        #expect(c._test_isLocalNetworkHost("openclaw.local"))
+        #expect(c._test_isLocalNetworkHost("mymac.local"))
+    }
+
+    @Test @MainActor func localNetworkHost_tailscale() async {
+        let c = makeController()
+        #expect(c._test_isLocalNetworkHost("mymachine.tail1234.ts.net"))
+        #expect(c._test_isLocalNetworkHost("gateway.ts.net"))
+    }
+
+    @Test @MainActor func localNetworkHost_publicHostnames_notLocal() async {
+        let c = makeController()
+        #expect(!c._test_isLocalNetworkHost("example.com"))
+        #expect(!c._test_isLocalNetworkHost("8.8.8.8"))
+        #expect(!c._test_isLocalNetworkHost("1.1.1.1"))
+    }
+
+    @Test @MainActor func manualUseTLS_lanHostDoesNotForceTLS() async {
+        let c = makeController()
+        // LAN hosts with useTLS=false should stay plaintext (#47887)
+        #expect(!c._test_resolveManualUseTLS(host: "192.168.1.100", useTLS: false))
+        #expect(!c._test_resolveManualUseTLS(host: "10.0.0.1", useTLS: false))
+        #expect(!c._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false))
+        #expect(!c._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false))
+    }
+
+    @Test @MainActor func manualUseTLS_publicHostForcedTLS() async {
+        let c = makeController()
+        // Public hosts without explicit useTLS should still require TLS
+        #expect(c._test_resolveManualUseTLS(host: "my-server.example.com", useTLS: false))
+    }
+
+    @Test @MainActor func manualUseTLS_explicitTLSTrueAlwaysUseTLS() async {
+        let c = makeController()
+        // Explicit useTLS=true always wins regardless of host type
+        #expect(c._test_resolveManualUseTLS(host: "192.168.1.1", useTLS: true))
+        #expect(c._test_resolveManualUseTLS(host: "localhost", useTLS: true))
+    }

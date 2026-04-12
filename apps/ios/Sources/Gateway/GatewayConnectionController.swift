@@ -688,7 +688,12 @@ final class GatewayConnectionController {
     }
 
     private func shouldRequireTLS(host: String) -> Bool {
-        !Self.isLoopbackHost(host)
+        // Allow plaintext for loopback and local-network hosts (RFC-1918, .local,
+        // Tailscale .ts.net). Only force TLS for internet-routable hosts.
+        // Previously this returned `!isLoopbackHost`, which silently upgraded
+        // ws:// to wss:// for all LAN/Tailscale addresses and broke onboarding
+        // when the gateway runs without TLS (the common LAN default). (#47887)
+        !Self.isLoopbackHost(host) && !Self.isLocalNetworkHost(host)
     }
 
     private func shouldForceTLS(host: String) -> Bool {
@@ -740,6 +745,47 @@ final class GatewayConnectionController {
             let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
             return isMappedV4 && bytes[12] == 127
         }
+    }
+
+    /// Returns true for hosts that are on a local network and should not require TLS
+    /// by default: RFC-1918 private ranges, link-local, .local mDNS names, and
+    /// Tailscale MagicDNS addresses (.ts.net). These are trusted-network endpoints
+    /// where the gateway commonly runs without a certificate. (#47887)
+    private static func isLocalNetworkHost(_ rawHost: String) -> Bool {
+        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+        if host.hasPrefix("[") && host.hasSuffix("]") { host.removeFirst(); host.removeLast() }
+        if host.hasSuffix(".") { host.removeLast() }
+
+        // .local mDNS names (Bonjour)
+        if host.hasSuffix(".local") { return true }
+
+        // Tailscale MagicDNS hostnames
+        if host.hasSuffix(".ts.net") { return true }
+
+        // RFC-1918 and link-local IPv4 ranges
+        var addr = in_addr()
+        if host.withCString({ inet_pton(AF_INET, $0, &addr) == 1 }) {
+            let value = UInt32(bigEndian: addr.s_addr)
+            let a = UInt8((value >> 24) & 0xFF)
+            let b = UInt8((value >> 16) & 0xFF)
+            if a == 10 { return true }                        // 10.0.0.0/8
+            if a == 172 && (b >= 16 && b <= 31) { return true }  // 172.16-31.0.0/12
+            if a == 192 && b == 168 { return true }           // 192.168.0.0/16
+            if a == 169 && b == 254 { return true }           // 169.254.0.0/16 link-local
+            if a == 100 && (b >= 64 && b <= 127) { return true }  // 100.64-127 CG-NAT / Tailscale
+        }
+
+        // RFC-4193 ULA IPv6 (fc00::/7) — local
+        var addr6 = in6_addr()
+        if host.withCString({ inet_pton(AF_INET6, $0, &addr6) == 1 }) {
+            return withUnsafeBytes(of: &addr6) {
+                let first = $0.bindMemory(to: UInt8.self)[0]
+                return (first & 0xFE) == 0xFC   // fc00::/7
+            }
+        }
+
+        return false
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -995,6 +1041,10 @@ extension GatewayConnectionController {
         allowTOFU: Bool) -> GatewayTLSParams?
     {
         self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
+    }
+
+    func _test_isLocalNetworkHost(_ host: String) -> Bool {
+        Self.isLocalNetworkHost(host)
     }
 
     func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {

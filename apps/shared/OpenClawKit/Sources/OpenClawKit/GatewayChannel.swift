@@ -518,7 +518,9 @@ public actor GatewayChannelActor {
                 (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
                     ? storedToken
                     : nil)
-        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        // Suppress bootstrap auth when an explicit password is present:
+        // mixed payloads and stale bootstrap state should defer to password. (#47887)
+        let authBootstrapToken = (authToken == nil && explicitPassword == nil) ? explicitBootstrapToken : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource
         if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
