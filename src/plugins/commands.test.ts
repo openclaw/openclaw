@@ -186,6 +186,22 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "signal",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            resolveCommandConversation: ({ senderId }: { senderId?: string }) => {
+              const normalizedSenderId = senderId?.trim();
+              return normalizedSenderId ? { conversationId: `dm:${normalizedSenderId}` } : null;
+            },
+          },
+        },
+      },
     ]),
   );
 });
@@ -237,6 +253,7 @@ describe("registerPluginCommand", () => {
         name: "demo_cmd",
         description: "Demo command",
         pluginId: "demo-plugin",
+        acceptsArgs: false,
       },
     ]);
     expect(getPluginCommandSpecs()).toEqual([
@@ -444,6 +461,19 @@ describe("registerPluginCommand", () => {
         accountId: "default",
       },
       expected: null,
+    },
+    {
+      name: "resolves sender-keyed command bindings when only senderId is available",
+      params: {
+        channel: "signal",
+        senderId: "signal-user-42",
+        accountId: "default",
+      },
+      expected: {
+        channel: "signal",
+        accountId: "default",
+        conversationId: "dm:signal-user-42",
+      },
     },
   ] as const)("$name", ({ params, expected }) => {
     expectBindingConversationCase(params, expected);

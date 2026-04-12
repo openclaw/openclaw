@@ -89,7 +89,7 @@ vi.mock("../commands/health.js", () => ({
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
-  SEARCH_PROVIDER_OPTIONS: [],
+  listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,
   hasKeyInEnv,

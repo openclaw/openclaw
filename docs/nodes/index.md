@@ -11,7 +11,8 @@ title: "Nodes"
 
 A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
+Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL;
+historical only for current nodes).
 
 macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
 
@@ -164,7 +165,7 @@ Or per session:
 Once set, any `exec` call with `host=node` runs on the node host (subject to the
 node allowlist/approvals).
 
-`host=auto` will not silently hop to the node just because a tool call requests it. If you want node exec, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
 

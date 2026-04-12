@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
@@ -10,11 +10,21 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "../../../test/helpers/plugins/plugin-registry.js";
+import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
-import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
 
-type AgentBinding = NonNullable<OpenClawConfig["bindings"]>[number];
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+
+const lineBindingsPlugin = {
+  id: "line",
+  bindings: lineBindingsAdapter,
+  conversationBindings: {
+    defaultTopLevelPlacement: "current",
+    supportsCurrentConversationBinding: true,
+  },
+};
 
 describe("buildLineMessageContext", () => {
   let tmpDir: string;
@@ -65,8 +75,8 @@ describe("buildLineMessageContext", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: linePlugin.id,
-          plugin: linePlugin,
+          pluginId: lineBindingsPlugin.id,
+          plugin: lineBindingsPlugin,
           source: "test",
         },
       ]),
@@ -318,12 +328,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:user:U1234567890abcdef1234567890abcdef",
     });
 
@@ -331,12 +336,7 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
+      lineBindingsAdapter.matchInboundConversation({
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),
@@ -347,12 +347,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
 
@@ -360,20 +355,14 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.resolveCommandConversation?.({
-        accountId: "default",
+      lineBindingsAdapter.resolveCommandConversation({
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
     ).toEqual({
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
+      lineBindingsAdapter.matchInboundConversation({
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),

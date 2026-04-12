@@ -1,8 +1,12 @@
 import { Command } from "commander";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
 import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
+import {
+  addCommandDescriptorsToProgram,
+  collectUniqueCommandDescriptors,
+} from "./command-descriptor-utils.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
@@ -21,29 +25,16 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     agentChannelOptions: "",
   });
 
-  const existingCommands = new Set<string>();
-  for (const command of getCoreCliCommandDescriptors()) {
-    program.command(command.name).description(command.description);
-    existingCommands.add(command.name);
-  }
-  for (const command of getSubCliEntries()) {
-    if (existingCommands.has(command.name)) {
-      continue;
-    }
-    program.command(command.name).description(command.description);
-    existingCommands.add(command.name);
-  }
-  for (const command of await getPluginCliCommandDescriptors(
-    renderOptions?.config,
-    renderOptions?.env,
-    { pluginSdkResolution: renderOptions?.pluginSdkResolution },
-  )) {
-    if (existingCommands.has(command.name)) {
-      continue;
-    }
-    program.command(command.name).description(command.description);
-    existingCommands.add(command.name);
-  }
+  addCommandDescriptorsToProgram(
+    program,
+    collectUniqueCommandDescriptors([
+      getCoreCliCommandDescriptors(),
+      getSubCliEntries(),
+      await getPluginCliCommandDescriptors(renderOptions?.config, renderOptions?.env, {
+        pluginSdkResolution: renderOptions?.pluginSdkResolution,
+      }),
+    ]),
+  );
 
   return program;
 }

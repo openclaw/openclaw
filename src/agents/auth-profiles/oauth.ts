@@ -4,14 +4,17 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai/oauth";
-import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { writeCodexCliCredentials } from "../cli-credentials.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
@@ -24,7 +27,11 @@ import {
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  saveAuthProfileStore,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function listOAuthProviderIds(): string[] {
@@ -115,7 +122,52 @@ async function buildOAuthProfileResult(params: {
 }
 
 function extractErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
+}
+
+function isRefreshTokenReusedError(error: unknown): boolean {
+  const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
+  return (
+    message.includes("refresh_token_reused") ||
+    message.includes("refresh token has already been used") ||
+    message.includes("already been used to generate a new access token")
+  );
+}
+
+function hasOAuthCredentialChanged(
+  previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+  current: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+): boolean {
+  return (
+    previous.access !== current.access ||
+    previous.refresh !== current.refresh ||
+    previous.expires !== current.expires
+  );
+}
+
+async function loadFreshStoredOAuthCredential(params: {
+  profileId: string;
+  agentDir?: string;
+  provider: string;
+  previous?: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+  requireChange?: boolean;
+}): Promise<OAuthCredential | null> {
+  const reloadedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+  const reloaded = reloadedStore.profiles[params.profileId];
+  if (reloaded?.type !== "oauth" || reloaded.provider !== params.provider) {
+    return null;
+  }
+  if (!Number.isFinite(reloaded.expires) || Date.now() >= reloaded.expires) {
+    return null;
+  }
+  if (
+    params.requireChange &&
+    params.previous &&
+    !hasOAuthCredentialChanged(params.previous, reloaded)
+  ) {
+    return null;
+  }
+  return reloaded;
 }
 
 type ResolveApiKeyForProfileParams = {
@@ -158,7 +210,7 @@ function adoptNewerMainOAuthCredential(params: {
     // Best-effort: don't crash if main agent store is missing or unreadable.
     log.debug("adoptNewerMainOAuthCredential failed", {
       profileId: params.profileId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
   }
   return null;
@@ -172,7 +224,9 @@ async function refreshOAuthTokenWithLock(params: {
   ensureAuthStoreFile(authPath);
 
   return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-    const store = ensureAuthProfileStore(params.agentDir);
+    // Locked refresh must bypass runtime snapshots so we can adopt fresher
+    // on-disk credentials written by another refresh attempt.
+    const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") {
       return null;
@@ -255,7 +309,7 @@ async function refreshOAuthTokenWithLock(params: {
 
     const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
     const result =
-      String(cred.provider) === "chutes"
+      cred.provider === "chutes"
         ? await (async () => {
             const newCredentials = await refreshChutesTokens({
               credential: cred,
@@ -352,7 +406,7 @@ async function resolveProfileSecretString(params: {
         log.debug(params.inlineFailureMessage, {
           profileId: params.profileId,
           provider: params.provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatErrorMessage(err),
         });
       }
     }
@@ -370,7 +424,7 @@ async function resolveProfileSecretString(params: {
       log.debug(params.refFailureMessage, {
         profileId: params.profileId,
         provider: params.provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
     }
   }
@@ -478,7 +532,7 @@ export async function resolveApiKeyForProfile(
       email: cred.email,
     });
   } catch (error) {
-    const refreshedStore = ensureAuthProfileStore(params.agentDir);
+    const refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
     if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
       return await buildOAuthProfileResult({
@@ -486,6 +540,38 @@ export async function resolveApiKeyForProfile(
         credentials: refreshed,
         email: refreshed.email ?? cred.email,
       });
+    }
+    if (
+      isRefreshTokenReusedError(error) &&
+      refreshed?.type === "oauth" &&
+      refreshed.provider === cred.provider &&
+      hasOAuthCredentialChanged(cred, refreshed)
+    ) {
+      const recovered = await loadFreshStoredOAuthCredential({
+        profileId,
+        agentDir: params.agentDir,
+        provider: cred.provider,
+        previous: cred,
+        requireChange: true,
+      });
+      if (recovered) {
+        return await buildOAuthProfileResult({
+          provider: recovered.provider,
+          credentials: recovered,
+          email: recovered.email ?? cred.email,
+        });
+      }
+      const retried = await refreshOAuthTokenWithLock({
+        profileId,
+        agentDir: params.agentDir,
+      });
+      if (retried) {
+        return buildApiKeyProfileResult({
+          apiKey: retried.apiKey,
+          provider: cred.provider,
+          email: cred.email,
+        });
+      }
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,

@@ -37,6 +37,13 @@ openclaw cron runs --id <job-id>
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
+- Isolated cron runs also guard against stale acknowledgement replies. If the
+  first result is just an interim status update (`on it`, `pulling everything
+together`, and similar hints) and no descendant subagent run is still
+  responsible for the final answer, OpenClaw re-prompts once for the actual
+  result before delivery.
+
+<a id="maintenance"></a>
 
 Task reconciliation for cron is runtime-owned: an active cron task stays live while the
 cron runtime still tracks that job as running, even if an old child session row still exists.
@@ -55,6 +62,18 @@ Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` fo
 
 Recurring top-of-hour expressions are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing or `--stagger 30s` for an explicit window.
 
+### Day-of-month and day-of-week use OR logic
+
+Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When both the day-of-month and day-of-week fields are non-wildcard, croner matches when **either** field matches — not both. This is standard Vixie cron behavior.
+
+```
+# Intended: "9 AM on the 15th, only if it's a Monday"
+# Actual:   "9 AM on every 15th, AND 9 AM on every Monday"
+0 9 15 * 1
+```
+
+This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw uses Croner's default OR behavior here. To require both conditions, use Croner's `+` day-of-week modifier (`0 9 15 * +1`) or schedule on one field and guard the other in your job's prompt or command.
+
 ## Execution styles
 
 | Style           | `--session` value   | Runs in                  | Best for                        |
@@ -67,6 +86,10 @@ Recurring top-of-hour expressions are automatically staggered by up to 5 minutes
 **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
+
+When isolated cron runs orchestrate subagents, delivery also prefers the final
+descendant output over stale parent interim text. If descendants are still
+running, OpenClaw suppresses that partial parent update instead of announcing it.
 
 ### Payload options for isolated jobs
 
@@ -81,6 +104,23 @@ model selection instead. Configured fallback chains still apply, but a plain
 model override with no explicit per-job fallback list no longer appends the
 agent primary as a hidden extra retry target.
 
+Model-selection precedence for isolated jobs is:
+
+1. Gmail hook model override (when the run came from Gmail and that override is allowed)
+2. Per-job payload `model`
+3. Stored cron session model override
+4. Agent/default model selection
+
+Fast mode follows the resolved live selection too. If the selected model config
+has `params.fastMode`, isolated cron uses that by default. A stored session
+`fastMode` override still wins over config in either direction.
+
+If an isolated run hits a live model-switch handoff, cron retries with the
+switched provider/model and persists that live selection before retrying. When
+the switch also carries a new auth profile, cron persists that auth profile
+override too. Retries are bounded: after the initial attempt plus 2 switch
+retries, cron aborts instead of looping forever.
+
 ## Delivery and output
 
 | Mode       | What happens                                             |
@@ -90,6 +130,15 @@ agent primary as a hidden extra retry target.
 | `none`     | Internal only, no delivery                               |
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+
+For cron-owned isolated jobs, the runner owns the final delivery path. The
+agent is prompted to return a plain-text summary, and that summary is then sent
+through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
+does not hand delivery back to the agent; it keeps the run internal.
+
+If the original task explicitly says to message some external recipient, the
+agent should note who/where that message should go in its output instead of
+trying to send it directly.
 
 Failure notifications follow a separate destination path:
 
@@ -354,6 +403,12 @@ openclaw doctor
 - Delivery mode is `none` means no external message is expected.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
+- If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
+  OpenClaw suppresses direct outbound delivery and also suppresses the fallback
+  queued summary path, so nothing is posted back to chat.
+- For cron-owned isolated jobs, do not expect the agent to use the message tool
+  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
+  internal instead of allowing a direct send.
 
 ### Timezone gotchas
 

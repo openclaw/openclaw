@@ -51,7 +51,11 @@ See the [full reference](/gateway/configuration-reference) for every available f
   </Tab>
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
-    The Control UI renders a form from the config schema, with a **Raw JSON** editor as an escape hatch.
+    The Control UI renders a form from the live config schema, including field
+    `title` / `description` docs metadata plus plugin and channel schemas when
+    available, with a **Raw JSON** editor as an escape hatch. For drill-down
+    UIs and other tooling, the gateway also exposes `config.schema.lookup` to
+    fetch one path-scoped schema node plus immediate child summaries.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -63,6 +67,27 @@ See the [full reference](/gateway/configuration-reference) for every available f
 <Warning>
 OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
+
+Schema tooling notes:
+
+- `openclaw config schema` prints the same JSON Schema family used by Control UI
+  and config validation.
+- Treat that schema output as the canonical machine-readable contract for
+  `openclaw.json`; this overview and the configuration reference summarize it.
+- Field `title` and `description` values are carried into the schema output for
+  editor and form tooling.
+- Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
+  docs metadata where matching field documentation exists.
+- `anyOf` / `oneOf` / `allOf` composition branches inherit the same docs
+  metadata too, so union/intersection variants keep the same field help.
+- `config.schema.lookup` returns one normalized config path with a shallow
+  schema node (`title`, `description`, `type`, `enum`, `const`, common bounds,
+  and similar validation fields), matched UI hint metadata, and immediate child
+  summaries for drill-down tooling.
+- Runtime plugin/channel schemas are merged in when the gateway can load the
+  current manifest registry.
+- `pnpm config:docs:check` detects drift between docs-facing config baseline
+  artifacts and the current schema surface.
 
 When validation fails:
 
@@ -80,12 +105,13 @@ When validation fails:
     - [WhatsApp](/channels/whatsapp) — `channels.whatsapp`
     - [Telegram](/channels/telegram) — `channels.telegram`
     - [Discord](/channels/discord) — `channels.discord`
+    - [Feishu](/channels/feishu) — `channels.feishu`
+    - [Google Chat](/channels/googlechat) — `channels.googlechat`
+    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
     - [Slack](/channels/slack) — `channels.slack`
     - [Signal](/channels/signal) — `channels.signal`
     - [iMessage](/channels/imessage) — `channels.imessage`
-    - [Google Chat](/channels/googlechat) — `channels.googlechat`
     - [Mattermost](/channels/mattermost) — `channels.mattermost`
-    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
 
     All channels share the same DM policy pattern:
 
@@ -198,7 +224,7 @@ When validation fails:
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
+      the [Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
 
   </Accordion>
 
@@ -509,6 +535,18 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 <Note>
 Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
 </Note>
+
+Safe/default flow:
+
+- `config.schema.lookup`: inspect one path-scoped config subtree with a shallow
+  schema node, matched hint metadata, and immediate child summaries
+- `config.get`: fetch the current snapshot + hash
+- `config.patch`: preferred partial update path
+- `config.apply`: full-config replacement only
+- `update.run`: explicit self-update + restart
+
+When you are not replacing the entire config, prefer `config.schema.lookup`
+then `config.patch`.
 
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">

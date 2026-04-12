@@ -63,10 +63,10 @@ describe("createTeamsReplyStreamController", () => {
     const fullText = "a".repeat(4000) + "b".repeat(200);
 
     ctrl.onPartialReply({ text: fullText });
-    streamInstances[0]!.hasContent = false;
-    streamInstances[0]!.isFailed = true;
-    streamInstances[0]!.isFinalized = true;
-    streamInstances[0]!.streamedLength = 4000;
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 4000;
 
     const result = ctrl.preparePayload({ text: fullText });
     expect(result).toEqual({ text: "b".repeat(200) });
@@ -77,10 +77,10 @@ describe("createTeamsReplyStreamController", () => {
     const fullText = "Failure at first chunk";
 
     ctrl.onPartialReply({ text: fullText });
-    streamInstances[0]!.hasContent = false;
-    streamInstances[0]!.isFailed = true;
-    streamInstances[0]!.isFinalized = true;
-    streamInstances[0]!.streamedLength = 0;
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 0;
 
     const result = ctrl.preparePayload({ text: fullText });
     expect(result).toEqual({ text: fullText });
@@ -177,6 +177,59 @@ describe("createTeamsReplyStreamController", () => {
     expect(result).toEqual({
       text: undefined,
       mediaUrl: "https://example.com/image.png",
+    });
+  });
+
+  describe("isStreamActive", () => {
+    it("returns false before any tokens arrive so typing keepalive can warm up", () => {
+      const ctrl = createController();
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false after the informative update but before tokens arrive", async () => {
+      const ctrl = createController();
+      await ctrl.onReplyStart();
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns true while the stream is actively receiving tokens", () => {
+      const ctrl = createController();
+      ctrl.onPartialReply({ text: "Streaming tokens" });
+      expect(ctrl.isStreamActive()).toBe(true);
+    });
+
+    it("returns false after the stream is finalized between tool rounds", () => {
+      const ctrl = createController();
+
+      ctrl.onPartialReply({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(true);
+
+      // First segment complete: stream is finalized so the typing keepalive
+      // can resume during the tool chain that follows.
+      ctrl.preparePayload({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false when the stream has failed", () => {
+      const ctrl = createController();
+
+      ctrl.onPartialReply({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(true);
+
+      streamInstances[0].isFailed = true;
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false when conversationType is not personal", () => {
+      streamInstances.length = 0;
+      const ctrl = createTeamsReplyStreamController({
+        conversationType: "channel",
+        context: { sendActivity: vi.fn() } as never,
+        feedbackLoopEnabled: false,
+        log: { debug: vi.fn() } as never,
+      });
+      ctrl.onPartialReply({ text: "anything" });
+      expect(ctrl.isStreamActive()).toBe(false);
     });
   });
 });

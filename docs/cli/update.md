@@ -96,10 +96,12 @@ High-level:
 3. Fetches upstream (dev only).
 4. Dev only: preflight lint + TypeScript build in a temp worktree; if the tip fails, walks back up to 10 commits to find the newest clean build.
 5. Rebases onto the selected commit (dev only).
-6. Installs deps (pnpm preferred; npm fallback; bun remains available as a secondary compatibility fallback).
+6. Installs deps with the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@10` fallback) instead of running `npm run build` inside a pnpm workspace.
 7. Builds + builds the Control UI.
 8. Runs `openclaw doctor` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+
+If pnpm bootstrap still fails, the updater now stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 
 ## `--update` shorthand
 

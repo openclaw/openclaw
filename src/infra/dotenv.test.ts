@@ -97,6 +97,55 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          ["FOO=from-gateway", "BAR=from-gateway"].join("\n"),
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
+      });
+    });
+  });
+
+  it("does not warn about dotenv conflicts when the key is already set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        process.env.HOME = base;
+        process.env.FOO = "from-shell";
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-shell");
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it("blocks dangerous and workspace-control vars from CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -287,21 +336,27 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
             "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
             "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
             "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
           ].join("\n"),
         );
 
+        delete process.env.OPENCLAW_BROWSER_CONTROL_MODULE;
         delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
+        expect(process.env.OPENCLAW_BROWSER_CONTROL_MODULE).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBeUndefined();
       });
     });
   });
@@ -427,28 +482,101 @@ describe("loadCliDotEnv", () => {
     });
   });
 
+  it("loads the gateway.env compatibility fallback during CLI startup", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
+      });
+    });
+  });
+
+  it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        const customStateDir = path.join(base, "custom-state");
+        process.env.HOME = base;
+        process.env.OPENCLAW_STATE_DIR = customStateDir;
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(customStateDir);
+        expect(process.env.BAR).toBeUndefined();
+      });
+    });
+  });
+
+  it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
+      const cwdDir = path.join(base, "cwd");
+      const legacyStateDir = path.join(base, ".clawdbot");
+      process.env.HOME = base;
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_TEST_FAST;
+      await fs.mkdir(cwdDir, { recursive: true });
+      await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
+
+      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+      delete process.env.LEGACY_ONLY;
+
+      loadCliDotEnv({ quiet: true });
+
+      expect(process.env.LEGACY_ONLY).toBe("from-legacy");
+    });
+  });
+
   it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
             "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
             "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
             "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
           ].join("\n"),
         );
 
+        delete process.env.OPENCLAW_BROWSER_CONTROL_MODULE;
         delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
 
+        expect(process.env.OPENCLAW_BROWSER_CONTROL_MODULE).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBeUndefined();
       });
     });
   });
@@ -493,6 +621,83 @@ describe("loadCliDotEnv", () => {
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
+      });
+    });
+  });
+});
+
+describe("workspace .env blocklist completeness", () => {
+  it("blocks runtime-control variables from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        const runtimeControlKeys = [
+          "OPENCLAW_UPDATE_PACKAGE_SPEC",
+          "OPENCLAW_GATEWAY_PORT",
+          "OPENCLAW_GATEWAY_URL",
+          "OPENCLAW_CLAWHUB_URL",
+          "CLAWHUB_URL",
+          "OPENCLAW_CLAWHUB_TOKEN",
+          "CLAWHUB_TOKEN",
+          "CLAWHUB_AUTH_TOKEN",
+          "CLAWHUB_CONFIG_PATH",
+          "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+          "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+          "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+          "BROWSER_EXECUTABLE_PATH",
+          "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+          "OPENCLAW_SKIP_CHANNELS",
+          "OPENCLAW_SKIP_PROVIDERS",
+          "OPENCLAW_SKIP_CRON",
+          "OPENCLAW_RAW_STREAM",
+          "OPENCLAW_RAW_STREAM_PATH",
+          "OPENCLAW_CACHE_TRACE",
+          "OPENCLAW_CACHE_TRACE_FILE",
+          "OPENCLAW_CACHE_TRACE_MESSAGES",
+          "OPENCLAW_CACHE_TRACE_PROMPT",
+          "OPENCLAW_CACHE_TRACE_SYSTEM",
+          "OPENCLAW_SHOW_SECRETS",
+          "OPENCLAW_PLUGIN_CATALOG_PATHS",
+          "OPENCLAW_MPM_CATALOG_PATHS",
+          "OPENCLAW_NODE_EXEC_HOST",
+          "OPENCLAW_NODE_EXEC_FALLBACK",
+          "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+        ];
+
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${runtimeControlKeys.map((key) => `${key}=INJECTED_${key}`).join("\n")}\n`,
+        );
+
+        for (const key of runtimeControlKeys) {
+          delete process.env[key];
+        }
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        for (const key of runtimeControlKeys) {
+          expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  it("still allows user-defined non-control vars through workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "MY_APP_KEY=user-value\nAPP_GITHUB_REPO=openclaw/openclaw\nDATABASE_URL_CUSTOM=pg://localhost\n",
+        );
+
+        delete process.env.MY_APP_KEY;
+        delete process.env.APP_GITHUB_REPO;
+        delete process.env.DATABASE_URL_CUSTOM;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MY_APP_KEY).toBe("user-value");
+        expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
+        expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
       });
     });
   });

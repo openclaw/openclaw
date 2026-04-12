@@ -1,6 +1,7 @@
 import http from "node:http";
 import { URL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -21,6 +22,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
+import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
@@ -38,7 +40,7 @@ type WebhookHeaderGateResult =
 
 function sanitizeTranscriptForLog(value: string): string {
   const sanitized = value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
@@ -46,12 +48,6 @@ function sanitizeTranscriptForLog(value: string): string {
   }
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
-
-export type WebhookResponsePayload = {
-  statusCode: number;
-  body: string;
-  headers?: Record<string, string>;
-};
 
 function buildRequestUrl(
   requestUrl: string | undefined,
@@ -84,6 +80,7 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
+  private fullConfig: OpenClawConfig | null;
   private agentRuntime: CoreAgentDeps | null;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
@@ -100,12 +97,14 @@ export class VoiceCallWebhookServer {
     manager: CallManager,
     provider: VoiceCallProvider,
     coreConfig?: CoreConfig,
+    fullConfig?: OpenClawConfig,
     agentRuntime?: CoreAgentDeps,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
     this.provider = provider;
     this.coreConfig = coreConfig ?? null;
+    this.fullConfig = fullConfig ?? null;
     this.agentRuntime = agentRuntime ?? null;
   }
 
@@ -149,8 +148,7 @@ export class VoiceCallWebhookServer {
       return false;
     }
 
-    const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
     return initialMessage.length > 0;
   }
 
@@ -159,7 +157,8 @@ export class VoiceCallWebhookServer {
    */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const pluginConfig = this.coreConfig as unknown as OpenClawConfig | undefined;
+    const pluginConfig =
+      this.fullConfig ?? (this.coreConfig as unknown as OpenClawConfig | undefined);
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await import("./realtime-transcription.runtime.js");
     const resolution = resolveConfiguredCapabilityProvider({

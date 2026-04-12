@@ -3,9 +3,10 @@
 
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
@@ -92,10 +93,7 @@ function loadModelsConfigRuntime() {
 }
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = path
-    .basename(argv[1] ?? "")
-    .trim()
-    .toLowerCase();
+  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
   return (
     entryBasename === "openclaw" ||
     entryBasename === "openclaw.mjs" ||
@@ -129,6 +127,7 @@ function getCommandPathFromArgv(argv: string[]): string[] {
 }
 
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
+  "agent",
   "backup",
   "completion",
   "config",
@@ -138,6 +137,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "health",
   "hooks",
   "logs",
+  "models",
   "plugins",
   "secrets",
   "status",
@@ -273,9 +273,9 @@ function resolveConfiguredModelParams(
   if (!models) {
     return undefined;
   }
-  const key = `${provider}/${model}`.trim().toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(`${provider}/${model}`);
   for (const [rawKey, entry] of Object.entries(models)) {
-    if (rawKey.trim().toLowerCase() === key) {
+    if (normalizeLowercaseStringOrEmpty(rawKey) === key) {
       const params = (entry as AgentModelEntry | undefined)?.params;
       return params && typeof params === "object" ? params : undefined;
     }
@@ -358,7 +358,9 @@ function resolveConfiguredProviderContextTokens(
   }
 
   // 1. Exact match (case-insensitive, no alias expansion).
-  const exactResult = findContextTokens((id) => id.trim().toLowerCase() === provider.toLowerCase());
+  const exactResult = findContextTokens(
+    (id) => normalizeLowercaseStringOrEmpty(id) === normalizeLowercaseStringOrEmpty(provider),
+  );
   if (exactResult !== undefined) {
     return exactResult;
   }
@@ -372,7 +374,7 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   if (provider !== "anthropic") {
     return false;
   }
-  const normalized = model.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   const modelId = normalized.includes("/")
     ? (normalized.split("/").at(-1) ?? normalized)
     : normalized;

@@ -1,11 +1,11 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerAnthropicPlugin } from "./register.runtime.js";
 
 export default definePluginEntry({
   id: "anthropic",
   name: "Anthropic Provider",
   description: "Bundled Anthropic provider plugin",
-  async register(api) {
-    const { registerAnthropicPlugin } = await import("./register.runtime.js");
-    await registerAnthropicPlugin(api);
+  register(api) {
+    return registerAnthropicPlugin(api);
   },
 });

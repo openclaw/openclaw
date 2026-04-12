@@ -54,7 +54,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it("compiles Slack directives for direct agent deliveries when interactive replies are enabled", () => {
+  it("keeps Slack directives in text for direct agent deliveries", () => {
     const normalized = normalizeAgentCommandReplyPayloads({
       cfg: {
         channels: {
@@ -72,19 +72,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     expect(normalized).toMatchObject([
       {
-        text: "Choose",
-        interactive: {
-          blocks: [
-            {
-              type: "text",
-              text: "Choose",
-            },
-            {
-              type: "buttons",
-              buttons: [{ label: "Retry", value: "retry" }],
-            },
-          ],
-        },
+        text: "Choose [[slack_buttons: Retry:retry]]",
       },
     ]);
   });

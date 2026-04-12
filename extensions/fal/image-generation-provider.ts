@@ -2,6 +2,7 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -11,8 +12,12 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
   type SsrFPolicy,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
@@ -80,8 +85,8 @@ function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPoli
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = hostname.trim().toLowerCase();
-  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
+  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
 }
 
@@ -96,13 +101,13 @@ function resolveFalNetworkPolicy(params: {
     return {};
   }
 
-  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
   if (!hostSuffix || !params.allowPrivateNetwork) {
     return {};
   }
 
   const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = ssrfPolicyFromAllowPrivateNetwork(true);
+  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
   const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
   return {
     apiPolicy: trustedHostPolicy,
@@ -240,7 +245,7 @@ function toDataUri(buffer: Buffer, mimeType: string): string {
 }
 
 function fileExtensionForMimeType(mimeType: string | undefined): string {
-  const normalized = mimeType?.toLowerCase().trim();
+  const normalized = normalizeOptionalLowercaseString(mimeType);
   if (!normalized) {
     return "png";
   }
@@ -294,6 +299,11 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "fal",
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,

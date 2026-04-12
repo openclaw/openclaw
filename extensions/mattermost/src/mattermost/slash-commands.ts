@@ -12,6 +12,7 @@
  * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
  */
 
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -508,7 +509,9 @@ const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
  */
 function normalizeCallbackPath(path: string): string {
   const trimmed = path.trim();
-  if (!trimmed) return DEFAULT_CALLBACK_PATH;
+  if (!trimmed) {
+    return DEFAULT_CALLBACK_PATH;
+  }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
@@ -519,7 +522,7 @@ export function resolveSlashCommandConfig(
     native: raw?.native ?? "auto",
     nativeSkills: raw?.nativeSkills ?? "auto",
     callbackPath: normalizeCallbackPath(raw?.callbackPath ?? DEFAULT_CALLBACK_PATH),
-    callbackUrl: raw?.callbackUrl?.trim() || undefined,
+    callbackUrl: normalizeOptionalString(raw?.callbackUrl),
   };
 }
 
@@ -564,7 +567,9 @@ export function resolveCallbackUrl(params: {
 
   const isWildcardBindHost = (rawHost: string): boolean => {
     const trimmed = rawHost.trim();
-    if (!trimmed) return false;
+    if (!trimmed) {
+      return false;
+    }
     const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
 
     // NOTE: Wildcard listen hosts are valid bind addresses but are not routable callback

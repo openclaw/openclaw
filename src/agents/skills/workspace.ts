@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
@@ -35,14 +36,45 @@ const skillsLogger = createSubsystemLogger("skills");
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
+function resolveUserHomeDir(): string | undefined {
+  try {
+    return path.resolve(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
 function compactSkillPaths(skills: Skill[]): Skill[] {
-  const home = os.homedir();
-  if (!home) return skills;
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  const homes = [resolveHomeDir(), resolveUserHomeDir()]
+    .filter((home): home is string => !!home)
+    .map((home) => path.resolve(home))
+    .filter((home, index, all) => all.indexOf(home) === index)
+    .sort((a, b) => b.length - a.length);
+  if (homes.length === 0) return skills;
   return skills.map((s) => ({
     ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+    filePath: compactHomePath(s.filePath, homes),
   }));
+}
+
+function compactHomePath(filePath: string, homes: readonly string[]): string {
+  for (const home of homes) {
+    const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+    if (filePath.startsWith(prefix)) {
+      return "~/" + filePath.slice(prefix.length);
+    }
+  }
+  return filePath;
+}
+
+function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+  }
+  if (entry.invocation) {
+    return entry.invocation.disableModelInvocation !== true;
+  }
+  return entry.skill.disableModelInvocation !== true;
 }
 
 function filterSkillEntries(
@@ -400,9 +432,7 @@ function loadSkillEntries(
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw
-    .map((d) => (typeof d === "string" ? d.trim() : ""))
-    .filter(Boolean);
+  const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,
@@ -426,7 +456,10 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const osHomeDir = resolveUserHomeDir();
+  const personalAgentsSkillsDir = osHomeDir
+    ? path.resolve(osHomeDir, ".agents", "skills")
+    : path.resolve(".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
@@ -469,11 +502,20 @@ function loadSkillEntries(
         filePath: skill.filePath,
         maxBytes: limits.maxSkillFileBytes,
       }) ?? ({} as ParsedSkillFrontmatter);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
     return {
       skill,
       frontmatter,
       metadata: resolveOpenClawMetadata(frontmatter),
-      invocation: resolveSkillInvocationPolicy(frontmatter),
+      invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        // Freshly loaded entries preserve the documented disable-model-invocation
+        // contract, while legacy entries without exposure metadata still use the
+        // fallback in isSkillVisibleInAvailableSkillsPrompt().
+        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+        userInvocable: invocation.userInvocable !== false,
+      },
     };
   });
   return skillEntries;
@@ -494,8 +536,7 @@ function escapeXml(str: string): string {
  * preserving awareness of all skills before resorting to dropping.
  */
 export function formatSkillsCompact(skills: Skill[]): string {
-  const visible = skills.filter((s) => !s.disableModelInvocation);
-  if (visible.length === 0) return "";
+  if (skills.length === 0) return "";
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its name.",
@@ -503,7 +544,7 @@ export function formatSkillsCompact(skills: Skill[]): string {
     "",
     "<available_skills>",
   ];
-  for (const skill of visible) {
+  for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
@@ -629,9 +670,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
-  );
+  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
@@ -809,6 +848,10 @@ export async function syncSkillsToWorkspace(params: {
         await fsp.cp(entry.skill.baseDir, dest, {
           recursive: true,
           force: true,
+          filter: (src) => {
+            const name = path.basename(src);
+            return !(name === ".git" || name === "node_modules");
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);

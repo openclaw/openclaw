@@ -66,9 +66,10 @@ cat ~/.openclaw/openclaw.json
 - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
 - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
+- Codex OAuth shadowing warnings (`models.providers.openai-codex`).
 - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
-- Legacy plugin manifest contract key migration (`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders` → `contracts`).
+- Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
 - State integrity and permissions checks (sessions, transcripts, state dir).
@@ -91,6 +92,40 @@ cat ~/.openclaw/openclaw.json
 - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
 - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
 - Writes updated config + wizard metadata.
+
+## Dreams UI backfill and reset
+
+The Control UI Dreams scene includes **Backfill**, **Reset**, and **Clear Grounded**
+actions for the grounded dreaming workflow. These actions use gateway
+doctor-style RPC methods, but they are **not** part of `openclaw doctor` CLI
+repair/migration.
+
+What they do:
+
+- **Backfill** scans historical `memory/YYYY-MM-DD.md` files in the active
+  workspace, runs the grounded REM diary pass, and writes reversible backfill
+  entries into `DREAMS.md`.
+- **Reset** removes only those marked backfill diary entries from `DREAMS.md`.
+- **Clear Grounded** removes only staged grounded-only short-term entries that
+  came from historical replay and have not accumulated live recall or daily
+  support yet.
+
+What they do **not** do by themselves:
+
+- they do not edit `MEMORY.md`
+- they do not run full doctor migrations
+- they do not automatically stage grounded candidates into the live short-term
+  promotion store unless you explicitly run the staged CLI path first
+
+If you want grounded historical replay to influence the normal deep promotion
+lane, use the CLI flow instead:
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
+```
+
+That stages grounded durable candidates into the short-term dreaming store while
+keeping `DREAMS.md` as the review surface.
 
 ## Detailed behavior and rationale
 
@@ -147,7 +182,7 @@ Current migrations:
 - `plugins.entries.voice-call.config.streaming.openaiApiKey|sttModel|silenceDurationMs|vadThreshold`
   → `plugins.entries.voice-call.config.streaming.providers.openai.*`
 - `bindings[].match.accountID` → `bindings[].match.accountId`
-- For channels with named `accounts` but missing `accounts.default`, move account-scoped top-level single-account channel values into `channels.<channel>.accounts.default` when present
+- For channels with named `accounts` but lingering single-account top-level channel values, move those account-scoped values into the promoted account chosen for that channel (`accounts.default` for most channels; Matrix can preserve an existing matching named/default target)
 - `identity` → `agents.list[].identity`
 - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
@@ -194,6 +229,11 @@ still requires:
 - remote debugging enabled in that browser
 - approving the first attach consent prompt in the browser
 
+Readiness here is only about local attach prerequisites. Existing-session keeps
+the current Chrome MCP route limits; advanced routes like `responsebody`, PDF
+export, download interception, and batch actions still require a managed
+browser or raw CDP profile.
+
 This check does **not** apply to Docker, sandbox, remote-browser, or other
 headless flows. Those continue to use raw CDP.
 
@@ -206,6 +246,16 @@ example `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, expired cert, or self-signed cert),
 doctor prints platform-specific fix guidance. On macOS with a Homebrew Node, the
 fix is usually `brew postinstall ca-certificates`. With `--deep`, the probe runs
 even if the gateway is healthy.
+
+### 2c) Codex OAuth provider overrides
+
+If you previously added legacy OpenAI transport settings under
+`models.providers.openai-codex`, they can shadow the built-in Codex OAuth
+provider path that newer releases use automatically. Doctor warns when it sees
+those old transport settings alongside Codex OAuth so you can remove or rewrite
+the stale transport override and get the built-in routing/fallback behavior
+back. Custom proxies and header-only overrides are still supported and do not
+trigger this warning.
 
 ### 3) Legacy state migrations (disk layout)
 
@@ -229,11 +279,14 @@ repeat no-op `doctor --fix` changes.
 
 ### 3a) Legacy plugin manifest migrations
 
-Doctor scans all installed plugin manifests for deprecated top-level capability keys
-(`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`).
-When found, it offers to move them into the `contracts` object and rewrite the manifest
-file in-place. This migration is idempotent; if the `contracts` key already has the
-same values, the legacy key is removed without duplicating the data.
+Doctor scans all installed plugin manifests for deprecated top-level capability
+keys (`speechProviders`, `realtimeTranscriptionProviders`,
+`realtimeVoiceProviders`, `mediaUnderstandingProviders`,
+`imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`,
+`webSearchProviders`). When found, it offers to move them into the `contracts`
+object and rewrite the manifest file in-place. This migration is idempotent;
+if the `contracts` key already has the same values, the legacy key is removed
+without duplicating the data.
 
 ### 3b) Legacy cron store migrations
 
@@ -298,10 +351,16 @@ Doctor checks:
 ### 5) Model auth health (OAuth expiry)
 
 Doctor inspects OAuth profiles in the auth store, warns when tokens are
-expiring/expired, and can refresh them when safe. If the Anthropic Claude Code
-profile is stale, it suggests migrating to Claude CLI or an Anthropic API key.
+expiring/expired, and can refresh them when safe. If the Anthropic
+OAuth/token profile is stale, it suggests an Anthropic API key or the
+Anthropic setup-token path.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
+
+When an OAuth refresh fails permanently (for example `refresh_token_reused`,
+`invalid_grant`, or a provider telling you to sign in again), doctor reports
+that re-auth is required and prints the exact `openclaw models auth login --provider ...`
+command to run.
 
 Doctor also reports auth profiles that are temporarily unusable due to:
 

@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -13,8 +18,8 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
-import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -296,11 +301,19 @@ function isExtensionFile(filePath: string): boolean {
   if (!EXTENSION_EXTS.has(ext)) {
     return false;
   }
-  return !filePath.endsWith(".d.ts");
+  if (filePath.endsWith(".d.ts")) {
+    return false;
+  }
+  const baseName = normalizeLowercaseStringOrEmpty(path.basename(filePath));
+  return (
+    !baseName.includes(".test.") &&
+    !baseName.includes(".live.test.") &&
+    !baseName.includes(".e2e.test.")
+  );
 }
 
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
-  const normalized = dirName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(dirName);
   if (!normalized) {
     return true;
   }
@@ -434,9 +447,9 @@ function addCandidate(params: {
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
     workspaceDir: params.workspaceDir,
-    packageName: manifest?.name?.trim() || undefined,
-    packageVersion: manifest?.version?.trim() || undefined,
-    packageDescription: manifest?.description?.trim() || undefined,
+    packageName: normalizeOptionalString(manifest?.name),
+    packageVersion: normalizeOptionalString(manifest?.version),
+    packageDescription: normalizeOptionalString(manifest?.description),
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
     bundledManifest: params.bundledManifest,
@@ -496,19 +509,9 @@ function resolvePackageEntrySource(params: {
   const source = path.resolve(params.packageDir, params.entryPath);
   const rejectHardlinks = params.rejectHardlinks ?? true;
   const candidates = [source];
-  if (!rejectHardlinks) {
-    const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
-    if (builtCandidate !== source) {
-      candidates.push(builtCandidate);
-    }
-  }
-
-  for (const candidate of new Set(candidates)) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
+  const openCandidate = (absolutePath: string): string | null => {
     const opened = openBoundaryFileSync({
-      absolutePath: candidate,
+      absolutePath,
       rootPath: params.packageDir,
       boundaryLabel: "plugin package directory",
       rejectHardlinks,
@@ -537,38 +540,22 @@ function resolvePackageEntrySource(params: {
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
     return safeSource;
+  };
+  if (!rejectHardlinks) {
+    const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
+    if (builtCandidate !== source) {
+      candidates.push(builtCandidate);
+    }
   }
 
-  const opened = openBoundaryFileSync({
-    absolutePath: source,
-    rootPath: params.packageDir,
-    boundaryLabel: "plugin package directory",
-    rejectHardlinks,
-  });
-  if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
-      path: () => null,
-      io: () => {
-        params.diagnostics.push({
-          level: "warn",
-          message: `extension entry unreadable (I/O error): ${params.entryPath}`,
-          source: params.sourceLabel,
-        });
-        return null;
-      },
-      fallback: () => {
-        params.diagnostics.push({
-          level: "error",
-          message: `extension entry escapes package directory: ${params.entryPath}`,
-          source: params.sourceLabel,
-        });
-        return null;
-      },
-    });
+  for (const candidate of new Set(candidates)) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    return openCandidate(candidate);
   }
-  const safeSource = opened.path;
-  fs.closeSync(opened.fd);
-  return safeSource;
+
+  return openCandidate(source);
 }
 
 function discoverInDirectory(params: {
@@ -898,7 +885,7 @@ export function discoverOpenClawPlugins(params: {
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
-  const workspaceDir = params.workspaceDir?.trim();
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
 
@@ -915,7 +902,7 @@ export function discoverOpenClawPlugins(params: {
       rawPath: trimmed,
       origin: "config",
       ownershipUid: params.ownershipUid,
-      workspaceDir: workspaceDir?.trim() || undefined,
+      workspaceDir,
       env,
       candidates,
       diagnostics,

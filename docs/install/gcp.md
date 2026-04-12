@@ -317,13 +317,16 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     `http://127.0.0.1:18789/`
 
-    Fetch a fresh tokenized dashboard link:
+    Reprint a clean dashboard link:
 
     ```bash
     docker compose run --rm openclaw-cli dashboard --no-open
     ```
 
-    Paste the token from that URL.
+    If the UI prompts for shared-secret auth, paste the configured token or
+    password into Control UI settings. This Docker flow writes a token by
+    default; if you switch the container config to password auth, use that
+    password instead.
 
     If Control UI shows `unauthorized` or `disconnected (1008): pairing required`, approve the browser device:
 

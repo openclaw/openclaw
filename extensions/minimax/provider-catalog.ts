@@ -67,18 +67,18 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   });
 }
 
-export function buildMinimaxProvider(): ModelProviderConfig {
+export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: resolveMinimaxCatalogBaseUrl(),
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),
   };
 }
 
-export function buildMinimaxPortalProvider(): ModelProviderConfig {
+export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: resolveMinimaxCatalogBaseUrl(),
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),

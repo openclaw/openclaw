@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  drainAndStopTuiSafely,
   isIgnorableTuiStopError,
   resolveCtrlCAction,
   resolveFinalAssistantText,
@@ -231,6 +232,53 @@ describe("resolveCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  it("drains terminal input before stopping the TUI", async () => {
+    const calls: string[] = [];
+    const drainInput = vi.fn(async () => {
+      calls.push("drain");
+    });
+    const stop = vi.fn(() => {
+      calls.push("stop");
+    });
+
+    await drainAndStopTuiSafely({
+      stop,
+      terminal: { drainInput },
+    });
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(calls).toEqual(["drain", "stop"]);
+  });
+
+  it("still stops when the terminal does not support drainInput", async () => {
+    const stop = vi.fn();
+
+    await drainAndStopTuiSafely({
+      stop,
+      terminal: {},
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("rethrows non-ignorable stop errors after draining", async () => {
+    const drainInput = vi.fn(async () => {});
+    const stop = vi.fn(() => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      drainAndStopTuiSafely({
+        stop,
+        terminal: { drainInput },
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("treats setRawMode EBADF errors as ignorable", () => {
     expect(isIgnorableTuiStopError(new Error("setRawMode EBADF"))).toBe(true);
     expect(

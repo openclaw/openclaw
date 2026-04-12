@@ -1,12 +1,18 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import type {
+  ChannelResolveKind,
+  ChannelResolveResult,
+} from "../../channels/plugins/types.adapters.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
@@ -72,10 +78,10 @@ function detectAutoKindForPlugin(
     return generic;
   }
   const trimmed = input.trim();
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
   for (const prefix of prefixes) {
     if (!lowered.startsWith(`${prefix}:`)) {
       continue;
@@ -108,19 +114,14 @@ function formatResolveResult(result: ResolveResult): string {
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = loadConfig();
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
     mode: "read_only_operational",
+    runtime,
+    autoEnable: true,
   });
-  let cfg = applyPluginAutoEnable({
-    config: resolvedConfig,
-    env: process.env,
-  }).config;
-  for (const entry of diagnostics) {
-    runtime.log(`[secrets] ${entry}`);
-  }
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
     throw new Error("At least one entry is required.");

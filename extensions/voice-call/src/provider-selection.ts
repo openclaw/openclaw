@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
 type AutoSelectableProvider = {
   autoSelectOrder?: number;
 };
@@ -11,7 +13,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
   missingConfiguredProvider: boolean;
   provider: TProvider | undefined;
 } {
-  const configuredProviderId = params.configuredProviderId?.trim() || undefined;
+  const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
   const configuredProvider = params.getConfiguredProvider(configuredProviderId);
 
   if (configuredProviderId && !configuredProvider) {
@@ -27,7 +29,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
     missingConfiguredProvider: false,
     provider:
       configuredProvider ??
-      [...params.listProviders()].sort(
+      [...params.listProviders()].toSorted(
         (left, right) =>
           (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
           (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
@@ -53,7 +55,7 @@ export function resolveProviderRawConfig(params: {
       : undefined;
 
   return {
-    ...(canonicalProviderConfig ?? {}),
-    ...(selectedProviderConfig ?? {}),
+    ...canonicalProviderConfig,
+    ...selectedProviderConfig,
   };
 }

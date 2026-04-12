@@ -1,5 +1,8 @@
-import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { loadSessionStore } from "../../../config/sessions/store-load.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
@@ -15,7 +18,7 @@ import {
 } from "./shared.js";
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, runs, restTokens } = ctx;
+  const { params, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return stopWithText("ℹ️ Usage: /subagents info <id|#>");
@@ -41,7 +44,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     : "n/a";
   const linkedTask = findTaskByRunIdForOwner({
     runId: run.runId,
-    callerOwnerKey: params.sessionKey,
+    callerOwnerKey: requesterKey,
   });
   const taskText = sanitizeTaskStatusText(run.task) || "n/a";
   const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
@@ -52,7 +55,12 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveDisplayStatus(run, { pendingDescendants: countPendingDescendantRuns(run.childSessionKey) })}`,
+    `Status: ${resolveDisplayStatus(run, {
+      pendingDescendants: countPendingDescendantRunsFromRuns(
+        getSubagentRunsSnapshotForRead(subagentRuns),
+        run.childSessionKey,
+      ),
+    })}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,

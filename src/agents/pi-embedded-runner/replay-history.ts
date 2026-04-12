@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   sanitizeProviderReplayHistoryWithPlugin,
   validateProviderReplayTurnsWithPlugin,
@@ -8,7 +9,6 @@ import {
 import type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
-  ProviderRuntimeModel,
 } from "../../plugins/types.js";
 import {
   hasInterSessionUserProvenance,
@@ -28,22 +28,22 @@ import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  resolveTranscriptPolicy,
+  shouldAllowProviderOwnedThinkingReplay,
+} from "../transcript-policy.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
-
-type AssistantHistoryMessage = Extract<AgentMessage, { role: "assistant" }>;
-type RawAssistantHistoryMessage = Omit<AssistantHistoryMessage, "content"> & { content?: unknown };
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -129,61 +129,6 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     } as AgentMessage);
   }
   return touched ? out : messages;
-}
-
-function describeAssistantContentKind(content: unknown): string {
-  if (Array.isArray(content)) {
-    return "array";
-  }
-  if (content === null) {
-    return "null";
-  }
-  return typeof content;
-}
-
-function canonicalizeAssistantHistoryMessages(params: {
-  messages: AgentMessage[];
-  sessionId: string;
-}): AgentMessage[] {
-  let touched = false;
-  let repairedCount = 0;
-  const repairedKinds = new Set<string>();
-  const out: AgentMessage[] = [];
-
-  for (const msg of params.messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
-      out.push(msg);
-      continue;
-    }
-
-    const assistant = msg as RawAssistantHistoryMessage;
-    if (Array.isArray(assistant.content)) {
-      out.push(msg);
-      continue;
-    }
-
-    // Session transcripts and custom stream boundaries have historically leaked
-    // malformed assistant payloads. Repair them here so Pi replay only sees the
-    // canonical array-based assistant content contract.
-    const repairedText = typeof assistant.content === "string" ? assistant.content : "";
-    out.push({
-      ...(assistant as unknown as Record<string, unknown>),
-      content: [{ type: "text", text: repairedText }],
-    } as AgentMessage);
-    touched = true;
-    repairedCount += 1;
-    repairedKinds.add(describeAssistantContentKind(assistant.content));
-  }
-
-  if (!touched) {
-    return params.messages;
-  }
-
-  log.warn(
-    `sanitizeSessionHistory: canonicalized ${repairedCount} malformed assistant message(s) before replay ` +
-      `session=${params.sessionId} contentKinds=${Array.from(repairedKinds).join(",")}`,
-  );
-  return out;
 }
 
 function parseMessageTimestamp(value: unknown): number | null {
@@ -459,17 +404,23 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const canonicalizedAssistantHistory = canonicalizeAssistantHistoryMessages({
-    messages: withInterSessionMarkers,
-    sessionId: params.sessionId,
+  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+    modelApi: params.modelApi,
+    policy,
   });
+  const isOpenAIResponsesApi =
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "azure-openai-responses";
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    canonicalizedAssistantHistory,
+    withInterSessionMarkers,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      sanitizeToolCallIds:
+        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
       toolCallIdMode: policy.toolCallIdMode,
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
       ...resolveImageSanitizationLimits(params.config),
@@ -480,21 +431,26 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
+    allowProviderOwnedThinkingReplay,
   });
+  const sanitizedToolIds =
+    policy.sanitizeToolCallIds && policy.toolCallIdMode && !isOpenAIResponsesApi
+      ? sanitizeToolCallIdsForCloudCodeAssist(sanitizedToolCalls, policy.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          allowedToolNames: params.allowedToolNames,
+        })
+      : sanitizedToolCalls;
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+    ? sanitizeToolUseResultPairing(sanitizedToolIds, {
         erroredAssistantResultPolicy: "drop",
       })
-    : sanitizedToolCalls;
+    : sanitizedToolIds;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
 
-  const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-codex-responses" ||
-    params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot

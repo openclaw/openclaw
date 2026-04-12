@@ -1,10 +1,10 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginChannelRegistryVersion,
-  getActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 
@@ -23,8 +23,8 @@ export function bootstrapOutboundChannelPlugin(params: {
     return;
   }
 
-  const activeRegistry = getActivePluginRegistry();
-  const activeHasRequestedChannel = activeRegistry?.channels?.some(
+  const activeChannelRegistry = getActivePluginChannelRegistry();
+  const activeHasRequestedChannel = activeChannelRegistry?.channels?.some(
     (entry) => entry?.plugin?.id === params.channel,
   );
   if (activeHasRequestedChannel) {

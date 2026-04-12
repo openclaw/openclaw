@@ -1,5 +1,9 @@
-import { getBundledChannelContractSurfaceEntries } from "../../channels/plugins/contract-surfaces.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -78,20 +82,6 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
   leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
 
-type ChannelMessageActionAliasSurface = {
-  messageActionTargetAliases?: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>>;
-};
-
-function listChannelMessageActionAliasSurfaces(): Array<{
-  pluginId: string;
-  surface: ChannelMessageActionAliasSurface;
-}> {
-  return getBundledChannelContractSurfaceEntries() as Array<{
-    pluginId: string;
-    surface: ChannelMessageActionAliasSurface;
-  }>;
-}
-
 function listActionTargetAliasSpecs(
   action: ChannelMessageActionName,
   channel?: string,
@@ -101,18 +91,14 @@ function listActionTargetAliasSpecs(
   if (coreSpec) {
     specs.push(coreSpec);
   }
-  const normalizedChannel = channel?.trim().toLowerCase();
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
   if (!normalizedChannel) {
     return specs;
   }
-  for (const entry of listChannelMessageActionAliasSurfaces()) {
-    if (entry.pluginId !== normalizedChannel) {
-      continue;
-    }
-    const channelSpec = entry.surface.messageActionTargetAliases?.[action];
-    if (channelSpec) {
-      specs.push(channelSpec);
-    }
+  const plugin = getBootstrapChannelPlugin(normalizedChannel);
+  const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
+  if (channelSpec) {
+    specs.push(channelSpec);
   }
   return specs;
 }
@@ -126,11 +112,11 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
@@ -142,7 +128,7 @@ export function actionHasTarget(
     spec.aliases.some((alias) => {
       const value = params[alias];
       if (typeof value === "string") {
-        return value.trim().length > 0;
+        return Boolean(normalizeOptionalString(value));
       }
       if (typeof value === "number") {
         return Number.isFinite(value);

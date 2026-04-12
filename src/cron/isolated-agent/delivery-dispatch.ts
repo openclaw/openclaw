@@ -1,20 +1,27 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -29,8 +36,8 @@ export function matchesMessagingToolDeliveryTarget(
   if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
-  const channel = delivery.channel.trim().toLowerCase();
-  const provider = target.provider?.trim().toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(delivery.channel);
+  const provider = normalizeOptionalLowercaseString(target.provider);
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
@@ -184,9 +191,7 @@ function pruneCompletedDirectCronDeliveries(now: number) {
 
 function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
-    ? scheduledAt
-    : params.runStartedAt;
+  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
 }
 
 function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
@@ -257,7 +262,8 @@ async function queueCronAwarenessSystemEvent(params: {
   outputText?: string;
   synthesizedText?: string;
 }): Promise<void> {
-  const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
+  const text =
+    normalizeOptionalString(params.outputText) ?? normalizeOptionalString(params.synthesizedText);
   if (!text) {
     return;
   }
@@ -273,7 +279,7 @@ async function queueCronAwarenessSystemEvent(params: {
     });
   } catch (err) {
     logWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${err instanceof Error ? err.message : String(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
     );
   }
 }
@@ -370,6 +376,37 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
+  const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+    if (!params.job.deleteAfterRun) {
+      return;
+    }
+    try {
+      const { callGateway } = await loadGatewayCallRuntime();
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.agentSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort; direct delivery result should still be returned.
+    }
+  };
+  const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
+    deliveryAttempted = true;
+    await cleanupDirectCronSessionIfNeeded();
+    return params.withRunSession({
+      status: "ok",
+      summary,
+      outputText,
+      delivered: false,
+      deliveryAttempted: true,
+      ...params.telemetry,
+    });
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
@@ -387,14 +424,18 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Suppress NO_REPLY sentinel so it never leaks to external channels.
+      const payloadsForDelivery = rawPayloads.filter(
+        (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
+      );
       if (payloadsForDelivery.length === 0) {
-        return null;
+        return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
         return params.withRunSession({
@@ -453,7 +494,7 @@ export async function dispatchCronDelivery(
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
             logError(
-              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
           }
         : undefined;
@@ -516,9 +557,7 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      logError(
-        `[cron:${params.job.id}] delivery failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logError(`[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`);
       return null;
     }
   };
@@ -526,26 +565,6 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-      if (!params.job.deleteAfterRun) {
-        return;
-      }
-      try {
-        const { callGateway } = await loadGatewayCallRuntime();
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.agentSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort; direct delivery result should still be returned.
-      }
-    };
-
     if (!synthesizedText) {
       return null;
     }
@@ -616,7 +635,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
@@ -631,15 +650,8 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-      await cleanupDirectCronSessionIfNeeded();
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        delivered: false,
-        ...params.telemetry,
-      });
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      return await finishSilentReplyDelivery();
     }
     if (params.isAborted()) {
       return params.withRunSession({

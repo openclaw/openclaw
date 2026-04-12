@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,
@@ -19,7 +20,6 @@ import {
   sanitizeRuntimeProviderRequestOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -113,6 +113,8 @@ export function createEmbeddedRunAuthController(params: {
   const hasRefreshableRuntimeAuth = () =>
     Boolean(params.getRuntimeAuthState()?.sourceApiKey.trim());
 
+  const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -139,7 +141,10 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
-    runtimeAuthState.refreshInFlight = (async () => {
+    const refreshGeneration = runtimeAuthState.generation;
+    const refreshProfileId = runtimeAuthState.profileId;
+    let refreshPromise: Promise<void>;
+    refreshPromise = (async () => {
       const currentRuntimeAuthState = params.getRuntimeAuthState();
       const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
       if (!sourceApiKey) {
@@ -170,10 +175,22 @@ export function createEmbeddedRunAuthController(params: {
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
         );
       }
+      const activeRuntimeAuthState = params.getRuntimeAuthState();
+      if (
+        !activeRuntimeAuthState ||
+        activeRuntimeAuthState.generation !== refreshGeneration ||
+        activeRuntimeAuthState.profileId !== refreshProfileId ||
+        activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
+      ) {
+        params.log.debug(
+          `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
+        );
+        return;
+      }
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth });
       params.setRuntimeAuthState({
-        ...params.getRuntimeAuthState(),
+        ...activeRuntimeAuthState,
         expiresAt: preparedAuth.expiresAt,
       } as RuntimeAuthState);
       if (preparedAuth.expiresAt) {
@@ -186,17 +203,22 @@ export function createEmbeddedRunAuthController(params: {
       .catch((err) => {
         const runtimeModel = params.getRuntimeModel();
         params.log.warn(
-          `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
+          `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
       .finally(() => {
         const activeState = params.getRuntimeAuthState();
-        if (activeState) {
+        if (
+          activeState &&
+          activeState.generation === refreshGeneration &&
+          activeState.refreshInFlight === refreshPromise
+        ) {
           activeState.refreshInFlight = undefined;
         }
       });
-    await runtimeAuthState.refreshInFlight;
+    runtimeAuthState.refreshInFlight = refreshPromise;
+    await refreshPromise;
   };
 
   const scheduleRuntimeAuthRefresh = (): void => {
@@ -273,7 +295,9 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message);
+    const classified = classifyFailoverReason(failoverParams.message, {
+      provider: params.getProvider(),
+    });
     return classified ?? "auth";
   };
 
@@ -287,7 +311,7 @@ export function createEmbeddedRunAuthController(params: {
     const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
     const message =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? describeUnknownError(failoverParams.error).trim() : "") ||
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
       fallbackMessage;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
@@ -356,8 +380,10 @@ export function createEmbeddedRunAuthController(params: {
     });
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       params.setRuntimeAuthState({
+        generation: nextRuntimeAuthGeneration(),
         sourceApiKey: apiKeyInfo.apiKey,
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
@@ -369,6 +395,7 @@ export function createEmbeddedRunAuthController(params: {
       runtimeAuthHandled = true;
     }
     if (!runtimeAuthHandled) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
       params.setRuntimeAuthState(null);
     }
@@ -475,10 +502,10 @@ export function createEmbeddedRunAuthController(params: {
     if (!params.getRuntimeAuthState() || retried) {
       return false;
     }
-    if (!isFailoverErrorMessage(errorText)) {
+    if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {
       return false;
     }
-    if (classifyFailoverReason(errorText) !== "auth") {
+    if (classifyFailoverReason(errorText, { provider: params.getProvider() }) !== "auth") {
       return false;
     }
     try {

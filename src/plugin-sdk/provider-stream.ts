@@ -139,6 +139,7 @@ export function buildProviderStreamFamilyHooks(
           createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
       };
   }
+  throw new Error("Unsupported provider stream family");
 }
 
 // Public stream-wrapper helpers for provider plugins.
@@ -163,14 +164,18 @@ export {
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
-  createMinimaxFastModeWrapper,
+} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
+} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
+export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-};
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,

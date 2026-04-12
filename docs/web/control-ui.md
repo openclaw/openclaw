@@ -29,8 +29,11 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.password`
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
-  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
+
+The dashboard settings panel keeps a token for the current browser tab session
+and selected gateway URL; passwords are not persisted. Onboarding usually
+generates a gateway token for shared-secret auth on first connect, but password
+auth works too when `gateway.auth.mode` is `"password"`.
 
 ## Device pairing (first connection)
 
@@ -61,16 +64,20 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 **Notes:**
 
-- Local connections (`127.0.0.1`) are auto-approved.
-- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
+  auto-approved.
+- Tailnet and LAN browser connects still require explicit approval, even when
+  they originate from the same machine.
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 
 ## Language support
 
-The Control UI can localize itself on first load based on your browser locale, and you can override it later from the language picker in the Access card.
+The Control UI can localize itself on first load based on your browser locale.
+To override it later, open **Overview -> Gateway Access -> Language**. The
+locale picker lives in the Gateway Access card, not under Appearance.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
@@ -79,9 +86,10 @@ The Control UI can localize itself on first load based on your browser locale, a
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Sessions: list + per-session model/thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
@@ -90,7 +98,11 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
 - Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
-- Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor is available only when the snapshot has a safe raw round-trip
+- Config schema + form rendering (`config.schema` / `config.schema.lookup`,
+  including field `title` / `description`, matched UI hints, immediate child
+  summaries, docs metadata on nested object/wildcard/array/composition nodes,
+  plus plugin + channel schemas when available); Raw JSON editor is
+  available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
@@ -114,7 +126,9 @@ Cron jobs panel notes:
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+- `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
+- The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
   - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
@@ -123,6 +137,38 @@ Cron jobs panel notes:
   - When a run is aborted, partial assistant text can still be shown in the UI
   - Gateway persists aborted partial assistant text into transcript history when buffered output exists
   - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
+
+## Hosted embeds
+
+Assistant messages can render hosted web content inline with the `[embed ...]`
+shortcode. The iframe sandbox policy is controlled by
+`gateway.controlUi.embedSandbox`:
+
+- `strict`: disables script execution inside hosted embeds
+- `scripts`: allows interactive embeds while keeping origin isolation; this is
+  the default and is usually enough for self-contained browser games/widgets
+- `trusted`: adds `allow-same-origin` on top of `allow-scripts` for same-site
+  documents that intentionally need stronger privileges
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      embedSandbox: "scripts",
+    },
+  },
+}
+```
+
+Use `trusted` only when the embedded document genuinely needs same-origin
+behavior. For most agent-generated games and interactive canvases, `scripts` is
+the safer choice.
+
+Absolute external `http(s)` embed URLs stay blocked by default. If you
+intentionally want `[embed url="https://..."]` to load third-party pages, set
+`gateway.controlUi.allowExternalEmbedUrls: true`.
 
 ## Tailnet access (recommended)
 

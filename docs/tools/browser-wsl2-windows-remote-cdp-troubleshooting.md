@@ -40,6 +40,8 @@ Choose this when:
 - OpenClaw and Chrome are on the same machine
 - you want the local signed-in browser state
 - you do not need cross-host browser transport
+- you do not need advanced managed/raw-CDP-only routes like `responsebody`, PDF
+  export, download interception, or batch actions
 
 For WSL2 Gateway + Windows Chrome, prefer raw remote CDP. Chrome MCP is host-local, not a WSL2-to-Windows bridge.
 

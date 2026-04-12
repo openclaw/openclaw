@@ -1,34 +1,32 @@
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  coerceSecretRef,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
+import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
-function buildGithubCopilotReplayPolicy(modelId?: string) {
-  return (modelId?.toLowerCase() ?? "").includes("claude")
-    ? {
-        dropThinkingBlocks: true,
-      }
-    : {};
-}
+type GithubCopilotPluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
 
+async function loadGithubCopilotRuntime() {
+  return await import("./register.runtime.js");
+}
 export default definePluginEntry({
   id: "github-copilot",
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
-  async register(api) {
-    const {
-      coerceSecretRef,
-      DEFAULT_COPILOT_API_BASE_URL,
-      ensureAuthProfileStore,
-      fetchCopilotUsage,
-      githubCopilotLoginCommand,
-      listProfilesForProvider,
-      PROVIDER_ID,
-      resolveCopilotApiToken,
-      resolveCopilotForwardCompatModel,
-      wrapCopilotProviderStream,
-    } = await import("./register.runtime.js");
-
+  register(api) {
+    const pluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
     function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
       githubToken: string;
       hasProfile: boolean;
@@ -64,6 +62,7 @@ export default definePluginEntry({
     }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
+      const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
       await ctx.prompter.note(
         [
           "This will open a GitHub device login to authorize Copilot.",
@@ -134,6 +133,13 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
+          const discoveryEnabled =
+            pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
+          if (discoveryEnabled === false) {
+            return null;
+          }
+          const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+            await loadGithubCopilotRuntime();
           const { githubToken, hasProfile } = resolveFirstGithubToken({
             agentDir: ctx.agentDir,
             env: ctx.env,
@@ -165,8 +171,11 @@ export default definePluginEntry({
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
-        COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
+        COPILOT_XHIGH_MODEL_IDS.includes(
+          (normalizeOptionalLowercaseString(modelId) ?? "") as never,
+        ),
       prepareRuntimeAuth: async (ctx) => {
+        const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({
           githubToken: ctx.apiKey,
           env: ctx.env,
@@ -178,8 +187,10 @@ export default definePluginEntry({
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
-      fetchUsageSnapshot: async (ctx) =>
-        await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+      fetchUsageSnapshot: async (ctx) => {
+        const { fetchCopilotUsage } = await loadGithubCopilotRuntime();
+        return await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+      },
     });
   },
 });

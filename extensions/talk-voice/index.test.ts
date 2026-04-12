@@ -20,7 +20,7 @@ function createHarness(config: Record<string, unknown>) {
       command = definition;
     }),
   };
-  register.register(api as never);
+  void register.register(api as never);
   if (!command) {
     throw new Error("talk-voice command not registered");
   }
@@ -84,7 +84,7 @@ describe("talk-voice plugin", () => {
       text:
         "Talk voice status:\n" +
         "- provider: microsoft\n" +
-        "- talk.voiceId: en-US-AvaNeural\n" +
+        "- talk.providers.microsoft.voiceId: en-US-AvaNeural\n" +
         "- microsoft.apiKey: secret…",
     });
   });

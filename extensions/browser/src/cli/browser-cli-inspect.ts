@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -31,10 +32,10 @@ export function registerBrowserInspectCommands(
             path: "/screenshot",
             query: profile ? { profile } : undefined,
             body: {
-              targetId: targetId?.trim() || undefined,
+              targetId: normalizeOptionalString(targetId),
               fullPage: Boolean(opts.fullPage),
-              ref: opts.ref?.trim() || undefined,
-              element: opts.element?.trim() || undefined,
+              ref: normalizeOptionalString(opts.ref),
+              element: normalizeOptionalString(opts.element),
               type: opts.type === "jpeg" ? "jpeg" : "png",
             },
           },
@@ -78,13 +79,13 @@ export function registerBrowserInspectCommands(
       try {
         const query: Record<string, string | number | boolean | undefined> = {
           format,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
           limit: Number.isFinite(opts.limit) ? opts.limit : undefined,
           interactive: opts.interactive ? true : undefined,
           compact: opts.compact ? true : undefined,
           depth: Number.isFinite(opts.depth) ? opts.depth : undefined,
-          selector: opts.selector?.trim() || undefined,
-          frame: opts.frame?.trim() || undefined,
+          selector: normalizeOptionalString(opts.selector),
+          frame: normalizeOptionalString(opts.frame),
           labels: opts.labels ? true : undefined,
           mode,
           profile,

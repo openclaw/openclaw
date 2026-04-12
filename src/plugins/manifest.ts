@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
+import {
+  normalizeManifestCommandAliases,
+  type PluginManifestCommandAlias,
+} from "./manifest-command-aliases.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -32,6 +39,98 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
+
+export type PluginManifestActivation = {
+  /**
+   * Provider ids that should activate this plugin when explicitly requested.
+   * This is metadata only; runtime loading still happens through the loader.
+   */
+  onProviders?: string[];
+  /** Command ids that should activate this plugin. */
+  onCommands?: string[];
+  /** Channel ids that should activate this plugin. */
+  onChannels?: string[];
+  /** Route kinds that should activate this plugin. */
+  onRoutes?: string[];
+  /** Cheap capability hints used by future activation planning. */
+  onCapabilities?: PluginManifestActivationCapability[];
+};
+
+export type PluginManifestSetupProvider = {
+  /** Provider id surfaced during setup/onboarding. */
+  id: string;
+  /** Setup/auth methods that this provider supports. */
+  authMethods?: string[];
+  /** Environment variables that can satisfy setup without runtime loading. */
+  envVars?: string[];
+};
+
+export type PluginManifestSetup = {
+  /** Cheap provider setup metadata exposed before runtime loads. */
+  providers?: PluginManifestSetupProvider[];
+  /** Setup-time backend ids available without full runtime activation. */
+  cliBackends?: string[];
+  /** Config migration ids owned by this plugin's setup surface. */
+  configMigrations?: string[];
+  /**
+   * Whether setup still needs plugin runtime execution after descriptor lookup.
+   * Defaults to false when omitted.
+   */
+  requiresRuntime?: boolean;
+};
+
+export type PluginManifestConfigLiteral = string | number | boolean | null;
+
+export type PluginManifestDangerousConfigFlag = {
+  /**
+   * Dot-separated config path relative to `plugins.entries.<id>.config`.
+   * Supports `*` wildcards for map/array segments.
+   */
+  path: string;
+  /** Exact literal that marks this config value as dangerous. */
+  equals: PluginManifestConfigLiteral;
+};
+
+export type PluginManifestSecretInputPath = {
+  /**
+   * Dot-separated config path relative to `plugins.entries.<id>.config`.
+   * Supports `*` wildcards for map/array segments.
+   */
+  path: string;
+  /** Expected resolved type for SecretRef materialization. */
+  expected?: "string";
+};
+
+export type PluginManifestSecretInputContracts = {
+  /**
+   * Override bundled-plugin default enablement when deciding whether this
+   * SecretRef surface is active. Use this when the plugin is bundled but the
+   * surface should stay inactive until explicitly enabled in config.
+   */
+  bundledDefaultEnabled?: boolean;
+  paths: PluginManifestSecretInputPath[];
+};
+
+export type PluginManifestConfigContracts = {
+  /**
+   * Root-relative config paths that indicate this plugin's setup-time
+   * compatibility migrations might apply. Use this to keep generic runtime
+   * config reads from loading every plugin setup surface when the config does
+   * not reference the plugin at all.
+   */
+  compatibilityMigrationPaths?: string[];
+  /**
+   * Root-relative compatibility paths that this plugin can service during
+   * runtime before plugin code fully activates. Use this for legacy surfaces
+   * that should cheaply narrow bundled candidate sets without importing every
+   * compatible plugin runtime.
+   */
+  compatibilityRuntimePaths?: string[];
+  dangerousFlags?: PluginManifestDangerousConfigFlag[];
+  secretInputs?: PluginManifestSecretInputContracts;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
@@ -44,19 +143,37 @@ export type PluginManifest = {
   channels?: string[];
   providers?: string[];
   /**
+   * Optional lightweight module that exports provider plugin metadata for
+   * auth/catalog discovery. It should not import the full plugin runtime.
+   */
+  providerDiscoveryEntry?: string;
+  /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
+  /**
+   * Plugin-owned command aliases that should resolve to this plugin during
+   * config diagnostics before runtime loads.
+   */
+  commandAliases?: PluginManifestCommandAlias[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
+  /** Provider ids that should reuse another provider id for auth lookup. */
+  providerAuthAliases?: Record<string, string>;
+  /** Cheap channel env lookup without booting plugin runtime. */
+  channelEnvVars?: Record<string, string[]>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
    */
   providerAuthChoices?: PluginManifestProviderAuthChoice[];
+  /** Cheap activation hints exposed before plugin runtime loads. */
+  activation?: PluginManifestActivation;
+  /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
+  setup?: PluginManifestSetup;
   skills?: string[];
   name?: string;
   description?: string;
@@ -67,15 +184,20 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Manifest-owned config behavior consumed by generic core helpers. */
+  configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
 export type PluginManifestContracts = {
+  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
+  videoGenerationProviders?: string[];
+  musicGenerationProviders?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -119,28 +241,37 @@ export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
 function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const normalized: Record<string, string[]> = {};
   for (const [key, rawValues] of Object.entries(value)) {
-    const providerId = typeof key === "string" ? key.trim() : "";
+    const providerId = normalizeOptionalString(key) ?? "";
     if (!providerId) {
       continue;
     }
-    const values = normalizeStringList(rawValues);
+    const values = normalizeTrimmedStringList(rawValues);
     if (values.length === 0) {
       continue;
     }
     normalized[providerId] = values;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeOptionalString(rawKey) ?? "";
+    const value = normalizeOptionalString(rawValue) ?? "";
+    if (!key || !value) {
+      continue;
+    }
+    normalized[key] = value;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -150,20 +281,28 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
-  const speechProviders = normalizeStringList(value.speechProviders);
-  const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
-  const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
-  const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
-  const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
-  const webFetchProviders = normalizeStringList(value.webFetchProviders);
-  const webSearchProviders = normalizeStringList(value.webSearchProviders);
-  const tools = normalizeStringList(value.tools);
+  const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
+  const speechProviders = normalizeTrimmedStringList(value.speechProviders);
+  const realtimeTranscriptionProviders = normalizeTrimmedStringList(
+    value.realtimeTranscriptionProviders,
+  );
+  const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
+  const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
+  const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
+  const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
+  const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
+  const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
+    ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
+    ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
@@ -172,19 +311,177 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 
+function isManifestConfigLiteral(value: unknown): value is PluginManifestConfigLiteral {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function normalizeManifestDangerousConfigFlags(
+  value: unknown,
+): PluginManifestDangerousConfigFlag[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestDangerousConfigFlag[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const path = normalizeOptionalString(entry.path) ?? "";
+    if (!path || !isManifestConfigLiteral(entry.equals)) {
+      continue;
+    }
+    normalized.push({ path, equals: entry.equals });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSecretInputPaths(
+  value: unknown,
+): PluginManifestSecretInputPath[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSecretInputPath[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const path = normalizeOptionalString(entry.path) ?? "";
+    if (!path) {
+      continue;
+    }
+    const expected = entry.expected === "string" ? entry.expected : undefined;
+    normalized.push({
+      path,
+      ...(expected ? { expected } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestConfigContracts(
+  value: unknown,
+): PluginManifestConfigContracts | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const compatibilityMigrationPaths = normalizeTrimmedStringList(value.compatibilityMigrationPaths);
+  const compatibilityRuntimePaths = normalizeTrimmedStringList(value.compatibilityRuntimePaths);
+  const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
+  const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
+  const secretInputPaths = rawSecretInputs
+    ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
+    : undefined;
+  const secretInputs =
+    secretInputPaths && secretInputPaths.length > 0
+      ? ({
+          ...(rawSecretInputs?.bundledDefaultEnabled === true
+            ? { bundledDefaultEnabled: true }
+            : rawSecretInputs?.bundledDefaultEnabled === false
+              ? { bundledDefaultEnabled: false }
+              : {}),
+          paths: secretInputPaths,
+        } satisfies PluginManifestSecretInputContracts)
+      : undefined;
+  const configContracts = {
+    ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
+    ...(compatibilityRuntimePaths.length > 0 ? { compatibilityRuntimePaths } : {}),
+    ...(dangerousFlags ? { dangerousFlags } : {}),
+    ...(secretInputs ? { secretInputs } : {}),
+  } satisfies PluginManifestConfigContracts;
+  return Object.keys(configContracts).length > 0 ? configContracts : undefined;
+}
+
 function normalizeManifestModelSupport(value: unknown): PluginManifestModelSupport | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
 
-  const modelPrefixes = normalizeStringList(value.modelPrefixes);
-  const modelPatterns = normalizeStringList(value.modelPatterns);
+  const modelPrefixes = normalizeTrimmedStringList(value.modelPrefixes);
+  const modelPatterns = normalizeTrimmedStringList(value.modelPatterns);
   const modelSupport = {
     ...(modelPrefixes.length > 0 ? { modelPrefixes } : {}),
     ...(modelPatterns.length > 0 ? { modelPatterns } : {}),
   } satisfies PluginManifestModelSupport;
 
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
+}
+
+function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const onProviders = normalizeTrimmedStringList(value.onProviders);
+  const onCommands = normalizeTrimmedStringList(value.onCommands);
+  const onChannels = normalizeTrimmedStringList(value.onChannels);
+  const onRoutes = normalizeTrimmedStringList(value.onRoutes);
+  const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
+    (capability): capability is PluginManifestActivationCapability =>
+      capability === "provider" ||
+      capability === "channel" ||
+      capability === "tool" ||
+      capability === "hook",
+  );
+
+  const activation = {
+    ...(onProviders.length > 0 ? { onProviders } : {}),
+    ...(onCommands.length > 0 ? { onCommands } : {}),
+    ...(onChannels.length > 0 ? { onChannels } : {}),
+    ...(onRoutes.length > 0 ? { onRoutes } : {}),
+    ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
+  } satisfies PluginManifestActivation;
+
+  return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+function normalizeManifestSetupProviders(
+  value: unknown,
+): PluginManifestSetupProvider[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSetupProvider[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const id = normalizeOptionalString(entry.id) ?? "";
+    if (!id) {
+      continue;
+    }
+    const authMethods = normalizeTrimmedStringList(entry.authMethods);
+    const envVars = normalizeTrimmedStringList(entry.envVars);
+    normalized.push({
+      id,
+      ...(authMethods.length > 0 ? { authMethods } : {}),
+      ...(envVars.length > 0 ? { envVars } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const providers = normalizeManifestSetupProviders(value.providers);
+  const cliBackends = normalizeTrimmedStringList(value.cliBackends);
+  const configMigrations = normalizeTrimmedStringList(value.configMigrations);
+  const requiresRuntime =
+    typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
+  const setup = {
+    ...(providers ? { providers } : {}),
+    ...(cliBackends.length > 0 ? { cliBackends } : {}),
+    ...(configMigrations.length > 0 ? { configMigrations } : {}),
+    ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
+  } satisfies PluginManifestSetup;
+  return Object.keys(setup).length > 0 ? setup : undefined;
 }
 
 function normalizeProviderAuthChoices(
@@ -198,14 +495,14 @@ function normalizeProviderAuthChoices(
     if (!isRecord(entry)) {
       continue;
     }
-    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
-    const method = typeof entry.method === "string" ? entry.method.trim() : "";
-    const choiceId = typeof entry.choiceId === "string" ? entry.choiceId.trim() : "";
+    const provider = normalizeOptionalString(entry.provider) ?? "";
+    const method = normalizeOptionalString(entry.method) ?? "";
+    const choiceId = normalizeOptionalString(entry.choiceId) ?? "";
     if (!provider || !method || !choiceId) {
       continue;
     }
-    const choiceLabel = typeof entry.choiceLabel === "string" ? entry.choiceLabel.trim() : "";
-    const choiceHint = typeof entry.choiceHint === "string" ? entry.choiceHint.trim() : "";
+    const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
+    const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -214,16 +511,15 @@ function normalizeProviderAuthChoices(
       entry.assistantVisibility === "manual-only" || entry.assistantVisibility === "visible"
         ? entry.assistantVisibility
         : undefined;
-    const deprecatedChoiceIds = normalizeStringList(entry.deprecatedChoiceIds);
-    const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
-    const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
-    const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
-    const optionKey = typeof entry.optionKey === "string" ? entry.optionKey.trim() : "";
-    const cliFlag = typeof entry.cliFlag === "string" ? entry.cliFlag.trim() : "";
-    const cliOption = typeof entry.cliOption === "string" ? entry.cliOption.trim() : "";
-    const cliDescription =
-      typeof entry.cliDescription === "string" ? entry.cliDescription.trim() : "";
-    const onboardingScopes = normalizeStringList(entry.onboardingScopes).filter(
+    const deprecatedChoiceIds = normalizeTrimmedStringList(entry.deprecatedChoiceIds);
+    const groupId = normalizeOptionalString(entry.groupId) ?? "";
+    const groupLabel = normalizeOptionalString(entry.groupLabel) ?? "";
+    const groupHint = normalizeOptionalString(entry.groupHint) ?? "";
+    const optionKey = normalizeOptionalString(entry.optionKey) ?? "";
+    const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
+    const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
+    const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
+    const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation",
     );
@@ -257,7 +553,7 @@ function normalizeChannelConfigs(
   }
   const normalized: Record<string, PluginManifestChannelConfig> = {};
   for (const [key, rawEntry] of Object.entries(value)) {
-    const channelId = typeof key === "string" ? key.trim() : "";
+    const channelId = normalizeOptionalString(key) ?? "";
     if (!channelId || !isRecord(rawEntry)) {
       continue;
     }
@@ -272,9 +568,9 @@ function normalizeChannelConfigs(
       isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
         ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
         : undefined;
-    const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
-    const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
-    const preferOver = normalizeStringList(rawEntry.preferOver);
+    const label = normalizeOptionalString(rawEntry.label) ?? "";
+    const description = normalizeOptionalString(rawEntry.description) ?? "";
+    const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
@@ -347,7 +643,7 @@ export function loadPluginManifest(
   if (!isRecord(raw)) {
     return { ok: false, error: "plugin manifest must be an object", manifestPath };
   }
-  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
     return { ok: false, error: "plugin manifest requires id", manifestPath };
   }
@@ -358,21 +654,28 @@ export function loadPluginManifest(
 
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
-  const legacyPluginIds = normalizeStringList(raw.legacyPluginIds);
-  const autoEnableWhenConfiguredProviders = normalizeStringList(
+  const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
+  const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
   );
-  const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
-  const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
-  const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
-  const channels = normalizeStringList(raw.channels);
-  const providers = normalizeStringList(raw.providers);
+  const name = normalizeOptionalString(raw.name);
+  const description = normalizeOptionalString(raw.description);
+  const version = normalizeOptionalString(raw.version);
+  const channels = normalizeTrimmedStringList(raw.channels);
+  const providers = normalizeTrimmedStringList(raw.providers);
+  const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
-  const cliBackends = normalizeStringList(raw.cliBackends);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
+  const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
-  const skills = normalizeStringList(raw.skills);
+  const activation = normalizeManifestActivation(raw.activation);
+  const setup = normalizeManifestSetup(raw.setup);
+  const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
+  const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -393,16 +696,23 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      providerDiscoveryEntry,
       modelSupport,
       cliBackends,
+      commandAliases,
       providerAuthEnvVars,
+      providerAuthAliases,
+      channelEnvVars,
       providerAuthChoices,
+      activation,
+      setup,
       skills,
       name,
       description,
       version,
       uiHints,
       contracts,
+      configContracts,
       channelConfigs,
     },
     manifestPath,
@@ -426,10 +736,24 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  exposure?: {
+    configured?: boolean;
+    setup?: boolean;
+    docs?: boolean;
+  };
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  configuredState?: {
+    specifier?: string;
+    exportName?: string;
+  };
+  persistedAuthState?: {
+    specifier?: string;
+    exportName?: string;
+  };
 };
 
 export type PluginPackageInstall = {
@@ -492,9 +816,7 @@ export function resolvePackageExtensionEntries(
   if (!Array.isArray(raw)) {
     return { status: "missing", entries: [] };
   }
-  const entries = raw
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter(Boolean);
+  const entries = raw.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
   if (entries.length === 0) {
     return { status: "empty", entries: [] };
   }

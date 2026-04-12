@@ -1,8 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
-import { resolveCacheRetention } from "./anthropic-cache-retention.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
@@ -35,6 +35,17 @@ vi.mock("./logger.js", () => ({
     warn: vi.fn(),
   },
 }));
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: () => undefined,
+    wrapProviderStreamFn: () => undefined,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
 
 describe("cacheRetention default behavior", () => {
   it("returns 'short' for Anthropic when not configured", () => {
@@ -236,6 +247,39 @@ describe("cacheRetention default behavior", () => {
         "us.anthropic.claude-sonnet-4-6",
       ),
     ).toBe("long");
+  });
+
+  it("defaults to 'short' for anthropic-vertex without explicit config", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("respects explicit 'long' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("long");
+  });
+
+  it("respects explicit 'none' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("none");
   });
 });
 

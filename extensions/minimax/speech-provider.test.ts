@@ -244,7 +244,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0]!;
+      const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       const body = JSON.parse(init!.body as string);
       expect(body.model).toBe("speech-2.8-hd");
@@ -268,7 +268,7 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0]![1]!.body as string);
+      const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
       expect(body.model).toBe("speech-01-240228");
       expect(body.voice_setting.voice_id).toBe("custom_voice");
       expect(body.voice_setting.speed).toBe(1.5);
@@ -288,7 +288,9 @@ describe("buildMinimaxSpeechProvider", () => {
           }),
         ).rejects.toThrow("MiniMax API key missing");
       } finally {
-        if (savedKey) process.env.MINIMAX_API_KEY = savedKey;
+        if (savedKey) {
+          process.env.MINIMAX_API_KEY = savedKey;
+        }
       }
     });
 
@@ -312,7 +314,7 @@ describe("buildMinimaxSpeechProvider", () => {
     it("returns known voices", async () => {
       const voices = await provider.listVoices!({} as never);
       expect(voices.length).toBeGreaterThan(0);
-      expect(voices[0]!.id).toBe("English_expressive_narrator");
+      expect(voices[0].id).toBe("English_expressive_narrator");
     });
   });
 });

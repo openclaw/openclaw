@@ -5,7 +5,7 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const secretTargetRegistryEntries = [
   {
@@ -56,7 +56,7 @@ export const secretTargetRegistryEntries = [
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
   const resolved = getChannelSurface(params.config, "zalo");
@@ -64,9 +64,6 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: zalo, surface } = resolved;
-  const baseTokenFile = typeof zalo.tokenFile === "string" ? zalo.tokenFile.trim() : "";
-  const accountTokenFile = (account: Record<string, unknown>) =>
-    typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
   collectConditionalChannelFieldAssignments({
     channelKey: "zalo",
     field: "botToken",
@@ -74,13 +71,12 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: baseTokenFile.length === 0,
+    topLevelActiveWithoutAccounts: true,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled && !hasOwnProperty(account, "botToken") && accountTokenFile(account).length === 0,
-    accountActive: ({ account, enabled }) => enabled && accountTokenFile(account).length === 0,
-    topInactiveReason:
-      "no enabled Zalo surface inherits this top-level botToken (tokenFile is configured).",
-    accountInactiveReason: "Zalo account is disabled or tokenFile is configured.",
+      enabled && !hasOwnProperty(account, "botToken"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
+    accountInactiveReason: "Zalo account is disabled.",
   });
   const baseWebhookUrl = typeof zalo.webhookUrl === "string" ? zalo.webhookUrl.trim() : "";
   const accountWebhookUrl = (account: Record<string, unknown>) =>
@@ -106,3 +102,8 @@ export function collectRuntimeConfigAssignments(params: {
       "Zalo account is disabled or webhook mode is not active for this account.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

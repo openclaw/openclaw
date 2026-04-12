@@ -71,7 +71,8 @@ Open:
 }
 ```
 
-Then start the gateway (token required for non-loopback binds):
+Then start the gateway (this non-loopback example uses shared-secret token
+auth):
 
 ```bash
 openclaw gateway
@@ -97,8 +98,12 @@ Open:
 
 - Gateway auth is required by default (token, password, trusted-proxy, or Tailscale Serve identity headers when enabled).
 - Non-loopback binds still **require** gateway auth. In practice that means token/password auth or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
-- The wizard generates a gateway token by default (even on loopback).
-- The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
+- The wizard creates shared-secret auth by default and usually generates a
+  gateway token (even on loopback).
+- In shared-secret mode, the UI sends `connect.params.auth.token` or
+  `connect.params.auth.password`.
+- In identity-bearing modes such as Tailscale Serve or `trusted-proxy`, the
+  WebSocket auth check is satisfied from request headers instead.
 - For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
   explicitly (full origins). Without it, gateway startup is refused by default.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables

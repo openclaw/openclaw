@@ -1,4 +1,5 @@
 import type { Bot, Context } from "grammy";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizedFromAuthorizers,
@@ -28,6 +29,7 @@ import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-sna
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -44,7 +46,7 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
@@ -211,6 +213,13 @@ export function parseTelegramNativeCommandCallbackData(data?: string | null): st
   }
   const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
   return commandText.startsWith("/") ? commandText : null;
+}
+
+export function resolveTelegramNativeCommandDisableBlockStreaming(
+  telegramCfg: TelegramAccountConfig,
+): boolean | undefined {
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
+  return typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined;
 }
 
 export type RegisterTelegramNativeCommandsParams = {
@@ -498,7 +507,7 @@ export const registerTelegramNativeCommands = ({
     listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
   );
   for (const command of skillCommands) {
-    reservedCommands.add(command.name.toLowerCase());
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
   }
   const customResolution = resolveTelegramCustomCommands({
     commands: telegramCfg.customCommands,
@@ -516,7 +525,7 @@ export const registerTelegramNativeCommands = ({
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
       ...customCommands.map((command) => command.command),
-    ].map((command) => command.toLowerCase()),
+    ].map((command) => normalizeLowercaseStringOrEmpty(command)),
   );
   const pluginCatalog = buildPluginTelegramMenuCommands({
     specs: pluginCommandSpecs,
@@ -560,15 +569,32 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
-  const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
-    buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
-    });
+  const {
+    commandsToRegister,
+    totalCommands,
+    maxCommands,
+    overflowCount,
+    maxTotalChars,
+    descriptionTrimmed,
+    textBudgetDropCount,
+  } = buildCappedTelegramMenuCommands({
+    allCommands: allCommandsFull,
+  });
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +
         `${totalCommands} configured; registering first ${maxCommands}. ` +
         `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+    );
+  }
+  if (descriptionTrimmed) {
+    runtime.log?.(
+      `Telegram menu text exceeded the conservative ${maxTotalChars}-character payload budget; shortening descriptions to keep ${commandsToRegister.length} commands visible.`,
+    );
+  }
+  if (textBudgetDropCount > 0) {
+    runtime.log?.(
+      `Telegram menu text still exceeded the conservative ${maxTotalChars}-character payload budget after shortening descriptions; registering first ${commandsToRegister.length} commands.`,
     );
   }
   const syncTelegramMenuCommands =
@@ -883,9 +909,7 @@ export const registerTelegramNativeCommands = ({
         });
 
         const disableBlockStreaming =
-          typeof runtimeTelegramCfg.blockStreaming === "boolean"
-            ? !runtimeTelegramCfg.blockStreaming
-            : undefined;
+          resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
           skippedNonSilent: 0,
@@ -917,7 +941,14 @@ export const registerTelegramNativeCommands = ({
                 return;
               }
               const result = await deliverReplies({
-                replies: [payload],
+                replies: [
+                  payload.replyToId
+                    ? payload
+                    : {
+                        ...payload,
+                        replyToId: String(msg.message_id),
+                      },
+                ],
                 ...deliveryBaseOptions,
                 silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
               });

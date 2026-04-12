@@ -1,8 +1,16 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
+
+// Local generic wrapper to defer union resolution. Works around a
+// single-file-mode limitation in the type-aware lint where imported
+// types resolved via extension runtime-api barrels are treated as
+// `error` (acting as `any`) and trip `no-redundant-type-constituents`
+// when combined with `undefined` in a union.
+type Maybe<T> = T | undefined;
 
 const INFORMATIVE_STATUS_TEXTS = [
   "Thinking...",
@@ -13,7 +21,7 @@ const INFORMATIVE_STATUS_TEXTS = [
 
 export function pickInformativeStatusText(random = Math.random): string {
   const index = Math.floor(random() * INFORMATIVE_STATUS_TEXTS.length);
-  return INFORMATIVE_STATUS_TEXTS[index] ?? INFORMATIVE_STATUS_TEXTS[0]!;
+  return INFORMATIVE_STATUS_TEXTS[index] ?? INFORMATIVE_STATUS_TEXTS[0];
 }
 
 export function createTeamsReplyStreamController(params: {
@@ -23,7 +31,7 @@ export function createTeamsReplyStreamController(params: {
   log: MSTeamsMonitorLogger;
   random?: () => number;
 }) {
-  const isPersonal = params.conversationType?.toLowerCase() === "personal";
+  const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const stream = isPersonal
     ? new TeamsHttpStream({
         sendActivity: (activity) => params.context.sendActivity(activity),
@@ -55,7 +63,7 @@ export function createTeamsReplyStreamController(params: {
       stream.update(payload.text);
     },
 
-    preparePayload(payload: ReplyPayload): ReplyPayload | undefined {
+    preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
       if (!stream || !streamReceivedTokens) {
         return payload;
       }
@@ -107,6 +115,33 @@ export function createTeamsReplyStreamController(params: {
 
     hasStream(): boolean {
       return Boolean(stream);
+    },
+
+    /**
+     * Whether the Teams streaming card is currently receiving LLM tokens.
+     * Used to gate side-channel keepalive activity so we don't overlay plain
+     * "typing" indicators on top of a live streaming card.
+     *
+     * Returns true only while the stream is actively chunking text into the
+     * streaming card. The informative update (blue progress bar) is short
+     * lived so we intentionally do not count it as "active"; this way the
+     * typing keepalive can still fire during the informative window and
+     * during tool chains between text segments.
+     *
+     * Returns false when:
+     * - No stream exists (non-personal conversation).
+     * - Stream has not yet received any text tokens.
+     * - Stream has been finalized (e.g. after the first text segment, while
+     *   tools run before the next segment).
+     */
+    isStreamActive(): boolean {
+      if (!stream) {
+        return false;
+      }
+      if (stream.isFinalized || stream.isFailed) {
+        return false;
+      }
+      return streamReceivedTokens;
     },
   };
 }

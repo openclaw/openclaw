@@ -286,6 +286,21 @@ describe("device bootstrap tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("rejects cross-role scope escalation (node role requesting operator scopes)", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "node",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    expect(raw).toContain(issued.token);
+  });
+
   it("supports explicitly bound bootstrap profiles", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({

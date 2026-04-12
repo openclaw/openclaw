@@ -26,6 +26,7 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  platform?: string;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -39,6 +40,7 @@ function loadRootAliasWithStubs(options?: {
     {
       process: {
         env: options?.env ?? {},
+        platform: options?.platform ?? "darwin",
       },
     },
     { filename: rootAliasPath },
@@ -206,6 +208,18 @@ describe("plugin-sdk root alias", () => {
       },
       expectedTryNative: false,
     },
+    {
+      name: "prefers source loading on Windows even when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "production" },
+        platform: "win32",
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: false,
+    },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
 
@@ -336,7 +350,6 @@ describe("plugin-sdk root alias", () => {
     expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-command-config"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();

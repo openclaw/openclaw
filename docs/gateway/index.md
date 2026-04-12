@@ -57,6 +57,10 @@ Healthy baseline: `Runtime: running` and `RPC probe: ok`.
 openclaw channels status --probe
 ```
 
+With a reachable gateway this runs live per-account channel probes and optional audits.
+If the gateway is unreachable, the CLI falls back to config-only channel summaries instead
+of live probe output.
+
   </Step>
 </Steps>
 
@@ -123,7 +127,7 @@ All of these run on the main Gateway port and use the same trusted operator auth
 
 ```bash
 openclaw gateway status
-openclaw gateway status --deep
+openclaw gateway status --deep   # adds a system-level service scan
 openclaw gateway status --json
 openclaw gateway install
 openclaw gateway restart
@@ -132,6 +136,33 @@ openclaw secrets reload
 openclaw logs --follow
 openclaw doctor
 ```
+
+`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system
+units/schtasks), not a deeper RPC health probe.
+
+## Multiple gateways (same host)
+
+Most installs should run one gateway per machine. A single gateway can host multiple
+agents and channels.
+
+You only need multiple gateways when you intentionally want isolation or a rescue bot.
+
+Useful checks:
+
+```bash
+openclaw gateway status --deep
+openclaw gateway probe
+```
+
+What to expect:
+
+- `gateway status --deep` can report `Other gateway-like services detected (best effort)`
+  and print cleanup hints when stale launchd/systemd/schtasks installs are still around.
+- `gateway probe` can warn about `multiple reachable gateways` when more than one target
+  answers.
+- If that is intentional, isolate ports, config/state, and workspace roots per gateway.
+
+Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).
 
 ## Remote access
 
@@ -142,7 +173,7 @@ Fallback: SSH tunnel.
 ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
-Then connect clients to `ws://127.0.0.1:18789` locally.
+Then connect clients locally to `ws://127.0.0.1:18789`.
 
 <Warning>
 SSH tunnels do not bypass gateway auth. For shared-secret auth, clients still
@@ -274,8 +305,12 @@ Defaults include isolated state/config and base gateway port `19001`.
 
 - First client frame must be `connect`.
 - Gateway returns `hello-ok` snapshot (`presence`, `health`, `stateVersion`, `uptimeMs`, limits/policy).
+- `hello-ok.features.methods` / `events` are a conservative discovery list, not
+  a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
-- Common events: `connect.challenge`, `agent`, `chat`, `presence`, `tick`, `health`, `heartbeat`, `shutdown`.
+- Common events include `connect.challenge`, `agent`, `chat`,
+  `session.message`, `session.tool`, `sessions.changed`, `presence`, `tick`,
+  `health`, `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
 
 Agent runs are two-stage:
 

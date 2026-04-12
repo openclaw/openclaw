@@ -14,14 +14,17 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
-import { loadConfig } from "../config/config.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
+export type GatewayScopedToolSurface = "http" | "loopback";
+
 export function resolveGatewayScopedTools(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
@@ -29,7 +32,10 @@ export function resolveGatewayScopedTools(params: {
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
+  surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
+  disablePluginTools?: boolean;
+  senderIsOwner?: boolean;
 }) {
   const {
     agentId,
@@ -71,6 +77,8 @@ export function resolveGatewayScopedTools(params: {
     agentThreadId: params.agentThreadId,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
+    disablePluginTools: params.disablePluginTools,
+    senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
@@ -86,10 +94,8 @@ export function resolveGatewayScopedTools(params: {
   });
 
   const policyFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    tools: allTools,
+    toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
@@ -110,10 +116,12 @@ export function resolveGatewayScopedTools(params: {
     ],
   });
 
+  const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
-  const defaultGatewayDeny = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-    (name) => !gatewayToolsCfg?.allow?.includes(name),
-  );
+  const defaultGatewayDeny =
+    surface === "http"
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),

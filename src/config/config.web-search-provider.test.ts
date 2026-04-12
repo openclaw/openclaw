@@ -12,6 +12,10 @@ vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
   resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
 }));
 
+vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
+  resolveManifestCommandAliasOwner: () => undefined,
+}));
+
 const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
   (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
 const getConfiguredPluginWebSearchConfig =
@@ -33,6 +37,7 @@ const getConfiguredPluginWebSearchCredential =
 const mockWebSearchProviders = [
   {
     id: "brave",
+    pluginId: "brave",
     envVars: ["BRAVE_API_KEY"],
     credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
     getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
@@ -40,6 +45,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "firecrawl",
+    pluginId: "firecrawl",
     envVars: ["FIRECRAWL_API_KEY"],
     credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("firecrawl"),
@@ -47,6 +53,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "gemini",
+    pluginId: "google",
     envVars: ["GEMINI_API_KEY"],
     credentialPath: "plugins.entries.google.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("gemini"),
@@ -54,6 +61,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "grok",
+    pluginId: "xai",
     envVars: ["XAI_API_KEY"],
     credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("grok"),
@@ -61,6 +69,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "kimi",
+    pluginId: "moonshot",
     envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
     credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("kimi"),
@@ -68,6 +77,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "minimax",
+    pluginId: "minimax",
     envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
     credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("minimax"),
@@ -75,6 +85,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "perplexity",
+    pluginId: "perplexity",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("perplexity"),
@@ -82,6 +93,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "searxng",
+    pluginId: "searxng",
     envVars: ["SEARXNG_BASE_URL"],
     credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
     getCredentialValue: (search?: Record<string, unknown>) =>
@@ -91,6 +103,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "tavily",
+    pluginId: "tavily",
     envVars: ["TAVILY_API_KEY"],
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("tavily"),
@@ -98,9 +111,8 @@ const mockWebSearchProviders = [
   },
 ] as const;
 
-vi.mock("../plugins/web-search-providers.js", () => {
+vi.mock("../plugins/web-search-providers.runtime.js", () => {
   return {
-    resolveBundledPluginWebSearchProviders: () => mockWebSearchProviders,
     resolvePluginWebSearchProviders: () => mockWebSearchProviders,
   };
 });
@@ -158,6 +170,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
           origin: "bundled",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
@@ -181,6 +196,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
           origin: "bundled",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: [id],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
@@ -193,15 +211,26 @@ vi.mock("../plugins/manifest-registry.js", () => {
       ],
       diagnostics: [],
     }),
+    resolveManifestContractPluginIds: (params?: { contract?: string; origin?: string }) =>
+      params?.contract === "webSearchProviders" && params.origin === "bundled"
+        ? mockWebSearchProviders
+            .map((provider) => provider.pluginId)
+            .filter((value, index, array) => array.indexOf(value) === index)
+            .toSorted((left, right) => left.localeCompare(right))
+        : [],
+    resolveManifestContractOwnerPluginId: (params?: { contract?: string; value?: string }) =>
+      params?.contract === "webSearchProviders"
+        ? mockWebSearchProviders.find((provider) => provider.id === params.value)?.pluginId
+        : undefined,
   };
 });
 
-let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
+let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
+  ({ validateConfigObjectWithPlugins } = await import("./validation.js"));
   ({
     __testing: { resolveSearchProvider },
   } = await import("../agents/tools/web-search.js"));
@@ -364,7 +393,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts legacy scoped provider config for bundled providers via auto-migration", () => {
+  it("detects legacy scoped provider config for bundled providers", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -378,21 +407,7 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search).toEqual({
-      provider: "gemini",
-    });
-    expect(res.config.plugins?.entries?.google).toEqual({
-      enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "legacy-key",
-        },
-      },
-    });
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {

@@ -5,12 +5,9 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "../plugin-sdk/google.js";
-import { MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
-import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -24,33 +21,68 @@ import {
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
-type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
+
+const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 const loginOpenAICodexOAuth = vi.hoisted(() =>
   vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
 );
-vi.mock("./openai-codex-oauth.js", () => ({
+vi.mock("../plugins/provider-openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
-    "../plugins/provider-auth-choice.runtime.js",
-  );
+const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => {
+  const normalizeProviderId = (value: string) => value.trim().toLowerCase();
   return {
-    ...actual,
     resolvePluginProviders,
+    resolveProviderPluginChoice: (params: { providers: ProviderPlugin[]; choice: string }) => {
+      const choice = params.choice.trim();
+      if (!choice) {
+        return null;
+      }
+      if (choice.startsWith("provider-plugin:")) {
+        const payload = choice.slice("provider-plugin:".length);
+        const separator = payload.indexOf(":");
+        const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
+        const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
+        const provider = params.providers.find(
+          (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
+        );
+        const method = methodId
+          ? provider?.auth.find((entry) => entry.id === methodId)
+          : provider?.auth[0];
+        return provider && method ? { provider, method } : null;
+      }
+      for (const provider of params.providers) {
+        for (const method of provider.auth) {
+          if (method.wizard?.choiceId === choice) {
+            return { provider, method, wizard: method.wizard };
+          }
+        }
+        if (normalizeProviderId(provider.id) === normalizeProviderId(choice) && provider.auth[0]) {
+          return { provider, method: provider.auth[0] };
+        }
+      }
+      return null;
+    },
+    runProviderModelSelectedHook,
   };
 });
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
-vi.mock("./zai-endpoint-detect.js", () => ({
+vi.mock("../plugins/provider-zai-endpoint.js", () => ({
   detectZaiEndpoint,
 }));
 
 type StoredAuthProfile = {
   key?: string;
+  token?: string;
   keyRef?: { source: string; provider: string; id: string };
   access?: string;
   refresh?: string;
@@ -276,9 +308,7 @@ function createDefaultProviderPlugins() {
     run: async (ctx) => {
       const state = "state-test";
       ctx.runtime.log(`Open this URL: https://api.chutes.ai/idp/authorize?state=${state}`);
-      const redirect = String(
-        await ctx.prompter.text({ message: "Paste the redirect URL or code" }),
-      );
+      const redirect = await ctx.prompter.text({ message: "Paste the redirect URL or code" });
       const params = new URLSearchParams(redirect.startsWith("?") ? redirect.slice(1) : redirect);
       const code = params.get("code") ?? redirect;
       const tokenResponse = await fetch("https://api.chutes.ai/idp/token", {
@@ -641,6 +671,7 @@ describe("applyAuthChoice", () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
     resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+    runProviderModelSelectedHook.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
@@ -651,24 +682,58 @@ describe("applyAuthChoice", () => {
 
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
-  it("rejects legacy Anthropic token setup aliases", async () => {
+  it("applies Anthropic setup-token auth when the provider exposes the setup flow", async () => {
     await setupTempState();
 
-    await expect(
-      applyAuthChoice({
-        authChoice: "token",
-        config: {} as OpenClawConfig,
-        prompter: createPrompter({}),
-        runtime: createExitThrowingRuntime(),
-        setDefaultModel: true,
-        opts: { tokenProvider: "anthropic" },
+    resolvePluginProviders.mockReturnValue([
+      createFixedChoiceProvider({
+        providerId: "anthropic",
+        label: "Anthropic",
+        choiceId: "setup-token",
+        method: {
+          id: "setup-token",
+          label: "Anthropic setup-token",
+          kind: "token",
+          run: vi.fn(
+            async (): Promise<ProviderAuthResult> => ({
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  credential: {
+                    type: "token",
+                    provider: "anthropic",
+                    token: `sk-ant-oat01-${"a".repeat(80)}`,
+                  },
+                },
+              ],
+              defaultModel: "anthropic/claude-sonnet-4-6",
+            }),
+          ),
+        },
       }),
-    ).rejects.toThrow(
-      [
-        'Auth choice "token" is no longer supported for Anthropic setup in OpenClaw.',
-        "Existing Anthropic token profiles still run if they are already configured.",
-        'Use "anthropic-cli" or "apiKey" instead.',
-      ].join("\n"),
+    ]);
+
+    const result = await applyAuthChoice({
+      authChoice: "token",
+      config: {} as OpenClawConfig,
+      prompter: createPrompter({}),
+      runtime: createExitThrowingRuntime(),
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "anthropic",
+        token: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+      provider: "anthropic",
+      mode: "token",
+    });
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect((await readAuthProfile("anthropic:default"))?.token).toBe(
+      `sk-ant-oat01-${"a".repeat(80)}`,
     );
   });
 
@@ -1426,7 +1491,7 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
+      authChoice: "synthetic-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
@@ -1438,13 +1503,13 @@ describe("applyAuthChoice", () => {
       agentId?: string;
     }> = [
       {
-        authChoice: "xai-api-key",
-        token: "sk-xai-test",
-        promptMessage: "Enter xAI API key",
+        authChoice: "synthetic-api-key",
+        token: "sk-synthetic-agent-test",
+        promptMessage: "Enter Synthetic API key",
         existingPrimary: "openai/gpt-4o-mini",
-        expectedOverride: "xai/grok-4",
-        profileId: "xai:default",
-        profileProvider: "xai",
+        expectedOverride: "synthetic/Synthetic-1",
+        profileId: "synthetic:default",
+        profileProvider: "synthetic",
         agentId: "agent-1",
       },
       {
@@ -1588,16 +1653,10 @@ describe("applyAuthChoice", () => {
   it("does not persist literal 'undefined' when API key prompts return undefined", async () => {
     const scenarios = [
       {
-        authChoice: "apiKey" as const,
-        envKey: "ANTHROPIC_API_KEY",
-        profileId: "anthropic:default",
-        provider: "anthropic",
-      },
-      {
-        authChoice: "openrouter-api-key" as const,
-        envKey: "OPENROUTER_API_KEY",
-        profileId: "openrouter:default",
-        provider: "openrouter",
+        authChoice: "synthetic-api-key" as const,
+        envKey: "SYNTHETIC_API_KEY",
+        profileId: "synthetic:default",
+        provider: "synthetic",
       },
     ];
 

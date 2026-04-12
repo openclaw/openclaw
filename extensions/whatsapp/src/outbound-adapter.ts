@@ -12,7 +12,7 @@ import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { sendPollWhatsApp } from "./send.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";

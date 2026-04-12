@@ -1,5 +1,10 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { getBundledChannelContractSurfaces } from "../../channels/plugins/contract-surfaces.js";
+import { listChannelPlugins } from "../../channels/plugins/registry.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
@@ -10,9 +15,24 @@ type LegacyGroupSessionSurface = {
   resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
 };
 
+function resolveImplicitGroupSurface(params: {
+  from: string;
+  normalizedChatType?: "group" | "channel";
+}): { provider: string; chatType: "group" | "channel" } | null {
+  if (params.from.endsWith("@g.us")) {
+    return { provider: "whatsapp", chatType: "group" };
+  }
+  if (params.normalizedChatType) {
+    return null;
+  }
+  return null;
+}
+
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
-  for (const surface of getBundledChannelContractSurfaces() as LegacyGroupSessionSurface[]) {
-    const resolved = surface.resolveLegacyGroupSessionKey?.(ctx);
+  for (const plugin of listChannelPlugins()) {
+    const resolved = (
+      plugin.messaging as LegacyGroupSessionSurface | undefined
+    )?.resolveLegacyGroupSessionKey?.(ctx);
     if (resolved) {
       return resolved;
     }
@@ -25,7 +45,7 @@ function normalizeGroupLabel(raw?: string) {
 }
 
 function shortenGroupId(value?: string) {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -43,15 +63,15 @@ export function buildGroupDisplayName(params: {
   id?: string;
   key: string;
 }) {
-  const providerKey = (params.provider?.trim().toLowerCase() || "group").trim();
-  const groupChannel = params.groupChannel?.trim();
-  const space = params.space?.trim();
-  const subject = params.subject?.trim();
+  const providerKey = normalizeOptionalLowercaseString(params.provider) ?? "group";
+  const groupChannel = normalizeOptionalString(params.groupChannel);
+  const space = normalizeOptionalString(params.space);
+  const subject = normalizeOptionalString(params.subject);
   const detail =
     (groupChannel && space
       ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
       : groupChannel || subject || space || "") || "";
-  const fallbackId = params.id?.trim() || params.key;
+  const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;
   let token = normalizeGroupLabel(rawLabel);
   if (!token) {
@@ -67,10 +87,11 @@ export function buildGroupDisplayName(params: {
 }
 
 export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
-  const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
-  const chatType = ctx.ChatType?.trim().toLowerCase();
+  const from = normalizeOptionalString(ctx.From) ?? "";
+  const chatType = normalizeOptionalLowercaseString(ctx.ChatType);
   const normalizedChatType =
     chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
+  const implicitGroupSurface = resolveImplicitGroupSurface({ from, normalizedChatType });
 
   const legacyResolution = resolveLegacyGroupSessionKey(ctx);
   const looksLikeGroup =
@@ -78,39 +99,42 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     normalizedChatType === "channel" ||
     from.includes(":group:") ||
     from.includes(":channel:") ||
+    implicitGroupSurface !== null ||
     legacyResolution !== null;
   if (!looksLikeGroup) {
     return null;
   }
 
-  const providerHint = ctx.Provider?.trim().toLowerCase();
+  const providerHint = normalizeOptionalLowercaseString(ctx.Provider);
 
   const parts = from.split(":").filter(Boolean);
-  const head = parts[0]?.trim().toLowerCase() ?? "";
+  const head = normalizeLowercaseStringOrEmpty(parts[0]);
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
   if (!headIsSurface && !providerHint && legacyResolution) {
     return legacyResolution;
   }
 
-  const provider = headIsSurface ? head : (providerHint ?? legacyResolution?.channel);
+  const provider = headIsSurface
+    ? head
+    : (providerHint ?? implicitGroupSurface?.provider ?? legacyResolution?.channel);
   if (!provider) {
     return null;
   }
 
-  const second = parts[1]?.trim().toLowerCase();
+  const second = normalizeOptionalLowercaseString(parts[1]);
   const secondIsKind = second === "group" || second === "channel";
   const kind = secondIsKind
     ? second
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
-      : "group";
+      : (implicitGroupSurface?.chatType ?? "group");
   const id = headIsSurface
     ? secondIsKind
       ? parts.slice(2).join(":")
       : parts.slice(1).join(":")
     : from;
-  const finalId = id.trim().toLowerCase();
+  const finalId = normalizeLowercaseStringOrEmpty(id);
   if (!finalId) {
     return null;
   }

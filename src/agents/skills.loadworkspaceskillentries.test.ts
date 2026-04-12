@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
@@ -13,6 +14,10 @@ async function createTempWorkspaceDir() {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
+}
+
+function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
 afterEach(async () => {
@@ -59,10 +64,12 @@ describe("loadWorkspaceSkillEntries", () => {
     const managedDir = path.join(workspaceDir, ".managed");
     await fs.mkdir(managedDir, { recursive: true });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const entries = withWorkspaceHome(workspaceDir, () =>
+      loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
 
     expect(entries).toEqual([]);
   });
@@ -147,6 +154,26 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
+  });
+
+  it("marks disable-model-invocation skills as hidden in exposure metadata for newly loaded entries", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "hidden-skill"),
+      name: "hidden-skill",
+      description: "Hidden prompt entry",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
+
+    expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
+    expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
   });
 
   it("inherits agents.defaults.skills when an agent omits skills", async () => {

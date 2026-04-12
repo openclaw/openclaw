@@ -1,17 +1,16 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import {
+  buildCapabilityProviderMaps,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
-}
 
 export function normalizeRealtimeVoiceProviderId(
   providerId: string | undefined,
 ): RealtimeVoiceProviderId | undefined {
-  return trimToUndefined(providerId);
+  return normalizeCapabilityProviderId(providerId);
 }
 
 function resolveRealtimeVoiceProviderEntries(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {
@@ -25,28 +24,7 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   canonical: Map<string, RealtimeVoiceProviderPlugin>;
   aliases: Map<string, RealtimeVoiceProviderPlugin>;
 } {
-  const canonical = new Map<string, RealtimeVoiceProviderPlugin>();
-  const aliases = new Map<string, RealtimeVoiceProviderPlugin>();
-  const register = (provider: RealtimeVoiceProviderPlugin) => {
-    const id = normalizeRealtimeVoiceProviderId(provider.id);
-    if (!id) {
-      return;
-    }
-    canonical.set(id, provider);
-    aliases.set(id, provider);
-    for (const alias of provider.aliases ?? []) {
-      const normalizedAlias = normalizeRealtimeVoiceProviderId(alias);
-      if (normalizedAlias) {
-        aliases.set(normalizedAlias, provider);
-      }
-    }
-  };
-
-  for (const provider of resolveRealtimeVoiceProviderEntries(cfg)) {
-    register(provider);
-  }
-
-  return { canonical, aliases };
+  return buildCapabilityProviderMaps(resolveRealtimeVoiceProviderEntries(cfg));
 }
 
 export function listRealtimeVoiceProviders(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {

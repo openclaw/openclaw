@@ -13,9 +13,9 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.adapters.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -29,7 +29,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -39,6 +41,7 @@ import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
+export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
@@ -61,20 +64,6 @@ async function loadChannelBootstrapRuntime() {
   channelBootstrapRuntimePromise ??= import("./channel-bootstrap.runtime.js");
   return await channelBootstrapRuntimePromise;
 }
-
-export type OutboundDeliveryResult = {
-  channel: Exclude<OutboundChannel, "none">;
-  messageId: string;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
-  timestamp?: number;
-  toJid?: string;
-  pollId?: string;
-  // Channel docking: stash channel-specific fields here to avoid core type churn.
-  meta?: Record<string, unknown>;
-};
 
 type Chunker = (text: string, limit: number) => string[];
 
@@ -560,9 +549,7 @@ export async function deliverOutboundPayloads(
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else {
-        await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-          () => {},
-        );
+        await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
       }
     }
     throw err;
@@ -581,6 +568,13 @@ async function deliverOutboundPayloadsCore(
     cfg,
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
+    sessionKey: params.session?.key,
+    messageProvider: params.session?.key ? undefined : channel,
+    accountId: params.session?.requesterAccountId ?? accountId,
+    requesterSenderId: params.session?.requesterSenderId,
+    requesterSenderName: params.session?.requesterSenderName,
+    requesterSenderUsername: params.session?.requesterSenderUsername,
+    requesterSenderE164: params.session?.requesterSenderE164,
   });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
@@ -790,7 +784,7 @@ async function deliverOutboundPayloadsCore(
       emitMessageSent({
         success: false,
         content: payloadSummary.text,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {
         throw err;

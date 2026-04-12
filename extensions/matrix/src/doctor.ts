@@ -1,182 +1,23 @@
-import {
-  type ChannelDoctorAdapter,
-  type ChannelDoctorConfigMutation,
-  type ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
+import { type ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
   removePluginFromConfig,
-} from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
+} from "./doctor-contract.js";
 import {
   autoMigrateLegacyMatrixState,
   autoPrepareLegacyMatrixCrypto,
   detectLegacyMatrixCrypto,
   detectLegacyMatrixState,
-  hasActionableMatrixMigration,
-  hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
+  resolveMatrixMigrationStatus,
 } from "./matrix-migration.runtime.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
-  const room = isRecord(value) ? value : null;
-  return Boolean(room && typeof room.allow === "boolean");
-}
-
-function hasLegacyMatrixRoomMapAllowAliases(value: unknown): boolean {
-  const rooms = isRecord(value) ? value : null;
-  return Boolean(rooms && Object.values(rooms).some((room) => hasLegacyMatrixRoomAllowAlias(room)));
-}
-
-function hasLegacyMatrixAccountRoomAllowAliases(value: unknown): boolean {
-  const accounts = isRecord(value) ? value : null;
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => {
-    if (!isRecord(account)) {
-      return false;
-    }
-    return (
-      hasLegacyMatrixRoomMapAllowAliases(account.groups) ||
-      hasLegacyMatrixRoomMapAllowAliases(account.rooms)
-    );
-  });
-}
-
-function normalizeMatrixRoomAllowAliases(params: {
-  rooms: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { rooms: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextRooms: Record<string, unknown> = { ...params.rooms };
-  for (const [roomId, roomValue] of Object.entries(params.rooms)) {
-    const room = isRecord(roomValue) ? roomValue : null;
-    if (!room || typeof room.allow !== "boolean") {
-      continue;
-    }
-    const nextRoom = { ...room };
-    if (typeof nextRoom.enabled !== "boolean") {
-      nextRoom.enabled = room.allow;
-    }
-    delete nextRoom.allow;
-    nextRooms[roomId] = nextRoom;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.${roomId}.allow → ${params.pathPrefix}.${roomId}.enabled (${String(nextRoom.enabled)}).`,
-    );
-  }
-  return { rooms: nextRooms, changed };
-}
-
-function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
-  const channels = isRecord(cfg.channels) ? cfg.channels : null;
-  const matrix = isRecord(channels?.matrix) ? channels.matrix : null;
-  if (!matrix) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  let updatedMatrix: Record<string, unknown> = matrix;
-  let changed = false;
-
-  const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
-    const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
-    if (!rooms) {
-      return;
-    }
-    const normalized = normalizeMatrixRoomAllowAliases({
-      rooms,
-      pathPrefix: `channels.matrix.${key}`,
-      changes,
-    });
-    if (normalized.changed) {
-      updatedMatrix = { ...updatedMatrix, [key]: normalized.rooms };
-      changed = true;
-    }
-  };
-
-  normalizeTopLevelRoomScope("groups");
-  normalizeTopLevelRoomScope("rooms");
-
-  const accounts = isRecord(updatedMatrix.accounts) ? updatedMatrix.accounts : null;
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = isRecord(accountValue) ? accountValue : null;
-      if (!account) {
-        continue;
-      }
-      let nextAccount: Record<string, unknown> = account;
-      let accountChanged = false;
-      for (const key of ["groups", "rooms"] as const) {
-        const rooms = isRecord(nextAccount[key]) ? nextAccount[key] : null;
-        if (!rooms) {
-          continue;
-        }
-        const normalized = normalizeMatrixRoomAllowAliases({
-          rooms,
-          pathPrefix: `channels.matrix.accounts.${accountId}.${key}`,
-          changes,
-        });
-        if (normalized.changed) {
-          nextAccount = { ...nextAccount, [key]: normalized.rooms };
-          accountChanged = true;
-        }
-      }
-      if (accountChanged) {
-        nextAccounts[accountId] = nextAccount;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updatedMatrix = { ...updatedMatrix, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...cfg,
-      channels: {
-        ...(cfg.channels ?? {}),
-        matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
-      },
-    },
-    changes,
-  };
-}
-
-const MATRIX_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "matrix", "groups"],
-    message:
-      "channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead (auto-migrated on load).",
-    match: hasLegacyMatrixRoomMapAllowAliases,
-  },
-  {
-    path: ["channels", "matrix", "rooms"],
-    message:
-      "channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead (auto-migrated on load).",
-    match: hasLegacyMatrixRoomMapAllowAliases,
-  },
-  {
-    path: ["channels", "matrix", "accounts"],
-    message:
-      "channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead (auto-migrated on load).",
-    match: hasLegacyMatrixAccountRoomAllowAliases,
-  },
-];
+import { isRecord } from "./record-shared.js";
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -293,17 +134,13 @@ export async function applyMatrixDoctorRepair(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const pendingMatrixMigration = hasPendingMatrixMigration({
-    cfg: params.cfg,
-    env: params.env,
-  });
-  const actionableMatrixMigration = hasActionableMatrixMigration({
+  const migrationStatus = resolveMatrixMigrationStatus({
     cfg: params.cfg,
     env: params.env,
   });
 
   let matrixSnapshotReady = true;
-  if (actionableMatrixMigration) {
+  if (migrationStatus.actionable) {
     try {
       const snapshot = await maybeCreateMatrixMigrationSnapshot({
         trigger: "doctor-fix",
@@ -321,7 +158,7 @@ export async function applyMatrixDoctorRepair(params: {
         '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
       );
     }
-  } else if (pendingMatrixMigration) {
+  } else if (migrationStatus.pending) {
     warnings.push(
       "- Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.",
     );
@@ -382,15 +219,6 @@ export async function runMatrixDoctorSequence(params: {
     return { changeNotes, warningNotes };
   }
 
-  const legacyState = detectLegacyMatrixState({
-    cfg: params.cfg,
-    env: params.env,
-  });
-  const legacyCrypto = detectLegacyMatrixCrypto({
-    cfg: params.cfg,
-    env: params.env,
-  });
-
   if (params.shouldRepair) {
     const repair = await applyMatrixDoctorRepair({
       cfg: params.cfg,
@@ -398,16 +226,24 @@ export async function runMatrixDoctorSequence(params: {
     });
     changeNotes.push(...repair.changes);
     warningNotes.push(...repair.warnings);
-  } else if (legacyState) {
-    if ("warning" in legacyState) {
-      warningNotes.push(`- ${legacyState.warning}`);
-    } else {
-      warningNotes.push(formatMatrixLegacyStatePreview(legacyState));
+  } else {
+    const migrationStatus = resolveMatrixMigrationStatus({
+      cfg: params.cfg,
+      env: params.env,
+    });
+    if (migrationStatus.legacyState) {
+      if ("warning" in migrationStatus.legacyState) {
+        warningNotes.push(`- ${migrationStatus.legacyState.warning}`);
+      } else {
+        warningNotes.push(formatMatrixLegacyStatePreview(migrationStatus.legacyState));
+      }
     }
-  }
-
-  if (!params.shouldRepair && (legacyCrypto.warnings.length > 0 || legacyCrypto.plans.length > 0)) {
-    warningNotes.push(...formatMatrixLegacyCryptoPreview(legacyCrypto));
+    if (
+      migrationStatus.legacyCrypto.warnings.length > 0 ||
+      migrationStatus.legacyCrypto.plans.length > 0
+    ) {
+      warningNotes.push(...formatMatrixLegacyCryptoPreview(migrationStatus.legacyCrypto));
+    }
   }
 
   return { changeNotes, warningNotes };
@@ -419,7 +255,7 @@ export const matrixDoctor: ChannelDoctorAdapter = {
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: true,
   legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeMatrixCompatibilityConfig(cfg),
+  normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runMatrixDoctorSequence({ cfg, env, shouldRepair }),
   cleanStaleConfig: async ({ cfg }) => await cleanStaleMatrixPluginConfig(cfg),

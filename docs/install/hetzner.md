@@ -225,7 +225,8 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     `http://127.0.0.1:18789/`
 
-    Paste your gateway token.
+    Paste the configured shared secret. This guide uses the gateway token by
+    default; if you switched to password auth, use that password instead.
 
   </Step>
 </Steps>

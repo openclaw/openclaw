@@ -1,11 +1,13 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig, defineProject } from "vitest/config";
-import { jsdomOptimizedDeps, resolveDefaultVitestPool } from "../vitest.shared.config.ts";
+import {
+  jsdomOptimizedDeps,
+  resolveDefaultVitestPool,
+} from "../test/vitest/vitest.shared.config.ts";
 
 const sharedUiTestConfig = {
-  isolate: false,
+  isolate: true,
   pool: resolveDefaultVitestPool(),
-  runner: "../test/non-isolated-runner.ts",
 } as const;
 
 export default defineConfig({

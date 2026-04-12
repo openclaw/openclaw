@@ -131,6 +131,26 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated[0]).toBe(appBinDir);
   });
 
+  it("keeps the current runtime directory ahead of system PATH hardening", () => {
+    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
+    const nodeBinDir = path.join(tmp, "node-bin");
+    const nodeExec = path.join(nodeBinDir, "node");
+    setDir(tmp);
+    setDir(nodeBinDir);
+    setExe(nodeExec);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: nodeExec,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expect(updated[0]).toBe(nodeBinDir);
+    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
+  });
+
   it("is idempotent", () => {
     process.env.PATH = "/bin";
     process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";

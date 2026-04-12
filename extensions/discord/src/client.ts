@@ -3,12 +3,14 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
+import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import type { DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -78,7 +80,10 @@ function resolveRest(
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
-  return new RequestClient(token, resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined);
+  return createDiscordRequestClient(
+    token,
+    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
+  );
 }
 
 function resolveAccountWithoutToken(params: {
@@ -92,7 +97,7 @@ function resolveAccountWithoutToken(params: {
   return {
     accountId,
     enabled: baseEnabled && accountEnabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
     config: merged,

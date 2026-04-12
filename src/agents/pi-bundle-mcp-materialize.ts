@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -95,7 +96,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );
     }
-    reservedNames.add(safeToolName.toLowerCase());
+    reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
     tools.push({
       name: safeToolName,
       label: tool.title ?? tool.toolName,
@@ -112,9 +113,9 @@ export async function materializeBundleMcpToolsForRun(params: {
     });
   }
 
-  // Sort tools deterministically by name so the tools block in API requests is
-  // stable across turns. MCP's listTools() does not guarantee order, and any
-  // change in the tools array busts the prompt cache at the tools block.
+  // Sort tools deterministically by name so the tools block in API requests is stable across
+  // turns (defensive — listTools() order is usually stable but not guaranteed).
+  // Cannot fix name collisions: collision suffixes above are order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
 
   return {

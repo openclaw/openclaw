@@ -3,9 +3,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 
 /**
- * Number of most-recent assistant turns whose preceding user/toolResult image blocks are
- * kept intact. Pruning these would diverge the request bytes from what the provider
- * cached on the previous turn, invalidating the prompt-cache prefix.
+ * Number of most-recent completed turns whose preceding user/toolResult image
+ * blocks are kept intact. Counts all completed turns, not just image-bearing
+ * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
@@ -46,10 +46,10 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
 }
 
 /**
- * Idempotent cleanup for legacy sessions that persisted image blocks in history.
- * Called each run; mutates only completed turns older than
- * {@link PRESERVE_RECENT_COMPLETED_TURNS} so recent turns remain
- * byte-identical for prompt caching.
+ * Idempotent cleanup: prune persisted image blocks from completed turns older
+ * than {@link PRESERVE_RECENT_COMPLETED_TURNS}. The delay also reduces
+ * prompt-cache churn, though prefix stability additionally depends on the
+ * replay sanitizer being idempotent.
  */
 export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
   const pruneBeforeIndex = resolvePruneBeforeIndex(messages);

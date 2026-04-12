@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import {
+  coerceNativeSetting,
   createDangerousNameMatchingMutableAllowlistWarningCollector,
   createRestrictSendersChannelSecurity,
+  normalizeAllowFromList,
 } from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {
@@ -104,5 +106,30 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
         } as never,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("normalizeAllowFromList", () => {
+  it("normalizes strings and numbers into trimmed entries", () => {
+    expect(normalizeAllowFromList(["  abc ", 42, "", "   "])).toEqual(["abc", "42"]);
+  });
+
+  it("returns an empty list for non-arrays", () => {
+    expect(normalizeAllowFromList(undefined)).toEqual([]);
+    expect(normalizeAllowFromList(null)).toEqual([]);
+  });
+});
+
+describe("coerceNativeSetting", () => {
+  it("keeps boolean and auto values", () => {
+    expect(coerceNativeSetting(true)).toBe(true);
+    expect(coerceNativeSetting(false)).toBe(false);
+    expect(coerceNativeSetting("auto")).toBe("auto");
+  });
+
+  it("drops unsupported values", () => {
+    expect(coerceNativeSetting("true")).toBeUndefined();
+    expect(coerceNativeSetting("on")).toBeUndefined();
+    expect(coerceNativeSetting(1)).toBeUndefined();
   });
 });
