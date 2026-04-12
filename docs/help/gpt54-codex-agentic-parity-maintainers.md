@@ -1,184 +1,121 @@
-# GPT-5.4 / Codex Parity Maintainer Notes
+# GPT-5.4 / Codex parity maintainer notes
 
-This note explains how to review the GPT-5.4 / Codex parity program as a two-wave closeout without losing the original six-contract architecture.
+This note is the review-oriented companion to `gpt54-codex-agentic-parity.md`.
+
+The earlier follow-up wave became hard to review because the remaining work was split across too many proof slices. The closeout is now intentionally collapsed into **2 PRs**:
+
+- **Runtime Completion Rollup**
+- **Parity Proof Rollup**
+
+The already-merged foundation stays the same:
+
+- PR A: strict-agentic execution contract
+- PR B: runtime truthfulness
+- PR C: execution correctness and replay/liveness surfacing
+- PR D: first-wave parity harness
 
 ## Merge units
 
-### PR A: strict-agentic execution
+### Runtime Completion Rollup
 
 Owns:
 
-- `executionContract`
-- GPT-5-first same-turn follow-through
-- `update_plan` as non-terminal progress tracking
-- explicit blocked states instead of plan-only silent stops
+- default strict-agentic activation for GPT-5-family `openai` / `openai-codex` runs
+- shared GPT-5-family matcher for activation and retry enforcement
+- explicit blocked-exit replay/liveness metadata
+- any minimal runtime follow-up required by the new instruction-followthrough proof
 
 Does not own:
 
-- auth/runtime failure classification
-- permission truthfulness
-- replay/continuation redesign
-- parity benchmarking
+- parity report formatting
+- mock-provider routing
+- summary artifact provenance
+- docs/runbook
 
-### PR B: runtime truthfulness
+### Parity Proof Rollup
 
 Owns:
 
-- Codex OAuth scope correctness
-- typed provider/runtime failure classification
-- truthful `/elevated full` availability and blocked reasons
+- expanded parity pack
+- required-scenario gate semantics
+- scenario-specific tool-call enforcement
+- Anthropic mock baseline support
+- offline mock auth staging
+- `qa-suite-summary.json` `run` provenance
+- parity workflow / runbook
+- the new `instruction-followthrough-repo-contract` scenario
 
 Does not own:
 
-- tool schema normalization
-- replay/liveness state
-- benchmark gating
+- provider/runtime auth truthfulness
+- tool-schema normalization
+- the original strict-agentic runtime contract itself
 
-### PR C: execution correctness
+## Mapping back to the original prompt
 
-Owns:
+| Original concern from the GPT-5.4 prompt | Owning merge unit |
+| --- | --- |
+| “It stops after planning” | PR A foundation + Runtime Completion Rollup |
+| “It seeks permission every turn” | PR B foundation + Runtime Completion Rollup |
+| “Tool usage feels confused / not agentic enough” | PR C foundation + Parity Proof Rollup |
+| “`/elevated full` needs to be truthful” | PR B foundation |
+| “Replay / continuation issues should stay visible” | PR C foundation + Runtime Completion Rollup |
+| “We need proof against Opus, not vibes” | PR D foundation + Parity Proof Rollup |
+| “It reads AGENT.md / SOUL.md but doesn’t really follow them” | Parity Proof Rollup via `instruction-followthrough-repo-contract` |
 
-- provider-owned OpenAI/Codex tool compatibility
-- parameter-free strict schema handling
-- replay-invalid surfacing
-- paused, blocked, and abandoned long-task state visibility
+## Review checklist
 
-Does not own:
+### Runtime Completion Rollup
 
-- self-elected continuation
-- generic Codex dialect behavior outside provider hooks
-- benchmark gating
+Look for:
 
-### PR D: parity harness
+- unconfigured GPT-5-family runs auto-activating strict-agentic
+- explicit `executionContract: "default"` still opting out
+- blocked exits surfacing `replayInvalid`, `livenessState: "blocked"`, and terminal lifecycle metadata
+- no new public runtime API
 
-Owns:
+Expected evidence:
 
-- first-wave GPT-5.4 vs Opus 4.6 scenario pack
-- parity documentation
-- parity report and release-gate mechanics
+- `src/agents/execution-contract.test.ts`
+- `src/agents/pi-embedded-runner/run.incomplete-turn.test.ts`
 
-Does not own:
+### Parity Proof Rollup
 
-- runtime behavior changes outside QA-lab
-- auth/proxy/DNS simulation inside the harness
+Look for:
 
-### PR E: second-wave parity expansion
+- the pack contains the full 11 scenarios
+- tool-mediated scenarios require real tool evidence
+- Anthropic `/v1/messages` mock requests exercise the same scenario dispatcher
+- `qa-suite-summary.json` is self-describing
+- docs and workflow describe mock structural gate vs live proof accurately
 
-Owns:
+Expected evidence:
 
-- second-wave parity scenario expansion
-- merged-main proof packaging
-- goal-to-evidence parity documentation
-
-Does not own:
-
-- runtime behavior changes outside QA-lab
-- auth/proxy/DNS truthfulness logic
-
-## Mapping back to the original six contracts
-
-| Original contract                        | Merge unit |
-| ---------------------------------------- | ---------- |
-| Provider transport/auth correctness      | PR B       |
-| Tool contract/schema compatibility       | PR C       |
-| Same-turn execution                      | PR A       |
-| Permission truthfulness                  | PR B       |
-| Replay/continuation/liveness correctness | PR C       |
-| Benchmark/release gate                   | PR D       |
-
-## Review order
-
-1. PR A
-2. PR B
-3. PR C
-4. PR D
-5. PR E
-
-PR D establishes the proof base. PR E expands scenario breadth and merged-main proof depth. Neither should be the reason runtime-correctness PRs are delayed.
-
-## What to look for
-
-### PR A
-
-- GPT-5 runs act or fail closed instead of stopping at commentary
-- `update_plan` no longer looks like progress by itself
-- behavior stays GPT-5-first and embedded-Pi scoped
-
-### PR B
-
-- auth/proxy/runtime failures stop collapsing into generic “model failed” handling
-- `/elevated full` is only described as available when it is actually available
-- blocked reasons are visible to both the model and the user-facing runtime
-
-### PR C
-
-- strict OpenAI/Codex tool registration behaves predictably
-- parameter-free tools do not fail strict schema checks
-- replay and compaction outcomes preserve truthful liveness state
-
-### PR D
-
-- the scenario pack is understandable and reproducible
-- the pack includes a mutating replay-safety lane, not only read-only flows
-- reports are readable by humans and automation
-- parity claims are evidence-backed, not anecdotal
-
-### PR E
-
-- the parity pack widens beyond the first wave without adding runtime-scope behavior
-- subagent, memory, thread-isolation, and restart-capability lanes are covered
-- merged-main parity proof is explicitly documented and traceable
-
-Expected artifacts from PR D:
-
-- `qa-suite-report.md` / `qa-suite-summary.json` for each model run
-- `qa-agentic-parity-report.md` with aggregate and scenario-level comparison
-- `qa-agentic-parity-summary.json` with a machine-readable verdict
+- `extensions/qa-lab/src/agentic-parity-report.test.ts`
+- `extensions/qa-lab/src/scenario-catalog.test.ts`
+- `extensions/qa-lab/src/mock-openai-server.test.ts`
+- `extensions/qa-lab/src/qa-gateway-config.test.ts`
+- `extensions/qa-lab/src/suite.summary-json.test.ts`
+- `.github/workflows/parity-gate.yml`
 
 ## Release gate
 
-Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:
+Do not call the project complete until all of these are true:
 
-- PR A, PR B, and PR C are merged
-- PR D and PR E run the full parity pack cleanly
-- runtime-truthfulness regression suites remain green
-- the parity report shows no fake-success cases and no regression in stop behavior
+- A/B/C/D remain merged and stable
+- both rollup PRs are merged
+- GPT-5.4 no longer stalls after planning on the default supported lane
+- GPT-5.4 no longer fakes tool progress
+- GPT-5.4 no longer gives false `/elevated full` guidance
+- replay/liveness failures are explicit
+- `instruction-followthrough-repo-contract` passes
+- the merged-main parity report shows GPT-5.4 matches or beats Opus 4.6 on the agreed metrics
 
-```mermaid
-flowchart LR
-    A["PR A-C merged"] --> B["Run GPT-5.4 parity pack"]
-    A --> C["Run Opus 4.6 parity pack"]
-    B --> D["qa-suite-summary.json"]
-    C --> E["qa-suite-summary.json"]
-    D --> F["qa parity-report"]
-    E --> F
-    F --> G["Markdown report + JSON verdict"]
-    G --> H{"Pass?"}
-    H -- "yes" --> I["Parity claim allowed"]
-    H -- "no" --> J["Keep runtime fixes / review loop open"]
-```
+## Mock gate vs live proof
 
-The parity harness is not the only evidence source. Keep this split explicit in review:
+Keep this distinction explicit in review:
 
-- PR D and PR E own the scenario-based GPT-5.4 vs Opus 4.6 comparison
-- PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
+- the workflow is the **mock structural gate**
+- the final product claim still depends on the **live-frontier proof**
 
-## Goal-to-evidence map
-
-| Completion gate item                     | Primary owner      | Review artifact                                                                    |
-| ---------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| No plan-only stalls                      | PR A               | strict-agentic runtime tests and `approval-turn-tool-followthrough`                |
-| No fake progress or fake tool completion | PR A + PR D + PR E | parity fake-success count plus scenario-level report details                       |
-| No false `/elevated full` guidance       | PR B               | deterministic runtime-truthfulness suites                                          |
-| Replay/liveness failures remain explicit | PR C + PR D + PR E | lifecycle/replay suites plus `compaction-retry-mutating-tool` and continuity lanes |
-| GPT-5.4 matches or beats Opus 4.6        | PR D + PR E        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`                 |
-
-## Reviewer shorthand: before vs after
-
-| User-visible problem before                                 | Review signal after                                                                     |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| GPT-5.4 stopped after planning                              | PR A shows act-or-block behavior instead of commentary-only completion                  |
-| Tool use felt brittle with strict OpenAI/Codex schemas      | PR C keeps tool registration and parameter-free invocation predictable                  |
-| `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
-| Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
-| Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
+The mock gate is necessary because it keeps the harness reproducible and catches regressions in scenario registration, tool-call assertions, and artifact wiring. It is not enough by itself for the release claim.
