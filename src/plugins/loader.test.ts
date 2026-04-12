@@ -34,9 +34,11 @@ import {
 import {
   clearMemoryPluginState,
   buildMemoryPromptSection,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -1759,6 +1761,133 @@ module.exports = { id: "throws-after-import", register() {} };`,
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("preserves the existing memory capability during non-activating snapshot loads", () => {
+    useNoBundledPlugins();
+    registerMemoryCapability("existing-memory", {
+      publicArtifacts: {
+        listArtifacts: async () => [
+          {
+            kind: "memory-root",
+            workspaceDir: "/tmp/existing-memory",
+            relativePath: "MEMORY.md",
+            absolutePath: "/tmp/existing-memory/MEMORY.md",
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+        ],
+      },
+    });
+
+    const plugin = writePlugin({
+      id: "snapshot-memory-artifacts",
+      filename: "snapshot-memory-artifacts.cjs",
+      body: `module.exports = {
+        id: "snapshot-memory-artifacts",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              listArtifacts: async () => [{
+                kind: "memory-root",
+                workspaceDir: "/tmp/snapshot-memory-artifacts",
+                relativePath: "MEMORY.md",
+                absolutePath: "/tmp/snapshot-memory-artifacts/MEMORY.md",
+                agentIds: ["main"],
+                contentType: "markdown",
+              }],
+            },
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-memory-artifacts"],
+          slots: { memory: "snapshot-memory-artifacts" },
+        },
+      },
+      onlyPluginIds: ["snapshot-memory-artifacts"],
+      activate: false,
+      cache: false,
+    });
+
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("existing-memory");
+  });
+
+  it("restores the previous memory capability when plugin register throws", () => {
+    useNoBundledPlugins();
+    const existingPlugin = writePlugin({
+      id: "existing-memory",
+      filename: "existing-memory.cjs",
+      body: `module.exports = {
+        id: "existing-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              listArtifacts: async () => [{
+                kind: "memory-root",
+                workspaceDir: "/tmp/existing-memory",
+                relativePath: "MEMORY.md",
+                absolutePath: "/tmp/existing-memory/MEMORY.md",
+                agentIds: ["main"],
+                contentType: "markdown",
+              }],
+            },
+          });
+        },
+      };`,
+    });
+
+    const plugin = writePlugin({
+      id: "failing-memory-artifacts",
+      filename: "failing-memory-artifacts.cjs",
+      body: `module.exports = {
+        id: "failing-memory-artifacts",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              listArtifacts: async () => [{
+                kind: "memory-root",
+                workspaceDir: "/tmp/failing-memory-artifacts",
+                relativePath: "MEMORY.md",
+                absolutePath: "/tmp/failing-memory-artifacts/MEMORY.md",
+                agentIds: ["main"],
+                contentType: "markdown",
+              }],
+            },
+          });
+          throw new Error("register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [existingPlugin.file, plugin.file] },
+          allow: ["existing-memory", "failing-memory-artifacts"],
+          entries: {
+            "existing-memory": { enabled: true },
+            "failing-memory-artifacts": { enabled: true },
+          },
+          slots: { memory: "existing-memory" },
+        },
+      },
+      onlyPluginIds: ["existing-memory", "failing-memory-artifacts"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-memory-artifacts")?.status).toBe(
+      "error",
+    );
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("existing-memory");
   });
 
   it.each([
