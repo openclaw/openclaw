@@ -67,8 +67,10 @@ import {
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import {
   createReplyOperation,
+  readReplyRunCreateSeq,
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
+  waitForReplyRunEndBySessionId,
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -890,6 +892,8 @@ export async function runReplyAgent(params: {
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyOperation?: ReplyOperation;
+  /** True when the scheduling layer force-detached a stale run (timeout path). */
+  waitInterrupted?: boolean;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -918,6 +922,7 @@ export async function runReplyAgent(params: {
     typingMode,
     resetTriggered,
     replyOperation: providedReplyOperation,
+    waitInterrupted,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -1080,12 +1085,75 @@ export async function runReplyAgent(params: {
       });
   } catch (error) {
     if (error instanceof ReplyRunAlreadyActiveError) {
-      typing.cleanup();
-      return {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-      };
+      // The previous run's ReplyOperation may still be clearing in its
+      // finally block after the embedded run handle was removed. Wait for
+      // the reply-op to clear (returns immediately if already idle) with a
+      // 500ms cap, then retry once.
+      //
+      // Capture two witnesses synchronously here, before the await:
+      //   - staleReplyOperation: the ReplyOperation object we collided
+      //     with, for the identity-gated force.
+      //   - staleSeq: the total number of ops ever created for this
+      //     sessionKey, for detecting "any new op came and went during
+      //     our wait."
+      //
+      // During the 500ms wait, one of four things can happen:
+      //   1. Stale op clears, nobody takes over — registry idle at
+      //      retry, seq unchanged, we create fresh.
+      //   2. Stale op stays stuck — registry still has it at retry, seq
+      //      unchanged, ifStale matches, force supersedes.
+      //   3. Stale op clears, newer request registers an op that is
+      //      still running at retry — seq advanced (caught by the seq
+      //      check below).
+      //   4. Stale op clears, newer request registers AND completes
+      //      within the window — registry idle again at retry but seq
+      //      advanced. Identity-gate alone cannot catch this case
+      //      (nothing in the registry to compare against). The seq
+      //      check rejects the retry and returns "try again" instead of
+      //      running our older input out of order.
+      const staleReplyOperation = replyRunRegistry.get(replySessionKey ?? "");
+      const staleSeq = readReplyRunCreateSeq(replySessionKey ?? "");
+      await waitForReplyRunEndBySessionId(followupRun.run.sessionId, 500);
+      if (readReplyRunCreateSeq(replySessionKey ?? "") !== staleSeq) {
+        // A newer operation was created (and possibly already finished)
+        // during our wait. In interrupt mode that represents newer user
+        // input that has already claimed this slot; running our older
+        // input now would deliver a reply out of order. Honor the
+        // established rapid-burst contract: the loser of the race
+        // receives the "still shutting down" response.
+        typing.cleanup();
+        return {
+          text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+        };
+      }
+      try {
+        replyOperation = createReplyOperation({
+          sessionId: followupRun.run.sessionId,
+          sessionKey: replySessionKey ?? "",
+          resetTriggered: resetTriggered === true,
+          upstreamAbortSignal: opts?.abortSignal,
+          // Force-supersede only when (a) the scheduling layer actually
+          // force-detached a stale run (timeout path) AND (b) the
+          // currently registered op is still object-identical to the
+          // stale one we originally observed.  The seq check above
+          // already rejected the "newer op came and went" case; this
+          // identity gate additionally covers the "newer op still
+          // running at retry" edge where seq advanced but the
+          // registered object is not our stale one.
+          force: waitInterrupted && staleReplyOperation ? { ifStale: staleReplyOperation } : false,
+        });
+      } catch (retryError) {
+        if (retryError instanceof ReplyRunAlreadyActiveError) {
+          typing.cleanup();
+          return {
+            text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+          };
+        }
+        throw retryError;
+      }
+    } else {
+      throw error;
     }
-    throw error;
   }
   let runFollowupTurn = queuedRunFollowupTurn;
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
