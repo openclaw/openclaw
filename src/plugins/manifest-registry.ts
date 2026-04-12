@@ -15,6 +15,12 @@ import {
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
 import {
   loadPluginManifest,
   type OpenClawPackageManifest,
@@ -28,15 +34,9 @@ import {
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginCacheInputs } from "./roots.js";
-import type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-  PluginKind,
-} from "./types.js";
 
 type PluginManifestContractListKey =
   | "speechProviders"

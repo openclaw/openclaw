@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -41,6 +42,10 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
 }
 
 describe("byteplus video generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildBytePlusVideoGenerationProvider());
+  });
+
   it("creates a content-generation task, polls, and downloads the video", async () => {
     mockSuccessfulBytePlusTask();
 

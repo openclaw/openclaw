@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -165,14 +165,24 @@ function tryRealpath(filePath: string): string | null {
 function warnEscapedSkillPath(params: {
   source: string;
   rootDir: string;
+  rootRealPath: string;
   candidatePath: string;
   candidateRealPath: string;
 }) {
+  const rootResolved =
+    path.resolve(params.rootDir) === params.rootRealPath
+      ? ""
+      : ` rootResolved=${params.rootRealPath}`;
   skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
     source: params.source,
     rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
     path: params.candidatePath,
     realPath: params.candidateRealPath,
+    consoleMessage:
+      `Skipping skill path that resolves outside its configured root: ` +
+      `source=${params.source} root=${params.rootDir}${rootResolved} ` +
+      `requested=${params.candidatePath} resolved=${params.candidateRealPath}`,
   });
 }
 
@@ -192,6 +202,7 @@ function resolveContainedSkillPath(params: {
   warnEscapedSkillPath({
     source: params.source,
     rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
     candidatePath: path.resolve(params.candidatePath),
     candidateRealPath,
   });
