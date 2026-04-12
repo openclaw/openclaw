@@ -1,3 +1,4 @@
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/infra-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const approvalGatewayRuntimeHoisted = vi.hoisted(() => ({
@@ -12,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
 describe("resolveTelegramExecApproval", () => {
   async function invokeResolver(params: {
     approvalId: string;
-    decision: string;
+    decision: ExecApprovalReplyDecision;
     senderId: string;
     allowPluginFallback?: boolean;
   }) {
@@ -27,7 +28,7 @@ describe("resolveTelegramExecApproval", () => {
 
   function expectApprovalGatewayCall(params: {
     approvalId: string;
-    decision: string;
+    decision: ExecApprovalReplyDecision;
     senderId: string;
     allowPluginFallback?: boolean;
   }) {

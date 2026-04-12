@@ -61,7 +61,12 @@ export const AgentDefaultsSchema = z
         enabled: z.boolean().optional(),
         applyOn: z.array(z.union([z.literal("new"), z.literal("reset")])).optional(),
         dailyMemoryDays: z.number().int().min(1).max(14).optional(),
-        maxFileBytes: z.number().int().min(1).max(64 * 1024).optional(),
+        maxFileBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(64 * 1024)
+          .optional(),
         maxFileChars: z.number().int().min(1).max(10_000).optional(),
         maxTotalChars: z.number().int().min(1).max(50_000).optional(),
       })
