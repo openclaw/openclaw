@@ -13,15 +13,19 @@ if (
   throw new Error("Missing channel secret contract api");
 }
 
+const googleChatAssignments = googleChatSecrets.collectRuntimeConfigAssignments;
+const ircAssignments = ircSecrets.collectRuntimeConfigAssignments;
+const slackAssignments = slackSecrets.collectRuntimeConfigAssignments;
+
 function resolveAssignments(id: string) {
   if (id === "irc") {
-    return ircSecrets.collectRuntimeConfigAssignments;
+    return ircAssignments;
   }
   if (id === "slack") {
-    return slackSecrets.collectRuntimeConfigAssignments;
+    return slackAssignments;
   }
   if (id === "googlechat") {
-    return googleChatSecrets.collectRuntimeConfigAssignments;
+    return googleChatAssignments;
   }
   return undefined;
 }
