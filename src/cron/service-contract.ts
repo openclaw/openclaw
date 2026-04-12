@@ -37,6 +37,8 @@ export type CronListPageResult = {
 
 export type CronWakeResult = { ok: true } | { ok: false };
 
+export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
+
 export interface CronServiceContract {
   start(): Promise<void>;
   stop(): void;
@@ -46,8 +48,8 @@ export interface CronServiceContract {
   add(input: CronAddInput): Promise<CronAddResult>;
   update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
   remove(id: string): Promise<CronRemoveResult>;
-  run(id: string, mode?: CronRunMode): Promise<CronRunResult>;
-  enqueueRun(id: string, mode?: CronRunMode): Promise<CronRunResult>;
+  run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
+  enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
   wake(opts: { mode: CronWakeMode; text: string }): CronWakeResult;
 }

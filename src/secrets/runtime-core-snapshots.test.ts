@@ -11,6 +11,7 @@ import {
 } from "./runtime.js";
 import {
   asConfig,
+  buildTestWebSearchProviders,
   loadAuthStoreWithProfiles,
   resetPluginWebSearchProvidersMock,
 } from "./runtime.test-support.ts";
