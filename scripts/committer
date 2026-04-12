@@ -4,9 +4,18 @@ set -euo pipefail
 # Disable glob expansion to handle brackets in file paths
 set -f
 usage() {
-  printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
-  exit 2
+  local exit_code=${1:-2}
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")"
+  else
+    printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
+  fi
+  exit "$exit_code"
 }
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage 0
+fi
 
 if [ "$#" -lt 2 ]; then
   usage
@@ -23,6 +32,9 @@ while [[ "${1:-}" == --* ]]; do
     --fast)
       fast_commit=true
       shift
+      ;;
+    --help|-h)
+      usage 0
       ;;
     *)
       usage
