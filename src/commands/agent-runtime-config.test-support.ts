@@ -53,7 +53,7 @@ export async function withSharedAgentCommandTempHome<T>(
 }
 
 export function mockSharedAgentCommandConfig(
-  configSpy: typeof configModule.loadConfig,
+  configSpy: Parameters<typeof mockAgentCommandConfig>[0],
   home: string,
   storePath: string,
   agentOverrides?: Parameters<typeof mockAgentCommandConfig>[3],
