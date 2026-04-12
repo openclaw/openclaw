@@ -471,7 +471,6 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "github-copilot",
       model: "gpt-5.4-mini",
-      messageChannel: "webchat",
       messageProvider: "webchat",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
       config: {
@@ -1155,7 +1154,7 @@ describe("active-memory plugin", () => {
     );
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       messageChannel: "telegram",
-      messageProvider: "webchat",
+      messageProvider: "telegram",
     });
     expect(hoisted.sessionStore["agent:main:telegram:direct:12345"]?.pluginDebugEntries).toEqual([
       {
@@ -1189,6 +1188,82 @@ describe("active-memory plugin", () => {
     expect(result).toEqual({
       prependSystemContext: expect.stringContaining("plugin-provided supplemental context"),
       appendSystemContext: expect.stringContaining("<active_memory_plugin>"),
+    });
+  });
+
+  it("prefers the resolved session channel over a wrapper channel hint", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      channel: "telegram",
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? wrapper channel hint", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "webchat",
+        channelId: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
+  it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      origin: {
+        provider: "webchat",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? explicit channel hint", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "webchat",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
+  it("preserves a direct explicit channel when weak legacy fallback disagrees", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      origin: {
+        provider: "webchat",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? direct explicit channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "telegram",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
     });
   });
 
