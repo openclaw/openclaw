@@ -5,20 +5,21 @@ const zaloSecrets = loadBundledChannelSecretContractApi("zalo");
 if (!zaloSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Zalo secret contract api");
 }
+const zaloAssignments = zaloSecrets.collectRuntimeConfigAssignments;
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "zalo"
       ? {
           secrets: {
-            collectRuntimeConfigAssignments: zaloSecrets.collectRuntimeConfigAssignments,
+            collectRuntimeConfigAssignments: zaloAssignments,
           },
         }
       : undefined,
   getBootstrapChannelSecrets: (id: string) =>
     id === "zalo"
       ? {
-          collectRuntimeConfigAssignments: zaloSecrets.collectRuntimeConfigAssignments,
+          collectRuntimeConfigAssignments: zaloAssignments,
         }
       : undefined,
 }));

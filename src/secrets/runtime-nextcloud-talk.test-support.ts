@@ -5,20 +5,21 @@ const nextcloudTalkSecrets = loadBundledChannelSecretContractApi("nextcloud-talk
 if (!nextcloudTalkSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Nextcloud Talk secret contract api");
 }
+const nextcloudTalkAssignments = nextcloudTalkSecrets.collectRuntimeConfigAssignments;
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "nextcloud-talk"
       ? {
           secrets: {
-            collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
+            collectRuntimeConfigAssignments: nextcloudTalkAssignments,
           },
         }
       : undefined,
   getBootstrapChannelSecrets: (id: string) =>
     id === "nextcloud-talk"
       ? {
-          collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
+          collectRuntimeConfigAssignments: nextcloudTalkAssignments,
         }
       : undefined,
 }));

@@ -5,20 +5,21 @@ const telegramSecrets = loadBundledChannelSecretContractApi("telegram");
 if (!telegramSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Telegram secret contract api");
 }
+const telegramAssignments = telegramSecrets.collectRuntimeConfigAssignments;
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "telegram"
       ? {
           secrets: {
-            collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+            collectRuntimeConfigAssignments: telegramAssignments,
           },
         }
       : undefined,
   getBootstrapChannelSecrets: (id: string) =>
     id === "telegram"
       ? {
-          collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+          collectRuntimeConfigAssignments: telegramAssignments,
         }
       : undefined,
 }));
