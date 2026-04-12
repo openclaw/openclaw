@@ -63,8 +63,7 @@ The proxy normalizes the request payload so Anthropic's billing system classifie
       "models": {
         "providers": {
           "anthropic": {
-            "baseUrl": "http://127.0.0.1:18801",
-            "models": []
+            "baseUrl": "http://127.0.0.1:18801"
           }
         }
       }
@@ -79,10 +78,7 @@ The proxy normalizes the request payload so Anthropic's billing system classifie
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": [
-              "anthropic/claude-sonnet-4-6",
-              "google-gemini-cli/gemini-3-pro-preview"
-            ]
+            "fallbacks": ["anthropic/claude-sonnet-4-6"]
           }
         }
       }
@@ -183,8 +179,7 @@ To revert to direct API access, change `baseUrl` back in `~/.openclaw/openclaw.j
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "https://api.anthropic.com",
-        "models": []
+        "baseUrl": "https://api.anthropic.com"
       }
     }
   }
