@@ -14,7 +14,6 @@ import {
   onceMessage,
   rpcReq,
   writeSessionStore,
-  mockLogger,
 } from "./test-helpers.server.js";
 
 vi.mock("../plugin-sdk/browser-maintenance.js", async () => {
