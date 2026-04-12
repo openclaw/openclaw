@@ -56,7 +56,7 @@ export async function loadGatewayModelCatalog(params?: {
       if (findModelInCatalog(catalog, providerId, id)) {
         continue;
       }
-      const rawInput = Array.isArray(m.input) ? m.input : [];
+      const rawInput: unknown[] = Array.isArray(m.input) ? m.input : [];
       const input = rawInput.filter(
         (v): v is ModelInputType => v === "text" || v === "image" || v === "document",
       );

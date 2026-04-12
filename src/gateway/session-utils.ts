@@ -1006,9 +1006,12 @@ export async function resolveGatewayModelSupportsImages(params: {
     // resolve to the correct catalog entry and its capability declarations.
     let modelEntry: ModelCatalogEntry | undefined;
     if (params.provider) {
+      // Provider is known — scope the lookup to that provider only so a
+      // model that exists under a different provider does not satisfy the
+      // check (fail-closed intent preserved).
       modelEntry = findModelInCatalog(catalog, params.provider, params.model);
-    }
-    if (!modelEntry) {
+    } else {
+      // No provider context — fall back to a model-ID-only lookup.
       const normalizedModelId = params.model.toLowerCase().trim();
       modelEntry = catalog.find((entry) => entry.id.toLowerCase().trim() === normalizedModelId);
     }
