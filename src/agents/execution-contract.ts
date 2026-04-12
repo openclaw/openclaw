@@ -15,8 +15,9 @@ import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-s
  * gap on completion-gate criterion 1.
  */
 function stripProviderPrefix(modelId: string): string {
-  const match = /^([^/:]+)[/:](.+)$/.exec(modelId);
-  return (match?.[2] ?? modelId).trim().toLowerCase();
+  const normalizedModelId = modelId.trim();
+  const match = /^([^/:]+)[/:](.+)$/.exec(normalizedModelId);
+  return (match?.[2] ?? normalizedModelId).toLowerCase();
 }
 
 /**
@@ -32,7 +33,7 @@ function stripProviderPrefix(modelId: string): string {
  *
  * Does NOT cover `gpt-4.5`, `gpt-6`, or any non-gpt-5 family member.
  */
-const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.\-o]|$)/i;
+const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.o-]|$)/i;
 
 /**
  * Supported provider + model combinations where strict-agentic is the intended

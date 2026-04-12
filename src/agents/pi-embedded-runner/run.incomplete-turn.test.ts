@@ -363,7 +363,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
   it("applies the planning-only retry guard to prefixed GPT-5 ids", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
-      modelId: "openai/gpt-5.4",
+      modelId: "  openai/gpt-5.4  ",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
