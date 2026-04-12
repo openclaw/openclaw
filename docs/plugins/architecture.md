@@ -528,6 +528,13 @@ Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
 
+Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
+`setup.cliBackends` to narrow candidate plugins before it falls back to
+`setup-api` for plugins that still need setup-time runtime hooks. If more than
+one discovered plugin claims the same normalized setup provider or CLI backend
+id, setup lookup refuses the ambiguous owner instead of relying on discovery
+order.
+
 ### What the loader caches
 
 OpenClaw keeps short in-process caches for:
