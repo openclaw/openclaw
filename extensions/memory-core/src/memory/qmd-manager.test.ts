@@ -4152,6 +4152,122 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+  it("passes extraCollections pattern to qmd collection add CLI args", async () => {
+    const extraCollectionDir = path.join(tmpRoot, "session-logs");
+    await fs.mkdir(extraCollectionDir, { recursive: true });
+
+    cfg = {
+      ...cfg,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: extraCollectionDir, name: "session-logs", pattern: "*.jsonl" },
+              ],
+            },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      // Return empty collection list so ensureCollections creates all collections fresh.
+      if (args[0] === "collection" && args[1] === "list") {
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      queueMicrotask(() => child.closeWith(0));
+      return child;
+    });
+
+    await createManager({ mode: "full" });
+
+    const addCalls = spawnMock.mock.calls.filter(
+      (call) => call[1]?.[0] === "collection" && call[1]?.[1] === "add",
+    );
+    const extraCollectionAdd = addCalls.find((call: unknown[]) =>
+      (call[1] as string[]).includes("session-logs"),
+    );
+    expect(extraCollectionAdd, "expected a collection add call for session-logs").toBeTruthy();
+
+    const args = extraCollectionAdd![1] as string[];
+    // The pattern flag (--mask or --glob) must appear immediately before the pattern value.
+    const patternFlagIndex = args.findIndex((a: string) => a === "--mask" || a === "--glob");
+    expect(
+      patternFlagIndex,
+      "expected --mask or --glob flag in collection add args",
+    ).toBeGreaterThan(-1);
+    expect(args[patternFlagIndex + 1]).toBe("*.jsonl");
+  });
+  it("passes brace-expansion extraCollections pattern to qmd collection add CLI args", async () => {
+    const extraCollectionDir = path.join(tmpRoot, "mixed-docs");
+    await fs.mkdir(extraCollectionDir, { recursive: true });
+
+    cfg = {
+      ...cfg,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: extraCollectionDir, name: "mixed-docs", pattern: "**/*.{md,json}" },
+              ],
+            },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (args[0] === "collection" && args[1] === "list") {
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      queueMicrotask(() => child.closeWith(0));
+      return child;
+    });
+
+    await createManager({ mode: "full" });
+
+    const addCalls = spawnMock.mock.calls.filter(
+      (call) => call[1]?.[0] === "collection" && call[1]?.[1] === "add",
+    );
+    const extraCollectionAdd = addCalls.find((call: unknown[]) =>
+      (call[1] as string[]).includes("mixed-docs"),
+    );
+    expect(extraCollectionAdd, "expected a collection add call for mixed-docs").toBeTruthy();
+
+    const args = extraCollectionAdd![1] as string[];
+    const patternFlagIndex = args.findIndex((a: string) => a === "--mask" || a === "--glob");
+    expect(
+      patternFlagIndex,
+      "expected --mask or --glob flag in collection add args",
+    ).toBeGreaterThan(-1);
+    expect(args[patternFlagIndex + 1]).toBe("**/*.{md,json}");
+  });
 });
 
 function createDeferred<T>() {
