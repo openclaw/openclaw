@@ -55,4 +55,14 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
       }),
     ).toEqual([]);
   });
+
+  it("keeps runtime fallback for scoped plugins with no declared web candidates", () => {
+    expect(
+      resolveManifestDeclaredWebProviderCandidatePluginIds({
+        contract: "webSearchProviders",
+        configKey: "webSearch",
+        onlyPluginIds: ["missing-plugin"],
+      }),
+    ).toBeUndefined();
+  });
 });
