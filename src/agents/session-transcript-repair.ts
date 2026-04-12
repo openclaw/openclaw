@@ -145,6 +145,40 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   return next as RawToolCallBlock;
 }
 
+function countRawToolCallBlocks(content: unknown[]): number {
+  let count = 0;
+  for (const block of content) {
+    if (isRawToolCallBlock(block)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function isReplaySafeThinkingAssistantTurn(
+  content: unknown[],
+  allowedToolNames: Set<string> | null,
+): boolean {
+  let sawToolCall = false;
+  for (const block of content) {
+    if (!isRawToolCallBlock(block)) {
+      continue;
+    }
+    sawToolCall = true;
+    if (
+      !hasToolCallInput(block) ||
+      !hasToolCallId(block) ||
+      !hasToolCallName(block, allowedToolNames)
+    ) {
+      return false;
+    }
+    if (sanitizeToolCallBlock(block) !== block) {
+      return false;
+    }
+  }
+  return sawToolCall || content.some((block) => isThinkingLikeBlock(block));
+}
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -247,11 +281,18 @@ export function repairToolCallInputs(
       continue;
     }
 
-    // Preserve provider-owned thinking turns verbatim. Anthropic replays can
-    // reject any historical assistant turn whose signed thinking block no
-    // longer matches the original response, including sibling tool calls.
     if (msg.content.some((block) => isThinkingLikeBlock(block))) {
-      out.push(msg);
+      // Signed Anthropic thinking blocks must remain byte-for-byte stable on
+      // replay. Preserve the turn only if every sibling tool call is already
+      // valid and requires no redaction or normalization. Otherwise drop the
+      // whole assistant turn rather than mutating provider-owned content.
+      if (isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames)) {
+        out.push(msg);
+      } else {
+        droppedToolCalls += countRawToolCallBlocks(msg.content);
+        droppedAssistantMessages += 1;
+        changed = true;
+      }
       continue;
     }
 
