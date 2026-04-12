@@ -976,6 +976,16 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   contextVisibility: ContextVisibilityModeSchema.optional(),
+  threadBindings: z
+    .object({
+      enabled: z.boolean().optional(),
+      idleHours: z.number().nonnegative().optional(),
+      maxAgeHours: z.number().nonnegative().optional(),
+      spawnSubagentSessions: z.boolean().optional(),
+      spawnAcpSessions: z.boolean().default(false),
+    })
+    .strict()
+    .optional(),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
