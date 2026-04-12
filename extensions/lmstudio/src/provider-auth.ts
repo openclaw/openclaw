@@ -51,8 +51,9 @@ export function shouldUseLmstudioSyntheticAuth(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {
   const hasModels = Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
-  // Runtime synthetic auth is independent from explicit Authorization headers.
-  // LM Studio can authenticate entirely through models.providers.lmstudio.headers.Authorization,
-  // and removing the provider-owned marker lets core fall back to generic local no-auth behavior.
-  return hasModels && !resolveLmstudioProviderAuthMode(providerConfig?.apiKey);
+  return (
+    hasModels &&
+    !resolveLmstudioProviderAuthMode(providerConfig?.apiKey) &&
+    !hasLmstudioAuthorizationHeader(providerConfig?.headers)
+  );
 }

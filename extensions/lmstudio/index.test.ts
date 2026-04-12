@@ -85,7 +85,7 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("keeps synthetic placeholder auth when Authorization header is configured", () => {
+  it("does not synthesize placeholder auth when Authorization header is configured", () => {
     const provider = registerProvider();
 
     expect(
@@ -98,11 +98,7 @@ describe("lmstudio plugin", () => {
           },
         }),
       }),
-    ).toEqual({
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      source: "models.providers.lmstudio (synthetic local key)",
-      mode: "api-key",
-    });
+    ).toBeUndefined();
   });
 
   it("defers stored lmstudio-local profile auth so real credentials can win", () => {

@@ -22,12 +22,22 @@ import {
 const fetchLmstudioModelsMock = vi.hoisted(() => vi.fn());
 const discoverLmstudioModelsMock = vi.hoisted(() => vi.fn());
 const configureSelfHostedNonInteractiveMock = vi.hoisted(() => vi.fn());
+const removeProviderAuthProfilesWithLockMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./models.fetch.js", () => ({
   fetchLmstudioModels: (...args: unknown[]) => fetchLmstudioModelsMock(...args),
   discoverLmstudioModels: (...args: unknown[]) => discoverLmstudioModelsMock(...args),
   ensureLmstudioModelLoaded: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  return {
+    ...actual,
+    removeProviderAuthProfilesWithLock: (...args: unknown[]) =>
+      removeProviderAuthProfilesWithLockMock(...args),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-setup")>();
@@ -166,6 +176,7 @@ describe("lmstudio setup", () => {
     fetchLmstudioModelsMock.mockReset();
     discoverLmstudioModelsMock.mockReset();
     configureSelfHostedNonInteractiveMock.mockReset();
+    removeProviderAuthProfilesWithLockMock.mockReset();
 
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
@@ -355,6 +366,17 @@ describe("lmstudio setup", () => {
   it("non-interactive setup keeps Authorization header auth without writing a synthetic key", async () => {
     const ctx = buildNonInteractiveContext({
       config: {
+        auth: {
+          profiles: {
+            "lmstudio:default": {
+              provider: "lmstudio",
+              mode: "api_key",
+            },
+          },
+          order: {
+            lmstudio: ["lmstudio:default"],
+          },
+        },
         models: {
           providers: {
             lmstudio: {
@@ -378,6 +400,10 @@ describe("lmstudio setup", () => {
 
     const result = await configureLmstudioNonInteractive(ctx);
 
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      provider: "lmstudio",
+      agentDir: undefined,
+    });
     expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
       baseUrl: "http://localhost:1234/v1",
       apiKey: undefined,
@@ -404,6 +430,7 @@ describe("lmstudio setup", () => {
     });
     expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
     expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    expect(result?.auth).toBeUndefined();
   });
 
   it("non-interactive setup prefers --lmstudio-api-key over --custom-api-key", async () => {

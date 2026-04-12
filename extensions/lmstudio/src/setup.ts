@@ -1,4 +1,5 @@
 import {
+  removeProviderAuthProfilesWithLock,
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
@@ -63,6 +64,31 @@ type LmstudioSetupDiscovery = {
   defaultModel: string | undefined;
   defaultModelId: string | undefined;
 };
+
+function stripLmstudioStoredAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const { profiles: _profiles, order: _order, ...restAuth } = cfg.auth ?? {};
+  const nextProfiles = Object.fromEntries(
+    Object.entries(cfg.auth?.profiles ?? {}).filter(
+      ([, profile]) => profile.provider !== PROVIDER_ID,
+    ),
+  );
+  const nextOrder = Object.fromEntries(
+    Object.entries(cfg.auth?.order ?? {}).filter(([providerId]) => providerId !== PROVIDER_ID),
+  );
+  return {
+    ...cfg,
+    auth:
+      Object.keys(restAuth).length > 0 ||
+      Object.keys(nextProfiles).length > 0 ||
+      Object.keys(nextOrder).length > 0
+        ? {
+            ...restAuth,
+            ...(Object.keys(nextProfiles).length > 0 ? { profiles: nextProfiles } : {}),
+            ...(Object.keys(nextOrder).length > 0 ? { order: nextOrder } : {}),
+          }
+        : undefined,
+  };
+}
 
 function resolvePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -588,14 +614,19 @@ export async function configureLmstudioNonInteractive(
     return null;
   }
   if (!resolved && hasAuthorizationHeader) {
+    await removeProviderAuthProfilesWithLock({
+      provider: PROVIDER_ID,
+      agentDir: normalizedCtx.agentDir,
+    });
+    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(normalizedCtx.config);
     return applyProviderDefaultModel(
       {
-        ...normalizedCtx.config,
+        ...configWithoutStoredLmstudioAuth,
         models: {
-          ...normalizedCtx.config.models,
-          mode: normalizedCtx.config.models?.mode ?? "merge",
+          ...configWithoutStoredLmstudioAuth.models,
+          mode: configWithoutStoredLmstudioAuth.models?.mode ?? "merge",
           providers: {
-            ...normalizedCtx.config.models?.providers,
+            ...configWithoutStoredLmstudioAuth.models?.providers,
             [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
               existingProvider,
               baseUrl,
