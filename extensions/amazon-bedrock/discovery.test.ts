@@ -433,4 +433,63 @@ describe("bedrock discovery", () => {
     expect(legacyEnabled?.baseUrl).toBe("https://bedrock-runtime.us-west-2.amazonaws.com");
     expect(sendMock).toHaveBeenCalledTimes(4);
   });
+
+  it("resolves au. prefix for Australia/NZ Bedrock inference profiles", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-sonnet-4-6",
+            modelName: "Claude Sonnet 4.6",
+            providerName: "anthropic",
+            inputModalities: ["TEXT", "IMAGE"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "au.anthropic.claude-sonnet-4-6",
+            inferenceProfileName: "AU Anthropic Claude Sonnet 4.6",
+            inferenceProfileArn:
+              "arn:aws:bedrock:ap-southeast-2::inference-profile/au.anthropic.claude-sonnet-4-6",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-4-6",
+              },
+              {
+                modelArn:
+                  "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-4-6",
+              },
+              {
+                modelArn:
+                  "arn:aws:bedrock:ap-southeast-6::foundation-model/anthropic.claude-sonnet-4-6",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "ap-southeast-2", clientFactory });
+
+    // Foundation model + 1 AU inference profile.
+    expect(models).toHaveLength(2);
+
+    const auProfile = models.find((m) => m.id === "au.anthropic.claude-sonnet-4-6");
+
+    // au. profile should resolve base model and inherit capabilities.
+    expect(auProfile).toMatchObject({
+      id: "au.anthropic.claude-sonnet-4-6",
+      name: "AU Anthropic Claude Sonnet 4.6",
+      input: ["text", "image"],
+      contextWindow: 32000,
+      maxTokens: 4096,
+    });
+  });
 });

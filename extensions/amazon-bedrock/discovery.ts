@@ -192,7 +192,7 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
   }
   if (profile.type === "SYSTEM_DEFINED") {
     const id = profile.inferenceProfileId ?? "";
-    const prefixMatch = /^(?:us|eu|ap|jp|global)\.(.+)$/i.exec(id);
+    const prefixMatch = /^(?:us|eu|ap|au|jp|global)\.(.+)$/i.exec(id);
     if (prefixMatch) {
       return prefixMatch[1];
     }
