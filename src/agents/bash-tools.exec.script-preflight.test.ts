@@ -960,3 +960,43 @@ describe("exec interpreter heuristics ReDoS guard", () => {
     expect(elapsed).toBeLessThan(5000);
   });
 });
+
+describeNonWin("exec preflight bypass when elevated=full", () => {
+  it("skips script-bleed preflight when elevated defaults are full", async () => {
+    await withTempDir("openclaw-exec-preflight-bypass-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      // This file would normally trigger the preflight:
+      await fs.writeFile(
+        pyPath,
+        ["import json", "payload = $DM_JSON", "print(payload)"].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        elevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+      });
+
+      // Should NOT throw a preflight error — the command may still fail
+      // for other reasons (python not found, etc.), but the preflight
+      // shell-bleed check must be skipped.
+      try {
+        await tool.execute("bypass-call", {
+          command: "python bad.py",
+          workdir: tmp,
+        });
+      } catch (err) {
+        // Any error is acceptable as long as it is NOT the preflight guard
+        expect(String(err)).not.toMatch(
+          /exec preflight: detected likely shell variable injection/,
+        );
+      }
+    });
+  });
+});

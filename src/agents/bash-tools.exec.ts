@@ -1658,7 +1658,12 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      // Skip when elevated=full already bypasses all approvals — the preflight
+      // validation is an approval-adjacent guard and should not block fully
+      // trusted sessions (e.g. cron agents configured with elevatedDefault=full).
+      if (!bypassApprovals) {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
 
       const run = await runExecProcess({
         command: params.command,
