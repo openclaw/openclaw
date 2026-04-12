@@ -577,6 +577,34 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
+  it("does not trust future tool results with the right id but the wrong tool name", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "wrong tool" }],
+        isError: false,
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(4);
+    expect((result[1] as { content?: unknown[] }).content).toEqual([
+      { type: "text", text: "[tool calls omitted]" },
+    ]);
+  });
+
   it("drops redacted-thinking turns whose sibling tool calls are dangling", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
