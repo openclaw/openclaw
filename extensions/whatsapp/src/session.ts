@@ -64,15 +64,15 @@ async function safeSaveCreds(
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<void> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const backupPath = resolveWebCredsBackupPath(authDir);
+
+  // 1. Ensure backup exists and is valid before save
   try {
-    // Best-effort backup so we can recover after abrupt restarts.
-    // Important: don't clobber a good backup with a corrupted/truncated creds.json.
-    const credsPath = resolveWebCredsPath(authDir);
-    const backupPath = resolveWebCredsBackupPath(authDir);
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
       try {
-        JSON.parse(raw);
+        JSON.parse(raw); // Validate current creds before backing up
         fsSync.copyFileSync(credsPath, backupPath);
         try {
           fsSync.chmodSync(backupPath, 0o600);
@@ -80,21 +80,66 @@ async function safeSaveCreds(
           // best-effort on platforms that support it
         }
       } catch {
-        // keep existing backup
+        // keep existing backup if current creds is corrupted
       }
     }
   } catch {
     // ignore backup failures
   }
+
+  // 2. Perform save
   try {
     await Promise.resolve(saveCreds());
     try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
+      fsSync.chmodSync(credsPath, 0o600);
     } catch {
       // best-effort on platforms that support it
     }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+
+    // 3. Restore from backup on save failure
+    try {
+      const backupRaw = readCredsJsonRaw(backupPath);
+      if (backupRaw) {
+        JSON.parse(backupRaw); // Validate backup
+        fsSync.copyFileSync(backupPath, credsPath);
+        try {
+          fsSync.chmodSync(credsPath, 0o600);
+        } catch {}
+        logger.info({ credsPath }, "restored WhatsApp creds from backup after save failure");
+      }
+    } catch {}
+    return; // Don't throw, allow session to continue with backup
+  }
+
+  // 4. Validate saved file integrity
+  try {
+    const savedRaw = readCredsJsonRaw(credsPath);
+    if (!savedRaw) {
+      throw new Error("creds.json empty after save");
+    }
+    JSON.parse(savedRaw); // Validate JSON
+
+    // Update backup with validated new creds
+    fsSync.copyFileSync(credsPath, backupPath);
+    try {
+      fsSync.chmodSync(backupPath, 0o600);
+    } catch {}
+  } catch (err) {
+    logger.warn({ error: String(err) }, "creds validation failed after save");
+
+    // Restore from backup if validation failed
+    try {
+      const backupRaw = readCredsJsonRaw(backupPath);
+      if (backupRaw) {
+        fsSync.copyFileSync(backupPath, credsPath);
+        try {
+          fsSync.chmodSync(credsPath, 0o600);
+        } catch {}
+        logger.info({ credsPath }, "restored WhatsApp creds from backup after validation failure");
+      }
+    } catch {}
   }
 }
 
