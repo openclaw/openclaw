@@ -278,6 +278,43 @@ describe("searchMemoryWiki", () => {
     expect(customPaths).toEqual(["entities/status.md"]);
   });
 
+  it("does not match every page when a non-empty query yields no usable tokens", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "cpp.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.cpp",
+          title: "C plus plus",
+        },
+        body: "# C plus plus\n\nLanguage note without the symbol form.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "noise.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.noise",
+          title: "Unrelated page",
+        },
+        body: "# Unrelated page\n\nNothing here should match the symbol query.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "c++" });
+    const customPaths = results
+      .map((result) => result.path)
+      .filter((resultPath) => ["entities/cpp.md", "entities/noise.md"].includes(resultPath));
+
+    expect(customPaths).toEqual([]);
+  });
+
   it("ranks fresh supported claims ahead of stale contested claims", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

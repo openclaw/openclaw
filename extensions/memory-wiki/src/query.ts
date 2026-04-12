@@ -241,6 +241,9 @@ function matchesQuery(textLower: string, signals: QuerySignals): boolean {
   if (signals.queryLower && textLower.includes(signals.queryLower)) {
     return true;
   }
+  if (signals.queryTerms.length === 0) {
+    return false;
+  }
   return (
     countMatchingTerms(textLower, signals.queryTerms) >= minimumMatchingTerms(signals.queryTerms)
   );
