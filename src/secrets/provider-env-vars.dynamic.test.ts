@@ -50,6 +50,26 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
+  it("keeps workspace plugin env vars in default lookups", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(mod.getProviderEnvVars("whisperx")).toEqual(["WHISPERX_API_KEY"]);
+    expect(mod.listKnownProviderAuthEnvVarNames()).toContain("WHISPERX_API_KEY");
+  });
+
   it("excludes untrusted workspace plugin env vars when requested", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [

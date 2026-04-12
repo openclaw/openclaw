@@ -80,7 +80,7 @@ function shouldUsePluginProviderEnvVars(
   plugin: PluginManifestRecord,
   params: ProviderEnvVarLookupParams | undefined,
 ): boolean {
-  if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins === true) {
+  if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins !== false) {
     return true;
   }
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
