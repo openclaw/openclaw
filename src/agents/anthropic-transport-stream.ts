@@ -12,6 +12,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  ANTHROPIC_MIN_COMPACTION_TRIGGER_TOKENS,
   applyAnthropicServerCompactionToParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -279,7 +280,17 @@ function convertAnthropicMessages(
     }
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
-      for (const block of msg.content) {
+      const assistantContent = (
+        typeof msg.content === "string"
+          ? [{ type: "text" as const, text: msg.content }]
+          : msg.content
+      ) as Array<
+        | { type: "text"; text: string }
+        | { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
+        | { type: "toolCall"; id: string; name: string; arguments: unknown }
+        | { type: "compaction"; content: string | null }
+      >;
+      for (const block of assistantContent) {
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
             blocks.push({
@@ -394,8 +405,9 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
 function mapStopReason(reason: string | undefined): string {
   switch (reason) {
     case "end_turn":
-    case "compaction":
       return "stop";
+    case "compaction":
+      return "compaction";
     case "max_tokens":
       return "length";
     case "tool_use":
@@ -431,7 +443,14 @@ function stripCompactionBlocksForTransport(messages: Context["messages"]): Conte
       filteredMessages.push(message);
       continue;
     }
-    const filteredContent = message.content.filter((block) => block.type !== "compaction");
+    if (!Array.isArray(message.content)) {
+      filteredMessages.push(message);
+      continue;
+    }
+    const filteredContent = message.content.filter(
+      (block) =>
+        !(block && typeof block === "object" && (block as { type?: string }).type === "compaction"),
+    );
     if (filteredContent.length === 0) {
       continue;
     }
@@ -448,7 +467,7 @@ function resolveAnthropicCompactionThreshold(
   requested: number | undefined,
 ): number {
   if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
-    return Math.floor(requested);
+    return Math.max(ANTHROPIC_MIN_COMPACTION_TRIGGER_TOKENS, Math.floor(requested));
   }
   const contextWindow =
     typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
@@ -457,7 +476,10 @@ function resolveAnthropicCompactionThreshold(
   if (!contextWindow || contextWindow <= 0) {
     return 150_000;
   }
-  return Math.max(1, Math.min(150_000, Math.floor(contextWindow * 0.75)));
+  return Math.max(
+    ANTHROPIC_MIN_COMPACTION_TRIGGER_TOKENS,
+    Math.min(150_000, Math.floor(contextWindow * 0.75)),
+  );
 }
 
 function resolveAnthropicServerCompactionConfig(params: {

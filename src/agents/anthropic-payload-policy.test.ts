@@ -212,6 +212,27 @@ describe("anthropic payload policy", () => {
     ).toBe(true);
   });
 
+  it("clamps Anthropic compaction triggers to the documented minimum", () => {
+    const payload: Record<string, unknown> = {
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicServerCompactionToParams(payload, {
+      compactThreshold: 25_000,
+      pauseAfterCompaction: true,
+    });
+
+    expect(payload.context_management).toEqual({
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: 50_000 },
+          pause_after_compaction: true,
+        },
+      ],
+    });
+  });
+
   it("strips the boundary even when cache retention is disabled", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",

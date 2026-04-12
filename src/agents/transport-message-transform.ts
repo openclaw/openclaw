@@ -47,7 +47,15 @@ export function transformTransportMessages(
     const isSameModel =
       msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
     const content: typeof msg.content = [];
-    for (const block of msg.content) {
+    const assistantContent = (
+      typeof msg.content === "string" ? [{ type: "text" as const, text: msg.content }] : msg.content
+    ) as Array<
+      | { type: "text"; text: string }
+      | { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
+      | { type: "toolCall"; id: string; name: string; arguments: unknown; thoughtSignature?: string }
+      | { type: "compaction"; content: string | null }
+    >;
+    for (const block of assistantContent) {
       if (block.type === "thinking") {
         if (block.redacted) {
           if (isSameModel) {

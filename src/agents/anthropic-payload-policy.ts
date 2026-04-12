@@ -17,6 +17,8 @@ export type AnthropicServerCompactionConfig = {
   pauseAfterCompaction?: boolean;
 };
 
+export const ANTHROPIC_MIN_COMPACTION_TRIGGER_TOKENS = 50_000;
+
 type AnthropicPayloadPolicyInput = {
   api?: string;
   baseUrl?: string;
@@ -265,7 +267,7 @@ export function applyAnthropicServerCompactionToParams(
   if (typeof config.compactThreshold === "number" && Number.isFinite(config.compactThreshold)) {
     edit.trigger = {
       type: "input_tokens",
-      value: Math.max(1, Math.floor(config.compactThreshold)),
+      value: Math.max(ANTHROPIC_MIN_COMPACTION_TRIGGER_TOKENS, Math.floor(config.compactThreshold)),
     };
   }
   if (typeof config.pauseAfterCompaction === "boolean") {
