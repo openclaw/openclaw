@@ -5,7 +5,10 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { buildGroupChatContext } from "../../auto-reply/reply/groups.js";
+import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
+import type { TemplateContext } from "../../auto-reply/templating.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -191,6 +194,71 @@ function emitSessionsChanged(
     connIds,
     { dropIfSlow: true },
   );
+}
+
+function hasTaskCompletionInternalEvent(events?: AgentInternalEvent[]): boolean {
+  return Array.isArray(events) && events.some((event) => event.type === "task_completion");
+}
+
+function hasPersistedCompletionWakeDeliveryMetadata(entry: SessionEntry): boolean {
+  if (normalizeOptionalString(entry.lastChannel) || normalizeOptionalString(entry.lastTo)) {
+    return true;
+  }
+  const origin = entry.origin;
+  if (!origin) {
+    return false;
+  }
+  return Boolean(
+    normalizeOptionalString(origin.provider) ||
+    normalizeOptionalString(origin.surface) ||
+    normalizeOptionalString(origin.to) ||
+    normalizeOptionalString(origin.from) ||
+    normalizeOptionalString(origin.accountId) ||
+    normalizeOptionalString(origin.chatType) ||
+    normalizeOptionalString(origin.nativeChannelId) ||
+    normalizeOptionalString(origin.nativeDirectUserId) ||
+    (origin.threadId != null ? String(origin.threadId) : undefined),
+  );
+}
+
+function buildPersistedCompletionWakeExtraSystemPrompt(
+  entry: SessionEntry | undefined,
+  inputProvenance: InputProvenance | undefined,
+  events: AgentInternalEvent[] | undefined,
+  existingExtraSystemPrompt: string | undefined,
+): string | undefined {
+  const explicitExtraSystemPrompt = normalizeOptionalString(existingExtraSystemPrompt);
+  if (explicitExtraSystemPrompt) {
+    return explicitExtraSystemPrompt;
+  }
+  if (
+    inputProvenance?.kind !== "inter_session" ||
+    !hasTaskCompletionInternalEvent(events) ||
+    !entry ||
+    !hasPersistedCompletionWakeDeliveryMetadata(entry)
+  ) {
+    return undefined;
+  }
+
+  const sessionCtx: TemplateContext = {
+    AccountId: entry.lastAccountId ?? entry.origin?.accountId,
+    OriginatingTo: entry.lastTo ?? entry.origin?.to,
+    OriginatingChannel: entry.lastChannel ?? entry.origin?.provider ?? entry.channel,
+    Provider: entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+    Surface: entry.origin?.surface,
+    ChatType: entry.chatType ?? entry.origin?.chatType,
+    GroupSubject: entry.subject,
+    GroupChannel: entry.groupChannel,
+    GroupSpace: entry.space,
+  };
+
+  const groupChatContext =
+    sessionCtx.ChatType === "group" ? buildGroupChatContext({ sessionCtx }) : "";
+
+  const parts = [buildInboundMetaSystemPrompt(sessionCtx), groupChatContext]
+    .map((part) => normalizeOptionalString(part))
+    .filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 function dispatchAgentRunFromGateway(params: {
@@ -645,7 +713,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           store[primaryKey] = merged;
           return merged;
         });
-        sessionEntry = persisted;
+        sessionEntry = persisted ?? sessionEntry;
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
@@ -818,6 +886,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const extraSystemPrompt = buildPersistedCompletionWakeExtraSystemPrompt(
+      sessionEntry,
+      inputProvenance,
+      request.internalEvents,
+      request.extraSystemPrompt,
+    );
 
     dispatchAgentRunFromGateway({
       ingressOpts: {
@@ -852,7 +926,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
-        extraSystemPrompt: request.extraSystemPrompt,
+        extraSystemPrompt,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,
         internalEvents: request.internalEvents,

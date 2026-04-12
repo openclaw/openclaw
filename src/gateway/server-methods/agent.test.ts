@@ -873,6 +873,209 @@ describe("gateway agent handler", () => {
     expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
   });
 
+  it("rebuilds persisted session context for inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      chatType: "group",
+      channel: "telegram",
+      subject: "Release Squad",
+      lastChannel: "discord",
+      lastTo: "channel:c3",
+      lastAccountId: "acct-1",
+      origin: {
+        provider: "telegram",
+        surface: "discord",
+        chatType: "group",
+        to: "channel:c3",
+        accountId: "acct-1",
+      },
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-rebuild",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toContain("## Inbound Context (trusted metadata)");
+    expect(callArgs.extraSystemPrompt).toContain('"chat_id": "channel:c3"');
+    expect(callArgs.extraSystemPrompt).toContain('"account_id": "acct-1"');
+    expect(callArgs.extraSystemPrompt).toContain('"channel": "discord"');
+    expect(callArgs.extraSystemPrompt).toContain('"provider": "discord"');
+    expect(callArgs.extraSystemPrompt).toContain('"chat_type": "group"');
+    expect(callArgs.extraSystemPrompt).toContain(
+      'You are in the Discord group chat "Release Squad".',
+    );
+  });
+
+  it("does not add group chat context for channel completion wakes", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      chatType: "channel",
+      channel: "telegram",
+      subject: "Release Updates",
+      lastChannel: "discord",
+      lastTo: "channel:c3",
+      lastAccountId: "acct-1",
+      origin: {
+        provider: "telegram",
+        surface: "discord",
+        chatType: "channel",
+        to: "channel:c3",
+        accountId: "acct-1",
+      },
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-channel",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toContain("## Inbound Context (trusted metadata)");
+    expect(callArgs.extraSystemPrompt).toContain('"chat_type": "channel"');
+    expect(callArgs.extraSystemPrompt).toContain('"provider": "discord"');
+    expect(callArgs.extraSystemPrompt).not.toContain(
+      'You are in the Discord group chat "Release Updates".',
+    );
+    expect(callArgs.extraSystemPrompt).not.toContain(
+      "Your replies are automatically sent to this group chat.",
+    );
+  });
+
+  it("skips synthesized wake context for metadata-free sessions", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-metadata-free",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toBeUndefined();
+  });
+
+  it("keeps explicit extraSystemPrompt on inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      chatType: "group",
+      channel: "discord",
+      subject: "Release Squad",
+      lastChannel: "discord",
+      lastTo: "channel:c3",
+      lastAccountId: "acct-1",
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      extraSystemPrompt: "Caller-provided context.",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-explicit",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toBe("Caller-provided context.");
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
