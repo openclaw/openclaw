@@ -439,7 +439,58 @@ img.chat-avatar {
   min-width: min(480px, 100%);
 }
 
-/* ── Video sizing: break out of the bubble's column constraint ── */
+/* Metadata and Animations */
+.msg-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.msg-meta__model {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-family: var(--font-mono, monospace);
+}
+
+.chat-bubble.streaming {
+  animation: pulsing-border 1.5s ease-out infinite;
+}
+
+@keyframes pulsing-border {
+  0%, 100% { border-color: var(--border); }
+  50% { border-color: var(--accent); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Delete confirmation popover ── */
+.chat-delete-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chat-delete-confirm {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  background: var(--card, #1a1a1a);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  min-width: 200px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Video sizing: break out of the bubble's 68% column constraint ── */
 
 /* Bubbles containing video need to grow up to 854px regardless of column width */
 .chat-bubble:has(.chat-message-video),

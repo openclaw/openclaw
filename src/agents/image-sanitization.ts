@@ -5,7 +5,7 @@ export type ImageSanitizationLimits = {
   maxBytes?: number;
 };
 
-export const DEFAULT_IMAGE_MAX_DIMENSION_PX = 1200;
+export const DEFAULT_IMAGE_MAX_DIMENSION_PX = 3840;
 export const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 export function resolveImageSanitizationLimits(cfg?: OpenClawConfig): ImageSanitizationLimits {

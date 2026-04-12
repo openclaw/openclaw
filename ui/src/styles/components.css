@@ -4554,3 +4554,157 @@ details[open] > .ov-expandable-toggle::after {
     gap: 4px;
   }
 }
+
+/* Resizable message container */
+.chat-bubble-resizable {
+  position: relative;
+  min-width: 200px;
+  min-height: auto;
+  max-width: 90vw;
+  transition: none;
+  overflow: auto;
+  resize: none;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chat-bubble-resizable::-webkit-scrollbar {
+  display: none;
+}
+
+/* Fix image sizing - preserve aspect ratio */
+.chat-bubble-resizable .chat-message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.chat-bubble-resizable .chat-image-wrapper {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.chat-bubble-resizable .chat-message-image {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Fix video sizing */
+.chat-bubble-resizable .chat-message-video {
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+/* Fix audio */
+.chat-bubble-resizable .chat-message-audio {
+  max-width: 100%;
+}
+
+/* Resize handles */
+.chat-resize-handle {
+  position: absolute;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  background-color: #666;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 10;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.chat-bubble-resizable:hover .chat-resize-handle {
+  opacity: 0.6;
+}
+
+.chat-resize-handle:hover {
+  opacity: 1 !important;
+  background-color: #3b82f6;
+}
+
+.chat-resize-handle--bottom-right {
+  right: 0;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, #666 50%);
+  border-bottom-right-radius: 4px;
+}
+
+.chat-resize-handle--bottom-left {
+  left: 0;
+  cursor: sw-resize;
+  background: linear-gradient(225deg, transparent 50%, #666 50%);
+  border-bottom-left-radius: 4px;
+}
+
+/* Ensure text wraps properly */
+.chat-bubble-resizable .chat-text {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* Tool messages */
+.chat-bubble-resizable .chat-tool-msg-collapse {
+  position: static;
+}
+
+/* Ensure media inside resizes properly */
+.chat-bubble-resizable .chat-message-video,
+.chat-bubble-resizable .chat-message-images,
+.chat-bubble-resizable .chat-media-wrapper {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.chat-bubble-resizable .chat-message-image {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+/* Force same handle style on all messages */
+.chat-bubble-resizable .chat-resize-handle {
+  width: 16px !important;
+  height: 16px !important;
+  background: linear-gradient(135deg, transparent 50%, #666 50%) !important;
+  border-radius: 2px !important;
+}
+
+.chat-bubble-resizable .chat-resize-handle--bottom-right {
+  background: linear-gradient(135deg, transparent 50%, #666 50%) !important;
+  border-bottom-right-radius: 4px !important;
+}
+
+.chat-bubble-resizable .chat-resize-handle--bottom-left {
+  background: linear-gradient(225deg, transparent 50%, #666 50%) !important;
+  border-bottom-left-radius: 4px !important;
+}
+
+.chat-bubble-resizable .chat-resize-handle:hover {
+  background: linear-gradient(135deg, transparent 50%, #3b82f6 50%) !important;
+}
+
+.chat-tool-msg-summary {
+  padding: 2px 6px !important;
+  line-height: 1.2 !important;
+  min-height: 24px !important;
+}
+
+.chat-tool-msg-summary__icon svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+.chat-tool-msg-summary__label {
+  font-size: 11px !important;
+}
+
+.chat-bubble:has(.chat-tool-msg-collapse:not([open])) {
+  padding: 2px !important;
+  border: 2px solid var(--border) !important;
+  background: var(--card) !important;
+}

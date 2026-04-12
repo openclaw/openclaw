@@ -33,13 +33,23 @@ export {
   wrapToolParamValidation,
 } from "./pi-tools.params.js";
 
-// NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
-// to sanitize oversized images before they hit providers.
+const normalizeToolParams = (params: unknown): Record<string, unknown> | undefined => {
+  if (!params) return undefined;
+  if (typeof params === "object") return params as Record<string, unknown>;
+  return undefined;
+};
+
+const CLAUDE_PARAM_GROUPS = {
+  read: [{ keys: ["path"] }] as const,
+  write: [{ keys: ["path", "content"] }] as const,
+  edit: [{ keys: ["file_path", "old_string", "new_string"] }] as const,
+};
+
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
-const DEFAULT_READ_PAGE_MAX_BYTES = 50 * 1024;
+const DEFAULT_READ_PAGE_MAX_BYTES = 512 * 1024;
 const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -48,6 +58,8 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  root?: string;
+  containerWorkdir?: string;
 };
 
 type ReadTruncationDetails = {
@@ -233,6 +245,17 @@ async function executeReadWithAdaptivePaging(params: {
     const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
     firstResult ??= pageResult;
 
+    const content = Array.isArray(pageResult.content) ? pageResult.content : [];
+    const hasMediaBlock = content.some(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        typeof (block as { type?: unknown }).type === "string" &&
+        ["image", "audio", "video"].includes((block as { type: string }).type),
+    );
+
+    if (hasMediaBlock) return pageResult;
+
     const rawText = getToolResultText(pageResult);
     if (typeof rawText !== "string") {
       return pageResult;
@@ -282,7 +305,6 @@ async function executeReadWithAdaptivePaging(params: {
 }
 
 function rewriteReadImageHeader(text: string, mimeType: string): string {
-  // pi-coding-agent uses: "Read image file [image/png]"
   if (text.startsWith("Read image file [") && text.endsWith("]")) {
     return `Read image file [${mimeType}]`;
   }
@@ -583,6 +605,16 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   };
 }
 
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "avi", "mov", "mkv", "m4v"]);
+
+function getImageMimeType(ext: string): string {
+  if (ext === "svg") return "image/svg+xml";
+  if (ext === "jpg") return "image/jpeg";
+  return `image/${ext}`;
+}
+
 type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
@@ -595,6 +627,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
     operations: createSandboxReadOperations(params),
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
+    root: params.root,
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
   });
@@ -641,28 +674,123 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  // Cast to any to bypass the strict content type checking since we use a
+  // different image content format than the upstream library expects
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
-      const record = getToolParamsRecord(params);
-      assertRequiredParams(record, REQUIRED_PARAM_GROUPS.read, base.name);
-      const result = await executeReadWithAdaptivePaging({
-        base,
-        toolCallId,
-        args: record ?? {},
-        signal,
-        maxBytes: resolveAdaptiveReadMaxBytes(options),
-      });
-      const filePath = typeof record?.path === "string" ? record.path : "<unknown>";
-      const strippedDetailsResult = stripReadTruncationContentDetails(result);
-      const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
-        normalizedResult,
-        `read:${filePath}`,
-        options?.imageSanitization,
-      );
+      const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+
+      let rawPath = typeof record?.path === "string" ? record.path : ".";
+      rawPath = rawPath.replace(/[^\x00-\x7F]/g, "");
+
+      const rootDir = options?.root ? path.resolve(options.root) : process.cwd();
+      let cleanPath = rawPath;
+      const rootBaseName = path.basename(rootDir);
+      if (cleanPath.startsWith(`${rootBaseName}/`)) {
+        cleanPath = cleanPath.substring(rootBaseName.length + 1);
+      }
+      const inputPath = path.isAbsolute(cleanPath)
+        ? cleanPath
+        : path.resolve(rootDir, cleanPath);
+
+      try {
+        const stats = await fs.stat(inputPath);
+
+        if (stats.isDirectory()) {
+          const files = await fs.readdir(inputPath);
+          return {
+            toolCallId,
+            content: [{ type: "text", text: `Listing for ${cleanPath}:\n${files.join("\n")}` }],
+            details: { path: inputPath },
+          };
+        }
+
+        const ext = inputPath.toLowerCase().split(".").pop() ?? "";
+        const fileName = path.basename(inputPath);
+        const mediaUrl = `http://localhost:18791${inputPath}`;
+
+        if (IMAGE_EXTENSIONS.has(ext)) {
+          const fileBuffer = await fs.readFile(inputPath);
+          const mimeType = getImageMimeType(ext);
+
+          // Return format that matches our working display code
+          return {
+            toolCallId,
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: mimeType,
+                  data: fileBuffer.toString("base64"),
+                },
+              },
+              {
+                type: "text",
+                text: `📷 [${fileName}](${mediaUrl})`,
+              },
+            ],
+            details: { path: inputPath, size: stats.size },
+          } as any; // Type assertion to bypass upstream ImageContent type check
+        }
+
+        if (AUDIO_EXTENSIONS.has(ext)) {
+          return {
+            toolCallId,
+            content: [
+              {
+                type: "text",
+                text: `🎵 [${fileName}](${mediaUrl})`,
+              },
+            ],
+            details: { path: inputPath, size: stats.size },
+          };
+        }
+
+        if (VIDEO_EXTENSIONS.has(ext)) {
+          return {
+            toolCallId,
+            content: [
+              {
+                type: "text",
+                text: `🎬 [${fileName}](${mediaUrl})`,
+              },
+            ],
+            details: { path: inputPath, size: stats.size },
+          };
+        }
+
+        const result = await executeReadWithAdaptivePaging({
+          base,
+          toolCallId,
+          args: { ...record, path: inputPath },
+          signal,
+          maxBytes: resolveAdaptiveReadMaxBytes(options),
+        });
+
+        const filePath = typeof record?.path === "string" ? record.path : "<unknown>";
+        const strippedDetailsResult = stripReadTruncationContentDetails(result);
+        const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
+        return sanitizeToolResultImages(
+          normalizedResult,
+          `read:${filePath}`,
+          options?.imageSanitization,
+        );
+      } catch (err) {
+        const error = err as Error;
+        return {
+          toolCallId,
+          content: [{ type: "text", text: `Read failed: ${error.message}` }],
+          details: { isError: true, path: inputPath },
+        };
+      }
     },
-  };
+  } as AnyAgentTool; // Cast the entire tool to bypass type checking
 }
 
 function createSandboxReadOperations(params: SandboxToolParams) {
@@ -719,7 +847,6 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
         const resolved = path.resolve(dir);
@@ -729,7 +856,6 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -753,7 +879,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
@@ -767,7 +892,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
@@ -791,11 +915,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       try {
         relative = toRelativeWorkspacePath(root, absolutePath);
       } catch {
-        // Path escapes workspace root.  Don't throw here – the upstream
-        // library replaces any `access` error with a misleading "File not
-        // found" message.  By returning silently the subsequent `readFile`
-        // call will throw the same "Path escapes workspace root" error
-        // through a code-path that propagates the original message.
         return;
       }
       try {
@@ -809,8 +928,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
           throw createFsAccessError("ENOENT", absolutePath);
         }
         if (error instanceof SafeOpenError && error.code === "outside-workspace") {
-          // Don't throw here – see the comment above about the upstream
-          // library swallowing access errors as "File not found".
           return;
         }
         throw error;

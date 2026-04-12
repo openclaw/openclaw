@@ -95,14 +95,14 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
 
   try {
     const url = new URL(value);
-    const candidate = url.pathname.split("/").findLast(Boolean);
+    const candidate = url.pathname.split("/").filter(Boolean).at(-1);
     return candidate && candidate.length > 0 ? candidate : undefined;
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
   const normalized = value.replaceAll("\\", "/");
-  const candidate = normalized.split("/").findLast(Boolean);
+  const candidate = normalized.split("/").filter(Boolean).at(-1);
   return candidate && candidate.length > 0 ? candidate : undefined;
 }
 
@@ -353,10 +353,18 @@ export async function sanitizeToolResultImages(
   opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
+
+  // Check if there are any image or text blocks to process (skip audio/video)
   if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {
     return result;
   }
 
-  const next = await sanitizeContentBlocksImages(content, label, opts);
-  return { ...result, content: next };
+  // Filter out audio/video blocks, only sanitize image blocks
+  const blocksToSanitize = content.filter((b) => isImageBlock(b) || isTextBlock(b));
+  const otherBlocks = content.filter((b) => !isImageBlock(b) && !isTextBlock(b));
+
+  const sanitizedBlocks = await sanitizeContentBlocksImages(blocksToSanitize, label, opts);
+
+  // Combine sanitized blocks with untouched audio/video blocks
+  return { ...result, content: [...sanitizedBlocks, ...otherBlocks] };
 }

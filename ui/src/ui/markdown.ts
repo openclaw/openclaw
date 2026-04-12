@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
   "a",
+  "audio",
   "b",
   "blockquote",
   "br",
@@ -24,6 +25,7 @@ const allowedTags = [
   "ol",
   "p",
   "pre",
+  "source",
   "span",
   "strong",
   "summary",
@@ -34,11 +36,13 @@ const allowedTags = [
   "thead",
   "tr",
   "ul",
+  "video",
   "img",
 ];
 
 const allowedAttrs = [
   "class",
+  "controls",
   "href",
   "rel",
   "target",
@@ -169,6 +173,11 @@ marked.use({
 });
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
+  // If it's an audio tag, return it raw without sanitization
+  if (markdown.trim().startsWith('<audio') && markdown.includes('controls')) {
+    return markdown;
+  }
+  
   const input = markdown.trim();
   if (!input) {
     return "";

@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -34,6 +36,7 @@ import {
   renderToolCard,
   renderToolPreview,
 } from "./tool-cards.ts";
+import { setupResizeHandles, getStoredMessageSize, ResizeDirection } from "./message-resize.ts";
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
@@ -50,7 +53,53 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
 type ImageBlock = {
   url: string;
   alt?: string;
+  filename?: string;
+  httpUrl?: string;
 };
+
+type AudioBlock = {
+  type: "audio";
+  data: string;
+  mimeType: string;
+  filename?: string;
+};
+
+type VideoBlock = {
+  type: "video";
+  data: string;
+  mimeType: string;
+  filename?: string;
+};
+
+const DETAILS_STATE_KEY = "chat:details_state";
+
+function saveDetailsState(id: string, isOpen: boolean) {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) return;
+    const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
+    state[id] = isOpen;
+    storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
+  } catch {}
+}
+
+function getDetailsState(id: string): boolean {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) return true;
+    const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
+    if (state[id] === undefined) return true;
+    return state[id] === true;
+  } catch {
+    return true;
+  }
+}
+
+function generateDetailsId(message: unknown, index: number): string {
+  const m = message as Record<string, unknown>;
+  const id = m.id || m.messageId || m.timestamp;
+  return `tool-${id}-${index}`;
+}
 
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
@@ -65,28 +114,104 @@ function extractImages(message: unknown): ImageBlock[] {
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
           const mediaType = (source.media_type as string) || "image/png";
-          // If data is already a data URL, use it directly
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
+          const raw = source.data as string;
+          const url = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
+          const filename = typeof b.filename === "string" ? b.filename : undefined;
+          images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
+          const u = b.url as string;
+          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
+                                 u.startsWith("http://127.0.0.1:18791/");
+          const httpUrl = isMediaServerUrl ? u : undefined;
+          const filename = typeof b.filename === "string" ? b.filename : u.split("/").pop();
+          images.push({ url: u, filename, httpUrl });
         }
       } else if (b.type === "image_url") {
-        // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          const u = imageUrl.url as string;
+          const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
+                                 u.startsWith("http://127.0.0.1:18791/");
+          const httpUrl = isMediaServerUrl ? u : undefined;
+          images.push({
+            url: u,
+            filename: u.split("/").pop(),
+            httpUrl,
+          });
         }
       }
     }
   }
 
   return images;
+}
+
+function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video: VideoBlock[] } {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  const audio: AudioBlock[] = [];
+  const video: VideoBlock[] = [];
+
+  if (!Array.isArray(content)) {
+    return { audio, video };
+  }
+
+  for (let i = 0; i < content.length; i++) {
+    const block = content[i];
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+
+    if (b.type === "audio") {
+      if (typeof b.url === "string") {
+        audio.push({
+          type: "audio",
+          data: b.url,
+          mimeType: typeof b.mimeType === "string" ? b.mimeType : "audio/ogg",
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      } else if (typeof b.data === "string") {
+        const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "audio/ogg";
+        const dataUrl = b.data.startsWith("data:")
+          ? b.data
+          : `data:${mimeTypeValue};base64,${b.data}`;
+        audio.push({
+          type: "audio",
+          data: dataUrl,
+          mimeType: mimeTypeValue,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      }
+    }
+
+    if (b.type === "video") {
+      if (typeof b.url === "string") {
+        video.push({
+          type: "video",
+          data: b.url,
+          mimeType: typeof b.mimeType === "string" ? b.mimeType : "video/mp4",
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      } else if (typeof b.data === "string") {
+        const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "video/mp4";
+        const dataUrl = b.data.startsWith("data:")
+          ? b.data
+          : `data:${mimeTypeValue};base64,${b.data}`;
+        video.push({
+          type: "video",
+          data: dataUrl,
+          mimeType: mimeTypeValue,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
+      }
+    }
+  }
+
+  return { audio, video };
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
@@ -188,7 +313,6 @@ export function renderMessageGroup(
     minute: "2-digit",
   });
 
-  // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   return html`
@@ -238,8 +362,6 @@ export function renderMessageGroup(
     </div>
   `;
 }
-
-// ── Per-message metadata (tokens, cost, model, context %) ──
 
 type GroupMeta = {
   input: number;
@@ -292,7 +414,6 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
-/** Compact token count formatter (e.g. 128000 → "128k"). */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) {
     return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
@@ -310,7 +431,6 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   const parts: Array<ReturnType<typeof html>> = [];
 
-  // Token counts: ↑input ↓output
   if (meta.input) {
     parts.push(html`<span class="msg-meta__tokens">↑${fmtTokens(meta.input)}</span>`);
   }
@@ -318,7 +438,6 @@ function renderMessageMeta(meta: GroupMeta | null) {
     parts.push(html`<span class="msg-meta__tokens">↓${fmtTokens(meta.output)}</span>`);
   }
 
-  // Cache: R/W
   if (meta.cacheRead) {
     parts.push(html`<span class="msg-meta__cache">R${fmtTokens(meta.cacheRead)}</span>`);
   }
@@ -326,12 +445,10 @@ function renderMessageMeta(meta: GroupMeta | null) {
     parts.push(html`<span class="msg-meta__cache">W${fmtTokens(meta.cacheWrite)}</span>`);
   }
 
-  // Cost
   if (meta.cost > 0) {
     parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}</span>`);
   }
 
-  // Context %
   if (meta.contextPercent !== null) {
     const pct = meta.contextPercent;
     const cls =
@@ -343,9 +460,7 @@ function renderMessageMeta(meta: GroupMeta | null) {
     parts.push(html`<span class="${cls}">${pct}% ctx</span>`);
   }
 
-  // Model
   if (meta.model) {
-    // Shorten model name: strip provider prefix if present (e.g. "anthropic/claude-3.5-sonnet" → "claude-3.5-sonnet")
     const shortModel = meta.model.includes("/") ? meta.model.split("/").pop()! : meta.model;
     parts.push(html`<span class="msg-meta__model">${shortModel}</span>`);
   }
@@ -429,7 +544,6 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             onDelete();
           });
 
-          // Close on click outside
           const closeOnOutside = (evt: MouseEvent) => {
             if (!popover.contains(evt.target as Node) && evt.target !== btn) {
               popover.remove();
@@ -556,7 +670,6 @@ function renderAvatar(
     />`;
   }
 
-  /* Assistant with no custom avatar: use logo when basePath available */
   if (normalized === "assistant" && basePath) {
     const logoUrl = agentLogoUrl(basePath);
     return html`<img
@@ -571,7 +684,7 @@ function renderAvatar(
 
 function isAvatarUrl(value: string): boolean {
   return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
+    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/")
   );
 }
 
@@ -588,15 +701,187 @@ function renderMessageImages(images: ImageBlock[]) {
     <div class="chat-message-images">
       ${images.map(
         (img) => html`
-          <img
-            src=${img.url}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => openImage(img.url)}
-          />
+          <div class="chat-image-wrapper">
+            <img
+              src=${img.url}
+              alt=${img.alt ?? "Attached image"}
+              class="chat-message-image"
+              @load=${(e: Event) => {
+                const imgEl = e.target as HTMLImageElement;
+                const naturalWidth = imgEl.naturalWidth;
+                
+                const bubble = imgEl.closest('.chat-bubble') as HTMLElement;
+                if (bubble && !bubble.style.width) {
+                  let targetWidth: number;
+                  
+                  if (naturalWidth >= 3840) {
+                    targetWidth = 400;
+                  } else if (naturalWidth >= 2560) {
+                    targetWidth = 380;
+                  } else if (naturalWidth >= 1920) {
+                    targetWidth = 360;
+                  } else if (naturalWidth >= 1280) {
+                    targetWidth = 340;
+                  } else if (naturalWidth >= 800) {
+                    targetWidth = 320;
+                  } else if (naturalWidth >= 500) {
+                    targetWidth = 300;
+                  } else {
+                    targetWidth = Math.floor(naturalWidth * 0.8);
+                  }
+                  
+                  bubble.style.width = `${targetWidth}px`;
+                }
+              }}
+            />
+            ${img.httpUrl && img.httpUrl.startsWith("http")
+              ? html`<a
+                  href=${img.httpUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chat-image-filename"
+                  title="Open full-size image"
+                  style="display: block; text-align: center; width: 100%;"
+                  >${img.filename ?? "Open Image"}</a
+                >`
+              : nothing}
+          </div>
         `,
       )}
     </div>
+  `;
+}
+
+function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]) {
+  const elements = [];
+
+  for (let i = 0; i < audioBlocks.length; i++) {
+    const audio = audioBlocks[i];
+    elements.push(html`
+      <div class="chat-media-wrapper">
+        <audio controls class="chat-message-audio">
+          <source src=${audio.data} type=${audio.mimeType} />
+          Your browser does not support the audio element.
+        </audio>
+        <div class="chat-media-filename">${audio.filename || audio.mimeType}</div>
+      </div>
+    `);
+  }
+
+  for (let i = 0; i < videoBlocks.length; i++) {
+    const video = videoBlocks[i];
+    elements.push(html`
+      <div class="chat-media-wrapper" style="width: 100%; max-width: 640px;">
+        <video
+          controls
+          class="chat-message-video"
+          style="width: 100%; max-width: 640px; height: auto; max-height: 360px;"
+          playsinline
+        >
+          <source src=${video.data} type=${video.mimeType} />
+          Your browser does not support the video element.
+        </video>
+        <div class="chat-media-filename">${video.filename || video.mimeType}</div>
+      </div>
+    `);
+  }
+
+  if (elements.length === 0) {
+    return nothing;
+  }
+
+  return html`<div class="chat-message-media" style="width: 100%;">${elements}</div>`;
+}
+
+function renderVideoEmbed(markdown: string) {
+  const watchMatch = markdown.match(/https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/);
+  if (watchMatch) {
+    const embedUrl = `https://www.youtube.com/embed/${watchMatch[1]}`;
+    return html`
+      <div class="video-embed-container">
+        <iframe
+          src=${embedUrl}
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="no-referrer-when-downgrade"
+          allowfullscreen
+          class="video-embed-frame"
+        ></iframe>
+      </div>
+    `;
+  }
+
+  const youtubeMatch = markdown.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]+)/,
+  );
+  if (youtubeMatch) {
+    const embedUrl = `https://www.youtube.com/embed/${youtubeMatch[1]}`;
+    return html`
+      <div class="video-embed-container">
+        <iframe
+          src=${embedUrl}
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="no-referrer-when-downgrade"
+          allowfullscreen
+          class="video-embed-frame"
+        ></iframe>
+      </div>
+    `;
+  }
+
+  const vimeoMatch = markdown.match(/https?:\/\/(?:www\.)?player\.vimeo\.com\/video\/(\d+)/);
+  if (vimeoMatch) {
+    const embedUrl = `https://player.vimeo.com/video/${vimeoMatch[1]}`;
+    return html`
+      <div class="video-embed-container">
+        <iframe
+          src=${embedUrl}
+          frameborder="0"
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowfullscreen
+          class="video-embed-frame"
+        ></iframe>
+      </div>
+    `;
+  }
+
+  return nothing;
+}
+
+function renderCollapsedToolCards(
+  toolCards: ToolCard[],
+  onOpenSidebar?: (content: SidebarContent) => void,
+) {
+  const calls = toolCards.filter((c) => c.kind === "call");
+  const results = toolCards.filter((c) => c.kind === "result");
+  const totalTools = Math.max(calls.length, results.length) || toolCards.length;
+  const toolNames = [...new Set(toolCards.map((c) => c.name))];
+  const summaryLabel =
+    toolNames.length <= 3
+      ? toolNames.join(", ")
+      : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+
+  return html`
+    <details class="chat-tools-collapse">
+      <summary class="chat-tools-summary">
+        <span class="chat-tools-summary__icon">${icons.zap}</span>
+        <span class="chat-tools-summary__count"
+          >${totalTools} tool${totalTools === 1 ? "" : "s"}</span
+        >
+        <span class="chat-tools-summary__names">${summaryLabel}</span>
+      </summary>
+      <div class="chat-tools-collapse__body">
+        ${toolCards.map((card) => renderToolCard(card, {
+          expanded: false,
+          onToggleExpanded: () => {},
+          onOpenSidebar,
+          canvasHostUrl: null,
+          embedSandboxMode: "scripts",
+          allowExternalEmbedUrls: false,
+        }))}
+      </div>
+    </details>
   `;
 }
 
@@ -969,21 +1254,11 @@ function renderInlineToolCards(
   `;
 }
 
-/**
- * Max characters for auto-detecting and pretty-printing JSON.
- * Prevents DoS from large JSON payloads in assistant/tool messages.
- */
 const MAX_JSON_AUTOPARSE_CHARS = 20_000;
 
-/**
- * Detect whether a trimmed string is a JSON object or array.
- * Must start with `{`/`[` and end with `}`/`]` and parse successfully.
- * Size-capped to prevent render-loop DoS from large JSON messages.
- */
 function detectJson(text: string): { parsed: unknown; pretty: string } | null {
   const t = text.trim();
 
-  // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
   if (t.length > MAX_JSON_AUTOPARSE_CHARS) {
     return null;
   }
@@ -999,7 +1274,6 @@ function detectJson(text: string): { parsed: unknown; pretty: string } | null {
   return null;
 }
 
-/** Build a short summary label for collapsed JSON (type + key count or array length). */
 function jsonSummaryLabel(parsed: unknown): string {
   if (Array.isArray(parsed)) {
     return `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`;
@@ -1063,7 +1337,9 @@ function renderGroupedMessage(
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
+  const { audio: audioBlocks, video: videoBlocks } = extractAudioVideoBlocks(message);
   const hasImages = images.length > 0;
+  const hasMedia = audioBlocks.length > 0 || videoBlocks.length > 0 || hasImages;
 
   const normalizedMessage = normalizeMessage(message);
   const extractedText = normalizedMessage.content
@@ -1090,23 +1366,25 @@ function renderGroupedMessage(
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
-  // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
-    .filter(Boolean)
-    .join(" ");
+  const isResizable = (role === "assistant" || role === "tool" || isToolResult) && !opts.isStreaming;
+  const messageId = (m.id || m.messageId || m.timestamp?.toString() || Date.now().toString()) as string;
+  const storedSize = isResizable ? getStoredMessageSize(messageId) : null;
+  const bubbleClasses = [
+    "chat-bubble", 
+    opts.isStreaming ? "streaming" : "", 
+    "fade-in",
+    isResizable ? "chat-bubble-resizable" : ""
+  ].filter(Boolean).join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  if (!markdown && hasToolCards && isToolResult && !hasMedia) {
+    return renderCollapsedToolCards(toolCards, onOpenSidebar);
+  }
+
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (
-    !markdown &&
-    !visibleToolCards &&
-    !hasImages &&
-    assistantAttachments.length === 0 &&
-    assistantViewBlocks.length === 0 &&
-    !normalizedMessage.replyTarget
-  ) {
+  if (!markdown && !visibleToolCards && !hasImages && assistantAttachments.length === 0 && 
+      assistantViewBlocks.length === 0 && !normalizedMessage.replyTarget && !hasMedia) {
     return nothing;
   }
 
@@ -1122,16 +1400,36 @@ function renderGroupedMessage(
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages
+    singleToolCard && !markdown && !hasImages && !hasMedia
       ? singleToolCard.outputText?.trim()
         ? "Tool output"
         : "Tool call"
       : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
+  
+  const styleString = storedSize?.width
+    ? `width: ${storedSize.width}px;`
+    : '';
+  
+  const resizeRef = (el: HTMLElement | undefined) => {
+    if (!isResizable || !el) return;
+    if (el.hasAttribute('data-resize-initialized')) return;
+    el.setAttribute('data-resize-initialized', 'true');
+    setTimeout(() => {
+      setupResizeHandles(el, 'bottom-right', messageId);
+    }, 100);
+  };
+
+  const detailsId = generateDetailsId(message, 0);
+  const isOpen = getDetailsState(detailsId);
 
   return html`
-    <div class="${bubbleClasses}">
+    <div 
+      class="${bubbleClasses}"
+      style="${styleString}"
+      ${ref(resizeRef)}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
@@ -1141,17 +1439,20 @@ function renderGroupedMessage(
         : nothing}
       ${isToolMessage
         ? html`
-            <div
-              class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
-                ? "is-open"
-                : ""}"
-            >
-              <button
-                class="chat-tool-msg-summary"
-                type="button"
-                aria-expanded=${String(toolMessageExpanded)}
-                @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
-              >
+            <details 
+              class="chat-tool-msg-collapse"
+              ?open=${isOpen}
+              @toggle=${(e: Event) => {
+                const details = e.currentTarget as HTMLDetailsElement;
+                saveDetailsState(detailsId, details.open);
+                if (details.open) {
+                  setTimeout(() => {
+                    details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }, 50);
+                }
+              }}
+>
+              <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
                 ${toolSummaryLabel
@@ -1159,67 +1460,66 @@ function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
-              </button>
-              ${toolMessageExpanded
-                ? html`
-                    <div class="chat-tool-msg-body">
-                      ${renderMessageImages(images)}
-                      ${renderAssistantAttachments(
-                        assistantAttachments,
-                        opts.localMediaPreviewRoots ?? [],
-                        opts.basePath,
-                        opts.assistantAttachmentAuthToken,
-                        opts.onRequestUpdate,
-                      )}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                          </div>`
-                        : nothing}
-                      ${jsonResult
-                        ? html`<details
-                            class="chat-json-collapse"
-                            ?open=${Boolean(opts.autoExpandToolCalls)}
-                          >
-                            <summary class="chat-json-summary">
-                              <span class="chat-json-badge">JSON</span>
-                              <span class="chat-json-label"
-                                >${jsonSummaryLabel(jsonResult.parsed)}</span
-                              >
-                            </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                          </details>`
-                        : markdown
-                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                            </div>`
-                          : nothing}
-                      ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
-                          ? renderExpandedToolCardContent(
-                              singleToolCard,
-                              onOpenSidebar,
-                              opts.canvasHostUrl,
-                              opts.embedSandboxMode ?? "scripts",
-                              opts.allowExternalEmbedUrls ?? false,
-                            )
-                          : renderInlineToolCards(toolCards, {
-                              messageKey,
-                              onOpenSidebar,
-                              isToolExpanded: opts.isToolExpanded,
-                              onToggleToolExpanded: opts.onToggleToolExpanded,
-                              canvasHostUrl: opts.canvasHostUrl,
-                              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                              allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                            })
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
-            </div>
+              </summary>
+              <div class="chat-tool-msg-body">
+                ${renderMessageImages(images)}
+                ${renderMessageMedia(audioBlocks, videoBlocks)}
+                ${renderAssistantAttachments(
+                  assistantAttachments,
+                  opts.localMediaPreviewRoots ?? [],
+                  opts.basePath,
+                  opts.assistantAttachmentAuthToken,
+                  opts.onRequestUpdate,
+                )}
+                ${reasoningMarkdown
+                  ? html`<div class="chat-thinking">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                    </div>`
+                  : nothing}
+                ${jsonResult
+                  ? html`<details class="chat-json-collapse">
+                      <summary class="chat-json-summary">
+                        <span class="chat-json-badge">JSON</span>
+                        <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                      </summary>
+                      <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                    </details>`
+                  : markdown
+                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                        ${markdown.trim().startsWith("<audio")
+                          ? unsafeHTML(markdown)
+                          : markdown.includes("youtube.com/watch") ||
+                              markdown.includes("youtube.com/embed") ||
+                              markdown.includes("player.vimeo.com")
+                            ? renderVideoEmbed(markdown)
+                            : unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                      </div>`
+                    : nothing}
+                ${hasToolCards
+                  ? singleToolCard && !markdown && !hasImages && !hasMedia
+                    ? renderExpandedToolCardContent(
+                        singleToolCard,
+                        onOpenSidebar,
+                        opts.canvasHostUrl,
+                        opts.embedSandboxMode ?? "scripts",
+                        opts.allowExternalEmbedUrls ?? false,
+                      )
+                    : renderInlineToolCards(toolCards, {
+                        messageKey,
+                        onOpenSidebar,
+                        isToolExpanded: opts.isToolExpanded,
+                        onToggleToolExpanded: opts.onToggleToolExpanded,
+                        canvasHostUrl: opts.canvasHostUrl,
+                        embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                        allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                      })
+                  : nothing}
+              </div>
+            </details>
           `
         : html`
             ${renderMessageImages(images)}
+            ${renderMessageMedia(audioBlocks, videoBlocks)}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],
@@ -1253,7 +1553,13 @@ function renderGroupedMessage(
                 </details>`
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                    ${markdown.trim().startsWith("<audio")
+                      ? unsafeHTML(markdown)
+                      : markdown.includes("youtube.com/watch") ||
+                          markdown.includes("youtube.com/embed") ||
+                          markdown.includes("player.vimeo.com")
+                        ? renderVideoEmbed(markdown)
+                        : unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
                 : nothing}
             ${hasToolCards
