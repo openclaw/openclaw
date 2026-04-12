@@ -90,6 +90,11 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
+import type {
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
@@ -432,16 +437,11 @@ export type ProviderNormalizeModelIdContext = {
   modelId: string;
 };
 
-/**
- * Provider-owned config normalization for `models.providers.<id>` entries.
- *
- * Use this for provider-specific config cleanup that should stay with the
- * plugin rather than in core config-policy tables.
- */
-export type ProviderNormalizeConfigContext = {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-};
+export type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
 
 /**
  * Provider-owned transport normalization for arbitrary provider/model config.
@@ -454,17 +454,6 @@ export type ProviderNormalizeTransportContext = {
   provider: string;
   api?: string | null;
   baseUrl?: string;
-};
-
-/**
- * Provider-owned env/config auth marker resolution for `models.providers`.
- *
- * Use this when a provider resolves auth from env vars that do not follow the
- * generic API-key conventions.
- */
-export type ProviderResolveConfigApiKeyContext = {
-  provider: string;
-  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -798,18 +787,6 @@ export type ProviderFailoverErrorContext = {
   provider?: string;
   modelId?: string;
   errorMessage: string;
-};
-
-/**
- * Provider-owned config-default application input.
- *
- * Use this when a provider needs to add global config defaults that depend on
- * provider auth mode or provider-specific model families.
- */
-export type ProviderApplyConfigDefaultsContext = {
-  provider: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
 };
 
 /**
