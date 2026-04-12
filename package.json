@@ -1192,6 +1192,7 @@
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
+    "lint:pack:qa-scenarios": "node scripts/check-npm-pack-qa-scenarios.mjs",
     "lint:webhook:no-low-level-body-read": "node scripts/check-webhook-auth-body-order.mjs",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",

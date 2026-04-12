@@ -838,6 +838,11 @@ jobs:
         continue-on-error: true
         run: pnpm run lint:web-search-provider-boundaries
 
+      - name: Run npm pack QA scenario bundle guard
+        id: npm_pack_qa_scenarios
+        continue-on-error: true
+        run: pnpm run lint:pack:qa-scenarios
+
       - name: Run web fetch provider boundary guard
         id: web_fetch_provider_boundary
         continue-on-error: true
