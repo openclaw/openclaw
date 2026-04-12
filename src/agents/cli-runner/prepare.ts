@@ -17,6 +17,7 @@ import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
+import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-materialize.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -171,6 +172,13 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
+  const reportToolRuntime = backendResolved.bundleMcp
+    ? await createBundleMcpToolRuntime({
+        workspaceDir,
+        cfg: params.config,
+      })
+    : undefined;
+  const reportTools = reportToolRuntime?.tools ?? [];
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -224,15 +232,32 @@ export async function prepareCliRunContext(
     bootstrapFiles,
     injectedFiles: contextFiles,
     skillsPrompt,
-    tools: [],
+    tools: reportTools,
   });
+  const preparedBackendWithReportCleanup = reportToolRuntime
+    ? {
+        ...preparedBackend,
+        cleanup: async () => {
+          const cleanupResults = await Promise.allSettled([
+            preparedBackend.cleanup?.(),
+            reportToolRuntime.dispose(),
+          ]);
+          const firstRejected = cleanupResults.find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+          );
+          if (firstRejected) {
+            throw firstRejected.reason;
+          }
+        },
+      }
+    : preparedBackend;
 
   return {
     params,
     started,
     workspaceDir,
     backendResolved,
-    preparedBackend,
+    preparedBackend: preparedBackendWithReportCleanup,
     reusableCliSession,
     modelId,
     normalizedModel,

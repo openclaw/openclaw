@@ -83,6 +83,14 @@ describe("runCliAgent bundle MCP e2e", () => {
 
         expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
         expect(result.meta.agentMeta?.sessionId.length ?? 0).toBeGreaterThan(0);
+        expect(result.meta.systemPromptReport?.tools.entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              name: "bundleProbe__bundle_probe",
+            }),
+          ]),
+        );
+        expect(result.meta.systemPromptReport?.tools.schemaChars ?? 0).toBeGreaterThan(0);
       } finally {
         await fs.rm(tempHome, { recursive: true, force: true });
         envSnapshot.restore();
