@@ -41,6 +41,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the abort originated from the caller-provided abortSignal. */
+  externalAbort: boolean;
   timedOut: boolean;
   /** True when the no-response LLM idle watchdog caused the timeout. */
   idleTimedOut: boolean;

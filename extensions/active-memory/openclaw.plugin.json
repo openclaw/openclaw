@@ -12,6 +12,7 @@
         "items": { "type": "string" }
       },
       "model": { "type": "string" },
+      "modelFallback": { "type": "string" },
       "modelFallbackPolicy": {
         "type": "string",
         "enum": ["default-remote", "resolved-only"]
@@ -69,9 +70,13 @@
       "label": "Memory Model",
       "help": "Provider/model used for the blocking memory sub-agent."
     },
+    "modelFallback": {
+      "label": "Fallback Memory Model",
+      "help": "Optional provider/model to use if no explicit plugin model, session model, or agent primary model resolves."
+    },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Choose whether Active Memory falls back to the built-in remote default model when no explicit or inherited model is available."
+      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",

@@ -25,7 +25,6 @@ const DEFAULT_RECENT_USER_CHARS = 220;
 const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
-const DEFAULT_MODEL_REF = "github-copilot/gpt-5.4-mini";
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const TOGGLE_STATE_FILE = "session-toggles.json";
@@ -58,6 +57,7 @@ type ActiveRecallPluginConfig = {
   enabled?: boolean;
   agents?: string[];
   model?: string;
+  modelFallback?: string;
   modelFallbackPolicy?: "default-remote" | "resolved-only";
   allowedChatTypes?: Array<"direct" | "group" | "channel">;
   thinking?: ActiveMemoryThinkingLevel;
@@ -87,6 +87,7 @@ type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
   agents: string[];
   model?: string;
+  modelFallback?: string;
   modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel">;
   thinking: ActiveMemoryThinkingLevel;
@@ -552,6 +553,10 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
       ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
       : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
+    modelFallback:
+      typeof raw.modelFallback === "string" && raw.modelFallback.trim()
+        ? raw.modelFallback.trim()
+        : undefined,
     modelFallbackPolicy:
       raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
@@ -1190,6 +1195,15 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
+function parseModelCandidate(modelRef: string | undefined) {
+  if (!modelRef) {
+    return undefined;
+  }
+  return (
+    parseModelRef(modelRef, DEFAULT_PROVIDER) ?? { provider: DEFAULT_PROVIDER, model: modelRef }
+  );
+}
+
 function getModelRef(
   api: OpenClawPluginApi,
   agentId: string,
@@ -1198,31 +1212,35 @@ function getModelRef(
     modelProviderId?: string;
     modelId?: string;
   },
-) {
+): {
+  modelRef?: {
+    provider: string;
+    model: string;
+  };
+  source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback" | "none";
+} {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
   const agentPrimaryModel = resolveAgentEffectiveModelPrimary(api.config, agentId);
-  const configured =
-    config.model ||
-    currentRunModel ||
-    agentPrimaryModel ||
-    (config.modelFallbackPolicy === "default-remote" ? DEFAULT_MODEL_REF : undefined);
-  if (!configured) {
-    return undefined;
-  }
-  const parsed = parseModelRef(configured, DEFAULT_PROVIDER);
-  if (parsed) {
-    return parsed;
-  }
-  const parsedAgentPrimary = agentPrimaryModel
-    ? parseModelRef(agentPrimaryModel, DEFAULT_PROVIDER)
-    : undefined;
-  return (
-    parsedAgentPrimary ?? {
-      provider: DEFAULT_PROVIDER,
-      model: configured,
+  const candidates: Array<{
+    source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback";
+    value?: string;
+  }> = [
+    { source: "plugin-model", value: config.model },
+    { source: "session-model", value: currentRunModel },
+    { source: "agent-primary", value: agentPrimaryModel },
+    { source: "config-fallback", value: config.modelFallback },
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseModelCandidate(candidate.value);
+    if (parsed) {
+      return {
+        modelRef: parsed,
+        source: candidate.source,
+      };
     }
-  );
+  }
+  return { source: "none" };
 }
 
 async function runRecallSubagent(params: {
@@ -1240,7 +1258,7 @@ async function runRecallSubagent(params: {
 }): Promise<{ rawReply: string; transcriptPath?: string }> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
-  const modelRef = getModelRef(params.api, params.agentId, params.config, {
+  const { modelRef } = getModelRef(params.api, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
@@ -1319,6 +1337,18 @@ async function runRecallSubagent(params: {
       silentExpected: true,
       abortSignal: params.abortSignal,
     });
+    if (params.abortSignal?.aborted) {
+      const reason = params.abortSignal.reason;
+      if (reason instanceof Error) {
+        throw reason;
+      }
+      const abortErr =
+        reason !== undefined
+          ? new Error("Operation aborted", { cause: reason })
+          : new Error("Operation aborted");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
     const rawReply = (result.payloads ?? [])
       .map((payload) => payload.text?.trim() ?? "")
       .filter(Boolean)
