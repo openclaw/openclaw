@@ -60,36 +60,7 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
   ).toSorted((left, right) => left.localeCompare(right));
 }
 
-function isChannelPluginEligibleForSetupDiscovery(params: {
-  plugin: PluginManifestRecord;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  rootConfig: OpenClawConfig;
-}): boolean {
-  if (
-    !passesManifestOwnerBasePolicy({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-    })
-  ) {
-    return false;
-  }
-  if (isBundledManifestOwner(params.plugin)) {
-    return true;
-  }
-  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitManifestOwnerTrust({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-    });
-  }
-  return isActivatedManifestOwner({
-    plugin: params.plugin,
-    normalizedConfig: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-  });
-}
-
-function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
+function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   rootConfig: OpenClawConfig;
@@ -124,7 +95,6 @@ function resolveScopedChannelOwnerPluginIds(params: {
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  mode: "runtime" | "setup";
   cache?: boolean;
 }): string[] {
   const channelIds = normalizeChannelIds(params.channelIds);
@@ -162,17 +132,11 @@ function resolveScopedChannelOwnerPluginIds(params: {
       if (!candidateIdSet.has(plugin.id)) {
         return false;
       }
-      return params.mode === "setup"
-        ? isChannelPluginEligibleForSetupDiscovery({
-            plugin,
-            normalizedConfig,
-            rootConfig: trustConfig,
-          })
-        : isChannelPluginEligibleForRuntimeOwnerActivation({
-            plugin,
-            normalizedConfig,
-            rootConfig: trustConfig,
-          });
+      return isChannelPluginEligibleForScopedOwnership({
+        plugin,
+        normalizedConfig,
+        rootConfig: trustConfig,
+      });
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -186,10 +150,7 @@ export function resolveScopedChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  return resolveScopedChannelOwnerPluginIds({
-    ...params,
-    mode: "runtime",
-  });
+  return resolveScopedChannelOwnerPluginIds(params);
 }
 
 export function resolveDiscoverableScopedChannelPluginIds(params: {
@@ -200,10 +161,7 @@ export function resolveDiscoverableScopedChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  return resolveScopedChannelOwnerPluginIds({
-    ...params,
-    mode: "setup",
-  });
+  return resolveScopedChannelOwnerPluginIds(params);
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {

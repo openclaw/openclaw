@@ -3,7 +3,6 @@ import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
-  hasExplicitManifestOwnerTrust,
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
@@ -119,27 +118,15 @@ function isProviderPluginEligibleForSetupDiscovery(params: {
     !passesManifestOwnerBasePolicy({
       plugin: params.plugin,
       normalizedConfig: params.normalizedConfig,
-      allowExplicitlyDisabled: true,
     })
   ) {
     return false;
   }
-  if (
-    isActivatedManifestOwner({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-      rootConfig: params.rootConfig,
-    })
-  ) {
-    return true;
-  }
-  return (
-    params.normalizedConfig.entries[params.plugin.id]?.enabled === false &&
-    hasExplicitManifestOwnerTrust({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-    })
-  );
+  return isActivatedManifestOwner({
+    plugin: params.plugin,
+    normalizedConfig: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+  });
 }
 
 export function resolveDiscoverableProviderOwnerPluginIds(params: {
