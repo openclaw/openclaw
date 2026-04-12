@@ -123,7 +123,7 @@ export function expectOpenAIResponsesStrictSanitizeCall(
     "session:history",
     expect.objectContaining({
       sanitizeMode: "images-only",
-      sanitizeToolCallIds: true,
+      sanitizeToolCallIds: false,
       toolCallIdMode: "strict",
     }),
   );
