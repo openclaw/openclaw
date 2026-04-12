@@ -218,8 +218,9 @@ async function assertNoTmpAliasEscape(params: {
 }
 
 function shortPath(value: string) {
-  if (value.startsWith(os.homedir())) {
-    return `~${value.slice(os.homedir().length)}`;
+  const home = resolveHome();
+  if (value.startsWith(home)) {
+    return `~${value.slice(home.length)}`;
   }
   return value;
 }
