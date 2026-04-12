@@ -15,25 +15,33 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
-import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { loadAgents } from "./controllers/agents.ts";
-import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
-import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
-import { loadDevices } from "./controllers/devices.ts";
+import { loadAgents, type AgentsState } from "./controllers/agents.ts";
+import {
+  loadAssistantIdentity,
+  type AssistantIdentityState,
+} from "./controllers/assistant-identity.ts";
+import {
+  loadChatHistory,
+  handleChatEvent,
+  type ChatEventPayload,
+  type ChatState,
+} from "./controllers/chat.ts";
+import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
+  pruneExecApprovalQueue,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
-import { loadHealthState } from "./controllers/health.ts";
-import { loadNodes } from "./controllers/nodes.ts";
-import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
+import { loadHealthState, type HealthState } from "./controllers/health.ts";
+import { loadNodes, type NodesState } from "./controllers/nodes.ts";
+import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -98,6 +106,22 @@ type SessionDefaultsSnapshot = {
 
 type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
+  resumeChatQueueAfterReconnect?: boolean;
+};
+
+type GatewayHostWithSideResults = GatewayHost & {
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
+};
+
+function isTerminalChatState(
+  state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
+): state is "final" | "aborted" | "error" {
+  return state === "final" || state === "aborted" || state === "error";
+}
+
+type ConnectGatewayOptions = {
+  reason?: "initial" | "seq-gap";
 };
 
 export function resolveControlUiClientVersion(params: {
@@ -179,14 +203,25 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
-export function connectGateway(host: GatewayHost) {
+export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
+  const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
+  shutdownHost.resumeChatQueueAfterReconnect = false;
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
-  host.execApprovalQueue = [];
+  if (reconnectReason === "seq-gap") {
+    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
+    clearPendingQueueItemsForRun(
+      host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
+      host.chatRunId ?? undefined,
+    );
+    shutdownHost.resumeChatQueueAfterReconnect = true;
+  } else {
+    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
+  }
   host.execApprovalError = null;
 
   const previousClient = host.client;
@@ -217,13 +252,22 @@ export function connectGateway(host: GatewayHost) {
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-      void subscribeSessions(host as unknown as OpenClawApp);
-      void loadAssistantIdentity(host as unknown as OpenClawApp);
-      void loadAgents(host as unknown as OpenClawApp);
-      void loadHealthState(host as unknown as OpenClawApp);
-      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
-      void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      if (shutdownHost.resumeChatQueueAfterReconnect) {
+        // The interrupted run will never emit its terminal event now that the
+        // old client is gone, so resume any deferred commands after hello.
+        shutdownHost.resumeChatQueueAfterReconnect = false;
+        void flushChatQueueForEvent(
+          host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
+        );
+      }
+      void subscribeSessions(host as unknown as SessionsState);
+      void loadAssistantIdentity(host as unknown as AssistantIdentityState);
+      void loadAgents(host as unknown as AgentsState);
+      void loadHealthState(host as unknown as HealthState);
+      void loadNodes(host as unknown as NodesState, { quiet: true });
+      void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -264,8 +308,9 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); reconnecting`;
       host.lastErrorCode = null;
+      connectGateway(host, { reason: "seq-gap" });
     },
   });
   host.client = client;
@@ -292,17 +337,17 @@ function handleTerminalChatEvent(
   // Check if tool events were seen before resetting (resetToolStream clears toolStreamOrder).
   const toolHost = host as unknown as Parameters<typeof resetToolStream>[0];
   const hadToolEvents = toolHost.toolStreamOrder.length > 0;
-  resetToolStream(toolHost);
+  const flushQueue = () =>
+    void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   clearPendingQueueItemsForRun(
     host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
     payload?.runId,
   );
-  void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
-      void loadSessions(host as unknown as OpenClawApp, {
+      void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
       });
     }
@@ -310,9 +355,18 @@ function handleTerminalChatEvent(
   // Reload history when tools were used so the persisted tool results
   // replace the now-cleared streaming state.
   if (hadToolEvents && state === "final") {
-    void loadChatHistory(host as unknown as OpenClawApp);
+    const completedRunId = runId ?? null;
+    void loadChatHistory(host as unknown as ChatState).finally(() => {
+      if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
+        return;
+      }
+      resetToolStream(toolHost);
+      flushQueue();
+    });
     return true;
   }
+  resetToolStream(toolHost);
+  flushQueue();
   return false;
 }
 
@@ -323,10 +377,19 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
-  const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+  const sideResultHost = host as GatewayHostWithSideResults;
+  const isTrackedSideResultTerminalEvent =
+    isTerminalChatState(payload?.state) &&
+    typeof payload?.runId === "string" &&
+    sideResultHost.chatSideResultTerminalRuns?.has(payload.runId) === true;
+  if (isTrackedSideResultTerminalEvent && payload?.runId) {
+    sideResultHost.chatSideResultTerminalRuns?.delete(payload.runId);
+    return;
+  }
+  const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as OpenClawApp);
+    void loadChatHistory(host as unknown as ChatState);
   }
 }
 
@@ -352,6 +415,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.side_result") {
+    const sideResult = parseChatSideResult(evt.payload);
+    if (!sideResult || sideResult.sessionKey !== host.sessionKey) {
+      return;
+    }
+    const sideResultHost = host as GatewayHostWithSideResults;
+    sideResultHost.chatSideResult = sideResult;
+    sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
     return;
   }
 
@@ -382,7 +456,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    void loadSessions(host as unknown as OpenClawApp);
+    void loadSessions(host as unknown as SessionsState);
     return;
   }
 
@@ -391,7 +465,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
-    void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+    void loadDevices(host as unknown as DevicesState, { quiet: true });
   }
 
   if (evt.event === "exec.approval.requested") {

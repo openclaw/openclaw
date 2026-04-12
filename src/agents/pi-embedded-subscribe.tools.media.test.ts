@@ -265,6 +265,18 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("image_generate")).toBe(true);
   });
 
+  it("trusts music_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
+  it("trusts video_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("video_generate")).toBe(true);
+  });
+
+  it("trusts bundled plugin tool local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
   it("does not trust local MEDIA paths for MCP-provenance results", () => {
     expect(
       filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {

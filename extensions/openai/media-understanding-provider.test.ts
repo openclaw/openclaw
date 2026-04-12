@@ -3,7 +3,7 @@ import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.ts";
 import { transcribeOpenAiAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
@@ -43,7 +43,7 @@ describe("transcribeOpenAiAudio", () => {
     });
     const { url: seenUrl, init: seenInit } = getRequest();
 
-    expect(result.model).toBe("gpt-4o-mini-transcribe");
+    expect(result.model).toBe("gpt-4o-transcribe");
     expect(result.text).toBe("hello");
     expect(seenUrl).toBe("https://api.example.com/v1/audio/transcriptions");
     expect(seenInit?.method).toBe("POST");
@@ -55,7 +55,7 @@ describe("transcribeOpenAiAudio", () => {
 
     const form = seenInit?.body as FormData;
     expect(form).toBeInstanceOf(FormData);
-    expect(form.get("model")).toBe("gpt-4o-mini-transcribe");
+    expect(form.get("model")).toBe("gpt-4o-transcribe");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;

@@ -92,6 +92,16 @@ type ConnectFrame = {
   };
 };
 
+function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
+  vi.stubGlobal("window", {
+    location: { href: "http://127.0.0.1:18789/" },
+    localStorage: storage,
+    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(() => handler(...args), timeout),
+    clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
+  });
+}
+
 function getLatestWebSocket(): MockWebSocket {
   const ws = wsInstances.at(-1);
   if (!ws) {
@@ -182,10 +192,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     vi.stubGlobal("localStorage", storage);
-    Object.defineProperty(window, "localStorage", {
-      configurable: true,
-      value: storage,
-    });
+    stubWindowGlobals(storage);
     localStorage.clear();
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -377,6 +384,46 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("cancels a queued connect send when stopped before the timeout fires", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(ws.sent).toHaveLength(0);
+
+    vi.useRealTimers();
+  });
+
+  it("cancels a scheduled reconnect when stopped before the retry fires", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitClose(1006, "socket lost");
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
     vi.useFakeTimers();
     localStorage.clear();
@@ -408,6 +455,14 @@ describe("GatewayBrowserClient", () => {
 });
 
 describe("shouldRetryWithDeviceToken", () => {
+  beforeEach(() => {
+    stubWindowGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("allows a bounded retry for trusted loopback endpoints", () => {
     expect(
       shouldRetryWithDeviceToken({

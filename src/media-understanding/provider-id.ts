@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 
 export function normalizeMediaProviderId(id: string): string {
   const normalized = normalizeProviderId(id);

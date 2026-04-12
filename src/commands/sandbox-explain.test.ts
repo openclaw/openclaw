@@ -1,18 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
 
 let mockCfg: unknown = {};
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: vi.fn().mockImplementation(() => mockCfg),
   };
 });
-
-const { sandboxExplainCommand } = await import("./sandbox-explain.js");
 
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {

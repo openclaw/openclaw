@@ -9,12 +9,11 @@ vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
 
-import { matrixPlugin } from "./channel.js";
+import { matrixConfigAdapter } from "./config-adapter.js";
+import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
-
-let runMatrixSetupBootstrapAfterConfigWrite: typeof import("./setup-bootstrap.js").runMatrixSetupBootstrapAfterConfigWrite;
 
 describe("matrix setup post-write bootstrap", () => {
   const log = vi.fn();
@@ -123,9 +122,7 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
+  beforeEach(() => {
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
@@ -240,13 +237,16 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
-    const updated = matrixPlugin.config.deleteAccount?.({
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
+    const updated = matrixConfigAdapter.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

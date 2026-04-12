@@ -1,4 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { z } from "openclaw/plugin-sdk/zod";
 import WebSocket from "ws";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
@@ -89,10 +95,21 @@ type CreateMattermostConnectOnceOpts = {
   onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
+  /**
+   * Called periodically to check whether the bot account has been modified
+   * (e.g. disabled then re-enabled) since the WebSocket was opened.
+   * Returns the bot's current `update_at` timestamp.  When it differs from
+   * the value recorded at connect time, the connection is terminated so the
+   * reconnect loop can establish a fresh one.
+   */
+  getBotUpdateAt?: () => Promise<number>;
+  healthCheckIntervalMs?: number;
 };
 
-export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
-  new WebSocket(url) as MattermostWebSocketLike;
+export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+  const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
+  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
+};
 
 export function parsePostedPayload(
   payload: MattermostEventPayload,
@@ -126,20 +143,87 @@ export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
   const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
+  const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 30_000;
   return async () => {
+    const flowId = randomUUID();
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    const getBotUpdateAt = opts.getBotUpdateAt;
 
     try {
       return await new Promise<void>((resolve, reject) => {
         let opened = false;
         let settled = false;
+        let healthCheckEnabled = getBotUpdateAt != null;
+        let healthCheckInFlight = false;
+        let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
+        let initialUpdateAt: number | undefined;
+
+        const clearTimers = () => {
+          if (healthCheckTimer !== undefined) {
+            clearTimeout(healthCheckTimer);
+            healthCheckTimer = undefined;
+          }
+        };
+
+        const stopHealthChecks = () => {
+          healthCheckEnabled = false;
+          clearTimers();
+        };
+
+        const scheduleHealthCheck = () => {
+          if (!getBotUpdateAt || !healthCheckEnabled || settled || healthCheckInFlight) {
+            return;
+          }
+          healthCheckTimer = setTimeout(() => {
+            healthCheckTimer = undefined;
+            void runHealthCheck();
+          }, healthCheckIntervalMs);
+        };
+
+        const runHealthCheck = async () => {
+          if (!getBotUpdateAt || !healthCheckEnabled || settled || healthCheckInFlight) {
+            return;
+          }
+          healthCheckInFlight = true;
+          try {
+            const current = await getBotUpdateAt();
+            if (!healthCheckEnabled || settled) {
+              return;
+            }
+            if (initialUpdateAt === undefined) {
+              initialUpdateAt = current;
+              return;
+            }
+            if (current !== initialUpdateAt) {
+              opts.runtime.log?.(
+                `mattermost: bot account updated (update_at changed: ${initialUpdateAt} → ${current}) — reconnecting`,
+              );
+              stopHealthChecks();
+              ws.terminate();
+            }
+          } catch (err) {
+            if (!healthCheckEnabled || settled) {
+              return;
+            }
+            const label =
+              initialUpdateAt === undefined
+                ? "mattermost: failed to get initial update_at"
+                : "mattermost: health check error";
+            opts.runtime.error?.(`${label}: ${String(err)}`);
+          } finally {
+            healthCheckInFlight = false;
+            scheduleHealthCheck();
+          }
+        };
+
         const resolveOnce = () => {
           if (settled) {
             return;
           }
           settled = true;
+          stopHealthChecks();
           resolve();
         };
         const rejectOnce = (error: Error) => {
@@ -147,26 +231,58 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
+          stopHealthChecks();
           reject(error);
         };
 
         ws.on("open", () => {
           opened = true;
+          captureWsEvent({
+            url: opts.wsUrl,
+            direction: "local",
+            kind: "ws-open",
+            flowId,
+            meta: { subsystem: "mattermost-websocket" },
+          });
           opts.statusSink?.({
             connected: true,
             lastConnectedAt: Date.now(),
             lastError: null,
           });
-          ws.send(
-            JSON.stringify({
-              seq: opts.nextSeq(),
-              action: "authentication_challenge",
-              data: { token: opts.botToken },
-            }),
-          );
+          const authPayload = JSON.stringify({
+            seq: opts.nextSeq(),
+            action: "authentication_challenge",
+            data: { token: opts.botToken },
+          });
+          captureWsEvent({
+            url: opts.wsUrl,
+            direction: "outbound",
+            kind: "ws-frame",
+            flowId,
+            payload: authPayload,
+            meta: { subsystem: "mattermost-websocket", eventType: "authentication_challenge" },
+          });
+          ws.send(authPayload);
+
+          // Periodically check if the bot account was modified (e.g. disable/enable).
+          // After such a cycle the WebSocket silently stops delivering events even
+          // though the connection itself stays alive.  Comparing update_at detects
+          // this reliably regardless of how quickly the cycle happens.
+          if (getBotUpdateAt) {
+            // Use a recursive timeout so only one REST poll can be in flight at a time.
+            void runHealthCheck();
+          }
         });
 
         ws.on("message", async (data) => {
+          captureWsEvent({
+            url: opts.wsUrl,
+            direction: "inbound",
+            kind: "ws-frame",
+            flowId,
+            payload: Buffer.from(rawDataToString(data)),
+            meta: { subsystem: "mattermost-websocket" },
+          });
           const raw = rawDataToString(data);
           const payload = parseMattermostEventPayload(raw);
           if (!payload) {
@@ -200,6 +316,16 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
+          captureWsEvent({
+            url: opts.wsUrl,
+            direction: "local",
+            kind: "ws-close",
+            flowId,
+            closeCode: code,
+            payload: reason,
+            meta: { subsystem: "mattermost-websocket" },
+          });
+          stopHealthChecks();
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
@@ -217,6 +343,14 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("error", (err) => {
+          captureWsEvent({
+            url: opts.wsUrl,
+            direction: "local",
+            kind: "error",
+            flowId,
+            errorText: String(err),
+            meta: { subsystem: "mattermost-websocket" },
+          });
           opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
           opts.statusSink?.({
             lastError: String(err),

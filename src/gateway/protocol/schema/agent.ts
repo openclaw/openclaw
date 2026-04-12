@@ -1,17 +1,23 @@
 import { Type } from "@sinclair/typebox";
+import {
+  AGENT_INTERNAL_EVENT_SOURCES,
+  AGENT_INTERNAL_EVENT_STATUSES,
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+} from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const AgentInternalEventSchema = Type.Object(
   {
-    type: Type.Literal("task_completion"),
-    source: Type.String({ enum: ["subagent", "cron"] }),
+    type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
+    source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
     childSessionKey: Type.String(),
     childSessionId: Type.Optional(Type.String()),
     announceType: Type.String(),
     taskLabel: Type.String(),
-    status: Type.String({ enum: ["ok", "timeout", "error", "unknown"] }),
+    status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
     statusLabel: Type.String(),
     result: Type.String(),
+    mediaUrls: Type.Optional(Type.Array(Type.String())),
     statsLine: Type.Optional(Type.String()),
     replyInstruction: Type.String(),
   },
@@ -25,6 +31,51 @@ export const AgentEventSchema = Type.Object(
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
     data: Type.Record(Type.String(), Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const MessageActionToolContextSchema = Type.Object(
+  {
+    currentChannelId: Type.Optional(Type.String()),
+    currentGraphChannelId: Type.Optional(Type.String()),
+    currentChannelProvider: Type.Optional(Type.String()),
+    currentThreadTs: Type.Optional(Type.String()),
+    currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    replyToMode: Type.Optional(
+      Type.Union([
+        Type.Literal("off"),
+        Type.Literal("first"),
+        Type.Literal("all"),
+        Type.Literal("batched"),
+      ]),
+    ),
+    hasRepliedRef: Type.Optional(
+      Type.Object(
+        {
+          value: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    skipCrossContextDecoration: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const MessageActionParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    action: NonEmptyString,
+    params: Type.Record(Type.String(), Type.Unknown()),
+    accountId: Type.Optional(Type.String()),
+    requesterSenderId: Type.Optional(Type.String()),
+    senderIsOwner: Type.Optional(Type.Boolean()),
+    sessionKey: Type.Optional(Type.String()),
+    sessionId: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    toolContext: Type.Optional(MessageActionToolContextSchema),
+    idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -96,6 +147,12 @@ export const AgentParamsSchema = Type.Object(
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
+    bootstrapContextMode: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
+    ),
+    bootstrapContextRunKind: Type.Optional(
+      Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
+    ),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,

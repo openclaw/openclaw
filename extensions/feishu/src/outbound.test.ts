@@ -8,6 +8,8 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
+const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -29,6 +31,18 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+vi.mock("./client.js", () => ({
+  createFeishuClient: vi.fn(() => ({ request: vi.fn() })),
+}));
+
+vi.mock("./drive.js", () => ({
+  deliverCommentThreadText: deliverCommentThreadTextMock,
+}));
+
+vi.mock("./comment-reaction.js", () => ({
+  cleanupAmbientCommentTypingReaction: cleanupAmbientCommentTypingReactionMock,
+}));
+
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
 const emptyConfig: ClawdbotConfig = {};
@@ -46,6 +60,11 @@ function resetOutboundMocks() {
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+  deliverCommentThreadTextMock.mockResolvedValue({
+    delivery_mode: "reply_comment",
+    reply_id: "reply_msg",
+  });
+  cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
 }
 
 describe("feishuOutbound.sendText local-image auto-convert", () => {
@@ -196,6 +215,164 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         accountId: "main",
       }),
     );
+  });
+});
+
+describe("feishuOutbound comment-thread routing", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("routes comment-thread text through deliverCommentThreadText", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      accountId: "main",
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "handled in thread",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("routes comment-thread code-block replies through deliverCommentThreadText instead of IM cards", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "```ts\nconst x = 1\n```",
+      accountId: "main",
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "```ts\nconst x = 1\n```",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("routes comment-thread replies through deliverCommentThreadText even when renderMode=card", async () => {
+    const result = await sendText({
+      cfg: cardRenderConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      accountId: "main",
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "handled in thread",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("falls back to a text-only comment reply for media payloads", async () => {
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "main",
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        content: "see attachment\n\nhttps://example.com/file.png",
+      }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("preserves comment-thread routing when deliverCommentThreadText falls back to add_comment", async () => {
+    deliverCommentThreadTextMock.mockResolvedValueOnce({
+      delivery_mode: "add_comment",
+      comment_id: "comment_msg",
+      reply_id: "reply_from_add_comment",
+    });
+
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "whole-comment follow-up",
+      accountId: "main",
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "whole-comment follow-up",
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        channel: "feishu",
+        messageId: "reply_from_add_comment",
+      }),
+    );
+  });
+
+  it("does not wait for ambient comment typing cleanup before sending comment-thread replies", async () => {
+    let resolveCleanup: ((value: boolean) => void) | undefined;
+    cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveCleanup = resolve;
+        }),
+    );
+
+    const sendPromise = sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      replyToId: "reply_ambient_1",
+      accountId: "main",
+    });
+
+    const status = await Promise.race([
+      sendPromise.then(() => "done"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(status).toBe("done");
+    expect(deliverCommentThreadTextMock).toHaveBeenCalled();
+    expect(cleanupAmbientCommentTypingReactionMock).toHaveBeenCalledWith({
+      client: expect.anything(),
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doxcn123:7623358762119646411",
+        threadId: "reply_ambient_1",
+      },
+    });
+
+    resolveCleanup?.(false);
+    await sendPromise;
   });
 });
 

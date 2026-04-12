@@ -5,9 +5,10 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilityNotices,
   formatPluginCompatibilityNotice,
@@ -48,8 +49,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const resolvedChoice = resolveProviderPluginChoice({
     providers,
@@ -131,7 +131,11 @@ export async function runSetupWizard(
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
+  let baseConfig: OpenClawConfig = snapshot.valid
+    ? snapshot.exists
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {}
+    : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -367,7 +371,7 @@ export async function runSetupWizard(
     await prompter.note(
       [
         "Could not resolve gateway.auth.token SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
+        formatErrorMessage(error),
       ].join("\n"),
       "Gateway auth",
     );
@@ -387,7 +391,7 @@ export async function runSetupWizard(
     await prompter.note(
       [
         "Could not resolve gateway.auth.password SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
+        formatErrorMessage(error),
       ].join("\n"),
       "Gateway auth",
     );
@@ -414,7 +418,7 @@ export async function runSetupWizard(
     await prompter.note(
       [
         "Could not resolve gateway.remote.token SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
+        formatErrorMessage(error),
       ].join("\n"),
       "Gateway auth",
     );
@@ -617,6 +621,16 @@ export async function runSetupWizard(
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+  }
+
+  // Plugin configuration (sandbox backends, tool plugins, etc.)
+  if (flow !== "quickstart") {
+    const { setupPluginConfig } = await import("./setup.plugin-config.js");
+    nextConfig = await setupPluginConfig({
+      config: nextConfig,
+      prompter,
+      workspaceDir,
+    });
   }
 
   // Setup hooks (session memory on /new)

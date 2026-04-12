@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -172,5 +173,27 @@ describe("channel registry pinning", () => {
       startupRegistry: startup,
       freshRegistry: fresh,
     });
+  });
+
+  it("loadChannelOutboundAdapter resolves from pinned registry after active registry replacement", async () => {
+    const outboundAdapter = { send: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    startup.channels = [
+      {
+        pluginId: "telegram",
+        plugin: { id: "telegram", meta: {}, outbound: outboundAdapter },
+        source: "test",
+      },
+    ] as never;
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+
+    // Simulate a post-boot registry replacement (e.g. config-schema load, plugin status query).
+    const replacement = createEmptyPluginRegistry();
+    setActivePluginRegistry(replacement);
+
+    // The outbound loader must still find the telegram adapter from the pinned registry.
+    const adapter = await loadChannelOutboundAdapter("telegram");
+    expect(adapter).toBe(outboundAdapter);
   });
 });

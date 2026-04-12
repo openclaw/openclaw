@@ -18,6 +18,3 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../plugins/provider-self-hosted-setup.js";
-
-export { buildVllmProvider } from "./vllm.js";
-export { buildSglangProvider } from "./sglang.js";

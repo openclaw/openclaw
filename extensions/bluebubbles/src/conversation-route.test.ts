@@ -1,10 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
-} from "../../../src/infra/outbound/session-binding-service.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 
 const baseCfg = {
@@ -17,7 +16,10 @@ const baseCfg = {
 describe("resolveBlueBubblesConversationRoute", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setDefaultChannelPluginRegistryForTests();
+  });
+
+  afterEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
   it("lets runtime BlueBubbles conversation bindings override default routing", () => {

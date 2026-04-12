@@ -1,16 +1,27 @@
 import os from "node:os";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
-
-type SkillsChangeEvent = {
-  workspaceDir?: string;
-  reason: "watch" | "manual" | "remote-node";
-  changedPath?: string;
-};
+import {
+  type SkillsChangeEvent,
+  bumpSkillsSnapshotVersion,
+  getSkillsSnapshotVersion,
+  registerSkillsChangeListener,
+  resetSkillsRefreshStateForTest,
+  setSkillsChangeListenerErrorHandler,
+  shouldRefreshSnapshotForVersion,
+} from "./refresh-state.js";
+export {
+  bumpSkillsSnapshotVersion,
+  getSkillsSnapshotVersion,
+  registerSkillsChangeListener,
+  shouldRefreshSnapshotForVersion,
+  type SkillsChangeEvent,
+} from "./refresh-state.js";
 
 type SkillsWatchState = {
   watcher: FSWatcher;
@@ -21,10 +32,11 @@ type SkillsWatchState = {
 };
 
 const log = createSubsystemLogger("gateway/skills");
-const listeners = new Set<(event: SkillsChangeEvent) => void>();
-const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
-let globalVersion = 0;
+
+setSkillsChangeListenerErrorHandler((err) => {
+  log.warn(`skills change listener failed: ${String(err)}`);
+});
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
@@ -41,21 +53,6 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
-function bumpVersion(current: number): number {
-  const now = Date.now();
-  return now <= current ? current + 1 : now;
-}
-
-function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      log.warn(`skills change listener failed: ${String(err)}`);
-    }
-  }
-}
-
 function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
@@ -66,7 +63,7 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   paths.push(path.join(os.homedir(), ".agents", "skills"));
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
-    .map((d) => (typeof d === "string" ? d.trim() : ""))
+    .map((d) => normalizeOptionalString(d) ?? "")
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   paths.push(...extraDirs);
@@ -93,40 +90,6 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): str
     targets.add(`${globRoot}/*/SKILL.md`);
   }
   return Array.from(targets).toSorted();
-}
-
-export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-export function bumpSkillsSnapshotVersion(params?: {
-  workspaceDir?: string;
-  reason?: SkillsChangeEvent["reason"];
-  changedPath?: string;
-}): number {
-  const reason = params?.reason ?? "manual";
-  const changedPath = params?.changedPath;
-  if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
-    const next = bumpVersion(current);
-    workspaceVersions.set(params.workspaceDir, next);
-    emit({ workspaceDir: params.workspaceDir, reason, changedPath });
-    return next;
-  }
-  globalVersion = bumpVersion(globalVersion);
-  emit({ reason, changedPath });
-  return globalVersion;
-}
-
-export function getSkillsSnapshotVersion(workspaceDir?: string): number {
-  if (!workspaceDir) {
-    return globalVersion;
-  }
-  const local = workspaceVersions.get(workspaceDir) ?? 0;
-  return Math.max(globalVersion, local);
 }
 
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
@@ -207,9 +170,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
-  listeners.clear();
-  workspaceVersions.clear();
-  globalVersion = 0;
+  resetSkillsRefreshStateForTest();
 
   const active = Array.from(watchers.values());
   watchers.clear();

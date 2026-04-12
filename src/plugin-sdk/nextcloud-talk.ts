@@ -1,9 +1,13 @@
 // Private helper surface for the bundled nextcloud-talk plugin.
-// Keep this list additive and scoped to symbols used under extensions/nextcloud-talk.
+// Keep this list additive and scoped to the bundled Nextcloud Talk surface.
 
 export { logInboundDrop } from "../channels/logging.js";
 export { createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
-export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+export {
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
+} from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export {
   buildChannelKeyCandidates,
@@ -32,7 +36,7 @@ export {
   patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
+export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.public.js";
 export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";
@@ -103,7 +107,7 @@ export {
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";
 export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
-export { createLoggerBackedRuntime } from "./runtime.js";
+export { createLoggerBackedRuntime } from "./runtime-logger.js";
 export {
   buildBaseChannelStatusSummary,
   buildRuntimeAccountStatusSnapshot,

@@ -1,3 +1,4 @@
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -167,7 +168,7 @@ export function registerBrowserAgentStorageRoutes(
           cdpUrl,
           targetId: tab.targetId,
           kind,
-          key: key.trim() || undefined,
+          key: normalizeOptionalString(key),
         });
         res.json({ ok: true, targetId: tab.targetId, ...result });
       },
@@ -292,7 +293,7 @@ export function registerBrowserAgentStorageRoutes(
     const targetId = resolveTargetIdFromBody(body);
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
-    const password = typeof body.password === "string" ? body.password : undefined;
+    const password = readStringValue(body.password);
 
     await withPlaywrightRouteContext({
       req,

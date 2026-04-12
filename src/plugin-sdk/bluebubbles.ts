@@ -1,17 +1,47 @@
+import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
-// Narrow plugin-sdk surface for the bundled bluebubbles plugin.
-// Keep this list additive and scoped to symbols used under extensions/bluebubbles.
+// Narrow plugin-sdk surface for the bundled BlueBubbles plugin.
+// Keep this list additive and scoped to the conversation-binding seam only.
 
 type BlueBubblesService = "imessage" | "sms" | "auto";
 
 type BlueBubblesTarget =
   | ParsedChatTarget
   | { kind: "handle"; to: string; service: BlueBubblesService };
+
+export type BlueBubblesConversationBindingManager = {
+  stop: () => void;
+};
+
+type BlueBubblesFacadeModule = {
+  createBlueBubblesConversationBindingManager: (params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+  }) => BlueBubblesConversationBindingManager;
+  collectBlueBubblesStatusIssues: (accounts: unknown[]) => ChannelStatusIssue[];
+};
+
+function loadBlueBubblesFacadeModule(): BlueBubblesFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<BlueBubblesFacadeModule>({
+    dirName: "bluebubbles",
+    artifactBasename: "api.js",
+  });
+}
+
+export function createBlueBubblesConversationBindingManager(params: {
+  accountId?: string;
+  cfg: OpenClawConfig;
+}): BlueBubblesConversationBindingManager {
+  return loadBlueBubblesFacadeModule().createBlueBubblesConversationBindingManager(params);
+}
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
@@ -54,7 +84,7 @@ function stripBlueBubblesPrefix(value: string): string {
   if (!trimmed) {
     return "";
   }
-  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("bluebubbles:")) {
     return trimmed;
   }
   return trimmed.slice("bluebubbles:".length).trim();
@@ -106,7 +136,7 @@ function normalizeBlueBubblesHandle(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.startsWith("imessage:")) {
     return normalizeBlueBubblesHandle(trimmed.slice(9));
   }
@@ -117,7 +147,7 @@ function normalizeBlueBubblesHandle(raw: string): string {
     return normalizeBlueBubblesHandle(trimmed.slice(5));
   }
   if (trimmed.includes("@")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return trimmed.replace(/\s+/g, "");
 }
@@ -138,7 +168,7 @@ function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   if (!trimmed) {
     throw new Error("BlueBubbles target is required");
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedTarget({
     trimmed,
@@ -236,6 +266,10 @@ export function resolveBlueBubblesConversationIdFromTarget(target: string): stri
   return normalizeBlueBubblesAcpConversationId(target)?.conversationId;
 }
 
+export function collectBlueBubblesStatusIssues(accounts: unknown[]): ChannelStatusIssue[] {
+  return loadBlueBubblesFacadeModule().collectBlueBubblesStatusIssues(accounts);
+}
+
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   createActionGate,
@@ -278,13 +312,12 @@ export {
   patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -297,7 +330,7 @@ export {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
 export { stripMarkdown } from "./text-runtime.js";
 export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";

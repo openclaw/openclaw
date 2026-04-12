@@ -2074,7 +2074,7 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
         return
     fi
 
@@ -2466,15 +2466,13 @@ main() {
                 return 0
             fi
             local -a doctor_args=()
-            if [[ "$NO_ONBOARD" == "1" ]]; then
-                if "$claw" doctor --help 2>/dev/null | grep -q -- "--non-interactive"; then
-                    doctor_args+=("--non-interactive")
-                fi
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
             else
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
             fi
@@ -2492,7 +2490,7 @@ main() {
             ui_info "Skipping onboard (requested); run openclaw onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true

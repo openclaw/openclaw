@@ -1,18 +1,26 @@
+import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
   hasEnvHttpProxyConfigured,
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureHttpExchange,
+  resolveEffectiveDebugProxyUrl,
+} from "openclaw/plugin-sdk/proxy-capture";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
-import { getProxyUrlFromFetch } from "./proxy.js";
+import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -159,7 +167,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   if (noProxyValue === "*") {
     return true;
   }
-  const targetHostname = TELEGRAM_API_HOSTNAME.toLowerCase();
+  const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
   for (let i = 0; i < noProxyEntries.length; i++) {
@@ -168,7 +176,9 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
       continue;
     }
     const parsed = entry.match(/^(.+):(\d+)$/);
-    const entryHostname = (parsed ? parsed[1] : entry).replace(/^\*?\./, "").toLowerCase();
+    const entryHostname = normalizeLowercaseStringOrEmpty(
+      (parsed ? parsed[1] : entry).replace(/^\*?\./, ""),
+    );
     const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
     if (entryPort && entryPort !== targetPort) {
       continue;
@@ -206,11 +216,13 @@ function resolveTelegramDispatcherPolicy(params: {
         ? {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
             proxyTls: { ...connect },
           }
         : {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
           },
       mode: "explicit-proxy",
     };
@@ -268,7 +280,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         effectivePolicy: policy,
       };
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
   }
@@ -291,9 +303,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       };
     } catch (err) {
       log.warn(
-        `env proxy dispatcher init failed; falling back to direct dispatcher: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `env proxy dispatcher init failed; falling back to direct dispatcher: ${formatErrorMessage(err)}`,
       );
       const directPolicy: PinnedDispatcherPolicy = {
         mode: "direct",
@@ -398,7 +408,9 @@ function formatErrorCodes(err: unknown): string {
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
   const ctx: TelegramTransportFallbackContext = {
     message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
+      err && typeof err === "object" && "message" in err
+        ? normalizeLowercaseStringOrEmpty(String(err.message))
+        : "",
     codes: collectErrorCodes(err),
   };
   for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {
@@ -489,15 +501,23 @@ export function resolveTelegramTransport(
     dnsDecision,
   });
 
-  const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
+  const effectiveProxyFetch =
+    proxyFetch ??
+    (() => {
+      const debugProxyUrl = resolveEffectiveDebugProxyUrl(undefined);
+      return debugProxyUrl ? makeProxyFetch(debugProxyUrl) : undefined;
+    })();
+  const explicitProxyUrl = effectiveProxyFetch
+    ? getProxyUrlFromFetch(effectiveProxyFetch)
+    : undefined;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
   const sourceFetch = explicitProxyUrl
     ? undiciSourceFetch
-    : proxyFetch
-      ? resolveWrappedFetch(proxyFetch)
+    : effectiveProxyFetch
+      ? resolveWrappedFetch(effectiveProxyFetch)
       : undiciSourceFetch;
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
-  if (proxyFetch && !explicitProxyUrl) {
+  if (effectiveProxyFetch && !explicitProxyUrl) {
     return { fetch: sourceFetch, sourceFetch };
   }
 
@@ -538,10 +558,20 @@ export function resolveTelegramTransport(
     let err: unknown;
 
     try {
-      return await sourceFetch(
+      const response = await sourceFetch(
         input,
         withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
       );
+      captureHttpExchange({
+        url: resolveRequestUrl(input),
+        method: init?.method ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+        response,
+        flowId: randomUUID(),
+        meta: { subsystem: "telegram-fetch" },
+      });
+      return response;
     } catch (caught) {
       err = caught;
     }
@@ -563,6 +593,15 @@ export function resolveTelegramTransport(
           input,
           withDispatcherIfMissing(init, nextAttempt.createDispatcher()),
         );
+        captureHttpExchange({
+          url: resolveRequestUrl(input),
+          method: init?.method ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "telegram-fetch", fallbackAttempt: nextIndex },
+        });
         stickyAttemptIndex = nextIndex;
         return response;
       } catch (caught) {

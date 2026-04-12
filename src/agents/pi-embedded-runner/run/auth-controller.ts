@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,
@@ -14,9 +15,11 @@ import {
   isFailoverErrorMessage,
   type FailoverReason,
 } from "../../pi-embedded-helpers.js";
+import {
+  resolveProviderRequestConfig,
+  sanitizeRuntimeProviderRequestOverrides,
+} from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
-import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -68,8 +71,49 @@ export function createEmbeddedRunAuthController(params: {
   setThinkLevel(next: ThinkLevel): void;
   log: LogLike;
 }) {
+  const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
+    runtimeModel: Model<Api>;
+    preparedAuth: {
+      baseUrl?: string;
+      request?: Parameters<typeof resolveProviderRequestConfig>[0]["request"];
+    };
+  }): void => {
+    if (!paramsForApply.preparedAuth.baseUrl && !paramsForApply.preparedAuth.request) {
+      return;
+    }
+    const runtimeRequestConfig = resolveProviderRequestConfig({
+      provider: paramsForApply.runtimeModel.provider,
+      api: paramsForApply.runtimeModel.api,
+      baseUrl: paramsForApply.preparedAuth.baseUrl ?? paramsForApply.runtimeModel.baseUrl,
+      providerHeaders:
+        paramsForApply.runtimeModel.headers &&
+        typeof paramsForApply.runtimeModel.headers === "object"
+          ? paramsForApply.runtimeModel.headers
+          : undefined,
+      request: sanitizeRuntimeProviderRequestOverrides(paramsForApply.preparedAuth.request),
+      capability: "llm",
+      transport: "stream",
+    });
+    params.setRuntimeModel({
+      ...paramsForApply.runtimeModel,
+      ...(paramsForApply.preparedAuth.baseUrl
+        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
+        : {}),
+      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
+    });
+    params.setEffectiveModel({
+      ...params.getEffectiveModel(),
+      ...(paramsForApply.preparedAuth.baseUrl
+        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
+        : {}),
+      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
+    });
+  };
+
   const hasRefreshableRuntimeAuth = () =>
     Boolean(params.getRuntimeAuthState()?.sourceApiKey.trim());
+
+  const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
 
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
@@ -97,7 +141,10 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
-    runtimeAuthState.refreshInFlight = (async () => {
+    const refreshGeneration = runtimeAuthState.generation;
+    const refreshProfileId = runtimeAuthState.profileId;
+    let refreshPromise: Promise<void>;
+    refreshPromise = (async () => {
       const currentRuntimeAuthState = params.getRuntimeAuthState();
       const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
       if (!sourceApiKey) {
@@ -128,16 +175,22 @@ export function createEmbeddedRunAuthController(params: {
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
         );
       }
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      if (preparedAuth.baseUrl) {
-        params.setRuntimeModel({ ...runtimeModel, baseUrl: preparedAuth.baseUrl });
-        params.setEffectiveModel({
-          ...params.getEffectiveModel(),
-          baseUrl: preparedAuth.baseUrl,
-        });
+      const activeRuntimeAuthState = params.getRuntimeAuthState();
+      if (
+        !activeRuntimeAuthState ||
+        activeRuntimeAuthState.generation !== refreshGeneration ||
+        activeRuntimeAuthState.profileId !== refreshProfileId ||
+        activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
+      ) {
+        params.log.debug(
+          `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
+        );
+        return;
       }
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+      applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth });
       params.setRuntimeAuthState({
-        ...params.getRuntimeAuthState(),
+        ...activeRuntimeAuthState,
         expiresAt: preparedAuth.expiresAt,
       } as RuntimeAuthState);
       if (preparedAuth.expiresAt) {
@@ -150,17 +203,22 @@ export function createEmbeddedRunAuthController(params: {
       .catch((err) => {
         const runtimeModel = params.getRuntimeModel();
         params.log.warn(
-          `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
+          `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
       .finally(() => {
         const activeState = params.getRuntimeAuthState();
-        if (activeState) {
+        if (
+          activeState &&
+          activeState.generation === refreshGeneration &&
+          activeState.refreshInFlight === refreshPromise
+        ) {
           activeState.refreshInFlight = undefined;
         }
       });
-    await runtimeAuthState.refreshInFlight;
+    runtimeAuthState.refreshInFlight = refreshPromise;
+    await refreshPromise;
   };
 
   const scheduleRuntimeAuthRefresh = (): void => {
@@ -237,7 +295,9 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message);
+    const classified = classifyFailoverReason(failoverParams.message, {
+      provider: params.getProvider(),
+    });
     return classified ?? "auth";
   };
 
@@ -251,7 +311,7 @@ export function createEmbeddedRunAuthController(params: {
     const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
     const message =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? describeUnknownError(failoverParams.error).trim() : "") ||
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
       fallbackMessage;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
@@ -280,16 +340,12 @@ export function createEmbeddedRunAuthController(params: {
       profileId: candidate,
       store: params.authStore,
       agentDir: params.agentDir,
+      lockedProfile: candidate != null && candidate === params.lockedProfileId,
     });
   };
 
   const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
     const apiKeyInfo = await resolveApiKeyForCandidate(candidate);
-    if (shouldTraceProviderAuth(params.getRuntimeModel().provider)) {
-      params.log.info(
-        `[xai-auth] auth-controller resolved api key: source=${apiKeyInfo.source} mode=${apiKeyInfo.mode} profile=${apiKeyInfo.profileId ?? candidate ?? "none"} key=${summarizeProviderAuthKey(apiKeyInfo.apiKey)}`,
-      );
-    }
     params.setApiKeyInfo(apiKeyInfo);
     const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
     if (!apiKeyInfo.apiKey) {
@@ -322,23 +378,12 @@ export function createEmbeddedRunAuthController(params: {
         profileId: apiKeyInfo.profileId,
       },
     });
-    if (shouldTraceProviderAuth(runtimeModel.provider)) {
-      params.log.info(
-        `[xai-auth] auth-controller prepared runtime auth: returnedKey=${summarizeProviderAuthKey(preparedAuth?.apiKey)} baseUrl=${preparedAuth?.baseUrl ?? runtimeModel.baseUrl ?? "default"} expiresAt=${preparedAuth?.expiresAt ?? "none"}`,
-      );
-    }
-    if (preparedAuth?.baseUrl) {
-      params.setRuntimeModel({ ...runtimeModel, baseUrl: preparedAuth.baseUrl });
-      params.setEffectiveModel({ ...params.getEffectiveModel(), baseUrl: preparedAuth.baseUrl });
-    }
+    applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      if (shouldTraceProviderAuth(runtimeModel.provider)) {
-        params.log.info(
-          `[xai-auth] auth-controller set runtime api key from prepared auth: key=${summarizeProviderAuthKey(preparedAuth.apiKey)}`,
-        );
-      }
       params.setRuntimeAuthState({
+        generation: nextRuntimeAuthGeneration(),
         sourceApiKey: apiKeyInfo.apiKey,
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
@@ -350,12 +395,8 @@ export function createEmbeddedRunAuthController(params: {
       runtimeAuthHandled = true;
     }
     if (!runtimeAuthHandled) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
-      if (shouldTraceProviderAuth(runtimeModel.provider)) {
-        params.log.info(
-          `[xai-auth] auth-controller set runtime api key directly: key=${summarizeProviderAuthKey(apiKeyInfo.apiKey)}`,
-        );
-      }
       params.setRuntimeAuthState(null);
     }
     params.setLastProfileId(apiKeyInfo.profileId);
@@ -461,10 +502,10 @@ export function createEmbeddedRunAuthController(params: {
     if (!params.getRuntimeAuthState() || retried) {
       return false;
     }
-    if (!isFailoverErrorMessage(errorText)) {
+    if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {
       return false;
     }
-    if (classifyFailoverReason(errorText) !== "auth") {
+    if (classifyFailoverReason(errorText, { provider: params.getProvider() }) !== "auth") {
       return false;
     }
     try {

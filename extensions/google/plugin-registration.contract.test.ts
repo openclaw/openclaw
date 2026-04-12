@@ -1,12 +1,11 @@
-import { describePluginRegistrationContract } from "../../test/helpers/extensions/plugin-registration-contract.js";
+import { pluginRegistrationContractCases } from "../../test/helpers/plugins/plugin-registration-contract-cases.js";
+import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
-  pluginId: "google",
-  providerIds: ["google", "google-gemini-cli"],
+  ...pluginRegistrationContractCases.google,
+  videoGenerationProviderIds: ["google"],
   webSearchProviderIds: ["gemini"],
-  mediaUnderstandingProviderIds: ["google"],
-  imageGenerationProviderIds: ["google"],
-  cliBackendIds: ["google-gemini-cli"],
   requireDescribeImages: true,
   requireGenerateImage: true,
+  requireGenerateVideo: true,
 });

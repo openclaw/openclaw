@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
@@ -25,7 +26,7 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => name.endsWith(".jsonl"))
+      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
       .map((name) => path.join(dir, name));
   } catch {
     return [];

@@ -4,16 +4,21 @@
 
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -32,10 +37,11 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
-  const trimmed = typeof key === "string" ? key.trim() : "";
+  const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
     throw new Error("system events require a sessionKey");
   }
@@ -43,14 +49,7 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key) ?? null;
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {
@@ -107,6 +106,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    trusted: options.trusted !== false,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();

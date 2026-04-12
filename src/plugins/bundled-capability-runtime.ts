@@ -7,10 +7,12 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
+import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -32,7 +34,11 @@ function applyVitestCapabilityAliasOverrides(params: {
     return params.aliasMap;
   }
 
-  const { ["openclaw/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } = params.aliasMap;
+  const {
+    ["openclaw/plugin-sdk"]: _ignoredLegacyRootAlias,
+    ["@openclaw/plugin-sdk"]: _ignoredScopedRootAlias,
+    ...scopedAliasMap
+  } = params.aliasMap;
   return {
     ...scopedAliasMap,
     // Capability contract loads only need a narrow SDK slice. Keep those
@@ -41,16 +47,31 @@ function applyVitestCapabilityAliasOverrides(params: {
     "openclaw/plugin-sdk/llm-task": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/llm-task": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/config-runtime": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
+    ),
+    "@openclaw/plugin-sdk/config-runtime": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
     ),
     "openclaw/plugin-sdk/media-runtime": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/media-runtime": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/provider-onboard": fileURLToPath(
       new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/provider-onboard": fileURLToPath(
+      new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/speech-core": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
+    ),
+    "@openclaw/plugin-sdk/speech-core": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
     ),
   };
@@ -75,12 +96,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -122,9 +138,16 @@ function createCapabilityPluginRecord(params: {
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -208,6 +231,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
   const seenPluginIds = new Set<string>();
+  const repoRoot = process.cwd();
 
   for (const candidate of discovery.candidates) {
     const manifest = manifestByRoot.get(candidate.rootDir);
@@ -224,15 +248,22 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
-      source: candidate.source,
+      source:
+        env?.VITEST && params.pluginSdkResolution === "dist"
+          ? (resolveBundledPluginRepoEntryPath({
+              rootDir: repoRoot,
+              pluginId: manifest.id,
+              preferBuilt: true,
+            }) ?? candidate.source)
+          : candidate.source,
       rootDir: candidate.rootDir,
       workspaceDir: candidate.workspaceDir,
     });
 
     const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
-      rootPath: candidate.rootDir,
-      boundaryLabel: "plugin root",
+      absolutePath: record.source,
+      rootPath: record.source === candidate.source ? candidate.rootDir : repoRoot,
+      boundaryLabel: record.source === candidate.source ? "plugin root" : "repo root",
       rejectHardlinks: false,
       skipLexicalRootCheck: true,
     });
@@ -271,13 +302,30 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
+      record.realtimeTranscriptionProviderIds.push(
+        ...captured.realtimeTranscriptionProviders.map((entry) => entry.id),
+      );
+      record.realtimeVoiceProviderIds.push(
+        ...captured.realtimeVoiceProviders.map((entry) => entry.id),
+      );
       record.mediaUnderstandingProviderIds.push(
         ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
       );
       record.imageGenerationProviderIds.push(
         ...captured.imageGenerationProviders.map((entry) => entry.id),
       );
+      record.videoGenerationProviderIds.push(
+        ...captured.videoGenerationProviders.map((entry) => entry.id),
+      );
+      record.musicGenerationProviderIds.push(
+        ...captured.musicGenerationProviders.map((entry) => entry.id),
+      );
+      record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
+      record.memoryEmbeddingProviderIds.push(
+        ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
+      );
+      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
@@ -285,6 +333,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           backend,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.textTransforms.push(
+        ...captured.textTransforms.map((transforms) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          transforms,
           source: record.source,
           rootDir: record.rootDir,
         })),
@@ -300,6 +357,24 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.speechProviders.push(
         ...captured.speechProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.realtimeTranscriptionProviders.push(
+        ...captured.realtimeTranscriptionProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.realtimeVoiceProviders.push(
+        ...captured.realtimeVoiceProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,
@@ -325,11 +400,56 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           rootDir: record.rootDir,
         })),
       );
+      registry.videoGenerationProviders.push(
+        ...captured.videoGenerationProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.musicGenerationProviders.push(
+        ...captured.musicGenerationProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.webFetchProviders.push(
+        ...captured.webFetchProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
       registry.webSearchProviders.push(
         ...captured.webSearchProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.memoryEmbeddingProviders.push(
+        ...captured.memoryEmbeddingProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.agentHarnesses.push(
+        ...captured.agentHarnesses.map((harness) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          harness,
           source: record.source,
           rootDir: record.rootDir,
         })),

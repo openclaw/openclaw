@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
@@ -18,7 +19,13 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
-import { detectMime, extensionForMime, kindFromMime } from "./mime.js";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  kindFromMime,
+  normalizeMimeType,
+} from "./mime.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -34,11 +41,14 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
+  /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
+  hostReadCapability?: boolean;
 };
 
 function resolveWebMediaOptions(params: {
@@ -64,6 +74,16 @@ function resolveWebMediaOptions(params: {
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
+  "application/msword",
+  "application/pdf",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 const MB = 1024 * 1024;
 
 function formatMb(bytes: number, digits = 2): string {
@@ -86,6 +106,47 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
     return true;
   }
   return false;
+}
+
+function assertHostReadMediaAllowed(params: {
+  sniffedContentType?: string;
+  contentType?: string;
+  filePath?: string;
+  kind: MediaKind | undefined;
+}): void {
+  const sniffedKind = kindFromMime(params.sniffedContentType);
+  if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
+    return;
+  }
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (
+    sniffedKind === "document" &&
+    sniffedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
+  ) {
+    return;
+  }
+  if (
+    sniffedMime === "application/x-cfb" &&
+    [".doc", ".ppt", ".xls"].includes(getFileExtension(params.filePath) ?? "")
+  ) {
+    return;
+  }
+  const normalizedMime = normalizeMimeType(params.contentType);
+  if (
+    params.kind === "document" &&
+    normalizedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
+  ) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
+    );
+  }
+  throw new LocalMediaAccessError(
+    "path-not-allowed",
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+  );
 }
 
 function toJpegFileName(fileName?: string): string | undefined {
@@ -163,9 +224,11 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    workspaceDir,
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
+    hostReadCapability = false,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -178,6 +241,7 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
+  mediaUrl = resolveCanvasHttpPathToLocalPath(mediaUrl) ?? mediaUrl;
 
   const optimizeAndClampImage = async (
     buffer: Buffer,
@@ -266,6 +330,9 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
+  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl)) {
+    mediaUrl = path.resolve(workspaceDir, mediaUrl);
+  }
   try {
     assertNoWindowsNetworkPath(mediaUrl, "Local media path");
   } catch (err) {
@@ -316,8 +383,17 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
+  const sniffedMime = await detectMime({ buffer: data });
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
+  if (hostReadCapability) {
+    assertHostReadMediaAllowed({
+      sniffedContentType: sniffedMime,
+      contentType: mime,
+      filePath: mediaUrl,
+      kind,
+    });
+  }
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);

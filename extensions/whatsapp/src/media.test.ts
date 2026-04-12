@@ -1,19 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
-import { optimizeImageToPng } from "../../../src/media/image-ops.js";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
-
-let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
-let loadWebMedia: typeof import("./media.js").loadWebMedia;
-let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
-let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
-let sendVoiceMessageDiscord: typeof import("../../discord/src/send.js").sendVoiceMessageDiscord;
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
+import {
+  LocalMediaAccessError,
+  loadWebMedia,
+  loadWebMediaRaw,
+  optimizeImageToJpeg,
+} from "./media.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -54,9 +55,6 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./media.js"));
-  ({ sendVoiceMessageDiscord } = await import("../../discord/src/send.js"));
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );

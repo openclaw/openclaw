@@ -1,8 +1,9 @@
 import { statSync } from "node:fs";
 import { EdgeTTS } from "node-edge-tts";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export function inferEdgeExtension(outputFormat: string): string {
-  const normalized = outputFormat.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
   if (normalized.includes("webm")) {
     return ".webm";
   }

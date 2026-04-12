@@ -1,15 +1,26 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
+import {
+  resolveMatrixConfigFieldPath,
+  resolveMatrixConfigPath,
+  shouldStoreMatrixAccountAtTopLevel,
+} from "./config-paths.js";
+
+export {
+  resolveMatrixConfigFieldPath,
+  resolveMatrixConfigPath,
+  shouldStoreMatrixAccountAtTopLevel,
+} from "./config-paths.js";
 
 export type MatrixAccountPatch = {
   name?: string | null;
   enabled?: boolean;
   homeserver?: string | null;
   allowPrivateNetwork?: boolean | null;
+  proxy?: string | null;
   userId?: string | null;
   accessToken?: MatrixConfig["accessToken"] | null;
   password?: MatrixConfig["password"] | null;
@@ -19,6 +30,8 @@ export type MatrixAccountPatch = {
   encryption?: boolean | null;
   initialSyncLimit?: number | null;
   allowBots?: MatrixConfig["allowBots"] | null;
+  autoJoin?: MatrixConfig["autoJoin"] | null;
+  autoJoinAllowlist?: MatrixConfig["autoJoinAllowlist"] | null;
   dm?: MatrixConfig["dm"] | null;
   groupPolicy?: MatrixConfig["groupPolicy"] | null;
   groupAllowFrom?: MatrixConfig["groupAllowFrom"] | null;
@@ -49,7 +62,7 @@ function applyNullableStringField(
 function applyNullableSecretInputField(
   target: Record<string, unknown>,
   key: "accessToken" | "password",
-  value: MatrixConfig["accessToken"] | MatrixConfig["password"] | null | undefined,
+  value: MatrixConfig["accessToken"] | null | undefined,
   defaults?: NonNullable<CoreConfig["secrets"]>["defaults"],
 ): void {
   if (value === undefined) {
@@ -86,9 +99,7 @@ function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
   };
 }
 
-function cloneMatrixRoomMap(
-  rooms: MatrixConfig["groups"] | MatrixConfig["rooms"],
-): MatrixConfig["groups"] | MatrixConfig["rooms"] {
+function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups"] {
   if (!rooms) {
     return rooms;
   }
@@ -110,35 +121,6 @@ function applyNullableArrayField(
     return;
   }
   target[key] = [...value];
-}
-
-export function shouldStoreMatrixAccountAtTopLevel(cfg: CoreConfig, accountId: string): boolean {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
-    return false;
-  }
-  const accounts = cfg.channels?.matrix?.accounts;
-  return !accounts || Object.keys(accounts).length === 0;
-}
-
-export function resolveMatrixConfigPath(cfg: CoreConfig, accountId: string): string {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  if (shouldStoreMatrixAccountAtTopLevel(cfg, normalizedAccountId)) {
-    return "channels.matrix";
-  }
-  return `channels.matrix.accounts.${normalizedAccountId}`;
-}
-
-export function resolveMatrixConfigFieldPath(
-  cfg: CoreConfig,
-  accountId: string,
-  fieldPath: string,
-): string {
-  const suffix = fieldPath.trim().replace(/^\.+/, "");
-  if (!suffix) {
-    return resolveMatrixConfigPath(cfg, accountId);
-  }
-  return `${resolveMatrixConfigPath(cfg, accountId)}.${suffix}`;
 }
 
 export function updateMatrixAccountConfig(
@@ -171,6 +153,7 @@ export function updateMatrixAccountConfig(
   }
 
   applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
+  applyNullableStringField(nextAccount, "proxy", patch.proxy);
   applyNullableStringField(nextAccount, "userId", patch.userId);
   applyNullableSecretInputField(
     nextAccount,
@@ -184,10 +167,19 @@ export function updateMatrixAccountConfig(
   applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);
 
   if (patch.allowPrivateNetwork !== undefined) {
+    const nextNetwork =
+      nextAccount.network && typeof nextAccount.network === "object"
+        ? { ...(nextAccount.network as Record<string, unknown>) }
+        : {};
     if (patch.allowPrivateNetwork === null) {
-      delete nextAccount.allowPrivateNetwork;
+      delete nextNetwork.dangerouslyAllowPrivateNetwork;
     } else {
-      nextAccount.allowPrivateNetwork = patch.allowPrivateNetwork;
+      nextNetwork.dangerouslyAllowPrivateNetwork = patch.allowPrivateNetwork;
+    }
+    if (Object.keys(nextNetwork).length > 0) {
+      nextAccount.network = nextNetwork;
+    } else {
+      delete nextAccount.network;
     }
   }
 
@@ -213,12 +205,20 @@ export function updateMatrixAccountConfig(
       nextAccount.allowBots = patch.allowBots;
     }
   }
+  if (patch.autoJoin !== undefined) {
+    if (patch.autoJoin === null) {
+      delete nextAccount.autoJoin;
+    } else {
+      nextAccount.autoJoin = patch.autoJoin;
+    }
+  }
+  applyNullableArrayField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist);
   if (patch.dm !== undefined) {
     if (patch.dm === null) {
       delete nextAccount.dm;
     } else {
       nextAccount.dm = cloneMatrixDmConfig({
-        ...((nextAccount.dm as MatrixConfig["dm"] | undefined) ?? {}),
+        ...(nextAccount.dm as MatrixConfig["dm"] | undefined),
         ...patch.dm,
       });
     }
@@ -255,16 +255,20 @@ export function updateMatrixAccountConfig(
   );
 
   if (shouldStoreMatrixAccountAtTopLevel(cfg, normalizedAccountId)) {
-    const { accounts: _ignoredAccounts, defaultAccount, ...baseMatrix } = matrix;
+    const { accounts: _ignoredAccounts, defaultAccount } = matrix;
+    const {
+      accounts: _ignoredNextAccounts,
+      defaultAccount: _ignoredNextDefaultAccount,
+      ...topLevelAccount
+    } = nextAccount;
     return {
       ...cfg,
       channels: {
         ...cfg.channels,
         matrix: {
-          ...baseMatrix,
           ...(defaultAccount ? { defaultAccount } : {}),
           enabled: true,
-          ...nextAccount,
+          ...topLevelAccount,
         },
       },
     };

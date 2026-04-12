@@ -1,29 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
-import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
 
-export type ApplyAuthChoiceParams = {
-  authChoice: AuthChoice;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  agentDir?: string;
-  setDefaultModel: boolean;
-  agentId?: string;
-  opts?: Partial<OnboardOptions>;
-};
-
-export type ApplyAuthChoiceResult = {
-  config: OpenClawConfig;
-  agentModelOverride?: string;
-};
+export type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
 
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
@@ -54,6 +36,21 @@ export async function applyAuthChoice(
     if (result) {
       return result;
     }
+  }
+
+  if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {
+    throw new Error(
+      [
+        `Auth choice "${normalizedParams.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "setup-token" with tokenProvider="anthropic" or choose the Anthropic setup-token entry explicitly.',
+      ].join("\n"),
+    );
+  }
+
+  if (normalizedParams.authChoice === "oauth") {
+    throw new Error(
+      'Auth choice "oauth" is no longer supported directly. Use "setup-token" for Anthropic legacy token auth or a provider-specific OAuth entry.',
+    );
   }
 
   return { config: normalizedParams.config };

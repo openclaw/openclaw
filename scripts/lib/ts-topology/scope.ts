@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../bundled-plugin-paths.mjs";
 import { pluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
 import type { ConsumerScope, PublicEntrypoint, TopologyScope, UsageBucket } from "./types.js";
 
@@ -19,7 +20,7 @@ function isTestFile(relPath: string): boolean {
 }
 
 function classifyScope(relPath: string): ConsumerScope {
-  if (relPath.startsWith("extensions/")) {
+  if (relPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     return "extension";
   }
   if (relPath.startsWith("packages/")) {
@@ -71,10 +72,11 @@ function extractOwner(relPath: string): string | null {
     case "test":
       return null;
   }
+  throw new Error("Unsupported topology scope");
 }
 
 function extractExtensionId(relPath: string): string | null {
-  if (!relPath.startsWith("extensions/")) {
+  if (!relPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     return null;
   }
   const parts = relPath.split("/");

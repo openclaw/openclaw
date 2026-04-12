@@ -1,18 +1,12 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  buildCommandsMessagePaginated,
-  buildCommandsPaginationKeyboard,
-  formatModelsAvailableHeader,
-  resolveStoredModelOverride,
-} from "openclaw/plugin-sdk/command-auth";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -31,10 +25,12 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
+import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -43,7 +39,12 @@ import {
 } from "./bot-access.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
-  APPROVE_CALLBACK_DATA_RE,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveDefaultModelForAgent,
+} from "./bot-handlers.agent.runtime.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import {
   hasInboundMedia,
   hasReplyTargetMedia,
   isMediaSizeLimitError,
@@ -51,7 +52,10 @@ import {
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import {
+  parseTelegramNativeCommandCallbackData,
+  RegisterTelegramHandlerParams,
+} from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
@@ -67,19 +71,17 @@ import {
   resolveTelegramGroupAllowFromContext,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
-import type {
-  TelegramContext,
-  TelegramGetChat,
-  TelegramSyntheticContextSource,
-} from "./bot/types.js";
+import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import {
   isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalAuthorizedSender,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 import {
@@ -88,6 +90,7 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -117,6 +120,12 @@ export const registerTelegramHandlers = ({
   logger,
   telegramDeps = defaultTelegramBotDeps,
 }: RegisterTelegramHandlerParams) => {
+  const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
+    cfg,
+    accountId,
+    token: opts.token,
+    transport: telegramTransport,
+  });
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -158,7 +167,20 @@ export const registerTelegramHandlers = ({
     botUsername?: string;
   };
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
-    return msg.forward_origin ? "forward" : "default";
+    const forwardMeta = msg as {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    return (forwardMeta.forward_origin ??
+      forwardMeta.forward_from ??
+      forwardMeta.forward_from_chat ??
+      forwardMeta.forward_sender_name ??
+      forwardMeta.forward_date)
+      ? "forward"
+      : "default";
   };
   const buildSyntheticTextMessage = (params: {
     base: Message;
@@ -175,19 +197,14 @@ export const registerTelegramHandlers = ({
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (
-    ctx: TelegramSyntheticContextSource,
+    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
   ): TelegramContext => {
     const getFile =
-      typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx as object) : async () => ({});
+      typeof ctx.getFile === "function"
+        ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
+        : async () => ({});
     return { message, me: ctx.me, getFile };
-  };
-  const isSelfAuthoredTelegramMessage = (
-    ctx: Pick<TelegramContext, "me">,
-    message: Message,
-  ): boolean => {
-    const botId = ctx.me?.id;
-    return typeof botId === "number" && message.from?.id === botId;
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
@@ -332,6 +349,10 @@ export const registerTelegramHandlers = ({
       sessionEntry: entry,
       sessionStore: store,
       sessionKey,
+      defaultProvider: resolveDefaultModelForAgent({
+        cfg: runtimeCfg,
+        agentId: route.agentId,
+      }).provider,
     });
     if (storedOverride) {
       return {
@@ -373,13 +394,11 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(
+          media = await resolveMedia({
             ctx,
-            mediaMaxBytes,
-            opts.token,
-            telegramTransport,
-            telegramCfg.apiRoot,
-          );
+            maxBytes: mediaMaxBytes,
+            ...mediaRuntimeOptions,
+          });
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -477,17 +496,15 @@ export const registerTelegramHandlers = ({
       return [];
     }
     try {
-      const media = await resolveMedia(
-        {
+      const media = await resolveMedia({
+        ctx: {
           message: replyMessage,
           me: ctx.me,
           getFile: async () => await bot.api.getFile(replyFileId),
         },
-        mediaMaxBytes,
-        opts.token,
-        telegramTransport,
-        telegramCfg.apiRoot,
-      );
+        maxBytes: mediaMaxBytes,
+        ...mediaRuntimeOptions,
+      });
       if (!media) {
         return [];
       }
@@ -618,7 +635,10 @@ export const registerTelegramHandlers = ({
   type TelegramEventAuthorizationMode = "reaction" | "callback-scope" | "callback-allowlist";
   type TelegramEventAuthorizationResult = { allowed: true } | { allowed: false; reason: string };
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
-  const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const getChat =
+    typeof (bot.api as { getChat?: unknown }).getChat === "function"
+      ? (bot.api as { getChat: TelegramGetChat }).getChat.bind(bot.api)
+      : undefined;
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
@@ -782,6 +802,9 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (reactionMode === "own" && !telegramDeps.wasSentByBot(chatId, messageId)) {
+        logVerbose(
+          `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
+        );
         return;
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
@@ -999,13 +1022,11 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(
+      media = await resolveMedia({
         ctx,
-        mediaMaxBytes,
-        opts.token,
-        telegramTransport,
-        telegramCfg.apiRoot,
-      );
+        maxBytes: mediaMaxBytes,
+        ...mediaRuntimeOptions,
+      });
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
@@ -1063,7 +1084,12 @@ export const registerTelegramHandlers = ({
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
+      ? buildTelegramInboundDebounceKey({
+          accountId,
+          conversationKey,
+          senderId,
+          debounceLane,
+        })
       : null;
     await inboundDebouncer.enqueue({
       ctx,
@@ -1084,10 +1110,10 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    const answerCallbackQuery = () =>
-      typeof ctx.answerCallbackQuery === "function"
-        ? ctx.answerCallbackQuery()
-        : bot.api.answerCallbackQuery(callback.id);
+    const answerCallbackQuery =
+      typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
+        ? () => ctx.answerCallbackQuery()
+        : () => bot.api.answerCallbackQuery(callback.id);
     // Answer immediately to prevent Telegram from retrying while we process
     await withTelegramApiErrorLogging({
       operation: "answerCallbackQuery",
@@ -1103,26 +1129,41 @@ export const registerTelegramHandlers = ({
       const editCallbackMessage = async (
         text: string,
         params?: Parameters<typeof bot.api.editMessageText>[3],
-      ) =>
-        typeof ctx.editMessageText === "function"
-          ? ctx.editMessageText(text, params)
-          : bot.api.editMessageText(
-              callbackMessage.chat.id,
-              callbackMessage.message_id,
-              text,
-              params,
-            );
+      ) => {
+        const editTextFn = (ctx as { editMessageText?: unknown }).editMessageText;
+        if (typeof editTextFn === "function") {
+          return await ctx.editMessageText(text, params);
+        }
+        return await bot.api.editMessageText(
+          callbackMessage.chat.id,
+          callbackMessage.message_id,
+          text,
+          params,
+        );
+      };
       const clearCallbackButtons = async () => {
         const emptyKeyboard = { inline_keyboard: [] };
         const replyMarkup = { reply_markup: emptyKeyboard };
-        if (typeof ctx.editMessageReplyMarkup === "function") {
+        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof editReplyMarkupFn === "function") {
           return await ctx.editMessageReplyMarkup(replyMarkup);
         }
-        return await bot.api.editMessageReplyMarkup(
-          callbackMessage.chat.id,
-          callbackMessage.message_id,
-          replyMarkup,
-        );
+        const apiEditReplyMarkupFn = (bot.api as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof apiEditReplyMarkupFn === "function") {
+          return await bot.api.editMessageReplyMarkup(
+            callbackMessage.chat.id,
+            callbackMessage.message_id,
+            replyMarkup,
+          );
+        }
+        // Fallback path for older clients that do not expose editMessageReplyMarkup.
+        const messageText = callbackMessage.text ?? callbackMessage.caption;
+        if (typeof messageText !== "string" || messageText.trim().length === 0) {
+          return undefined;
+        }
+        return await editCallbackMessage(messageText, replyMarkup);
       };
       const editCallbackButtons = async (
         buttons: Array<
@@ -1131,7 +1172,9 @@ export const registerTelegramHandlers = ({
       ) => {
         const keyboard = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
         const replyMarkup = { reply_markup: keyboard };
-        if (typeof ctx.editMessageReplyMarkup === "function") {
+        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof editReplyMarkupFn === "function") {
           return await ctx.editMessageReplyMarkup(replyMarkup);
         }
         return await bot.api.editMessageReplyMarkup(
@@ -1141,22 +1184,28 @@ export const registerTelegramHandlers = ({
         );
       };
       const deleteCallbackMessage = async () => {
-        return typeof ctx.deleteMessage === "function"
-          ? ctx.deleteMessage()
-          : bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+        const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
+        if (typeof deleteFn === "function") {
+          return await ctx.deleteMessage();
+        }
+        return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
       };
       const replyToCallbackChat = async (
         text: string,
         params?: Parameters<typeof bot.api.sendMessage>[2],
-      ) =>
-        typeof ctx.reply === "function"
-          ? ctx.reply(text, params)
-          : bot.api.sendMessage(callbackMessage.chat.id, text, params);
+      ) => {
+        const replyFn = (ctx as { reply?: unknown }).reply;
+        if (typeof replyFn === "function") {
+          return await ctx.reply(text, params);
+        }
+        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
+      };
 
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
-      const isApprovalCallback = APPROVE_CALLBACK_DATA_RE.test(data);
+      const approvalCallback = parseExecApprovalCommandText(data);
+      const isApprovalCallback = approvalCallback !== null;
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
@@ -1204,7 +1253,6 @@ export const registerTelegramHandlers = ({
       }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
-      // DM callbacks must enforce the same sender authorization gate as normal DM commands.
       const authorizationMode: TelegramEventAuthorizationMode =
         !isGroup || (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
@@ -1236,8 +1284,7 @@ export const registerTelegramHandlers = ({
         await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
         return;
       }
-      const pluginCallback = await dispatchPluginInteractiveHandler({
-        channel: "telegram",
+      const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data,
         callbackId: callback.id,
         ctx: {
@@ -1288,13 +1335,44 @@ export const registerTelegramHandlers = ({
       }
 
       const runtimeCfg = telegramDeps.loadConfig();
-      if (isApprovalCallback) {
-        if (
-          !isTelegramExecApprovalClientEnabled({ cfg: runtimeCfg, accountId }) ||
-          !isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
-        ) {
+      if (approvalCallback) {
+        const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const authorizedApprovalSender = isPluginApproval
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+        if (!authorizedApprovalSender) {
           logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
+          );
+          return;
+        }
+        try {
+          // Resolve approval callbacks directly so Telegram approvers are not forced through
+          // the generic chat-command authorization path.
+          await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
+            cfg: runtimeCfg,
+            approvalId: approvalCallback.approvalId,
+            decision: approvalCallback.decision,
+            senderId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
+          });
+        } catch (resolveErr) {
+          const errStr = String(resolveErr);
+          logVerbose(
+            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
+          );
+          await replyToCallbackChat(
+            "❌ Failed to submit approval. Please try again or contact an admin.",
           );
           return;
         }
@@ -1303,12 +1381,14 @@ export const registerTelegramHandlers = ({
         } catch (editErr) {
           const errStr = String(editErr);
           if (
-            !errStr.includes("message is not modified") &&
-            !errStr.includes("there is no text in the message to edit")
+            errStr.includes("message is not modified") ||
+            errStr.includes("there is no text in the message to edit")
           ) {
-            logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+            return;
           }
+          logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
         }
+        return;
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
@@ -1330,6 +1410,7 @@ export const registerTelegramHandlers = ({
         });
         const result = buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
           page,
+          forcePaginatedList: true,
           surface: "telegram",
         });
 
@@ -1366,22 +1447,27 @@ export const registerTelegramHandlers = ({
           runtimeCfg,
           sessionState.agentId,
         );
-        const { byProvider, providers, modelNames } = modelData;
+        const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
           buttons: ReturnType<typeof buildProviderKeyboard>,
+          extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
         ) => {
           const keyboard = buildInlineKeyboard(buttons);
+          const editParams = keyboard ? { reply_markup: keyboard, ...extra } : extra;
           try {
-            await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+            await editCallbackMessage(text, editParams);
           } catch (editErr) {
             const errStr = String(editErr);
             if (errStr.includes("no text in the message")) {
               try {
                 await deleteCallbackMessage();
               } catch {}
-              await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
+              await replyToCallbackChat(
+                text,
+                keyboard ? { reply_markup: keyboard, ...extra } : extra,
+              );
             } else if (!errStr.includes("message is not modified")) {
               throw editErr;
             }
@@ -1441,7 +1527,6 @@ export const registerTelegramHandlers = ({
             currentPage: safePage,
             totalPages,
             pageSize,
-            modelNames,
           });
           const text = formatModelsAvailableHeader({
             provider,
@@ -1484,13 +1569,18 @@ export const registerTelegramHandlers = ({
 
           // Directly set model override in session
           try {
-            // Get session store path
-            const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+            // Use the fresh runtimeCfg (loaded at callback entry) so store path
+            // and default-model resolution stay consistent with the next
+            // inbound message.  The outer `cfg` is a snapshot captured at
+            // handler-registration time and becomes stale after config reloads,
+            // which can cause the override to be written to the wrong store or
+            // incorrectly treated as the default model (clearing the override).
+            const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
               agentId: sessionState.agentId,
             });
 
             const resolvedDefault = resolveDefaultModelForAgent({
-              cfg,
+              cfg: runtimeCfg,
               agentId: sessionState.agentId,
             });
             const isDefaultSelection =
@@ -1512,12 +1602,15 @@ export const registerTelegramHandlers = ({
             });
 
             // Update message to show success with visual feedback
+            const escapeHtml = (text: string) =>
+              text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             const actionText = isDefaultSelection
               ? "reset to default"
-              : `changed to **${selection.provider}/${selection.model}**`;
+              : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
             await editMessageWithButtons(
               `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
               [], // Empty buttons = remove inline keyboard
+              { parse_mode: "HTML" },
             );
           } catch (err) {
             await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
@@ -1528,12 +1621,14 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
-        text: data,
+        text: nativeCallbackCommand ?? data,
       });
       await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+        ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
         forceWasMentioned: true,
         messageIdOverride: callback.id,
       });
@@ -1699,9 +1794,6 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
-    if (isSelfAuthoredTelegramMessage(ctx, msg)) {
-      return;
-    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: msg.chat.id,
@@ -1711,6 +1803,11 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    // Bot-authored message updates can be echoed back by Telegram. Skip them here
+    // and rely on the dedicated channel_post handler for channel-originated posts.
+    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
+      return;
+    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),

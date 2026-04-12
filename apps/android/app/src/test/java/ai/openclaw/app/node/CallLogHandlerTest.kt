@@ -173,15 +173,50 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     assertTrue(callLogObj.containsKey("number"))
     assertTrue(callLogObj.containsKey("cachedName"))
   }
+
+  @Test
+  fun handleCallLogSearch_clampsLimitAndOffsetBeforeSearch() {
+    val source = FakeCallLogDataSource(canRead = true)
+    val handler = CallLogHandler.forTesting(appContext(), source)
+
+    val result = handler.handleCallLogSearch("""{"limit":999,"offset":-5}""")
+
+    assertTrue(result.ok)
+    assertEquals(200, source.lastRequest?.limit)
+    assertEquals(0, source.lastRequest?.offset)
+  }
+
+  @Test
+  fun handleCallLogSearch_mapsSearchFailuresToUnavailable() {
+    val handler =
+      CallLogHandler.forTesting(
+        appContext(),
+        FakeCallLogDataSource(
+          canRead = true,
+          failure = IllegalStateException("provider down"),
+        ),
+      )
+
+    val result = handler.handleCallLogSearch(null)
+
+    assertFalse(result.ok)
+    assertEquals("CALL_LOG_UNAVAILABLE", result.error?.code)
+    assertEquals("CALL_LOG_UNAVAILABLE: provider down", result.error?.message)
+  }
 }
 
 private class FakeCallLogDataSource(
   private val canRead: Boolean,
   private val searchResults: List<CallLogRecord> = emptyList(),
+  private val failure: Throwable? = null,
 ) : CallLogDataSource {
+  var lastRequest: CallLogSearchRequest? = null
+
   override fun hasReadPermission(context: Context): Boolean = canRead
 
   override fun search(context: Context, request: CallLogSearchRequest): List<CallLogRecord> {
+    lastRequest = request
+    failure?.let { throw it }
     val startIndex = request.offset.coerceAtLeast(0)
     val endIndex = (startIndex + request.limit).coerceAtMost(searchResults.size)
     return if (startIndex < searchResults.size) {

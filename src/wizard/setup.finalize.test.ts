@@ -89,7 +89,7 @@ vi.mock("../commands/health.js", () => ({
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
-  SEARCH_PROVIDER_OPTIONS: [],
+  listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,
   hasKeyInEnv,
@@ -555,5 +555,55 @@ describe("finalizeSetupWizard", () => {
       "Gateway",
     );
     expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Dashboard ready");
+  });
+
+  it("does not show a Codex native search summary when web search is globally disabled", async () => {
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({
+      note,
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Codex native search:"),
+      "Codex native search",
+    );
   });
 });

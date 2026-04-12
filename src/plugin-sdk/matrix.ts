@@ -1,7 +1,20 @@
 // Private helper surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
+import {
+  createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-loader.js";
+
+type MatrixFacadeModule = typeof import("@openclaw/matrix/contract-api.js");
+
+function loadMatrixFacadeModule(): MatrixFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<MatrixFacadeModule>({
+    dirName: "matrix",
+    artifactBasename: "contract-api.js",
+  });
+}
 
 export {
   createActionGate,
@@ -11,7 +24,8 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext } from "../auto-reply/get-reply-options.types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,
@@ -74,7 +88,7 @@ export type {
   ChannelResolveResult,
   ChannelSetupInput,
   ChannelToolSend,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
@@ -88,6 +102,7 @@ export {
 } from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -96,6 +111,7 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type {
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   GroupToolPolicyConfig,
@@ -176,6 +192,18 @@ export {
   resetMatrixThreadBindingsForTests,
 } from "./matrix-surface.js";
 export { setMatrixRuntime } from "./matrix-runtime-surface.js";
+
+export const singleAccountKeysToMove: MatrixFacadeModule["singleAccountKeysToMove"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().singleAccountKeysToMove);
+
+export const namedAccountPromotionKeys: MatrixFacadeModule["namedAccountPromotionKeys"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().namedAccountPromotionKeys);
+
+export const resolveSingleAccountPromotionTarget: MatrixFacadeModule["resolveSingleAccountPromotionTarget"] =
+  ((...args) =>
+    loadMatrixFacadeModule().resolveSingleAccountPromotionTarget(
+      ...args,
+    )) as MatrixFacadeModule["resolveSingleAccountPromotionTarget"];
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

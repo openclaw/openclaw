@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -25,8 +27,32 @@ function replacementPreservesWordBoundary(source: string, offset: number, length
   return before && after && !/\s/u.test(before) && !/\s/u.test(after) ? " " : "";
 }
 
+const BLOCK_SENTINEL_SEED = "\uE000";
+
+function createBlockSentinel(text: string): string {
+  let sentinel = BLOCK_SENTINEL_SEED;
+  while (text.includes(sentinel)) {
+    sentinel += BLOCK_SENTINEL_SEED;
+  }
+  return sentinel;
+}
+
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
+  // Extract → normalize prose → restore:
+  // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
+  // under a sentinel-delimited placeholder so the prose regexes never touch them.
+  const blockSentinel = createBlockSentinel(text);
+  const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
+  const blocks: string[] = [];
+  const masked = text.replace(
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*|(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
+    (block) => {
+      blocks.push(block);
+      return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
+    },
+  );
+
+  const normalized = masked
     .replace(/\r\n/g, "\n")
     .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
     .replace(/^\n+/, "")
@@ -34,6 +60,8 @@ function normalizeDirectiveWhitespace(text: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
+
+  return normalized.replace(blockPlaceholderRe, (_, i) => blocks[Number(i)]);
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -159,7 +187,7 @@ export function parseInlineDirectives(
   cleaned = normalizeDirectiveWhitespace(cleaned);
 
   const replyToId =
-    lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);
+    lastExplicitId ?? (sawCurrent ? normalizeOptionalString(currentMessageId) : undefined);
 
   return {
     text: cleaned,

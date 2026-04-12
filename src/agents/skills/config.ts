@@ -1,4 +1,5 @@
-import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SkillConfig } from "../../config/types.skills.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
@@ -8,6 +9,7 @@ import {
 } from "../../shared/config-eval.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { resolveSkillSource } from "./source.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
@@ -50,7 +52,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
-  return BUNDLED_SOURCES.has(entry.skill.sourceInfo?.source ?? "");
+  return BUNDLED_SOURCES.has(resolveSkillSource(entry.skill));
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {

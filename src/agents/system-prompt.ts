@@ -1,13 +1,32 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import type {
+  EmbeddedFullAccessBlockedReason,
+  EmbeddedSandboxInfo,
+} from "./pi-embedded-runner/types.js";
+import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+} from "./prompt-cache-stability.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
+import type {
+  ProviderSystemPromptContribution,
+  ProviderSystemPromptSectionId,
+} from "./system-prompt-contribution.js";
+import type { PromptMode } from "./system-prompt.types.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -15,8 +34,119 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
  */
-export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
+
+const CONTEXT_FILE_ORDER = new Map<string, number>([
+  ["agents.md", 10],
+  ["soul.md", 20],
+  ["identity.md", 30],
+  ["user.md", 40],
+  ["tools.md", 50],
+  ["bootstrap.md", 60],
+  ["memory.md", 70],
+]);
+
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
+  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+function normalizeContextFilePath(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, "/");
+}
+
+function getContextFileBasename(pathValue: string): string {
+  const normalizedPath = normalizeContextFilePath(pathValue);
+  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
+}
+
+function isDynamicContextFile(pathValue: string): boolean {
+  return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sanitizeContextFileContentForPrompt(content: string): string {
+  // Claude Code subscription mode rejects this exact prompt-policy quote when it
+  // appears in system context. The live heartbeat user turn still carries the
+  // actual instruction, and the generated heartbeat section below covers behavior.
+  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
+}
+
+function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
+  return contextFiles.toSorted((a, b) => {
+    const aPath = normalizeContextFilePath(a.path);
+    const bPath = normalizeContextFilePath(b.path);
+    const aBase = getContextFileBasename(a.path);
+    const bBase = getContextFileBasename(b.path);
+    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    if (aBase !== bBase) {
+      return aBase.localeCompare(bBase);
+    }
+    return aPath.localeCompare(bPath);
+  });
+}
+
+function buildProjectContextSection(params: {
+  files: EmbeddedContextFile[];
+  heading: string;
+  dynamic: boolean;
+}) {
+  if (params.files.length === 0) {
+    return [];
+  }
+  const lines = [params.heading, ""];
+  if (params.dynamic) {
+    lines.push(
+      "The following frequently-changing project context files are kept below the cache boundary when possible:",
+      "",
+    );
+  } else {
+    const hasSoulFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "soul.md",
+    );
+    lines.push("The following project context files have been loaded:");
+    if (hasSoulFile) {
+      lines.push(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    lines.push("");
+  }
+  for (const file of params.files) {
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+  }
+  return lines;
+}
+
+function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
+  if (params.isMinimal || !params.heartbeatPrompt) {
+    return [];
+  }
+  return [
+    "## Heartbeats",
+    "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+    "HEARTBEAT_OK",
+    'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+    "",
+  ];
+}
+
+function buildExecApprovalPromptGuidance(params: {
+  runtimeChannel?: string;
+  inlineButtonsEnabled?: boolean;
+}) {
+  const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
+  const usesNativeApprovalUi =
+    params.inlineButtonsEnabled ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+  }
+  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
+}
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
@@ -38,10 +168,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
 
 function buildMemorySection(params: {
   isMinimal: boolean;
+  includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }) {
-  if (params.isMinimal) {
+  if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
   return buildMemoryPromptSection({
@@ -88,20 +219,81 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
-function buildReplyTagsSection(isMinimal: boolean) {
+function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
   }
   return [
-    "## Reply Tags",
-    "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "## Assistant Output Directives",
+    "Use these when you need delivery metadata in an assistant message:",
+    "- `MEDIA:<path-or-url>` on its own line requests attachment delivery. The web UI strips supported MEDIA lines and renders them inline; channels still decide actual delivery behavior.",
+    "- `[[audio_as_voice]]` marks attached audio as a voice-note style delivery hint. The web UI may show a voice-note badge when audio is present; channels still own delivery semantics.",
+    "- To request a native reply/quote on supported surfaces, include one reply tag in your reply:",
     "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
-    "Tags are stripped before sending; support depends on the current channel config.",
+    "- Channel-specific interactive directives are separate and should not be mixed into this web render guidance.",
+    "Supported tags are stripped before user-visible rendering; support still depends on the current channel config.",
     "",
   ];
+}
+
+function buildWebchatCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  canvasRootDir?: string;
+}) {
+  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+    return [];
+  }
+  return [
+    "## Control UI Embed",
+    "Use `[embed ...]` only in Control UI/webchat sessions for inline rich rendering inside the assistant bubble.",
+    "- Do not use `[embed ...]` for non-web channels.",
+    "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+    '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
+    '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
+    '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
+    params.canvasRootDir
+      ? `- The active hosted embed root for this session is: \`${sanitizeForPromptLiteral(params.canvasRootDir)}\`. If you manually stage a hosted embed file, write it there, not in the workspace.`
+      : "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
+    "- Quote all attribute values. Prefer `ref` for hosted documents unless you already have the full `/__openclaw__/canvas/documents/<id>/index.html` URL.",
+    "",
+  ];
+}
+
+function buildExecutionBiasSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## Execution Bias",
+    "If the user asks you to do the work, start doing it in the same turn.",
+    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
+    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "",
+  ];
+}
+
+function normalizeProviderPromptBlock(value?: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(value);
+  return normalized || undefined;
+}
+
+function buildOverridablePromptSection(params: {
+  override?: string;
+  fallback: string[];
+}): string[] {
+  const override = normalizeProviderPromptBlock(params.override);
+  if (override) {
+    return [override, ""];
+  }
+  return params.fallback;
 }
 
 function buildMessagingSection(params: {
@@ -173,6 +365,18 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
+function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
+  if (reason === "host-policy") {
+    return "host policy";
+  }
+  if (reason === "channel") {
+    return "channel constraints";
+  }
+  if (reason === "sandbox") {
+    return "sandbox constraints";
+  }
+  return "runtime constraints";
+}
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -210,6 +414,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
+    canvasRootDir?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -218,7 +423,9 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -233,7 +440,7 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
-    web_search: "Search the web",
+    web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
@@ -268,7 +475,6 @@ export function buildAgentSystemPrompt(params: {
     "ls",
     "exec",
     "process",
-    "code_execution",
     "web_search",
     "web_fetch",
     "browser",
@@ -332,6 +538,17 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const promptContribution = params.promptContribution;
+  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
+  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
+  const providerSectionOverrides = Object.fromEntries(
+    Object.entries(promptContribution?.sectionOverrides ?? {})
+      .map(([key, value]) => [
+        key,
+        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
+      ])
+      .filter(([, value]) => Boolean(value)),
+  ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -355,11 +572,11 @@ export function buildAgentSystemPrompt(params: {
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
-  const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
-  const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
-    .map((cap) => String(cap).trim())
-    .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
+  const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(cap)).filter(Boolean),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
@@ -369,6 +586,11 @@ export function buildAgentSystemPrompt(params: {
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
+  const elevated = params.sandboxInfo?.elevated;
+  const fullAccessBlockedReasonLabel =
+    elevated?.fullAccessAvailable === false
+      ? formatFullAccessBlockedReason(elevated.fullAccessBlockedReason)
+      : undefined;
   const displayWorkspaceDir =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
@@ -390,6 +612,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const memorySection = buildMemorySection({
     isMinimal,
+    includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
@@ -444,16 +667,39 @@ export function buildAgentSystemPrompt(params: {
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
-    "## Tool Call Style",
-    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
-    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
-    "Keep narration brief and value-dense; avoid repeating obvious steps.",
-    "Use plain human language for narration unless in a technical context.",
-    "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
-    "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
-    "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
-    "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
-    "",
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.interaction_style,
+      fallback: [],
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_call_style,
+      fallback: [
+        "## Tool Call Style",
+        "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+        "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+        "Keep narration brief and value-dense; avoid repeating obvious steps.",
+        "Use plain human language for narration unless in a technical context.",
+        "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+        buildExecApprovalPromptGuidance({
+          runtimeChannel: params.runtimeInfo?.channel,
+          inlineButtonsEnabled,
+        }),
+        "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+        "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
+        "",
+      ],
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.execution_bias,
+      fallback: buildExecutionBiasSection({
+        isMinimal,
+      }),
+    }),
+    ...buildOverridablePromptSection({
+      override: providerStablePrefix,
+      fallback: [],
+    }),
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
@@ -522,25 +768,40 @@ export function buildAgentSystemPrompt(params: {
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-          params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-            : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "Host browser control: allowed."
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed
             ? "Elevated exec is available for this session."
-            : "",
-          params.sandboxInfo.elevated?.allowed
+            : elevated
+              ? "Elevated exec is unavailable for this session."
+              : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "User can toggle with /elevated on|off|ask|full."
             : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "User can toggle with /elevated on|off|ask."
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "You may also send /elevated on|off|ask|full when needed."
             : "",
-          params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "You may also send /elevated on|off|ask when needed."
+            : "",
+          elevated?.fullAccessAvailable === false
+            ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
+            ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+            : elevated?.allowed
+              ? `Current elevated level: ${elevated.defaultLevel} (full auto-approval unavailable here; use ask/on instead).`
+              : elevated
+                ? "Current elevated level: off (elevated exec unavailable)."
+                : "",
+          elevated && !elevated.allowed
+            ? "Do not tell the user to switch to /elevated full in this session."
             : "",
         ]
           .filter(Boolean)
@@ -554,7 +815,12 @@ export function buildAgentSystemPrompt(params: {
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
-    ...buildReplyTagsSection(isMinimal),
+    ...buildAssistantOutputDirectivesSection(isMinimal),
+    ...buildWebchatCanvasSection({
+      isMinimal,
+      runtimeChannel,
+      canvasRootDir: params.runtimeInfo?.canvasRootDir,
+    }),
     ...buildMessagingSection({
       isMinimal,
       availableTools,
@@ -566,12 +832,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -603,26 +863,16 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
-    lines.push("# Project Context", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
-        const normalizedPath = file.path.trim().replace(/\\/g, "/");
-        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-        return baseName.toLowerCase() === "soul.md";
-      });
-      lines.push("The following project context files have been loaded:");
-      if (hasSoulFile) {
-        lines.push(
-          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-        );
-      }
-      lines.push("");
-    }
-    for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
-    }
-  }
+  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
+  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  lines.push(
+    ...buildProjectContextSection({
+      files: stableContextFiles,
+      heading: "# Project Context",
+      dynamic: false,
+    }),
+  );
 
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
@@ -642,18 +892,30 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal && heartbeatPrompt) {
-    lines.push(
-      "## Heartbeats",
-      `Heartbeat prompt: ${heartbeatPrompt}`,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
-      "",
-    );
+  // Keep large stable prompt context above this seam so Anthropic-family
+  // transports can reuse it across labs and turns. Dynamic group/session
+  // additions and volatile project context below it are the primary cache invalidators.
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  lines.push(
+    ...buildProjectContextSection({
+      files: dynamicContextFiles,
+      heading: stableContextFiles.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+      dynamic: true,
+    }),
+  );
+
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
+  if (providerDynamicSuffix) {
+    lines.push(providerDynamicSuffix, "");
+  }
+
+  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## Runtime",
@@ -680,6 +942,7 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
+  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
@@ -695,7 +958,11 @@ export function buildRuntimeLine(
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
-      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      ? `capabilities=${
+          normalizedRuntimeCapabilities.length > 0
+            ? normalizedRuntimeCapabilities.join(",")
+            : "none"
+        }`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
   ]

@@ -3,6 +3,7 @@ import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
+  resolveAgentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -12,9 +13,9 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
   formatUsageWindowSummary,
@@ -22,14 +23,24 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import {
+  listTasksForAgentIdForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../../tasks/task-status-access.js";
+import {
+  buildTaskStatusSnapshot,
+  formatTaskStatusDetail,
+  formatTaskStatusTitle,
+} from "../../tasks/task-status.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
-import { resolveSubagentLabel } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
@@ -50,8 +61,34 @@ function shouldLoadUsageSummary(params: {
   if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
     return true;
   }
-  const auth = params.selectedModelAuth?.trim().toLowerCase();
+  const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+}
+
+function formatSessionTaskLine(sessionKey: string): string | undefined {
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
+  const task = snapshot.focus;
+  if (!task) {
+    return undefined;
+  }
+  const headline =
+    snapshot.activeCount > 0
+      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
+      : snapshot.recentFailureCount > 0
+        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
+        : "recently finished";
+  const title = formatTaskStatusTitle(task);
+  const detail = formatTaskStatusDetail(task);
+  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
+function formatAgentTaskCountsLine(agentId: string): string | undefined {
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
+  if (snapshot.totalCount === 0) {
+    return undefined;
+  }
+  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
 export async function buildStatusReply(params: {
@@ -74,15 +111,58 @@ export async function buildStatusReply(params: {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
 }): Promise<ReplyPayload | undefined> {
+  const { command } = params;
+  if (!command.isAuthorizedSender) {
+    logVerbose(`Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`);
+    return undefined;
+  }
+
+  return {
+    text: await buildStatusText({
+      ...params,
+      statusChannel: command.channel,
+    }),
+  };
+}
+
+export async function buildStatusText(params: {
+  cfg: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  parentSessionKey?: string;
+  sessionScope?: SessionScope;
+  storePath?: string;
+  statusChannel: string;
+  provider: string;
+  model: string;
+  contextTokens?: number;
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
+  resolvedVerboseLevel: VerboseLevel;
+  resolvedReasoningLevel: ReasoningLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
+  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  isGroup: boolean;
+  defaultGroupActivation: () => "always" | "mention";
+  mediaDecisions?: MediaUnderstandingDecision[];
+  taskLineOverride?: string;
+  skipDefaultTaskLookup?: boolean;
+  primaryModelLabelOverride?: string;
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
+  includeTranscriptUsage?: boolean;
+}): Promise<string> {
   const {
     cfg,
-    command,
     sessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,
     storePath,
+    statusChannel,
     provider,
     model,
     contextTokens,
@@ -95,10 +175,6 @@ export async function buildStatusReply(params: {
     isGroup,
     defaultGroupActivation,
   } = params;
-  if (!command.isAuthorizedSender) {
-    logVerbose(`Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`);
-    return undefined;
-  }
   const statusAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -108,20 +184,24 @@ export async function buildStatusReply(params: {
     selectedModel: model,
     sessionEntry,
   });
-  const selectedModelAuth = resolveModelAuthLabel({
-    provider,
-    cfg,
-    sessionEntry,
-    agentDir: statusAgentDir,
-  });
-  const activeModelAuth = modelRefs.activeDiffers
-    ? resolveModelAuthLabel({
-        provider: modelRefs.active.provider,
+  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+    ? params.modelAuthOverride
+    : resolveModelAuthLabel({
+        provider,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
-      })
-    : selectedModelAuth;
+      });
+  const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
+    ? params.activeModelAuthOverride
+    : modelRefs.activeDiffers
+      ? resolveModelAuthLabel({
+          provider: modelRefs.active.provider,
+          cfg,
+          sessionEntry,
+          agentDir: statusAgentDir,
+        })
+      : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
       return resolveUsageProviderId(provider);
@@ -174,7 +254,7 @@ export async function buildStatusReply(params: {
   }
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: command.channel,
+    channel: statusChannel,
     sessionEntry,
   });
   const queueKey = sessionKey ?? sessionEntry?.sessionId;
@@ -184,27 +264,23 @@ export async function buildStatusReply(params: {
   );
 
   let subagentsLine: string | undefined;
+  let taskLine: string | undefined;
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    taskLine = params.skipDefaultTaskLookup
+      ? params.taskLineOverride
+      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey));
+    if (!taskLine && !params.skipDefaultTaskLookup) {
+      taskLine = formatAgentTaskCountsLine(statusAgentId);
+    }
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
-    if (runs.length > 0) {
-      const active = runs.filter(
-        (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
-      );
-      const done = runs.length - active.length;
-      if (verboseEnabled) {
-        const labels = active
-          .map((entry) => resolveSubagentLabel(entry, ""))
-          .filter(Boolean)
-          .slice(0, 3);
-        const labelText = labels.length ? ` (${labels.join(", ")})` : "";
-        subagentsLine = `🤖 Subagents: ${active.length} active${labelText} · ${done} done`;
-      } else if (active.length > 0) {
-        subagentsLine = `🤖 Subagents: ${active.length} active`;
-      }
-    }
+    subagentsLine = buildSubagentsStatusLine({
+      runs,
+      verboseEnabled,
+      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+    });
   }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
@@ -220,15 +296,17 @@ export async function buildStatusReply(params: {
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: `${provider}/${model}`,
+        primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      contextTokens,
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
@@ -261,9 +339,10 @@ export async function buildStatusReply(params: {
       showDetails: queueOverrides,
     },
     subagentsLine,
+    taskLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: false,
+    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
 
-  return { text: statusText };
+  return statusText;
 }

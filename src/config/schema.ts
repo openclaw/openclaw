@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
-import { CHANNEL_IDS } from "../channels/registry.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-import { applySensitiveHints } from "./schema.hints.js";
+import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
   asSchemaObject,
   cloneSchema,
@@ -278,7 +280,7 @@ function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
   for (const id of CHANNEL_IDS) {
-    const normalized = id.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(id);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -286,7 +288,7 @@ function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
     ordered.push(normalized);
   }
   for (const channel of channels) {
-    const normalized = channel.id.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(channel.id);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -439,11 +441,42 @@ function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
   mergedSchemaCache.set(key, value);
 }
 
+function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
+  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => {
+    const metadata: ChannelUiMetadata = {
+      id: entry.channelId,
+      ...(entry.label ? { label: entry.label } : {}),
+      ...(entry.description ? { description: entry.description } : {}),
+      configSchema: entry.schema,
+    };
+    if ("uiHints" in entry) {
+      metadata.configUiHints = entry.uiHints as ChannelUiMetadata["configUiHints"];
+    }
+    return metadata;
+  });
+}
+
 function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) {
     return cachedBase;
   }
-  const next = GENERATED_BASE_CONFIG_SCHEMA as unknown as ConfigSchemaResponse;
+  const generated = GENERATED_BASE_CONFIG_SCHEMA as unknown as ConfigSchemaResponse;
+  const bundledChannels = getBundledChannelSchemaMetadata();
+  const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
+    applyChannelHints(generated.uiHints, bundledChannels),
+    bundledChannels,
+  );
+  const mergedHints = applyDerivedTags(
+    applySensitiveHints(
+      mergedWithoutSensitiveHints,
+      collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
+    ),
+  );
+  const next = {
+    ...generated,
+    schema: applyChannelSchemas(generated.schema, bundledChannels),
+    uiHints: mergedHints,
+  };
   cachedBase = next;
   return next;
 }
@@ -477,7 +510,10 @@ export function buildConfigSchema(params?: {
     channels,
   );
   const mergedHints = applyDerivedTags(
-    applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
+    applySensitiveUrlHints(
+      applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
+      extensionHintKeys,
+    ),
   );
   const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
   const merged = {

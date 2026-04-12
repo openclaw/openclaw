@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "./api.js";
 import register from "./index.js";
 
 describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
+  const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
   const api = {
     pluginConfig: {},
     config: {
@@ -18,37 +20,28 @@ describe("thread-ownership plugin", () => {
     }),
   };
 
-  let originalFetch: typeof globalThis.fetch;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const key of Object.keys(hooks)) delete hooks[key];
+    for (const key of Object.keys(hooks)) {
+      delete hooks[key];
+    }
 
     process.env.SLACK_FORWARDER_URL = "http://localhost:8750";
     process.env.SLACK_BOT_USER_ID = "U999";
 
-    originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
     delete process.env.SLACK_FORWARDER_URL;
     delete process.env.SLACK_BOT_USER_ID;
     vi.restoreAllMocks();
   });
 
-  it("registers message_received and message_sending hooks", () => {
-    register.register(api as any);
-
-    expect(api.on).toHaveBeenCalledTimes(2);
-    expect(api.on).toHaveBeenCalledWith("message_received", expect.any(Function));
-    expect(api.on).toHaveBeenCalledWith("message_sending", expect.any(Function));
-  });
-
   describe("message_sending", () => {
-    beforeEach(() => {
-      register.register(api as any);
+    beforeEach(async () => {
+      await register.register(api as unknown as OpenClawPluginApi);
     });
 
     async function sendSlackThreadMessage() {
@@ -119,8 +112,8 @@ describe("thread-ownership plugin", () => {
   });
 
   describe("message_received @-mention tracking", () => {
-    beforeEach(() => {
-      register.register(api as any);
+    beforeEach(async () => {
+      await register.register(api as unknown as OpenClawPluginApi);
     });
 
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {

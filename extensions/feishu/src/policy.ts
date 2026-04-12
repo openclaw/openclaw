@@ -3,8 +3,9 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
-import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -20,7 +21,7 @@ function normalizeFeishuAllowEntry(raw: string): string {
   }
   const withoutProviderPrefix = trimmed.replace(/^feishu:/i, "");
   const normalized = normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
-  return normalized.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(normalized) ?? "";
 }
 
 export function resolveFeishuAllowlistMatch(params: {
@@ -41,7 +42,7 @@ export function resolveFeishuAllowlistMatch(params: {
 
   // Feishu allowlists are ID-based; mutable display names must never grant access.
   const senderCandidates = [params.senderId, ...(params.senderIds ?? [])]
-    .map((entry) => normalizeFeishuAllowEntry(String(entry ?? "")))
+    .map((entry) => normalizeFeishuAllowEntry(entry ?? ""))
     .filter(Boolean);
 
   for (const senderId of senderCandidates) {
@@ -69,8 +70,10 @@ export function resolveFeishuGroupConfig(params: {
     return direct;
   }
 
-  const lowered = groupId.toLowerCase();
-  const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
+  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
+  const matchKey = Object.keys(groups).find(
+    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  );
   if (matchKey) {
     return groups[matchKey];
   }
@@ -143,8 +146,6 @@ export function resolveFeishuReplyPolicy(params: {
         ? groupRequireMention
         : typeof resolvedCfg.requireMention === "boolean"
           ? resolvedCfg.requireMention
-          : params.groupPolicy === "open"
-            ? false
-            : true,
+          : params.groupPolicy !== "open",
   };
 }
