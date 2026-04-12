@@ -14,6 +14,8 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 type MSTeamsLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
 export async function resolveMSTeamsInboundMedia(params: {
@@ -54,6 +56,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     allowHosts,
     authAllowHosts: params.authAllowHosts,
     preserveFilenames,
+    logger: log,
   });
 
   if (mediaList.length === 0) {
@@ -87,6 +90,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             allowHosts,
             authAllowHosts: params.authAllowHosts,
             preserveFilenames,
+            logger: log,
           });
           if (bfMedia.media.length > 0) {
             mediaList = bfMedia.media;
@@ -137,6 +141,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             allowHosts,
             authAllowHosts: params.authAllowHosts,
             preserveFilenames,
+            logger: log,
           });
           attempts.push({
             url: messageUrl,
