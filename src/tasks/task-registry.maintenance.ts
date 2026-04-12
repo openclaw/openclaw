@@ -108,7 +108,7 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
 }
 
-function hasActiveCliRun(task: TaskRecord): boolean {
+function hasActiveRunContext(task: TaskRecord): boolean {
   const candidateRunIds = [task.sourceId, task.runId];
   for (const candidate of candidateRunIds) {
     const runId = candidate?.trim();
@@ -119,14 +119,18 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
+function requiresLiveRunContext(task: TaskRecord): boolean {
+  return task.runtime === "cli" || task.runtime === "subagent" || task.runtime === "acp";
+}
+
 function hasBackingSession(task: TaskRecord): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
 
-  if (task.runtime === "cli" && hasActiveCliRun(task)) {
-    return true;
+  if (requiresLiveRunContext(task)) {
+    return hasActiveRunContext(task);
   }
 
   const childSessionKey = task.childSessionKey?.trim();

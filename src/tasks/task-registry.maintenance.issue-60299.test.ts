@@ -102,7 +102,7 @@ async function loadMaintenanceModule(params: {
   return { mod, currentTasks };
 }
 
-describe("task-registry maintenance issue #60299", () => {
+describe("task-registry maintenance stale run reconciliation", () => {
   it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {
     const childSessionKey = "agent:main:slack:channel:test-channel";
     const task = makeStaleTask({
@@ -171,6 +171,59 @@ describe("task-registry maintenance issue #60299", () => {
       tasks: [task],
       sessionStore: { [channelKey]: { updatedAt: Date.now() } },
       activeRunIds: ["run-chat-cli-live"],
+    });
+
+    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("marks stale subagent tasks lost after reset leaves only the persisted session row", async () => {
+    const childSessionKey = "agent:main:subagent:worker";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      sourceId: "run-subagent-reset",
+      runId: "run-subagent-reset",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey,
+    });
+
+    const { mod, currentTasks } = await loadMaintenanceModule({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "sess-reset-replaced",
+          updatedAt: Date.now(),
+          status: "running",
+        },
+      },
+    });
+
+    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
+  it("keeps stale subagent tasks live while their run context is still active", async () => {
+    const childSessionKey = "agent:main:subagent:worker";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      sourceId: "run-subagent-live",
+      runId: "run-subagent-live",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey,
+    });
+
+    const { mod, currentTasks } = await loadMaintenanceModule({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "sess-subagent-live",
+          updatedAt: Date.now(),
+          status: "running",
+        },
+      },
+      activeRunIds: ["run-subagent-live"],
     });
 
     expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });

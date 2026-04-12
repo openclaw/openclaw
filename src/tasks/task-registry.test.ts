@@ -1563,6 +1563,7 @@ describe("task-registry", () => {
           saveSnapshot: () => {},
         },
       });
+      registerAgentRunContext("run-audit-summary", { sessionKey: "agent:main:acp:child" });
 
       expect(getInspectableTaskAuditSummary()).toEqual({
         total: 1,
