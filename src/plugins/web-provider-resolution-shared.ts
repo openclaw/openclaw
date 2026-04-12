@@ -8,6 +8,7 @@ import {
 } from "./manifest-registry.js";
 import {
   createPluginIdScopeSet,
+  hasExplicitPluginIdScope,
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
@@ -82,8 +83,8 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
       onlyPluginIds: params.onlyPluginIds,
     }),
   );
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+  const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const ids = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -98,7 +99,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  return ids.length > 0 ? ids : undefined;
+  return ids.length > 0 || hasExplicitPluginIdScope(onlyPluginIds) ? ids : undefined;
 }
 
 function resolveBundledWebProviderCompatPluginIds(params: {
