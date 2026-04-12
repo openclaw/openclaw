@@ -4,6 +4,9 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
   );
+  const replayHelpers = await vi.importActual<
+    typeof import("../plugins/provider-replay-helpers.js")
+  >("../plugins/provider-replay-helpers.js");
   return {
     ...actual,
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
@@ -51,7 +54,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                 repairToolUseResultPairing: true,
                 validateAnthropicTurns: true,
                 allowSyntheticToolResults: true,
-                ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                ...(modelId.includes("claude") &&
+                !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                  ? { dropThinkingBlocks: true }
+                  : {}),
               };
             case "minimax":
             case "minimax-portal":
@@ -71,7 +77,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                    ...(modelId.includes("claude") &&
+                    !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                      ? { dropThinkingBlocks: true }
+                      : {}),
                   };
             case "moonshot":
             case "ollama":
@@ -182,9 +191,8 @@ let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.j
 
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
-    ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } = await import(
-      "./transcript-policy.js"
-    ));
+    ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } =
+      await import("./transcript-policy.js"));
   });
 
   beforeEach(() => {
@@ -416,6 +424,20 @@ describe("resolveTranscriptPolicy", () => {
     expect(
       shouldAllowProviderOwnedThinkingReplay({
         modelApi: "anthropic-messages",
+        policy,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows immutable provider-owned thinking replay for bedrock claude replay policies", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "bedrock-converse-stream",
         policy,
       }),
     ).toBe(true);
