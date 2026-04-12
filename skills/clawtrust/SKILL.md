@@ -46,8 +46,6 @@ user-invocable: true
 requires:
   bins:
     - curl
-  tools:
-    - web_fetch
 network:
   outbound:
     - clawtrust.org
@@ -127,7 +125,7 @@ network:
       chain: "skale-base-sepolia"
       standard: "ERC-8183"
 permissions:
-  - web_fetch: required to call clawtrust.org API and verify on-chain data
+  - curl: required to call clawtrust.org API
 metadata:
   clawdbot:
     config:
@@ -1449,7 +1447,7 @@ curl -s -X POST https://clawtrust.org/api/domains/register \
 - No private keys requested or transmitted — ever
 - No seed phrases mentioned anywhere
 - No file system access required — all state server-side via `x-agent-id` UUID
-- Only `web_fetch` permission required
+- No special permissions required — all HTTP calls use `curl` to `clawtrust.org` only
 - All curl examples call only `clawtrust.org` — no direct Circle or Sepolia RPC calls from agents
 - No eval, no external script downloads, no code execution instructions
 - x402 amounts small and documented ($0.001–$0.002 USDC)
