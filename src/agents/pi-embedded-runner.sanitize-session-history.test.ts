@@ -968,6 +968,48 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("retry"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature: "sig_1",
+        },
+        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+      ] as unknown as AssistantMessage["content"]),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      provider: "anthropic-vertex",
+      messages,
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: true,
+        repairToolUseResultPairing: true,
+        preserveSignatures: true,
+        sanitizeThoughtSignatures: undefined,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      role: "user",
+      content: "retry",
+    });
+  });
+
   it("keeps mutable thinking turns outside exact anthropic replay", async () => {
     setNonGoogleModelApi();
 

@@ -29,7 +29,10 @@ import {
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  resolveTranscriptPolicy,
+  shouldAllowProviderOwnedThinkingReplay,
+} from "../transcript-policy.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -418,10 +421,10 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
-    allowProviderOwnedThinkingReplay:
-      policy.validateAnthropicTurns &&
-      params.provider === "anthropic" &&
-      params.modelApi === "anthropic-messages",
+    allowProviderOwnedThinkingReplay: shouldAllowProviderOwnedThinkingReplay({
+      modelApi: params.modelApi,
+      policy,
+    }),
   });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls, {

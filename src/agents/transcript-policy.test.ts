@@ -178,10 +178,13 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 });
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
+let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
 
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
-    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
+    ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } = await import(
+      "./transcript-policy.js"
+    ));
   });
 
   beforeEach(() => {
@@ -402,6 +405,34 @@ describe("resolveTranscriptPolicy", () => {
   ])("sets preserveSignatures for $title (#32526, #39798)", ({ preserveSignatures, ...input }) => {
     const policy = resolveTranscriptPolicy(input);
     expect(policy.preserveSignatures).toBe(preserveSignatures);
+  });
+
+  it("allows immutable provider-owned thinking replay for anthropic-compatible native replay policies", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax",
+      modelId: "MiniMax-M2.7",
+      modelApi: "anthropic-messages",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "anthropic-messages",
+        policy,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for strict openai-compatible replay", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      modelApi: "openai-completions",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "openai-completions",
+        policy,
+      }),
+    ).toBe(false);
   });
 
   it("enables turn-ordering and assistant-merge for strict OpenAI-compatible providers (#38962)", () => {

@@ -29,6 +29,18 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
+export function shouldAllowProviderOwnedThinkingReplay(params: {
+  modelApi?: string | null;
+  policy: Pick<TranscriptPolicy, "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks">;
+}): boolean {
+  return (
+    params.modelApi === "anthropic-messages" &&
+    params.policy.validateAnthropicTurns === true &&
+    params.policy.preserveSignatures === true &&
+    params.policy.dropThinkingBlocks !== true
+  );
+}
+
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
