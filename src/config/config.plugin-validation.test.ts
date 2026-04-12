@@ -548,6 +548,29 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts comfy workflow settings on the plugin-owned config path", async () => {
+    const res = validateInSuite({
+      plugins: {
+        enabled: true,
+        entries: {
+          comfy: {
+            enabled: true,
+            config: {
+              mode: "local",
+              baseUrl: "http://127.0.0.1:8188",
+              image: {
+                workflowPath: "./workflows/flux-api.json",
+                promptNodeId: "6",
+                outputNodeId: "9",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
       agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },

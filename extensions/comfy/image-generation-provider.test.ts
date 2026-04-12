@@ -5,6 +5,7 @@ import {
   _setComfyFetchGuardForTesting,
   buildComfyImageGenerationProvider,
 } from "./image-generation-provider.js";
+import { getComfyConfig } from "./workflow-runtime.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -21,6 +22,18 @@ function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
     models: {
       providers: {
         comfy: config,
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
+function buildComfyPluginConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        comfy: {
+          config,
+        },
       },
     },
   } as unknown as OpenClawConfig;
@@ -48,6 +61,47 @@ describe("comfy image-generation provider", () => {
         }),
       }),
     ).toBe(true);
+  });
+
+  it("reads workflows from the comfy plugin config entry", () => {
+    const provider = buildComfyImageGenerationProvider();
+    const cfg = buildComfyPluginConfig({
+      image: {
+        workflow: {
+          "6": { inputs: { text: "" } },
+        },
+        promptNodeId: "6",
+      },
+    });
+
+    expect(getComfyConfig(cfg).image).toEqual({
+      workflow: {
+        "6": { inputs: { text: "" } },
+      },
+      promptNodeId: "6",
+    });
+    expect(
+      provider.isConfigured?.({
+        cfg,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps models.providers.comfy as a runtime override", () => {
+    expect(
+      getComfyConfig({
+        ...buildComfyPluginConfig({
+          baseUrl: "http://127.0.0.1:8188",
+          mode: "local",
+        }),
+        ...buildComfyConfig({
+          baseUrl: "http://comfy.internal:8188",
+        }),
+      }),
+    ).toEqual({
+      baseUrl: "http://comfy.internal:8188",
+      mode: "local",
+    });
   });
 
   it("submits a local workflow, waits for history, and downloads images", async () => {

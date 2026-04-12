@@ -132,8 +132,15 @@ function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPoli
 }
 
 export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
-  const raw = cfg?.models?.providers?.comfy;
-  return isRecord(raw) ? raw : {};
+  const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
+  const providerConfig = cfg?.models?.providers?.comfy;
+  if (isRecord(pluginConfig) && isRecord(providerConfig)) {
+    return { ...pluginConfig, ...providerConfig };
+  }
+  if (isRecord(providerConfig)) {
+    return providerConfig;
+  }
+  return isRecord(pluginConfig) ? pluginConfig : {};
 }
 
 function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
@@ -163,7 +170,7 @@ export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
 function getRequiredConfigString(config: ComfyProviderConfig, key: string): string {
   const value = normalizeOptionalString(config[key]);
   if (!value) {
-    throw new Error(`models.providers.comfy.${key} is required`);
+    throw new Error(`Comfy config ${key} is required`);
   }
   return value;
 }
@@ -186,7 +193,7 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
     return source.workflow;
   }
   if (!source.workflowPath) {
-    throw new Error("models.providers.comfy.<capability>.workflow or workflowPath is required");
+    throw new Error("Comfy config workflow or workflowPath is required");
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
@@ -648,9 +655,7 @@ export async function runComfyWorkflow(params: {
 
   if (params.inputImage) {
     if (!inputImageNodeId) {
-      throw new Error(
-        "Comfy edit requests require models.providers.comfy.<capability>.inputImageNodeId to be configured",
-      );
+      throw new Error("Comfy edit requests require inputImageNodeId to be configured");
     }
     const uploadedName = await uploadInputImage({
       baseUrl: normalizedBaseUrl,

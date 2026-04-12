@@ -37,6 +37,64 @@ sections:
 
 ```json5
 {
+  plugins: {
+    entries: {
+      comfy: {
+        config: {
+          mode: "local",
+          baseUrl: "http://127.0.0.1:8188",
+          image: {
+            workflowPath: "./workflows/flux-api.json",
+            promptNodeId: "6",
+            outputNodeId: "9",
+          },
+          video: {
+            workflowPath: "./workflows/video-api.json",
+            promptNodeId: "12",
+            outputNodeId: "21",
+          },
+          music: {
+            workflowPath: "./workflows/music-api.json",
+            promptNodeId: "3",
+            outputNodeId: "18",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Shared keys under `plugins.entries.comfy.config`:
+
+- `mode`: `local` or `cloud`
+- `baseUrl`: defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud
+- `apiKey`: optional inline key alternative to env vars
+- `allowPrivateNetwork`: allow a private/LAN `baseUrl` in cloud mode
+
+Per-capability keys under `image`, `video`, or `music`:
+
+- `workflow` or `workflowPath`: required
+- `promptNodeId`: required
+- `promptInputName`: defaults to `text`
+- `outputNodeId`: optional
+- `pollIntervalMs`: optional
+- `timeoutMs`: optional
+
+Image and video sections also support:
+
+- `inputImageNodeId`: required when you pass a reference image
+- `inputImageInputName`: defaults to `image`
+
+## Backward compatibility
+
+Use `plugins.entries.comfy.config` in `openclaw.json` so the plugin schema can
+validate the workflow fields. Runtime provider config that still supplies
+`models.providers.comfy` is also read for compatibility and overrides matching
+plugin config keys:
+
+```json5
+{
   models: {
     providers: {
       comfy: {
@@ -63,30 +121,7 @@ sections:
 }
 ```
 
-Shared keys:
-
-- `mode`: `local` or `cloud`
-- `baseUrl`: defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud
-- `apiKey`: optional inline key alternative to env vars
-- `allowPrivateNetwork`: allow a private/LAN `baseUrl` in cloud mode
-
-Per-capability keys under `image`, `video`, or `music`:
-
-- `workflow` or `workflowPath`: required
-- `promptNodeId`: required
-- `promptInputName`: defaults to `text`
-- `outputNodeId`: optional
-- `pollIntervalMs`: optional
-- `timeoutMs`: optional
-
-Image and video sections also support:
-
-- `inputImageNodeId`: required when you pass a reference image
-- `inputImageInputName`: defaults to `image`
-
-## Backward compatibility
-
-Existing top-level image config still works:
+Top-level image workflow config in that legacy runtime shape still works:
 
 ```json5
 {
@@ -124,15 +159,17 @@ Reference-image editing example:
 
 ```json5
 {
-  models: {
-    providers: {
+  plugins: {
+    entries: {
       comfy: {
-        image: {
-          workflowPath: "./workflows/edit-api.json",
-          promptNodeId: "6",
-          inputImageNodeId: "7",
-          inputImageInputName: "image",
-          outputNodeId: "9",
+        config: {
+          image: {
+            workflowPath: "./workflows/edit-api.json",
+            promptNodeId: "6",
+            inputImageNodeId: "7",
+            inputImageInputName: "image",
+            outputNodeId: "9",
+          },
         },
       },
     },
@@ -177,7 +214,7 @@ Use `mode: "cloud"` plus one of:
 
 - `COMFY_API_KEY`
 - `COMFY_CLOUD_API_KEY`
-- `models.providers.comfy.apiKey`
+- `plugins.entries.comfy.config.apiKey`
 
 Cloud mode still uses the same `image`, `video`, and `music` workflow sections.
 
