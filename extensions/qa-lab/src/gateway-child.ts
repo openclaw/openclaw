@@ -86,7 +86,6 @@ const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV
 const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
 export type QaCliBackendAuthMode = "auto" | "api-key" | "subscription";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
-const QA_GATEWAY_CHILD_EXIT_TIMEOUT_MS = 5_000;
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -177,51 +176,6 @@ async function preserveQaGatewayDebugArtifacts(params: {
     ].join("\n"),
     "utf8",
   );
-}
-
-async function waitForChildExit(
-  child: Pick<ReturnType<typeof spawn>, "exitCode" | "signalCode" | "once" | "off">,
-  timeoutMs: number,
-) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return true;
-  }
-  return await new Promise<boolean>((resolve) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      child.off("exit", onExit);
-      resolve(true);
-    };
-    const timer = setTimeout(() => {
-      child.off("exit", onExit);
-      resolve(false);
-    }, timeoutMs);
-    timer.unref?.();
-    child.once("exit", onExit);
-  });
-}
-
-async function terminateChildProcess(
-  child: Pick<ReturnType<typeof spawn>, "exitCode" | "signalCode" | "kill" | "once" | "off">,
-  timeoutMs: number = QA_GATEWAY_CHILD_EXIT_TIMEOUT_MS,
-) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    return;
-  }
-  if (await waitForChildExit(child, timeoutMs)) {
-    return;
-  }
-  try {
-    child.kill("SIGKILL");
-  } catch {
-    return;
-  }
-  await waitForChildExit(child, 1_000);
 }
 
 function isRetryableGatewayStartupError(details: string) {
@@ -1114,7 +1068,10 @@ export async function startQaGatewayChild(params: {
           await rpcClient.stop().catch(() => {});
           rpcClient = null;
         }
-        await terminateChildProcess(attemptChild, 1_500);
+        await stopQaGatewayChildProcessTree(attemptChild, {
+          gracefulTimeoutMs: 1_500,
+          forceTimeoutMs: 1_500,
+        });
         child = null;
         if (!retryable) {
           throw error;
@@ -1203,7 +1160,10 @@ export async function startQaGatewayChild(params: {
   } catch (error) {
     await rpcClient?.stop().catch(() => {});
     if (child) {
-      await terminateChildProcess(child, 1_500);
+      await stopQaGatewayChildProcessTree(child, {
+        gracefulTimeoutMs: 1_500,
+        forceTimeoutMs: 1_500,
+      });
     }
     await closeWriteStream(stdoutLog);
     await closeWriteStream(stderrLog);
