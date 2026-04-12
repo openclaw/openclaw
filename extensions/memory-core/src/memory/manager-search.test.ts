@@ -91,16 +91,16 @@ describe("searchKeyword trigram fallback", () => {
       rows: [
         {
           id: "strong",
-          path: "memory/cursor-codex-context-bridge.md",
-          text: "Cursor Codex context bridge project memory notes.",
+          path: "memory/project-memory-notes.md",
+          text: "Project memory notes covering workspace context and retrieval behavior.",
         },
         {
           id: "weak",
-          path: "memory/bridge.md",
-          text: "Cursor Codex context bridge.",
+          path: "memory/notes.md",
+          text: "Project memory context.",
         },
       ],
-      query: "cursor codex context bridge",
+      query: "project memory context",
     });
     expect(results.map((row) => row.id)).toEqual(["weak", "strong"]);
     expect(results[0]?.textScore).toBeLessThanOrEqual(1);
