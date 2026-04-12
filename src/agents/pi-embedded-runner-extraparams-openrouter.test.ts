@@ -1,4 +1,3 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
@@ -8,6 +7,8 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./pi-embedded-runner/proxy-stream-wrappers.js";
+
+type AgentStreamFn = NonNullable<Parameters<typeof applyExtraParamsToAgent>[0]["streamFn"]>;
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
@@ -26,7 +27,7 @@ beforeEach(() => {
       if (providerRouting) {
         const underlying = streamFn;
         streamFn = (model, context, options) =>
-          (underlying as StreamFn)(
+          (underlying as AgentStreamFn)(
             {
               ...model,
               compat: { ...model.compat, openRouterRouting: providerRouting },
@@ -55,11 +56,11 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     payload?: Record<string, unknown>;
   }) {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
+    const baseStreamFn: AgentStreamFn = (model, _context, options) => {
       const payload = { ...params.payload };
       options?.onPayload?.(payload, model);
       payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
+      return {} as ReturnType<AgentStreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
 

@@ -11,13 +11,13 @@ import {
   resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
-import { backupCreateCommand } from "./backup.js";
 import {
   backupVerifyCommandMock,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   tarCreateMock,
 } from "./backup.test-support.js";
+import { backupCreateCommand } from "./backup.js";
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
