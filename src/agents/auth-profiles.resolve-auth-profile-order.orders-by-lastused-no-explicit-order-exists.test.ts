@@ -61,8 +61,8 @@ describe("resolveAuthProfileOrder", () => {
         },
         usageStats: {
           "anthropic:ready": { lastUsed: 50 },
-          "anthropic:cool1": { cooldownUntil: now + 5_000 },
-          "anthropic:cool2": { cooldownUntil: now + 1_000 },
+          "anthropic:cool1": { cooldownUntil: now + 120_000 },
+          "anthropic:cool2": { cooldownUntil: now + 60_000 },
         },
       },
       provider: "anthropic",

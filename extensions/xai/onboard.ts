@@ -1,7 +1,7 @@
 import {
   createDefaultModelsPresetAppliers,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+} from "@openclaw/plugin-sdk/provider-onboard";
 import { XAI_BASE_URL, XAI_DEFAULT_MODEL_ID } from "./model-definitions.js";
 import { buildXaiCatalogModels } from "./model-definitions.js";
 
@@ -22,7 +22,7 @@ const xaiPresetAppliers = createDefaultModelsPresetAppliers<
 });
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiPresetAppliers.applyProviderConfig(cfg, "openai-completions");
+  return xaiPresetAppliers.applyProviderConfig(cfg, "openai-responses");
 }
 
 export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -30,5 +30,5 @@ export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig 
 }
 
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiPresetAppliers.applyConfig(cfg, "openai-completions");
+  return xaiPresetAppliers.applyConfig(cfg, "openai-responses");
 }

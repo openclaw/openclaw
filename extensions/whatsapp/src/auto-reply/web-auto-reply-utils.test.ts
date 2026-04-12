@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { saveSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { saveSessionStore } from "../../../../src/config/sessions.js";
-import { withTempDir } from "../../../../test/helpers/extensions/temp-dir.js";
+import { withTempDir } from "../../../../test/helpers/plugins/temp-dir.js";
 import {
   debugMention,
   isBotMentionedFromTargets,

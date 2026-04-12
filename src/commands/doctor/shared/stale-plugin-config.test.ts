@@ -13,6 +13,7 @@ function manifest(id: string): PluginManifestRecord {
     id,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: [],
     hooks: [],
     origin: "bundled",
@@ -154,9 +155,19 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(scanStalePluginConfig(cfg)).toEqual([
       {
+        pluginId: "openai-codex",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
         pluginId: "acpx",
         pathLabel: "plugins.allow",
         surface: "allow",
+      },
+      {
+        pluginId: "openai-codex",
+        pathLabel: "plugins.entries.openai-codex",
+        surface: "entries",
       },
       {
         pluginId: "acpx",
@@ -166,9 +177,7 @@ describe("doctor stale plugin config helpers", () => {
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.config.plugins?.allow).toEqual(["openai-codex"]);
-    expect(result.config.plugins?.entries).toEqual({
-      "openai-codex": { enabled: true },
-    });
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.config.plugins?.entries).toEqual({});
   });
 });

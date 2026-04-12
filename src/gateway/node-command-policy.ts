@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -45,8 +45,7 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
-const SMS_COMMANDS = ["sms.search"];
-const SMS_DANGEROUS_COMMANDS = ["sms.send"];
+const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -98,7 +97,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CALENDAR_COMMANDS,
     ...CALL_LOG_COMMANDS,
     ...REMINDERS_COMMANDS,
-    ...SMS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
   ],
@@ -191,6 +189,32 @@ export function resolveNodeCommandAllowlist(
     }
   }
   return allow;
+}
+
+function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of commands) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+export function normalizeDeclaredNodeCommands(params: {
+  declaredCommands?: readonly string[];
+  allowlist: Set<string>;
+}): string[] {
+  return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
+    params.allowlist.has(command),
+  );
 }
 
 export function isNodeCommandAllowed(params: {

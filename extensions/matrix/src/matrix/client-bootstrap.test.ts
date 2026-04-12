@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   matrixClientResolverMocks,
@@ -32,10 +32,15 @@ vi.mock("./client/shared.js", () => ({
   releaseSharedClientInstance: (...args: unknown[]) => releaseSharedClientInstanceMock(...args),
 }));
 
-const { resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
-  await import("./client-bootstrap.js");
+let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
+let withResolvedRuntimeMatrixClient: typeof import("./client-bootstrap.js").withResolvedRuntimeMatrixClient;
 
 describe("client bootstrap", () => {
+  beforeAll(async () => {
+    ({ resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
+      await import("./client-bootstrap.js"));
+  });
+
   beforeEach(() => {
     primeMatrixClientResolverMocks({ resolved: {} });
   });

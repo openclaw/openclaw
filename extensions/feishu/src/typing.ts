@@ -40,6 +40,10 @@ export type TypingIndicatorState = {
   reactionId: string | null;
 };
 
+type FeishuMessageReactionCreateResponse = Awaited<
+  ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
+>;
+
 /**
  * Check whether an error represents a rate-limit or quota-exceeded condition
  * from the Feishu API that should stop the typing keepalive loop.
@@ -134,8 +138,8 @@ export async function addTypingIndicator(params: {
       throw new FeishuBackoffError(backoffCode);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-    const reactionId = (response as any)?.data?.reaction_id ?? null;
+    const typedResponse: FeishuMessageReactionCreateResponse = response;
+    const reactionId = typedResponse.data?.reaction_id ?? null;
     return { messageId, reactionId };
   } catch (err) {
     if (isFeishuBackoffError(err)) {

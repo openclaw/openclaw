@@ -7,12 +7,15 @@ import {
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -38,7 +41,7 @@ export async function logoutChannelAccount(params: {
   plugin: ChannelPlugin;
 }): Promise<ChannelLogoutPayload> {
   const resolvedAccountId =
-    params.accountId?.trim() ||
+    normalizeOptionalString(params.accountId) ||
     params.plugin.config.defaultAccountId?.(params.cfg) ||
     params.plugin.config.listAccountIds(params.cfg)[0] ||
     DEFAULT_ACCOUNT_ID;
@@ -53,7 +56,7 @@ export async function logoutChannelAccount(params: {
   if (!result) {
     throw new Error(`Channel ${params.channelId} does not support logout`);
   }
-  const cleared = Boolean(result.cleared);
+  const cleared = result.cleared;
   const loggedOut = typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
   if (loggedOut) {
     params.context.markChannelLoggedOut(params.channelId, true, resolvedAccountId);
@@ -82,7 +85,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
-    const cfg = loadConfig();
+    const cfg = applyPluginAutoEnable({
+      config: loadConfig(),
+      env: process.env,
+    }).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
@@ -266,7 +272,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountIdRaw = (params as { accountId?: unknown }).accountId;
-    const accountId = typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+    const accountId = normalizeOptionalString(accountIdRaw);
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       respond(

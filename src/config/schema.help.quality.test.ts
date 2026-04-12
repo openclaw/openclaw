@@ -42,6 +42,7 @@ const TARGET_KEYS = [
   "memory.citations",
   "memory.backend",
   "memory.qmd.searchMode",
+  "memory.qmd.searchTool",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
   "memory.qmd.mcporter.enabled",
@@ -72,6 +73,11 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.fallback",
   "agents.defaults.memorySearch.sources",
   "agents.defaults.memorySearch.extraPaths",
+  "agents.defaults.memorySearch.qmd",
+  "agents.defaults.memorySearch.qmd.extraCollections",
+  "agents.defaults.memorySearch.qmd.extraCollections.path",
+  "agents.defaults.memorySearch.qmd.extraCollections.name",
+  "agents.defaults.memorySearch.qmd.extraCollections.pattern",
   "agents.defaults.memorySearch.multimodal",
   "agents.defaults.memorySearch.multimodal.enabled",
   "agents.defaults.memorySearch.multimodal.modalities",
@@ -107,10 +113,12 @@ const TARGET_KEYS = [
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",
+  "models.providers.*.request",
   "gateway.reload.mode",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
   "cron.store",
@@ -226,9 +234,6 @@ const TARGET_KEYS = [
   "hooks.gmail.tailscale.mode",
   "hooks.gmail.thinking",
   "hooks.internal",
-  "hooks.internal.handlers",
-  "hooks.internal.handlers[].event",
-  "hooks.internal.handlers[].module",
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
@@ -250,6 +255,7 @@ const TARGET_KEYS = [
   "channels",
   "channels.defaults",
   "channels.defaults.groupPolicy",
+  "channels.defaults.contextVisibility",
   "channels.defaults.heartbeat",
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
@@ -301,16 +307,13 @@ const TARGET_KEYS = [
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
+  "gateway.controlUi.embedSandbox",
   "canvasHost",
   "canvasHost.enabled",
   "canvasHost.root",
   "canvasHost.port",
   "canvasHost.liveReload",
   "talk",
-  "talk.voiceId",
-  "talk.voiceAliases",
-  "talk.modelId",
-  "talk.outputFormat",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
   "meta",
@@ -365,18 +368,12 @@ const TARGET_KEYS = [
   "models.providers.*.api",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
   "agents",
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
+  "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
@@ -423,6 +420,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
+  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
   "gateway.mode": ['"local"', '"remote"'],
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
@@ -517,31 +515,7 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
   "agents.list[].tools.profile",
-  "channels.bluebubbles",
-  "channels.discord",
-  "channels.discord.token",
-  "channels.imessage",
-  "channels.imessage.cliPath",
-  "channels.irc",
   "channels.mattermost",
-  "channels.msteams",
-  "channels.signal",
-  "channels.signal.account",
-  "channels.slack",
-  "channels.slack.appToken",
-  "channels.slack.botToken",
-  "channels.slack.userToken",
-  "channels.slack.userTokenReadOnly",
-  "channels.telegram",
-  "channels.telegram.botToken",
-  "channels.telegram.capabilities.inlineButtons",
-  "channels.telegram.execApprovals",
-  "channels.telegram.execApprovals.enabled",
-  "channels.telegram.execApprovals.approvers",
-  "channels.telegram.execApprovals.agentFilter",
-  "channels.telegram.execApprovals.sessionFilter",
-  "channels.telegram.execApprovals.target",
-  "channels.whatsapp",
 ] as const;
 
 const FINAL_BACKLOG_TARGET_KEYS = [
@@ -551,7 +525,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
-  "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
@@ -569,7 +542,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "gateway.remote.token",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
-  "talk.apiKey",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
@@ -800,10 +772,6 @@ describe("config help copy quality", () => {
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
 
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
-
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
@@ -835,5 +803,17 @@ describe("config help copy quality", () => {
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
+  });
+
+  it("documents agent startup-context preload controls", () => {
+    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
+
+    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    expect(applyOn.includes('"new"')).toBe(true);
+    expect(applyOn.includes('"reset"')).toBe(true);
+
+    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

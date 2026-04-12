@@ -21,14 +21,18 @@ import {
   repairMatrixDirectRooms,
   type MatrixDirectRoomCandidate,
 } from "./matrix/direct-management.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
-import { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+
+export function resetMatrixCliStateForTests(): void {
+  matrixCliExitScheduled = false;
+}
 
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
@@ -46,7 +50,7 @@ function markCliFailure(): void {
 }
 
 function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return formatMatrixErrorMessage(err);
 }
 
 function printJson(payload: unknown): void {
@@ -159,6 +163,7 @@ async function addMatrixAccount(params: {
   name?: string;
   avatarUrl?: string;
   homeserver?: string;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -173,11 +178,12 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput & { avatarUrl?: string } = {
+  const input: ChannelSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
+    proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,
     password: params.password,
@@ -215,6 +221,7 @@ async function addMatrixAccount(params: {
     backupVersion: null,
   };
   if (accountConfig.encryption === true) {
+    const { maybeBootstrapNewEncryptedMatrixAccount } = await import("./setup-bootstrap.js");
     verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
       previousCfg: cfg,
       cfg: updated,
@@ -604,14 +611,14 @@ function buildVerificationGuidance(
       `Backup key mismatch on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' with the matching recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
       `Backup trust chain is not verified on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' if you have the correct recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
@@ -675,6 +682,7 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--name <name>", "Optional display name for this account")
     .option("--avatar-url <url>", "Optional Matrix avatar URL (mxc:// or http(s) URL)")
     .option("--homeserver <url>", "Matrix homeserver URL")
+    .option("--proxy <url>", "Optional HTTP(S) proxy URL for Matrix requests")
     .option(
       "--allow-private-network",
       "Allow Matrix homeserver traffic to private/internal hosts for this account",
@@ -696,6 +704,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         name?: string;
         avatarUrl?: string;
         homeserver?: string;
+        proxy?: string;
         allowPrivateNetwork?: boolean;
         userId?: string;
         accessToken?: string;
@@ -715,6 +724,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               name: options.name,
               avatarUrl: options.avatarUrl,
               homeserver: options.homeserver,
+              proxy: options.proxy,
               allowPrivateNetwork: options.allowPrivateNetwork === true,
               userId: options.userId,
               accessToken: options.accessToken,
@@ -940,7 +950,9 @@ export function registerMatrixCli(params: { program: Command }): void {
 
   backup
     .command("reset")
-    .description("Delete the current server backup and create a fresh room-key backup baseline")
+    .description(
+      "Delete the current server backup and create a fresh room-key backup baseline, repairing secret storage if needed for a durable reset",
+    )
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--yes", "Confirm destructive backup reset", false)
     .option("--verbose", "Show detailed diagnostics")

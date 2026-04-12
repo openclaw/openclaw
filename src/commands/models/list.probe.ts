@@ -19,19 +19,25 @@ import {
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+
+let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+
+function loadEmbeddedRunnerModule() {
+  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
+  return embeddedRunnerModulePromise;
+}
 
 export type AuthProbeStatus =
   | "ok"
@@ -124,7 +130,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of modelCandidates) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }
@@ -147,9 +153,9 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => entry.provider === provider);
+  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
   if (fromCatalog) {
-    return { provider: fromCatalog.provider, model: fromCatalog.id };
+    return { provider, model: fromCatalog.id };
   }
   return null;
 }
@@ -450,6 +456,7 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
+    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
       sessionFile,

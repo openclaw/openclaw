@@ -1,11 +1,11 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { msteamsSetupAdapter } from "./setup-core.js";
+import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
 const resolveMSTeamsChannelAllowlist = vi.hoisted(() => vi.fn());
 const normalizeSecretInputString = vi.hoisted(() =>
-  vi.fn((value: unknown) => String(value ?? "").trim() || undefined),
+  vi.fn((value: unknown) => (typeof value === "string" ? value.trim() || undefined : undefined)),
 );
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
 const resolveMSTeamsCredentials = vi.hoisted(() => vi.fn());
@@ -26,6 +26,8 @@ vi.mock("./token.js", () => ({
 }));
 
 describe("msteams setup surface", () => {
+  const msteamsSetupWizard = createMSTeamsSetupWizardBase();
+
   beforeEach(() => {
     resolveMSTeamsUserAllowlist.mockReset();
     resolveMSTeamsChannelAllowlist.mockReset();
@@ -36,7 +38,6 @@ describe("msteams setup surface", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.resetModules();
   });
 
   it("always resolves to the default account", () => {
@@ -73,7 +74,6 @@ describe("msteams setup surface", () => {
       appId: "app",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
@@ -85,7 +85,6 @@ describe("msteams setup surface", () => {
   it("reports configured status from configured credentials and renders status lines", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
@@ -109,7 +108,6 @@ describe("msteams setup surface", () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
 
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: { existing: true } } },
       prompter: {
@@ -138,13 +136,18 @@ describe("msteams setup surface", () => {
     const note = vi.fn(async () => {});
     const confirm = vi.fn(async () => false);
     const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") return "app-id";
-      if (message === "Enter MS Teams App Password") return "app-password";
-      if (message === "Enter MS Teams Tenant ID") return "tenant-id";
+      if (message === "Enter MS Teams App ID") {
+        return "app-id";
+      }
+      if (message === "Enter MS Teams App Password") {
+        return "app-password";
+      }
+      if (message === "Enter MS Teams Tenant ID") {
+        return "tenant-id";
+      }
       throw new Error(`Unexpected prompt: ${message}`);
     });
 
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
       prompter: {

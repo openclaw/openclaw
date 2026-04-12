@@ -4,14 +4,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: Object.assign(execFileMock, {
+        __promisify__: vi.fn(),
+      }) as typeof import("node:child_process").execFile,
+    },
+  );
+});
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isNonFatalSystemdInstallProbeError,
+  isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
@@ -71,7 +80,6 @@ function assertMachineUserSystemctlArgs(args: string[], user: string, ...command
 }
 
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
-  const { isSystemdServiceEnabled } = await import("./systemd.js");
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   return isSystemdServiceEnabled({ env });
 }
@@ -161,6 +169,40 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("does not fall back to machine scope when --user fails with permission denied", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "status"]);
+      cb(
+        createExecFileError("Failed to connect to bus: Permission denied", {
+          stderr: "Failed to connect to bus: Permission denied",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+    // Only one call should be made: no machine-scope fallback for permission denied errors.
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to direct --user when machine scope fails under sudo", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertMachineUserSystemctlArgs(args, "ai", "status");
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
@@ -180,7 +222,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false without calling systemctl when the managed unit file is missing", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     const err = new Error("missing unit") as NodeJS.ErrnoException;
     err.code = "ENOENT";
     vi.spyOn(fs, "access").mockRejectedValueOnce(err);
@@ -286,7 +327,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -309,7 +349,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
-    const { isSystemdServiceEnabled } = await import("./systemd.js");
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with

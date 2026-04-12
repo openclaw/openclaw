@@ -3,7 +3,8 @@ import {
   extractErrorCode,
   formatErrorMessage,
   readErrorName,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
@@ -113,7 +114,7 @@ function normalizeTelegramNetworkMethod(method?: string | null): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErrorOrigin): void {
@@ -183,9 +184,47 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
+function hasTelegramRetryAfter(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const retryAfter =
+      "parameters" in candidate && candidate.parameters && typeof candidate.parameters === "object"
+        ? (candidate.parameters as { retry_after?: unknown }).retry_after
+        : "response" in candidate &&
+            candidate.response &&
+            typeof candidate.response === "object" &&
+            "parameters" in candidate.response
+          ? (
+              candidate.response as {
+                parameters?: { retry_after?: unknown };
+              }
+            ).parameters?.retry_after
+          : "error" in candidate &&
+              candidate.error &&
+              typeof candidate.error === "object" &&
+              "parameters" in candidate.error
+            ? (candidate.error as { parameters?: { retry_after?: unknown } }).parameters
+                ?.retry_after
+            : undefined;
+    if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Returns true for HTTP 5xx server errors (error may have been processed). */
 export function isTelegramServerError(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 500);
+}
+
+export function isTelegramRateLimitError(err: unknown): boolean {
+  return (
+    hasTelegramErrorCode(err, (code) => code === 429) ||
+    (hasTelegramRetryAfter(err) && /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
+  );
 }
 
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
@@ -216,7 +255,7 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
 
-    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
       return true;
     }

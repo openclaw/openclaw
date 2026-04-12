@@ -17,6 +17,7 @@ export type IMessageSendOpts = {
   replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -26,13 +27,17 @@ export type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: { localRoots?: readonly string[] },
+    options?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
 export type IMessageSendResult = {
   messageId: string;
+  sentText: string;
 };
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
@@ -75,7 +80,18 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.guid === "string" && result.guid.trim()) ||
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
-  return raw ? String(raw).trim() : null;
+  return raw ? raw.trim() : null;
+}
+
+function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
+  if (text.trim()) {
+    return text;
+  }
+  const kind = kindFromMime(mediaContentType ?? undefined);
+  if (!kind) {
+    return text;
+  }
+  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
 }
 
 export async function sendMessageIMessage(
@@ -111,14 +127,10 @@ export async function sendMessageIMessage(
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
+      readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
-    if (!message.trim()) {
-      const kind = kindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
-        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      }
-    }
+    message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);
   }
 
   if (!message.trim() && !filePath) {
@@ -172,6 +184,7 @@ export async function sendMessageIMessage(
     const resolvedId = resolveMessageId(result);
     return {
       messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
+      sentText: message,
     };
   } finally {
     if (shouldClose) {

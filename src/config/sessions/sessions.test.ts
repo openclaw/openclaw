@@ -1,19 +1,11 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
-import * as transcriptEvents from "../../sessions/transcript-events.js";
+import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  mergeSessionEntry,
-  resolveAndPersistSessionFile,
-  updateSessionStore,
-} from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
@@ -22,30 +14,10 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
-import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
-
-function useTempSessionsFixture(prefix: string) {
-  let tempDir = "";
-  let storePath = "";
-  let sessionsDir = "";
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    storePath = path.join(sessionsDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  return {
-    storePath: () => storePath,
-    sessionsDir: () => sessionsDir,
-  };
-}
+import { resolveAndPersistSessionFile } from "./session-file.js";
+import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
+import { useTempSessionsFixture } from "./test-helpers.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -84,10 +56,9 @@ describe("session path safety", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-session-"));
-    const realRoot = path.join(tmpDir, "real-state");
-    const aliasRoot = path.join(tmpDir, "alias-state");
-    try {
+    withTempDirSync({ prefix: "openclaw-symlink-session-" }, (tmpDir) => {
+      const realRoot = path.join(tmpDir, "real-state");
+      const aliasRoot = path.join(tmpDir, "alias-state");
       const sessionsDir = path.join(realRoot, "agents", "main", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       fs.symlinkSync(realRoot, aliasRoot, "dir");
@@ -97,19 +68,16 @@ describe("session path safety", () => {
       expect(fs.realpathSync(resolved)).toBe(
         fs.realpathSync(path.join(sessionsDir, "sess-1.jsonl")),
       );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("falls back when sessionFile is a symlink that escapes sessions dir", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-escape-"));
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const outsideDir = path.join(tmpDir, "outside");
-    try {
+    withTempDirSync({ prefix: "openclaw-symlink-escape-" }, (tmpDir) => {
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      const outsideDir = path.join(tmpDir, "outside");
       fs.mkdirSync(sessionsDir, { recursive: true });
       fs.mkdirSync(outsideDir, { recursive: true });
       const outsideFile = path.join(outsideDir, "escaped.jsonl");
@@ -124,9 +92,7 @@ describe("session path safety", () => {
       );
       expect(fs.realpathSync(path.dirname(resolved))).toBe(fs.realpathSync(sessionsDir));
       expect(path.basename(resolved)).toBe("sess-1.jsonl");
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -179,15 +145,13 @@ describe("resolveSessionResetPolicy", () => {
 });
 
 describe("session store lock (Promise chain mutex)", () => {
-  let lockFixtureRoot = "";
-  let lockCaseId = 0;
+  const lockFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-lock-test-" });
   let lockTmpDirs: string[] = [];
 
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
-    const dir = path.join(lockFixtureRoot, `case-${lockCaseId++}`);
-    await fsPromises.mkdir(dir);
+    const dir = await lockFixtureRootTracker.make("case");
     lockTmpDirs.push(dir);
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
@@ -197,13 +161,11 @@ describe("session store lock (Promise chain mutex)", () => {
   }
 
   beforeAll(async () => {
-    lockFixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-test-"));
+    await lockFixtureRootTracker.setup();
   });
 
   afterAll(async () => {
-    if (lockFixtureRoot) {
-      await fsPromises.rm(lockFixtureRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await lockFixtureRootTracker.cleanup();
   });
 
   afterEach(async () => {
@@ -285,10 +247,10 @@ describe("session store lock (Promise chain mutex)", () => {
         model: "claude-opus-4-6",
       },
       {
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       },
     );
-    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.model).toBe("gpt-5.4");
     expect(merged.modelProvider).toBeUndefined();
   });
 
@@ -376,204 +338,6 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(result?.acp).toBeUndefined();
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toBeUndefined();
-  });
-});
-
-describe("appendAssistantMessageToSessionTranscript", () => {
-  const fixture = useTempSessionsFixture("transcript-test-");
-  const sessionId = "test-session-id";
-  const sessionKey = "test-session";
-
-  function writeTranscriptStore() {
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          chatType: "direct",
-          channel: "discord",
-        },
-      }),
-      "utf-8",
-    );
-  }
-
-  it("creates transcript file and appends message for valid session", async () => {
-    writeTranscriptStore();
-
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from delivery mirror!",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(fs.existsSync(result.sessionFile)).toBe(true);
-      const sessionFileMode = fs.statSync(result.sessionFile).mode & 0o777;
-      if (process.platform !== "win32") {
-        expect(sessionFileMode).toBe(0o600);
-      }
-
-      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
-      expect(lines.length).toBe(2);
-
-      const header = JSON.parse(lines[0]);
-      expect(header.type).toBe("session");
-      expect(header.id).toBe(sessionId);
-
-      const messageLine = JSON.parse(lines[1]);
-      expect(messageLine.type).toBe("message");
-      expect(messageLine.message.role).toBe("assistant");
-      expect(messageLine.message.content[0].type).toBe("text");
-      expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
-    }
-  });
-
-  it("emits transcript update events for delivery mirrors", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "discord",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
-
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from delivery mirror!",
-      storePath: fixture.storePath(),
-    });
-
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    expect(emitSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile,
-        sessionKey,
-        messageId: expect.any(String),
-        message: expect.objectContaining({
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Hello from delivery mirror!" }],
-        }),
-      }),
-    );
-    emitSpy.mockRestore();
-  });
-
-  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
-    writeTranscriptStore();
-
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from delivery mirror!",
-      idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
-    });
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from delivery mirror!",
-      idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
-    });
-
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-    expect(lines.length).toBe(2);
-
-    const messageLine = JSON.parse(lines[1]);
-    expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
-    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
-  });
-
-  it("finds session entry using normalized (lowercased) key", async () => {
-    const sessionId = "test-session-normalized";
-    // Store key is lowercase (as written by updateSessionStore/normalizeStoreSessionKey)
-    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
-    const store = {
-      [storeKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "bluebubbles",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-
-    // Pass a mixed-case key — append should still find the entry via normalization
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
-      text: "Hello normalized!",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("finds Slack session entry using normalized (lowercased) key", async () => {
-    const sessionId = "test-slack-session";
-    // Slack session keys include channel type and target ID; store key is lowercase
-    const storeKey = "agent:main:slack:direct:u12345abc";
-    const store = {
-      [storeKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "slack",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-
-    // Pass a mixed-case key (as resolveSlackSession might produce) — normalization should match
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:slack:direct:U12345ABC",
-      text: "Hello Slack user!",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
-    writeTranscriptStore();
-
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          version: 1,
-          id: sessionId,
-          timestamp: new Date().toISOString(),
-          cwd: process.cwd(),
-        }),
-        "{not-json",
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            idempotencyKey: "mirror:test-source-message",
-            content: [{ type: "text", text: "Hello from delivery mirror!" }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from delivery mirror!",
-      idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-    expect(lines.length).toBe(3);
   });
 });
 

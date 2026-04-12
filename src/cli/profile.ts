@@ -1,9 +1,14 @@
 import os from "node:os";
 import path from "node:path";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { getPrimaryCommand } from "./argv.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
+import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
 export type CliProfileParseResult =
@@ -31,7 +36,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--dev") {
-      if (getPrimaryCommand(out) === "gateway") {
+      if (resolveCliArgvInvocation(out).primary === "gateway") {
         out.push(arg);
         continue;
       }
@@ -65,14 +70,8 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    const consumedRootOption = consumeRootOptionToken(args, i);
+    const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
     if (consumedRootOption > 0) {
-      for (let offset = 0; offset < consumedRootOption; offset += 1) {
-        const token = args[i + offset];
-        if (token !== undefined) {
-          out.push(token);
-        }
-      }
       i += consumedRootOption - 1;
       continue;
     }
@@ -88,7 +87,7 @@ function resolveProfileStateDir(
   env: Record<string, string | undefined>,
   homedir: () => string,
 ): string {
-  const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
+  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
   return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
 }
 
@@ -107,12 +106,13 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
-  if (!env.OPENCLAW_STATE_DIR?.trim()) {
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
+  if (!existingStateDir) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 

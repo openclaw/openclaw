@@ -1,16 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { getMediaUnderstandingProvider } from "./provider-registry.js";
+import { normalizeMediaProviderId } from "./provider-registry.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   runCapability,
-  type ActiveMediaModel,
 } from "./runner.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingOutput } from "./types.js";
+import type {
+  DescribeImageFileParams,
+  DescribeImageFileWithModelParams,
+  DescribeVideoFileParams,
+  RunMediaUnderstandingFileParams,
+  RunMediaUnderstandingFileResult,
+  TranscribeAudioFileParams,
+} from "./runtime-types.js";
+export type {
+  DescribeImageFileParams,
+  DescribeImageFileWithModelParams,
+  DescribeVideoFileParams,
+  RunMediaUnderstandingFileParams,
+  RunMediaUnderstandingFileResult,
+  TranscribeAudioFileParams,
+} from "./runtime-types.js";
+
+type MediaUnderstandingCapability = "image" | "audio" | "video";
+type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
 
 const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
   audio: "audio.transcription",
@@ -18,23 +33,7 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
   video: "video.description",
 };
 
-export type RunMediaUnderstandingFileParams = {
-  capability: MediaUnderstandingCapability;
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-};
-
-export type RunMediaUnderstandingFileResult = {
-  text: string | undefined;
-  provider?: string;
-  model?: string;
-  output?: MediaUnderstandingOutput;
-};
-
-function buildFileContext(params: { filePath: string; mime?: string }): MsgContext {
+function buildFileContext(params: { filePath: string; mime?: string }) {
   return {
     MediaPath: params.filePath,
     MediaType: params.mime,
@@ -48,6 +47,15 @@ export async function runMediaUnderstandingFile(
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
     return { text: undefined };
+  }
+  const config = params.cfg.tools?.media?.[params.capability];
+  if (config?.enabled === false) {
+    return {
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+      output: undefined,
+    };
   }
 
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -64,7 +72,7 @@ export async function runMediaUnderstandingFile(
       media: attachments,
       agentDir: params.agentDir,
       providerRegistry,
-      config: params.cfg.tools?.media?.[params.capability],
+      config,
       activeModel: params.activeModel,
     });
     const output = result.outputs.find(
@@ -82,30 +90,16 @@ export async function runMediaUnderstandingFile(
   }
 }
 
-export async function describeImageFile(params: {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-}): Promise<RunMediaUnderstandingFileResult> {
+export async function describeImageFile(
+  params: DescribeImageFileParams,
+): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "image" });
 }
 
-export async function describeImageFileWithModel(params: {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  mime?: string;
-  provider: string;
-  model: string;
-  prompt: string;
-  maxTokens?: number;
-  timeoutMs?: number;
-}) {
+export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
   const timeoutMs = params.timeoutMs ?? 30_000;
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = getMediaUnderstandingProvider(params.provider, providerRegistry);
+  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   if (!provider?.describeImage) {
     throw new Error(`Provider does not support image analysis: ${params.provider}`);
   }
@@ -124,23 +118,34 @@ export async function describeImageFileWithModel(params: {
   });
 }
 
-export async function describeVideoFile(params: {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-}): Promise<RunMediaUnderstandingFileResult> {
+export async function describeVideoFile(
+  params: DescribeVideoFileParams,
+): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
 }
 
-export async function transcribeAudioFile(params: {
-  filePath: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  mime?: string;
-  activeModel?: ActiveMediaModel;
-}): Promise<{ text: string | undefined }> {
-  const result = await runMediaUnderstandingFile({ ...params, capability: "audio" });
+export async function transcribeAudioFile(
+  params: TranscribeAudioFileParams,
+): Promise<{ text: string | undefined }> {
+  const cfg =
+    params.language || params.prompt
+      ? {
+          ...params.cfg,
+          tools: {
+            ...params.cfg.tools,
+            media: {
+              ...params.cfg.tools?.media,
+              audio: {
+                ...params.cfg.tools?.media?.audio,
+                ...(params.language ? { _requestLanguageOverride: params.language } : {}),
+                ...(params.prompt ? { _requestPromptOverride: params.prompt } : {}),
+                ...(params.language ? { language: params.language } : {}),
+                ...(params.prompt ? { prompt: params.prompt } : {}),
+              },
+            },
+          },
+        }
+      : params.cfg;
+  const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return { text: result.text };
 }

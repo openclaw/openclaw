@@ -17,7 +17,6 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
-  resolveCommandArgChoices,
   resolveStoredModelOverride,
   serializeCommandArgs,
   type ChatCommandDefinition,
@@ -29,8 +28,12 @@ import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runt
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordChannelConfigWithFallback, resolveDiscordGuildEntry } from "./allow-list.js";
+import {
+  chunkItems,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  withTimeout,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -145,7 +148,7 @@ function parseDiscordCommandArgData(
 function resolveDiscordModelPickerCommandContext(
   command: ChatCommandDefinition,
 ): DiscordModelPickerCommandContext | null {
-  const normalized = (command.nativeName ?? command.key).trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(command.nativeName ?? command.key);
   if (normalized === "model" || normalized === "models") {
     return normalized;
   }
@@ -169,7 +172,8 @@ export function shouldOpenDiscordModelPickerFromCommand(params: {
     return null;
   }
 
-  const serializedArgs = serializeCommandArgs(params.command, params.commandArgs)?.trim() ?? "";
+  const serializedArgs =
+    normalizeOptionalString(serializeCommandArgs(params.command, params.commandArgs)) ?? "";
   if (context === "model") {
     const modelValue = resolveCommandArgStringValue(params.commandArgs, "model");
     return !modelValue && !serializedArgs ? context : null;
@@ -241,7 +245,7 @@ async function resolveDiscordModelPickerRouteState(params: {
     channelType === ChannelType.AnnouncementThread;
   const rawChannelId = channel?.id ?? "unknown";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   let threadParentId: string | undefined;
   if (interaction.guild && channel && isThreadChannel && rawChannelId) {
@@ -322,6 +326,7 @@ export async function resolveDiscordNativeChoiceContext(params: {
       sessionEntry,
       sessionStore,
       sessionKey: route.sessionKey,
+      defaultProvider: fallback.provider,
     });
     if (!override?.model) {
       return {
@@ -357,6 +362,7 @@ function resolveDiscordModelPickerCurrentModel(params: {
       sessionEntry,
       sessionStore,
       sessionKey: params.route.sessionKey,
+      defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
       return fallback;

@@ -13,10 +13,12 @@ import {
   renderChatMobileToggle,
   renderChatSessionSelect,
   renderTab,
+  resolveAssistantAttachmentAuthToken,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
+import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -26,6 +28,7 @@ import {
   loadAgents,
   loadToolsCatalog,
   loadToolsEffective,
+  resetToolsEffectiveState,
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
 } from "./controllers/agents.ts";
@@ -43,10 +46,9 @@ import {
   removeConfigFormValue,
 } from "./controllers/config.ts";
 import {
+  loadCronJobsPage,
   loadCronRuns,
-  loadMoreCronJobs,
   loadMoreCronRuns,
-  reloadCronJobs,
   toggleCronJob,
   runCronJob,
   removeCronJob,
@@ -70,6 +72,20 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices.ts";
 import {
+  backfillDreamDiary,
+  copyDreamingArchivePath,
+  dedupeDreamDiary,
+  loadDreamDiary,
+  loadDreamingStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
+  repairDreamingArtifacts,
+  resetGroundedShortTerm,
+  resetDreamDiary,
+  resolveConfiguredDreaming,
+  updateDreamingEnabled,
+} from "./controllers/dreaming.ts";
+import {
   loadExecApprovals,
   removeExecApprovalsFormValue,
   saveExecApprovals,
@@ -78,11 +94,23 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
+  branchSessionFromCheckpoint,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  patchSession,
+  restoreSessionFromCheckpoint,
+  toggleSessionCompactionCheckpoints,
+} from "./controllers/sessions.ts";
+import {
+  closeClawHubDetail,
+  installFromClawHub,
   installSkill,
+  loadClawHubDetail,
   loadSkills,
   saveSkillApiKey,
+  searchClawHub,
+  setClawHubSearchQuery,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -100,7 +128,8 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
-import { renderConfig } from "./views/config.ts";
+import { renderConfig, type ConfigProps } from "./views/config.ts";
+import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
@@ -139,6 +168,30 @@ const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 
+function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+  if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
+    return null;
+  }
+  return new Date(nextRunAtMs).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function resolveDreamingNextCycle(
+  status: { phases?: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
+): string | null {
+  if (!status?.phases) {
+    return null;
+  }
+  const nextRunAtMs = Object.values(status.phases)
+    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
+    .map((phase) => phase.nextRunAtMs as number)
+    .toSorted((a, b) => a - b)[0];
+  return formatDreamNextCycle(nextRunAtMs);
+}
+
+let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
   const mod = getter();
   return mod ? render(mod) : nothing;
@@ -181,6 +234,32 @@ function uniquePreserveOrder(values: string[]): string[] {
     output.push(normalized);
   }
   return output;
+}
+
+function isPluginExplicitlyEnabled(
+  configSnapshot: AppViewState["configSnapshot"],
+  pluginId: string,
+): boolean {
+  const config = configSnapshot?.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return true;
+  }
+  const plugins =
+    "plugins" in config && config.plugins && typeof config.plugins === "object"
+      ? (config.plugins as Record<string, unknown>)
+      : null;
+  if (plugins?.enabled === false) {
+    return false;
+  }
+  const entries =
+    plugins && "entries" in plugins && plugins.entries && typeof plugins.entries === "object"
+      ? (plugins.entries as Record<string, unknown>)
+      : null;
+  const entry = entries?.[pluginId];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return true;
+  }
+  return (entry as { enabled?: unknown }).enabled !== false;
 }
 
 type DismissedUpdateBanner = {
@@ -272,11 +351,61 @@ const AI_AGENTS_SECTION_KEYS = [
   "memory",
   "session",
 ] as const;
-type CommunicationSectionKey = (typeof COMMUNICATION_SECTION_KEYS)[number];
-type AppearanceSectionKey = (typeof APPEARANCE_SECTION_KEYS)[number];
-type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
-type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
-type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
+type ConfigSectionSelection = {
+  activeSection: string | null;
+  activeSubsection: string | null;
+};
+
+type ConfigTabOverrides = Pick<
+  ConfigProps,
+  | "formMode"
+  | "searchQuery"
+  | "activeSection"
+  | "activeSubsection"
+  | "onFormModeChange"
+  | "onSearchChange"
+  | "onSectionChange"
+  | "onSubsectionChange"
+> &
+  Partial<
+    Pick<
+      ConfigProps,
+      | "showModeToggle"
+      | "navRootLabel"
+      | "includeSections"
+      | "excludeSections"
+      | "includeVirtualSections"
+    >
+  >;
+
+const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
+  ...COMMUNICATION_SECTION_KEYS,
+  ...APPEARANCE_SECTION_KEYS,
+  ...AUTOMATION_SECTION_KEYS,
+  ...INFRASTRUCTURE_SECTION_KEYS,
+  ...AI_AGENTS_SECTION_KEYS,
+]);
+
+function normalizeMainConfigSelection(
+  activeSection: string | null,
+  activeSubsection: string | null,
+): ConfigSectionSelection {
+  if (activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
+    return { activeSection: null, activeSubsection: null };
+  }
+  return { activeSection, activeSubsection };
+}
+
+function normalizeScopedConfigSelection(
+  activeSection: string | null,
+  activeSubsection: string | null,
+  includedSections: readonly string[],
+): ConfigSectionSelection {
+  if (activeSection && !includedSections.includes(activeSection)) {
+    return { activeSection: null, activeSubsection: null };
+  }
+  return { activeSection, activeSubsection };
+}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -305,10 +434,7 @@ export function renderApp(state: AppViewState) {
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
   if (!state.connected) {
-    return html`
-      ${renderLoginGate(state)}
-      ${renderGatewayUrlConfirmation(state)}
-    `;
+    return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
   const presenceCount = state.presenceEntries.length;
@@ -317,20 +443,89 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
-  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
+  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const configuredDreaming = resolveConfiguredDreaming(configValue);
+  const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
+  const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
+  const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
+  const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
+  const refreshDreaming = () => {
+    void Promise.all([
+      loadDreamingStatus(state),
+      loadDreamDiary(state),
+      loadWikiImportInsights(state),
+      loadWikiMemoryPalace(state),
+    ]);
+  };
+  const openWikiPage = async (lookup: string) => {
+    if (!state.client || !state.connected) {
+      return null;
+    }
+    const payload = (await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 5000,
+    })) as {
+      title?: unknown;
+      path?: unknown;
+      content?: unknown;
+      updatedAt?: unknown;
+      totalLines?: unknown;
+      truncated?: unknown;
+    } | null;
+    const title =
+      typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
+    const path =
+      typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : lookup;
+    const content =
+      typeof payload?.content === "string" && payload.content.length > 0
+        ? payload.content
+        : "No wiki content available.";
+    const updatedAt =
+      typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
+        ? payload.updatedAt.trim()
+        : undefined;
+    const totalLines =
+      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+        ? Math.max(0, Math.floor(payload.totalLines))
+        : undefined;
+    const truncated = payload?.truncated === true;
+    return {
+      title,
+      path,
+      content,
+      ...(totalLines !== undefined ? { totalLines } : {}),
+      ...(truncated ? { truncated } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
+    };
+  };
+  const applyDreamingEnabled = (enabled: boolean) => {
+    if (state.dreamingModeSaving || dreamingOn === enabled) {
+      return;
+    }
+    void (async () => {
+      const updated = await updateDreamingEnabled(state, enabled);
+      if (!updated) {
+        return;
+      }
+      await loadConfig(state);
+      await loadDreamingStatus(state);
+    })();
+  };
   const basePath = normalizeBasePath(state.basePath ?? "");
-  const resolvedAgentId =
+  const resolveSelectedAgentId = () =>
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const resolvedAgentId = resolveSelectedAgentId();
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
@@ -340,6 +535,21 @@ export function renderApp(state: AppViewState) {
   const findAgentIndex = (agentId: string) =>
     findAgentConfigEntryIndex(getCurrentConfigValue(), agentId);
   const ensureAgentIndex = (agentId: string) => ensureAgentConfigEntry(state, agentId);
+  const resolveAgentToolsPath = (agentId: string, ensure: boolean) => {
+    const index = ensure ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
+    return index >= 0 ? (["agents", "list", index, "tools"] as const) : null;
+  };
+  const resolveAgentModelFormEntry = (index: number) => {
+    const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)?.agents
+      ?.list;
+    const existing = Array.isArray(list)
+      ? (list[index] as { model?: unknown } | undefined)?.model
+      : undefined;
+    return {
+      basePath: ["agents", "list", index, "model"] as Array<string | number>,
+      existing,
+    };
+  };
   const cronAgentSuggestions = sortLocaleStrings(
     new Set(
       [
@@ -393,6 +603,250 @@ export function renderApp(state: AppViewState) {
     state.cronForm.deliveryMode === "webhook"
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
+  const commonConfigProps = {
+    raw: state.configRaw,
+    originalRaw: state.configRawOriginal,
+    valid: state.configValid,
+    issues: state.configIssues,
+    loading: state.configLoading,
+    saving: state.configSaving,
+    applying: state.configApplying,
+    updating: state.updateRunning,
+    connected: state.connected,
+    schema: state.configSchema,
+    schemaLoading: state.configSchemaLoading,
+    uiHints: state.configUiHints,
+    formValue: state.configForm,
+    originalValue: state.configFormOriginal,
+    onRawChange: (next: string) => {
+      state.configRaw = next;
+    },
+    onRequestUpdate: requestHostUpdate,
+    onFormPatch: (path: Array<string | number>, value: unknown) =>
+      updateConfigFormValue(state, path, value),
+    onReload: () => loadConfig(state),
+    onSave: () => saveConfig(state),
+    onApply: () => applyConfig(state),
+    onUpdate: () => runUpdate(state),
+    onOpenFile: () => openConfigFile(state),
+    version: state.hello?.server?.version ?? "",
+    theme: state.theme,
+    themeMode: state.themeMode,
+    setTheme: (theme, context) => state.setTheme(theme, context),
+    setThemeMode: (mode, context) => state.setThemeMode(mode, context),
+    borderRadius: state.settings.borderRadius,
+    setBorderRadius: (value) => state.setBorderRadius(value),
+    gatewayUrl: state.settings.gatewayUrl,
+    assistantName: state.assistantName,
+    configPath: state.configSnapshot?.path ?? null,
+    rawAvailable: typeof state.configSnapshot?.raw === "string",
+  } satisfies Omit<
+    ConfigProps,
+    | "formMode"
+    | "searchQuery"
+    | "activeSection"
+    | "activeSubsection"
+    | "onFormModeChange"
+    | "onSearchChange"
+    | "onSectionChange"
+    | "onSubsectionChange"
+    | "showModeToggle"
+    | "navRootLabel"
+    | "includeSections"
+    | "excludeSections"
+    | "includeVirtualSections"
+  >;
+  const renderConfigTab = (overrides: ConfigTabOverrides) =>
+    renderConfig({
+      ...commonConfigProps,
+      includeVirtualSections: false,
+      ...overrides,
+    });
+  const configSelection = normalizeMainConfigSelection(
+    state.configActiveSection,
+    state.configActiveSubsection,
+  );
+  const communicationsSelection = normalizeScopedConfigSelection(
+    state.communicationsActiveSection,
+    state.communicationsActiveSubsection,
+    COMMUNICATION_SECTION_KEYS,
+  );
+  const appearanceSelection = normalizeScopedConfigSelection(
+    state.appearanceActiveSection,
+    state.appearanceActiveSubsection,
+    APPEARANCE_SECTION_KEYS,
+  );
+  const automationSelection = normalizeScopedConfigSelection(
+    state.automationActiveSection,
+    state.automationActiveSubsection,
+    AUTOMATION_SECTION_KEYS,
+  );
+  const infrastructureSelection = normalizeScopedConfigSelection(
+    state.infrastructureActiveSection,
+    state.infrastructureActiveSubsection,
+    INFRASTRUCTURE_SECTION_KEYS,
+  );
+  const aiAgentsSelection = normalizeScopedConfigSelection(
+    state.aiAgentsActiveSection,
+    state.aiAgentsActiveSubsection,
+    AI_AGENTS_SECTION_KEYS,
+  );
+  const renderConfigTabForActiveTab = () => {
+    switch (state.tab) {
+      case "config":
+        return renderConfigTab({
+          formMode: state.configFormMode,
+          searchQuery: state.configSearchQuery,
+          activeSection: configSelection.activeSection,
+          activeSubsection: configSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.configFormMode = mode),
+          onSearchChange: (query) => (state.configSearchQuery = query),
+          onSectionChange: (section) => {
+            state.configActiveSection = section;
+            state.configActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.configActiveSubsection = section),
+          showModeToggle: true,
+          excludeSections: [
+            ...COMMUNICATION_SECTION_KEYS,
+            ...AUTOMATION_SECTION_KEYS,
+            ...INFRASTRUCTURE_SECTION_KEYS,
+            ...AI_AGENTS_SECTION_KEYS,
+            "ui",
+            "wizard",
+          ],
+        });
+      case "communications":
+        return renderConfigTab({
+          formMode: state.communicationsFormMode,
+          searchQuery: state.communicationsSearchQuery,
+          activeSection: communicationsSelection.activeSection,
+          activeSubsection: communicationsSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.communicationsFormMode = mode),
+          onSearchChange: (query) => (state.communicationsSearchQuery = query),
+          onSectionChange: (section) => {
+            state.communicationsActiveSection = section;
+            state.communicationsActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
+          navRootLabel: "Communication",
+          includeSections: [...COMMUNICATION_SECTION_KEYS],
+        });
+      case "appearance":
+        return renderConfigTab({
+          formMode: state.appearanceFormMode,
+          searchQuery: state.appearanceSearchQuery,
+          activeSection: appearanceSelection.activeSection,
+          activeSubsection: appearanceSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.appearanceFormMode = mode),
+          onSearchChange: (query) => (state.appearanceSearchQuery = query),
+          onSectionChange: (section) => {
+            state.appearanceActiveSection = section;
+            state.appearanceActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
+          navRootLabel: t("tabs.appearance"),
+          includeSections: [...APPEARANCE_SECTION_KEYS],
+          includeVirtualSections: true,
+        });
+      case "automation":
+        return renderConfigTab({
+          formMode: state.automationFormMode,
+          searchQuery: state.automationSearchQuery,
+          activeSection: automationSelection.activeSection,
+          activeSubsection: automationSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.automationFormMode = mode),
+          onSearchChange: (query) => (state.automationSearchQuery = query),
+          onSectionChange: (section) => {
+            state.automationActiveSection = section;
+            state.automationActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.automationActiveSubsection = section),
+          navRootLabel: "Automation",
+          includeSections: [...AUTOMATION_SECTION_KEYS],
+        });
+      case "infrastructure":
+        return renderConfigTab({
+          formMode: state.infrastructureFormMode,
+          searchQuery: state.infrastructureSearchQuery,
+          activeSection: infrastructureSelection.activeSection,
+          activeSubsection: infrastructureSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
+          onSearchChange: (query) => (state.infrastructureSearchQuery = query),
+          onSectionChange: (section) => {
+            state.infrastructureActiveSection = section;
+            state.infrastructureActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+          navRootLabel: "Infrastructure",
+          includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
+        });
+      case "aiAgents":
+        return renderConfigTab({
+          formMode: state.aiAgentsFormMode,
+          searchQuery: state.aiAgentsSearchQuery,
+          activeSection: aiAgentsSelection.activeSection,
+          activeSubsection: aiAgentsSelection.activeSubsection,
+          onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
+          onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
+          onSectionChange: (section) => {
+            state.aiAgentsActiveSection = section;
+            state.aiAgentsActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
+          navRootLabel: "AI & Agents",
+          includeSections: [...AI_AGENTS_SECTION_KEYS],
+        });
+      default:
+        return nothing;
+    }
+  };
+  const loadAgentPanelDataForSelectedAgent = (agentId: string | null) => {
+    if (!agentId) {
+      return;
+    }
+    switch (state.agentsPanel) {
+      case "files":
+        void loadAgentFiles(state, agentId);
+        return;
+      case "skills":
+        void loadAgentSkills(state, agentId);
+        return;
+      case "tools":
+        void loadToolsCatalog(state, agentId);
+        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
+    }
+  };
+  const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
+    if (panel === "channels") {
+      void loadChannels(state, false);
+      return;
+    }
+    if (panel === "cron") {
+      void state.loadCron();
+    }
+  };
+  const resetAgentFilesState = (clearLoading = false) => {
+    state.agentFilesList = null;
+    state.agentFilesError = null;
+    state.agentFileActive = null;
+    state.agentFileContents = {};
+    state.agentFileDrafts = {};
+    if (clearLoading) {
+      state.agentFilesLoading = false;
+    }
+  };
+  const resetAgentSelectionPanelState = () => {
+    resetAgentFilesState(true);
+    state.agentSkillsReport = null;
+    state.agentSkillsError = null;
+    state.agentSkillsAgentId = null;
+    state.toolsCatalogResult = null;
+    state.toolsCatalogError = null;
+    state.toolsCatalogLoading = false;
+    resetToolsEffectiveState(state);
+  };
 
   return html`
     ${renderCommandPalette({
@@ -417,7 +871,11 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus
+        ? "shell--chat-focus"
+        : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
+        ? "shell--nav-drawer-open"
+        : ""} ${state.onboarding ? "shell--onboarding" : ""}"
     >
       <button
         type="button"
@@ -468,17 +926,19 @@ export function renderApp(state: AppViewState) {
           <div class="sidebar-shell">
             <div class="sidebar-shell__header">
               <div class="sidebar-brand">
-                ${
-                  navCollapsed
-                    ? nothing
-                    : html`
-                        <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
-                        <span class="sidebar-brand__copy">
-                          <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
-                          <span class="sidebar-brand__title">OpenClaw</span>
-                        </span>
-                      `
-                }
+                ${navCollapsed
+                  ? nothing
+                  : html`
+                      <img
+                        class="sidebar-brand__logo"
+                        src="${agentLogoUrl(basePath)}"
+                        alt="OpenClaw"
+                      />
+                      <span class="sidebar-brand__copy">
+                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
+                        <span class="sidebar-brand__title">OpenClaw</span>
+                      </span>
+                    `}
               </div>
               <button
                 type="button"
@@ -491,7 +951,9 @@ export function renderApp(state: AppViewState) {
                 title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
                 aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
               >
-                <span class="nav-collapse-toggle__icon" aria-hidden="true">${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span>
+                <span class="nav-collapse-toggle__icon" aria-hidden="true"
+                  >${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
+                >
               </button>
             </div>
             <div class="sidebar-shell__body">
@@ -503,31 +965,31 @@ export function renderApp(state: AppViewState) {
 
                   return html`
                     <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                      ${
-                        !navCollapsed
-                          ? html`
-                              <button
-                                class="nav-section__label"
-                                @click=${() => {
-                                  const next = { ...state.settings.navGroupsCollapsed };
-                                  next[group.label] = !isGroupCollapsed;
-                                  state.applySettings({
-                                    ...state.settings,
-                                    navGroupsCollapsed: next,
-                                  });
-                                }}
-                                aria-expanded=${showItems}
+                      ${!navCollapsed
+                        ? html`
+                            <button
+                              class="nav-section__label"
+                              @click=${() => {
+                                const next = { ...state.settings.navGroupsCollapsed };
+                                next[group.label] = !isGroupCollapsed;
+                                state.applySettings({
+                                  ...state.settings,
+                                  navGroupsCollapsed: next,
+                                });
+                              }}
+                              aria-expanded=${showItems}
+                            >
+                              <span class="nav-section__label-text"
+                                >${t(`nav.${group.label}`)}</span
                               >
-                                <span class="nav-section__label-text">${t(`nav.${group.label}`)}</span>
-                                <span class="nav-section__chevron">
-                                  ${icons.chevronDown}
-                                </span>
-                              </button>
-                            `
-                          : nothing
-                      }
+                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+                            </button>
+                          `
+                        : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
+                        ${group.tabs.map((tab) =>
+                          renderTab(state, tab, { collapsed: navCollapsed }),
+                        )}
                       </div>
                     </section>
                   `;
@@ -544,34 +1006,26 @@ export function renderApp(state: AppViewState) {
                   title="${t("common.docs")} (opens in new tab)"
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                  ${
-                    !navCollapsed
-                      ? html`
-                          <span class="nav-item__text">${t("common.docs")}</span>
-                          <span class="nav-item__external-icon">${icons.externalLink}</span>
-                        `
-                      : nothing
-                  }
+                  ${!navCollapsed
+                    ? html`
+                        <span class="nav-item__text">${t("common.docs")}</span>
+                        <span class="nav-item__external-icon">${icons.externalLink}</span>
+                      `
+                    : nothing}
                 </a>
-                <div class="sidebar-mode-switch">
-                  ${renderTopbarThemeModeToggle(state)}
-                </div>
+                <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
                 ${(() => {
                   const version = state.hello?.server?.version ?? "";
                   return version
                     ? html`
                         <div class="sidebar-version" title=${`v${version}`}>
-                          ${
-                            !navCollapsed
-                              ? html`
-                                  <span class="sidebar-version__label">${t("common.version")}</span>
-                                  <span class="sidebar-version__text">v${version}</span>
-                                  ${renderSidebarConnectionStatus(state)}
-                                `
-                              : html`
-                                  ${renderSidebarConnectionStatus(state)}
-                                `
-                          }
+                          ${!navCollapsed
+                            ? html`
+                                <span class="sidebar-version__label">${t("common.version")}</span>
+                                <span class="sidebar-version__text">v${version}</span>
+                                ${renderSidebarConnectionStatus(state)}
+                              `
+                            : html` ${renderSidebarConnectionStatus(state)} `}
                         </div>
                       `
                     : nothing;
@@ -582,18 +1036,19 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
-        ${
-          state.updateAvailable &&
-          state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
-          !isUpdateBannerDismissed(state.updateAvailable)
-            ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
+        ${state.updateAvailable &&
+        state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
+        !isUpdateBannerDismissed(state.updateAvailable)
+          ? html`<div class="update-banner callout danger" role="alert">
+              <strong>Update available:</strong> v${state.updateAvailable.latestVersion} (running
+              v${state.updateAvailable.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              >
+                ${state.updateRunning ? "Updating…" : "Update now"}
+              </button>
               <button
                 class="update-banner__close"
                 type="button"
@@ -607,1443 +1062,989 @@ export function renderApp(state: AppViewState) {
                 ${icons.x}
               </button>
             </div>`
-            : nothing
-        }
-        ${
-          state.tab === "config"
-            ? nothing
-            : html`<section class="content-header">
+          : nothing}
+        ${state.tab === "config"
+          ? nothing
+          : html`<section class="content-header">
               <div>
-                ${
-                  isChat
-                    ? renderChatSessionSelect(state)
-                    : html`<div class="page-title">${titleForTab(state.tab)}</div>`
-                }
+                ${isChat
+                  ? renderChatSessionSelect(state)
+                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
               <div class="page-meta">
-                ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
+                ${state.tab === "dreams"
+                  ? html`
+                      <div class="dreaming-header-controls">
+                        <button
+                          class="btn btn--subtle btn--sm"
+                          ?disabled=${dreamingLoading || state.dreamDiaryLoading}
+                          @click=${refreshDreaming}
+                        >
+                          ${dreamingRefreshLoading
+                            ? t("dreaming.header.refreshing")
+                            : t("dreaming.header.refresh")}
+                        </button>
+                        <button
+                          class="dreams__phase-toggle ${dreamingOn
+                            ? "dreams__phase-toggle--on"
+                            : ""}"
+                          ?disabled=${dreamingLoading}
+                          @click=${() => applyDreamingEnabled(!dreamingOn)}
+                        >
+                          <span class="dreams__phase-toggle-dot"></span>
+                          <span class="dreams__phase-toggle-label">
+                            ${dreamingOn ? t("dreaming.header.on") : t("dreaming.header.off")}
+                          </span>
+                        </button>
+                      </div>
+                    `
+                  : nothing}
+                ${state.lastError
+                  ? html`<div class="pill danger">${state.lastError}</div>`
+                  : nothing}
                 ${isChat ? renderChatControls(state) : nothing}
               </div>
-            </section>`
-        }
-
-        ${
-          state.tab === "overview"
-            ? renderOverview({
+            </section>`}
+        ${state.tab === "overview"
+          ? renderOverview({
+              connected: state.connected,
+              hello: state.hello,
+              settings: state.settings,
+              password: state.password,
+              lastError: state.lastError,
+              lastErrorCode: state.lastErrorCode,
+              presenceCount,
+              sessionsCount,
+              cronEnabled: state.cronStatus?.enabled ?? null,
+              cronNext,
+              lastChannelsRefresh: state.channelsLastSuccess,
+              warnQueryToken,
+              usageResult: state.usageResult,
+              sessionsResult: state.sessionsResult,
+              skillsReport: state.skillsReport,
+              cronJobs: state.cronJobs,
+              cronStatus: state.cronStatus,
+              attentionItems: state.attentionItems,
+              eventLog: state.eventLog,
+              overviewLogLines: state.overviewLogLines,
+              showGatewayToken: state.overviewShowGatewayToken,
+              showGatewayPassword: state.overviewShowGatewayPassword,
+              onSettingsChange: (next) => state.applySettings(next),
+              onPasswordChange: (next) => (state.password = next),
+              onSessionKeyChange: (next) => {
+                state.sessionKey = next;
+                state.chatMessage = "";
+                state.resetToolStream();
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: next,
+                  lastActiveSessionKey: next,
+                });
+                void state.loadAssistantIdentity();
+              },
+              onToggleGatewayTokenVisibility: () => {
+                state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
+              },
+              onToggleGatewayPasswordVisibility: () => {
+                state.overviewShowGatewayPassword = !state.overviewShowGatewayPassword;
+              },
+              onConnect: () => state.connect(),
+              onRefresh: () => state.loadOverview(),
+              onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
+              onRefreshLogs: () => state.loadOverview(),
+            })
+          : nothing}
+        ${state.tab === "channels"
+          ? lazyRender(lazyChannels, (m) =>
+              m.renderChannels({
                 connected: state.connected,
-                hello: state.hello,
-                settings: state.settings,
-                password: state.password,
-                lastError: state.lastError,
-                lastErrorCode: state.lastErrorCode,
-                presenceCount,
-                sessionsCount,
-                cronEnabled: state.cronStatus?.enabled ?? null,
-                cronNext,
-                lastChannelsRefresh: state.channelsLastSuccess,
-                usageResult: state.usageResult,
-                sessionsResult: state.sessionsResult,
-                skillsReport: state.skillsReport,
-                cronJobs: state.cronJobs,
-                cronStatus: state.cronStatus,
-                attentionItems: state.attentionItems,
-                eventLog: state.eventLog,
-                overviewLogLines: state.overviewLogLines,
-                showGatewayToken: state.overviewShowGatewayToken,
-                showGatewayPassword: state.overviewShowGatewayPassword,
-                onSettingsChange: (next) => state.applySettings(next),
-                onPasswordChange: (next) => (state.password = next),
-                onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.resetToolStream();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
+                loading: state.channelsLoading,
+                snapshot: state.channelsSnapshot,
+                lastError: state.channelsError,
+                lastSuccessAt: state.channelsLastSuccess,
+                whatsappMessage: state.whatsappLoginMessage,
+                whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
+                whatsappConnected: state.whatsappLoginConnected,
+                whatsappBusy: state.whatsappBusy,
+                configSchema: state.configSchema,
+                configSchemaLoading: state.configSchemaLoading,
+                configForm: state.configForm,
+                configUiHints: state.configUiHints,
+                configSaving: state.configSaving,
+                configFormDirty: state.configFormDirty,
+                nostrProfileFormState: state.nostrProfileFormState,
+                nostrProfileAccountId: state.nostrProfileAccountId,
+                onRefresh: (probe) => loadChannels(state, probe),
+                onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
+                onWhatsAppWait: () => state.handleWhatsAppWait(),
+                onWhatsAppLogout: () => state.handleWhatsAppLogout(),
+                onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+                onConfigSave: () => state.handleChannelConfigSave(),
+                onConfigReload: () => state.handleChannelConfigReload(),
+                onNostrProfileEdit: (accountId, profile) =>
+                  state.handleNostrProfileEdit(accountId, profile),
+                onNostrProfileCancel: () => state.handleNostrProfileCancel(),
+                onNostrProfileFieldChange: (field, value) =>
+                  state.handleNostrProfileFieldChange(field, value),
+                onNostrProfileSave: () => state.handleNostrProfileSave(),
+                onNostrProfileImport: () => state.handleNostrProfileImport(),
+                onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
+              }),
+            )
+          : nothing}
+        ${state.tab === "instances"
+          ? lazyRender(lazyInstances, (m) =>
+              m.renderInstances({
+                loading: state.presenceLoading,
+                entries: state.presenceEntries,
+                lastError: state.presenceError,
+                statusMessage: state.presenceStatus,
+                onRefresh: () => loadPresence(state),
+              }),
+            )
+          : nothing}
+        ${state.tab === "sessions"
+          ? lazyRender(lazySessions, (m) =>
+              m.renderSessions({
+                loading: state.sessionsLoading,
+                result: state.sessionsResult,
+                error: state.sessionsError,
+                activeMinutes: state.sessionsFilterActive,
+                limit: state.sessionsFilterLimit,
+                includeGlobal: state.sessionsIncludeGlobal,
+                includeUnknown: state.sessionsIncludeUnknown,
+                basePath: state.basePath,
+                searchQuery: state.sessionsSearchQuery,
+                sortColumn: state.sessionsSortColumn,
+                sortDir: state.sessionsSortDir,
+                page: state.sessionsPage,
+                pageSize: state.sessionsPageSize,
+                selectedKeys: state.sessionsSelectedKeys,
+                expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
+                checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
+                checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
+                checkpointBusyKey: state.sessionsCheckpointBusyKey,
+                checkpointErrorByKey: state.sessionsCheckpointErrorByKey,
+                onFiltersChange: (next) => {
+                  state.sessionsFilterActive = next.activeMinutes;
+                  state.sessionsFilterLimit = next.limit;
+                  state.sessionsIncludeGlobal = next.includeGlobal;
+                  state.sessionsIncludeUnknown = next.includeUnknown;
                 },
-                onToggleGatewayTokenVisibility: () => {
-                  state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
+                onSearchChange: (q) => {
+                  state.sessionsSearchQuery = q;
+                  state.sessionsPage = 0;
                 },
-                onToggleGatewayPasswordVisibility: () => {
-                  state.overviewShowGatewayPassword = !state.overviewShowGatewayPassword;
+                onSortChange: (col, dir) => {
+                  state.sessionsSortColumn = col;
+                  state.sessionsSortDir = dir;
+                  state.sessionsPage = 0;
                 },
-                onConnect: () => state.connect(),
-                onRefresh: () => state.loadOverview(),
-                onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
-                onRefreshLogs: () => state.loadOverview(),
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "channels"
-            ? lazyRender(lazyChannels, (m) =>
-                m.renderChannels({
-                  connected: state.connected,
-                  loading: state.channelsLoading,
-                  snapshot: state.channelsSnapshot,
-                  lastError: state.channelsError,
-                  lastSuccessAt: state.channelsLastSuccess,
-                  whatsappMessage: state.whatsappLoginMessage,
-                  whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
-                  whatsappConnected: state.whatsappLoginConnected,
-                  whatsappBusy: state.whatsappBusy,
-                  configSchema: state.configSchema,
-                  configSchemaLoading: state.configSchemaLoading,
-                  configForm: state.configForm,
-                  configUiHints: state.configUiHints,
-                  configSaving: state.configSaving,
-                  configFormDirty: state.configFormDirty,
-                  nostrProfileFormState: state.nostrProfileFormState,
-                  nostrProfileAccountId: state.nostrProfileAccountId,
-                  onRefresh: (probe) => loadChannels(state, probe),
-                  onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
-                  onWhatsAppWait: () => state.handleWhatsAppWait(),
-                  onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-                  onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
-                  onConfigSave: () => state.handleChannelConfigSave(),
-                  onConfigReload: () => state.handleChannelConfigReload(),
-                  onNostrProfileEdit: (accountId, profile) =>
-                    state.handleNostrProfileEdit(accountId, profile),
-                  onNostrProfileCancel: () => state.handleNostrProfileCancel(),
-                  onNostrProfileFieldChange: (field, value) =>
-                    state.handleNostrProfileFieldChange(field, value),
-                  onNostrProfileSave: () => state.handleNostrProfileSave(),
-                  onNostrProfileImport: () => state.handleNostrProfileImport(),
-                  onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "instances"
-            ? lazyRender(lazyInstances, (m) =>
-                m.renderInstances({
-                  loading: state.presenceLoading,
-                  entries: state.presenceEntries,
-                  lastError: state.presenceError,
-                  statusMessage: state.presenceStatus,
-                  onRefresh: () => loadPresence(state),
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "sessions"
-            ? lazyRender(lazySessions, (m) =>
-                m.renderSessions({
-                  loading: state.sessionsLoading,
-                  result: state.sessionsResult,
-                  error: state.sessionsError,
-                  activeMinutes: state.sessionsFilterActive,
-                  limit: state.sessionsFilterLimit,
-                  includeGlobal: state.sessionsIncludeGlobal,
-                  includeUnknown: state.sessionsIncludeUnknown,
-                  basePath: state.basePath,
-                  searchQuery: state.sessionsSearchQuery,
-                  sortColumn: state.sessionsSortColumn,
-                  sortDir: state.sessionsSortDir,
-                  page: state.sessionsPage,
-                  pageSize: state.sessionsPageSize,
-                  selectedKeys: state.sessionsSelectedKeys,
-                  onFiltersChange: (next) => {
-                    state.sessionsFilterActive = next.activeMinutes;
-                    state.sessionsFilterLimit = next.limit;
-                    state.sessionsIncludeGlobal = next.includeGlobal;
-                    state.sessionsIncludeUnknown = next.includeUnknown;
-                  },
-                  onSearchChange: (q) => {
-                    state.sessionsSearchQuery = q;
-                    state.sessionsPage = 0;
-                  },
-                  onSortChange: (col, dir) => {
-                    state.sessionsSortColumn = col;
-                    state.sessionsSortDir = dir;
-                    state.sessionsPage = 0;
-                  },
-                  onPageChange: (p) => {
-                    state.sessionsPage = p;
-                  },
-                  onPageSizeChange: (s) => {
-                    state.sessionsPageSize = s;
-                    state.sessionsPage = 0;
-                  },
-                  onRefresh: () => loadSessions(state),
-                  onPatch: (key, patch) => patchSession(state, key, patch),
-                  onToggleSelect: (key) => {
+                onPageChange: (p) => {
+                  state.sessionsPage = p;
+                },
+                onPageSizeChange: (s) => {
+                  state.sessionsPageSize = s;
+                  state.sessionsPage = 0;
+                },
+                onRefresh: () => loadSessions(state),
+                onPatch: (key, patch) => patchSession(state, key, patch),
+                onToggleSelect: (key) => {
+                  const next = new Set(state.sessionsSelectedKeys);
+                  if (next.has(key)) {
+                    next.delete(key);
+                  } else {
+                    next.add(key);
+                  }
+                  state.sessionsSelectedKeys = next;
+                },
+                onSelectPage: (keys) => {
+                  const next = new Set(state.sessionsSelectedKeys);
+                  for (const k of keys) {
+                    next.add(k);
+                  }
+                  state.sessionsSelectedKeys = next;
+                },
+                onDeselectPage: (keys) => {
+                  const next = new Set(state.sessionsSelectedKeys);
+                  for (const k of keys) {
+                    next.delete(k);
+                  }
+                  state.sessionsSelectedKeys = next;
+                },
+                onDeselectAll: () => {
+                  state.sessionsSelectedKeys = new Set();
+                },
+                onDeleteSelected: async () => {
+                  const keys = [...state.sessionsSelectedKeys];
+                  const deleted = await deleteSessionsAndRefresh(state, keys);
+                  if (deleted.length > 0) {
                     const next = new Set(state.sessionsSelectedKeys);
-                    if (next.has(key)) {
-                      next.delete(key);
-                    } else {
-                      next.add(key);
-                    }
-                    state.sessionsSelectedKeys = next;
-                  },
-                  onSelectPage: (keys) => {
-                    const next = new Set(state.sessionsSelectedKeys);
-                    for (const k of keys) {
-                      next.add(k);
-                    }
-                    state.sessionsSelectedKeys = next;
-                  },
-                  onDeselectPage: (keys) => {
-                    const next = new Set(state.sessionsSelectedKeys);
-                    for (const k of keys) {
+                    for (const k of deleted) {
                       next.delete(k);
                     }
                     state.sessionsSelectedKeys = next;
-                  },
-                  onDeselectAll: () => {
-                    state.sessionsSelectedKeys = new Set();
-                  },
-                  onDeleteSelected: async () => {
-                    const keys = [...state.sessionsSelectedKeys];
-                    const deleted = await deleteSessionsAndRefresh(state, keys);
-                    if (deleted.length > 0) {
-                      const next = new Set(state.sessionsSelectedKeys);
-                      for (const k of deleted) {
-                        next.delete(k);
-                      }
-                      state.sessionsSelectedKeys = next;
-                    }
-                  },
-                  onNavigateToChat: (sessionKey) => {
-                    switchChatSession(state, sessionKey);
+                  }
+                },
+                onNavigateToChat: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat" as import("./navigation.ts").Tab);
+                },
+                onToggleCheckpointDetails: (sessionKey) =>
+                  toggleSessionCompactionCheckpoints(state, sessionKey),
+                onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
+                  const nextKey = await branchSessionFromCheckpoint(
+                    state,
+                    sessionKey,
+                    checkpointId,
+                  );
+                  if (nextKey) {
+                    switchChatSession(state, nextKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
-                  },
-                }),
-              )
-            : nothing
-        }
-
+                  }
+                },
+                onRestoreCheckpoint: (sessionKey, checkpointId) =>
+                  restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+              }),
+            )
+          : nothing}
         ${renderUsageTab(state)}
-
-        ${
-          state.tab === "cron"
-            ? lazyRender(lazyCron, (m) =>
-                m.renderCron({
-                  basePath: state.basePath,
-                  loading: state.cronLoading,
+        ${state.tab === "cron"
+          ? lazyRender(lazyCron, (m) =>
+              m.renderCron({
+                basePath: state.basePath,
+                loading: state.cronLoading,
+                status: state.cronStatus,
+                jobs: visibleCronJobs,
+                jobsLoadingMore: state.cronJobsLoadingMore,
+                jobsTotal: state.cronJobsTotal,
+                jobsHasMore: state.cronJobsHasMore,
+                jobsQuery: state.cronJobsQuery,
+                jobsEnabledFilter: state.cronJobsEnabledFilter,
+                jobsScheduleKindFilter: state.cronJobsScheduleKindFilter,
+                jobsLastStatusFilter: state.cronJobsLastStatusFilter,
+                jobsSortBy: state.cronJobsSortBy,
+                jobsSortDir: state.cronJobsSortDir,
+                editingJobId: state.cronEditingJobId,
+                error: state.cronError,
+                busy: state.cronBusy,
+                form: state.cronForm,
+                channels: state.channelsSnapshot?.channelMeta?.length
+                  ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
+                  : (state.channelsSnapshot?.channelOrder ?? []),
+                channelLabels: state.channelsSnapshot?.channelLabels ?? {},
+                channelMeta: state.channelsSnapshot?.channelMeta ?? [],
+                runsJobId: state.cronRunsJobId,
+                runs: state.cronRuns,
+                runsTotal: state.cronRunsTotal,
+                runsHasMore: state.cronRunsHasMore,
+                runsLoadingMore: state.cronRunsLoadingMore,
+                runsScope: state.cronRunsScope,
+                runsStatuses: state.cronRunsStatuses,
+                runsDeliveryStatuses: state.cronRunsDeliveryStatuses,
+                runsStatusFilter: state.cronRunsStatusFilter,
+                runsQuery: state.cronRunsQuery,
+                runsSortDir: state.cronRunsSortDir,
+                fieldErrors: state.cronFieldErrors,
+                canSubmit: !hasCronFormErrors(state.cronFieldErrors),
+                agentSuggestions: cronAgentSuggestions,
+                modelSuggestions: cronModelSuggestions,
+                thinkingSuggestions: CRON_THINKING_SUGGESTIONS,
+                timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
+                deliveryToSuggestions,
+                accountSuggestions,
+                onFormChange: (patch) => {
+                  state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
+                  state.cronFieldErrors = validateCronForm(state.cronForm);
+                },
+                onRefresh: () => state.loadCron(),
+                onAdd: () => addCronJob(state),
+                onEdit: (job) => startCronEdit(state, job),
+                onClone: (job) => startCronClone(state, job),
+                onCancelEdit: () => cancelCronEdit(state),
+                onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
+                onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
+                onRemove: (job) => removeCronJob(state, job),
+                onLoadRuns: async (jobId) => {
+                  updateCronRunsFilter(state, { cronRunsScope: "job" });
+                  await loadCronRuns(state, jobId);
+                },
+                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true }),
+                onJobsFiltersChange: async (patch) => {
+                  updateCronJobsFilter(state, patch);
+                  const shouldReload =
+                    typeof patch.cronJobsQuery === "string" ||
+                    Boolean(patch.cronJobsEnabledFilter) ||
+                    Boolean(patch.cronJobsSortBy) ||
+                    Boolean(patch.cronJobsSortDir);
+                  if (shouldReload) {
+                    await loadCronJobsPage(state, { append: false });
+                  }
+                },
+                onJobsFiltersReset: async () => {
+                  updateCronJobsFilter(state, {
+                    cronJobsQuery: "",
+                    cronJobsEnabledFilter: "all",
+                    cronJobsScheduleKindFilter: "all",
+                    cronJobsLastStatusFilter: "all",
+                    cronJobsSortBy: "nextRunAtMs",
+                    cronJobsSortDir: "asc",
+                  });
+                  await loadCronJobsPage(state, { append: false });
+                },
+                onLoadMoreRuns: () => loadMoreCronRuns(state),
+                onRunsFiltersChange: async (patch) => {
+                  updateCronRunsFilter(state, patch);
+                  if (state.cronRunsScope === "all") {
+                    await loadCronRuns(state, null);
+                    return;
+                  }
+                  await loadCronRuns(state, state.cronRunsJobId);
+                },
+                onNavigateToChat: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat" as import("./navigation.ts").Tab);
+                },
+              }),
+            )
+          : nothing}
+        ${state.tab === "agents"
+          ? lazyRender(lazyAgents, (m) =>
+              m.renderAgents({
+                basePath: state.basePath ?? "",
+                loading: state.agentsLoading,
+                error: state.agentsError,
+                agentsList: state.agentsList,
+                selectedAgentId: resolvedAgentId,
+                activePanel: state.agentsPanel,
+                config: {
+                  form: configValue,
+                  loading: state.configLoading,
+                  saving: state.configSaving,
+                  dirty: state.configFormDirty,
+                },
+                channels: {
+                  snapshot: state.channelsSnapshot,
+                  loading: state.channelsLoading,
+                  error: state.channelsError,
+                  lastSuccess: state.channelsLastSuccess,
+                },
+                cron: {
                   status: state.cronStatus,
-                  jobs: visibleCronJobs,
-                  jobsLoadingMore: state.cronJobsLoadingMore,
-                  jobsTotal: state.cronJobsTotal,
-                  jobsHasMore: state.cronJobsHasMore,
-                  jobsQuery: state.cronJobsQuery,
-                  jobsEnabledFilter: state.cronJobsEnabledFilter,
-                  jobsScheduleKindFilter: state.cronJobsScheduleKindFilter,
-                  jobsLastStatusFilter: state.cronJobsLastStatusFilter,
-                  jobsSortBy: state.cronJobsSortBy,
-                  jobsSortDir: state.cronJobsSortDir,
-                  editingJobId: state.cronEditingJobId,
+                  jobs: state.cronJobs,
+                  loading: state.cronLoading,
                   error: state.cronError,
-                  busy: state.cronBusy,
-                  form: state.cronForm,
-                  channels: state.channelsSnapshot?.channelMeta?.length
-                    ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
-                    : (state.channelsSnapshot?.channelOrder ?? []),
-                  channelLabels: state.channelsSnapshot?.channelLabels ?? {},
-                  channelMeta: state.channelsSnapshot?.channelMeta ?? [],
-                  runsJobId: state.cronRunsJobId,
-                  runs: state.cronRuns,
-                  runsTotal: state.cronRunsTotal,
-                  runsHasMore: state.cronRunsHasMore,
-                  runsLoadingMore: state.cronRunsLoadingMore,
-                  runsScope: state.cronRunsScope,
-                  runsStatuses: state.cronRunsStatuses,
-                  runsDeliveryStatuses: state.cronRunsDeliveryStatuses,
-                  runsStatusFilter: state.cronRunsStatusFilter,
-                  runsQuery: state.cronRunsQuery,
-                  runsSortDir: state.cronRunsSortDir,
-                  fieldErrors: state.cronFieldErrors,
-                  canSubmit: !hasCronFormErrors(state.cronFieldErrors),
-                  agentSuggestions: cronAgentSuggestions,
-                  modelSuggestions: cronModelSuggestions,
-                  thinkingSuggestions: CRON_THINKING_SUGGESTIONS,
-                  timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
-                  deliveryToSuggestions,
-                  accountSuggestions,
-                  onFormChange: (patch) => {
-                    state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
-                    state.cronFieldErrors = validateCronForm(state.cronForm);
-                  },
-                  onRefresh: () => state.loadCron(),
-                  onAdd: () => addCronJob(state),
-                  onEdit: (job) => startCronEdit(state, job),
-                  onClone: (job) => startCronClone(state, job),
-                  onCancelEdit: () => cancelCronEdit(state),
-                  onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
-                  onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
-                  onRemove: (job) => removeCronJob(state, job),
-                  onLoadRuns: async (jobId) => {
-                    updateCronRunsFilter(state, { cronRunsScope: "job" });
-                    await loadCronRuns(state, jobId);
-                  },
-                  onLoadMoreJobs: () => loadMoreCronJobs(state),
-                  onJobsFiltersChange: async (patch) => {
-                    updateCronJobsFilter(state, patch);
-                    const shouldReload =
-                      typeof patch.cronJobsQuery === "string" ||
-                      Boolean(patch.cronJobsEnabledFilter) ||
-                      Boolean(patch.cronJobsSortBy) ||
-                      Boolean(patch.cronJobsSortDir);
-                    if (shouldReload) {
-                      await reloadCronJobs(state);
+                },
+                agentFiles: {
+                  list: state.agentFilesList,
+                  loading: state.agentFilesLoading,
+                  error: state.agentFilesError,
+                  active: state.agentFileActive,
+                  contents: state.agentFileContents,
+                  drafts: state.agentFileDrafts,
+                  saving: state.agentFileSaving,
+                },
+                agentIdentityLoading: state.agentIdentityLoading,
+                agentIdentityError: state.agentIdentityError,
+                agentIdentityById: state.agentIdentityById,
+                agentSkills: {
+                  report: state.agentSkillsReport,
+                  loading: state.agentSkillsLoading,
+                  error: state.agentSkillsError,
+                  agentId: state.agentSkillsAgentId,
+                  filter: state.skillsFilter,
+                },
+                toolsCatalog: {
+                  loading: state.toolsCatalogLoading,
+                  error: state.toolsCatalogError,
+                  result: state.toolsCatalogResult,
+                },
+                toolsEffective: {
+                  loading: state.toolsEffectiveLoading,
+                  error: state.toolsEffectiveError,
+                  result: state.toolsEffectiveResult,
+                },
+                runtimeSessionKey: state.sessionKey,
+                runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
+                modelCatalog: state.chatModelCatalog ?? [],
+                onRefresh: async () => {
+                  await loadAgents(state);
+                  const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
+                  if (agentIds.length > 0) {
+                    void loadAgentIdentities(state, agentIds);
+                  }
+                  loadAgentPanelDataForSelectedAgent(resolveSelectedAgentId());
+                  refreshAgentsPanelSupplementalData(state.agentsPanel);
+                },
+                onSelectAgent: (agentId) => {
+                  if (state.agentsSelectedId === agentId) {
+                    return;
+                  }
+                  state.agentsSelectedId = agentId;
+                  resetAgentSelectionPanelState();
+                  void loadAgentIdentity(state, agentId);
+                  loadAgentPanelDataForSelectedAgent(agentId);
+                },
+                onSelectPanel: (panel) => {
+                  state.agentsPanel = panel;
+                  if (
+                    panel === "files" &&
+                    resolvedAgentId &&
+                    state.agentFilesList?.agentId !== resolvedAgentId
+                  ) {
+                    resetAgentFilesState();
+                    void loadAgentFiles(state, resolvedAgentId);
+                  }
+                  if (panel === "skills" && resolvedAgentId) {
+                    void loadAgentSkills(state, resolvedAgentId);
+                  }
+                  if (panel === "tools" && resolvedAgentId) {
+                    if (
+                      state.toolsCatalogResult?.agentId !== resolvedAgentId ||
+                      state.toolsCatalogError
+                    ) {
+                      void loadToolsCatalog(state, resolvedAgentId);
                     }
-                  },
-                  onJobsFiltersReset: async () => {
-                    updateCronJobsFilter(state, {
-                      cronJobsQuery: "",
-                      cronJobsEnabledFilter: "all",
-                      cronJobsScheduleKindFilter: "all",
-                      cronJobsLastStatusFilter: "all",
-                      cronJobsSortBy: "nextRunAtMs",
-                      cronJobsSortDir: "asc",
-                    });
-                    await reloadCronJobs(state);
-                  },
-                  onLoadMoreRuns: () => loadMoreCronRuns(state),
-                  onRunsFiltersChange: async (patch) => {
-                    updateCronRunsFilter(state, patch);
-                    if (state.cronRunsScope === "all") {
-                      await loadCronRuns(state, null);
-                      return;
-                    }
-                    await loadCronRuns(state, state.cronRunsJobId);
-                  },
-                  onNavigateToChat: (sessionKey) => {
-                    switchChatSession(state, sessionKey);
-                    state.setTab("chat" as import("./navigation.ts").Tab);
-                  },
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "agents"
-            ? lazyRender(lazyAgents, (m) =>
-                m.renderAgents({
-                  basePath: state.basePath ?? "",
-                  loading: state.agentsLoading,
-                  error: state.agentsError,
-                  agentsList: state.agentsList,
-                  selectedAgentId: resolvedAgentId,
-                  activePanel: state.agentsPanel,
-                  config: {
-                    form: configValue,
-                    loading: state.configLoading,
-                    saving: state.configSaving,
-                    dirty: state.configFormDirty,
-                  },
-                  channels: {
-                    snapshot: state.channelsSnapshot,
-                    loading: state.channelsLoading,
-                    error: state.channelsError,
-                    lastSuccess: state.channelsLastSuccess,
-                  },
-                  cron: {
-                    status: state.cronStatus,
-                    jobs: state.cronJobs,
-                    loading: state.cronLoading,
-                    error: state.cronError,
-                  },
-                  agentFiles: {
-                    list: state.agentFilesList,
-                    loading: state.agentFilesLoading,
-                    error: state.agentFilesError,
-                    active: state.agentFileActive,
-                    contents: state.agentFileContents,
-                    drafts: state.agentFileDrafts,
-                    saving: state.agentFileSaving,
-                  },
-                  agentIdentityLoading: state.agentIdentityLoading,
-                  agentIdentityError: state.agentIdentityError,
-                  agentIdentityById: state.agentIdentityById,
-                  agentSkills: {
-                    report: state.agentSkillsReport,
-                    loading: state.agentSkillsLoading,
-                    error: state.agentSkillsError,
-                    agentId: state.agentSkillsAgentId,
-                    filter: state.skillsFilter,
-                  },
-                  toolsCatalog: {
-                    loading: state.toolsCatalogLoading,
-                    error: state.toolsCatalogError,
-                    result: state.toolsCatalogResult,
-                  },
-                  toolsEffective: {
-                    loading: state.toolsEffectiveLoading,
-                    error: state.toolsEffectiveError,
-                    result: state.toolsEffectiveResult,
-                  },
-                  runtimeSessionKey: state.sessionKey,
-                  runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
-                  modelCatalog: state.chatModelCatalog ?? [],
-                  onRefresh: async () => {
-                    await loadAgents(state);
-                    const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
-                    if (agentIds.length > 0) {
-                      void loadAgentIdentities(state, agentIds);
-                    }
-                    const refreshedAgentId =
-                      state.agentsSelectedId ??
-                      state.agentsList?.defaultId ??
-                      state.agentsList?.agents?.[0]?.id ??
-                      null;
-                    if (state.agentsPanel === "files" && refreshedAgentId) {
-                      void loadAgentFiles(state, refreshedAgentId);
-                    }
-                    if (state.agentsPanel === "skills" && refreshedAgentId) {
-                      void loadAgentSkills(state, refreshedAgentId);
-                    }
-                    if (state.agentsPanel === "tools" && refreshedAgentId) {
-                      void loadToolsCatalog(state, refreshedAgentId);
-                      if (refreshedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                        void loadToolsEffective(state, {
-                          agentId: refreshedAgentId,
-                          sessionKey: state.sessionKey,
-                        });
-                      }
-                    }
-                    if (state.agentsPanel === "channels") {
-                      void loadChannels(state, false);
-                    }
-                    if (state.agentsPanel === "cron") {
-                      void state.loadCron();
-                    }
-                  },
-                  onSelectAgent: (agentId) => {
-                    if (state.agentsSelectedId === agentId) {
-                      return;
-                    }
-                    state.agentsSelectedId = agentId;
-                    state.agentFilesList = null;
-                    state.agentFilesError = null;
-                    state.agentFilesLoading = false;
-                    state.agentFileActive = null;
-                    state.agentFileContents = {};
-                    state.agentFileDrafts = {};
-                    state.agentSkillsReport = null;
-                    state.agentSkillsError = null;
-                    state.agentSkillsAgentId = null;
-                    state.toolsCatalogResult = null;
-                    state.toolsCatalogError = null;
-                    state.toolsCatalogLoading = false;
-                    state.toolsEffectiveResult = null;
-                    state.toolsEffectiveResultKey = null;
-                    state.toolsEffectiveError = null;
-                    state.toolsEffectiveLoading = false;
-                    state.toolsEffectiveLoadingKey = null;
-                    void loadAgentIdentity(state, agentId);
-                    if (state.agentsPanel === "files") {
-                      void loadAgentFiles(state, agentId);
-                    }
-                    if (state.agentsPanel === "tools") {
-                      void loadToolsCatalog(state, agentId);
-                      if (agentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                        void loadToolsEffective(state, {
-                          agentId,
-                          sessionKey: state.sessionKey,
-                        });
-                      }
-                    }
-                    if (state.agentsPanel === "skills") {
-                      void loadAgentSkills(state, agentId);
-                    }
-                  },
-                  onSelectPanel: (panel) => {
-                    state.agentsPanel = panel;
-                    if (panel === "files" && resolvedAgentId) {
-                      if (state.agentFilesList?.agentId !== resolvedAgentId) {
-                        state.agentFilesList = null;
-                        state.agentFilesError = null;
-                        state.agentFileActive = null;
-                        state.agentFileContents = {};
-                        state.agentFileDrafts = {};
-                        void loadAgentFiles(state, resolvedAgentId);
-                      }
-                    }
-                    if (panel === "skills") {
-                      if (resolvedAgentId) {
-                        void loadAgentSkills(state, resolvedAgentId);
-                      }
-                    }
-                    if (panel === "tools" && resolvedAgentId) {
+                    if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                      const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
+                        agentId: resolvedAgentId,
+                        sessionKey: state.sessionKey,
+                      });
                       if (
-                        state.toolsCatalogResult?.agentId !== resolvedAgentId ||
-                        state.toolsCatalogError
+                        state.toolsEffectiveResultKey !== toolsRequestKey ||
+                        state.toolsEffectiveError
                       ) {
-                        void loadToolsCatalog(state, resolvedAgentId);
-                      }
-                      if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                        const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
+                        void loadToolsEffective(state, {
                           agentId: resolvedAgentId,
                           sessionKey: state.sessionKey,
                         });
-                        if (
-                          state.toolsEffectiveResultKey !== toolsRequestKey ||
-                          state.toolsEffectiveError
-                        ) {
-                          void loadToolsEffective(state, {
-                            agentId: resolvedAgentId,
-                            sessionKey: state.sessionKey,
-                          });
-                        }
-                      } else {
-                        state.toolsEffectiveResult = null;
-                        state.toolsEffectiveResultKey = null;
-                        state.toolsEffectiveError = null;
-                        state.toolsEffectiveLoading = false;
-                        state.toolsEffectiveLoadingKey = null;
                       }
-                    }
-                    if (panel === "channels") {
-                      void loadChannels(state, false);
-                    }
-                    if (panel === "cron") {
-                      void state.loadCron();
-                    }
-                  },
-                  onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
-                  onSelectFile: (name) => {
-                    state.agentFileActive = name;
-                    if (!resolvedAgentId) {
-                      return;
-                    }
-                    void loadAgentFileContent(state, resolvedAgentId, name);
-                  },
-                  onFileDraftChange: (name, content) => {
-                    state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
-                  },
-                  onFileReset: (name) => {
-                    const base = state.agentFileContents[name] ?? "";
-                    state.agentFileDrafts = { ...state.agentFileDrafts, [name]: base };
-                  },
-                  onFileSave: (name) => {
-                    if (!resolvedAgentId) {
-                      return;
-                    }
-                    const content =
-                      state.agentFileDrafts[name] ?? state.agentFileContents[name] ?? "";
-                    void saveAgentFile(state, resolvedAgentId, name, content);
-                  },
-                  onToolsProfileChange: (agentId, profile, clearAllow) => {
-                    const index =
-                      profile || clearAllow ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
-                    }
-                    const basePath = ["agents", "list", index, "tools"];
-                    if (profile) {
-                      updateConfigFormValue(state, [...basePath, "profile"], profile);
                     } else {
-                      removeConfigFormValue(state, [...basePath, "profile"]);
+                      resetToolsEffectiveState(state);
                     }
-                    if (clearAllow) {
-                      removeConfigFormValue(state, [...basePath, "allow"]);
+                  }
+                  refreshAgentsPanelSupplementalData(panel);
+                },
+                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onSelectFile: (name) => {
+                  state.agentFileActive = name;
+                  if (!resolvedAgentId) {
+                    return;
+                  }
+                  void loadAgentFileContent(state, resolvedAgentId, name);
+                },
+                onFileDraftChange: (name, content) => {
+                  state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+                },
+                onFileReset: (name) => {
+                  const base = state.agentFileContents[name] ?? "";
+                  state.agentFileDrafts = { ...state.agentFileDrafts, [name]: base };
+                },
+                onFileSave: (name) => {
+                  if (!resolvedAgentId) {
+                    return;
+                  }
+                  const content =
+                    state.agentFileDrafts[name] ?? state.agentFileContents[name] ?? "";
+                  void saveAgentFile(state, resolvedAgentId, name, content);
+                },
+                onToolsProfileChange: (agentId, profile, clearAllow) => {
+                  const basePath = resolveAgentToolsPath(agentId, Boolean(profile || clearAllow));
+                  if (!basePath) {
+                    return;
+                  }
+                  if (profile) {
+                    updateConfigFormValue(state, [...basePath, "profile"], profile);
+                  } else {
+                    removeConfigFormValue(state, [...basePath, "profile"]);
+                  }
+                  if (clearAllow) {
+                    removeConfigFormValue(state, [...basePath, "allow"]);
+                  }
+                },
+                onToolsOverridesChange: (agentId, alsoAllow, deny) => {
+                  const basePath = resolveAgentToolsPath(
+                    agentId,
+                    alsoAllow.length > 0 || deny.length > 0,
+                  );
+                  if (!basePath) {
+                    return;
+                  }
+                  if (alsoAllow.length > 0) {
+                    updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
+                  } else {
+                    removeConfigFormValue(state, [...basePath, "alsoAllow"]);
+                  }
+                  if (deny.length > 0) {
+                    updateConfigFormValue(state, [...basePath, "deny"], deny);
+                  } else {
+                    removeConfigFormValue(state, [...basePath, "deny"]);
+                  }
+                },
+                onConfigReload: () => loadConfig(state),
+                onConfigSave: () => saveAgentsConfig(state),
+                onChannelsRefresh: () => loadChannels(state, false),
+                onCronRefresh: () => state.loadCron(),
+                onCronRunNow: (jobId) => {
+                  const job = state.cronJobs.find((entry) => entry.id === jobId);
+                  if (!job) {
+                    return;
+                  }
+                  void runCronJob(state, job, "force");
+                },
+                onSkillsFilterChange: (next) => (state.skillsFilter = next),
+                onSkillsRefresh: () => {
+                  if (resolvedAgentId) {
+                    void loadAgentSkills(state, resolvedAgentId);
+                  }
+                },
+                onAgentSkillToggle: (agentId, skillName, enabled) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
+                    ?.agents?.list;
+                  const entry = Array.isArray(list)
+                    ? (list[index] as { skills?: unknown })
+                    : undefined;
+                  const normalizedSkill = skillName.trim();
+                  if (!normalizedSkill) {
+                    return;
+                  }
+                  const allSkills =
+                    state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
+                    [];
+                  const existing = Array.isArray(entry?.skills)
+                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                    : undefined;
+                  const base = existing ?? allSkills;
+                  const next = new Set(base);
+                  if (enabled) {
+                    next.add(normalizedSkill);
+                  } else {
+                    next.delete(normalizedSkill);
+                  }
+                  updateConfigFormValue(state, ["agents", "list", index, "skills"], [...next]);
+                },
+                onAgentSkillsClear: (agentId) => {
+                  const index = findAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  removeConfigFormValue(state, ["agents", "list", index, "skills"]);
+                },
+                onAgentSkillsDisableAll: (agentId) => {
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
+                },
+                onModelChange: (agentId, modelId) => {
+                  const index = modelId ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  const modelEntry = resolveAgentModelFormEntry(index);
+                  const { basePath, existing } = modelEntry;
+                  if (!modelId) {
+                    removeConfigFormValue(state, basePath);
+                  } else {
+                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                      const next = {
+                        primary: modelId,
+                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                      };
+                      updateConfigFormValue(state, basePath, next);
+                    } else {
+                      updateConfigFormValue(state, basePath, modelId);
                     }
-                  },
-                  onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                    const index =
-                      alsoAllow.length > 0 || deny.length > 0
+                  }
+                  void refreshVisibleToolsEffectiveForCurrentSession(state);
+                },
+                onModelFallbacksChange: (agentId, fallbacks) => {
+                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const currentConfig = getCurrentConfigValue();
+                  const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
+                  const effectivePrimary =
+                    resolveModelPrimary(resolvedConfig.entry?.model) ??
+                    resolveModelPrimary(resolvedConfig.defaults?.model);
+                  const effectiveFallbacks = resolveEffectiveModelFallbacks(
+                    resolvedConfig.entry?.model,
+                    resolvedConfig.defaults?.model,
+                  );
+                  const index =
+                    normalized.length > 0
+                      ? effectivePrimary
                         ? ensureAgentIndex(agentId)
-                        : findAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
+                        : -1
+                      : (effectiveFallbacks?.length ?? 0) > 0 || findAgentIndex(agentId) >= 0
+                        ? ensureAgentIndex(agentId)
+                        : -1;
+                  if (index < 0) {
+                    return;
+                  }
+                  const { basePath, existing } = resolveAgentModelFormEntry(index);
+                  const resolvePrimary = () => {
+                    if (typeof existing === "string") {
+                      return existing.trim() || null;
                     }
-                    const basePath = ["agents", "list", index, "tools"];
-                    if (alsoAllow.length > 0) {
-                      updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
-                    } else {
-                      removeConfigFormValue(state, [...basePath, "alsoAllow"]);
-                    }
-                    if (deny.length > 0) {
-                      updateConfigFormValue(state, [...basePath, "deny"], deny);
-                    } else {
-                      removeConfigFormValue(state, [...basePath, "deny"]);
-                    }
-                  },
-                  onConfigReload: () => loadConfig(state),
-                  onConfigSave: () => saveAgentsConfig(state),
-                  onChannelsRefresh: () => loadChannels(state, false),
-                  onCronRefresh: () => state.loadCron(),
-                  onCronRunNow: (jobId) => {
-                    const job = state.cronJobs.find((entry) => entry.id === jobId);
-                    if (!job) {
-                      return;
-                    }
-                    void runCronJob(state, job, "force");
-                  },
-                  onSkillsFilterChange: (next) => (state.skillsFilter = next),
-                  onSkillsRefresh: () => {
-                    if (resolvedAgentId) {
-                      void loadAgentSkills(state, resolvedAgentId);
-                    }
-                  },
-                  onAgentSkillToggle: (agentId, skillName, enabled) => {
-                    const index = ensureAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
-                    }
-                    const list = (
-                      getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null
-                    )?.agents?.list;
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { skills?: unknown })
-                      : undefined;
-                    const normalizedSkill = skillName.trim();
-                    if (!normalizedSkill) {
-                      return;
-                    }
-                    const allSkills =
-                      state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
-                      [];
-                    const existing = Array.isArray(entry?.skills)
-                      ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
-                      : undefined;
-                    const base = existing ?? allSkills;
-                    const next = new Set(base);
-                    if (enabled) {
-                      next.add(normalizedSkill);
-                    } else {
-                      next.delete(normalizedSkill);
-                    }
-                    updateConfigFormValue(state, ["agents", "list", index, "skills"], [...next]);
-                  },
-                  onAgentSkillsClear: (agentId) => {
-                    const index = findAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
-                    }
-                    removeConfigFormValue(state, ["agents", "list", index, "skills"]);
-                  },
-                  onAgentSkillsDisableAll: (agentId) => {
-                    const index = ensureAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
-                    }
-                    updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
-                  },
-                  onModelChange: (agentId, modelId) => {
-                    const index = modelId ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
-                    if (index < 0) {
-                      return;
-                    }
-                    const list = (
-                      getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null
-                    )?.agents?.list;
-                    const basePath = ["agents", "list", index, "model"];
-                    if (!modelId) {
-                      removeConfigFormValue(state, basePath);
-                    } else {
-                      const entry = Array.isArray(list)
-                        ? (list[index] as { model?: unknown })
-                        : undefined;
-                      const existing = entry?.model;
-                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                        const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                        const next = {
-                          primary: modelId,
-                          ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                        };
-                        updateConfigFormValue(state, basePath, next);
-                      } else {
-                        updateConfigFormValue(state, basePath, modelId);
+                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                      const primary = (existing as { primary?: unknown }).primary;
+                      if (typeof primary === "string") {
+                        const trimmed = primary.trim();
+                        return trimmed || null;
                       }
                     }
-                    void refreshVisibleToolsEffectiveForCurrentSession(state);
-                  },
-                  onModelFallbacksChange: (agentId, fallbacks) => {
-                    const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                    const currentConfig = getCurrentConfigValue();
-                    const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
-                    const effectivePrimary =
-                      resolveModelPrimary(resolvedConfig.entry?.model) ??
-                      resolveModelPrimary(resolvedConfig.defaults?.model);
-                    const effectiveFallbacks = resolveEffectiveModelFallbacks(
-                      resolvedConfig.entry?.model,
-                      resolvedConfig.defaults?.model,
-                    );
-                    const index =
-                      normalized.length > 0
-                        ? effectivePrimary
-                          ? ensureAgentIndex(agentId)
-                          : -1
-                        : (effectiveFallbacks?.length ?? 0) > 0 || findAgentIndex(agentId) >= 0
-                          ? ensureAgentIndex(agentId)
-                          : -1;
-                    if (index < 0) {
-                      return;
-                    }
-                    const list = (
-                      getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null
-                    )?.agents?.list;
-                    const basePath = ["agents", "list", index, "model"];
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
-                    const resolvePrimary = () => {
-                      if (typeof existing === "string") {
-                        return existing.trim() || null;
-                      }
-                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                        const primary = (existing as { primary?: unknown }).primary;
-                        if (typeof primary === "string") {
-                          const trimmed = primary.trim();
-                          return trimmed || null;
-                        }
-                      }
-                      return null;
-                    };
-                    const primary = resolvePrimary() ?? effectivePrimary;
-                    if (normalized.length === 0) {
-                      if (primary) {
-                        updateConfigFormValue(state, basePath, primary);
-                      } else {
-                        removeConfigFormValue(state, basePath);
-                      }
-                      return;
-                    }
-                    if (!primary) {
-                      return;
-                    }
-                    updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
-                  },
-                  onSetDefault: (agentId) => {
-                    if (!configValue) {
-                      return;
-                    }
-                    updateConfigFormValue(state, ["agents", "defaultId"], agentId);
-                  },
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "skills"
-            ? lazyRender(lazySkills, (m) =>
-                m.renderSkills({
-                  connected: state.connected,
-                  loading: state.skillsLoading,
-                  report: state.skillsReport,
-                  error: state.skillsError,
-                  filter: state.skillsFilter,
-                  statusFilter: state.skillsStatusFilter,
-                  edits: state.skillEdits,
-                  messages: state.skillMessages,
-                  busyKey: state.skillsBusyKey,
-                  detailKey: state.skillsDetailKey,
-                  onFilterChange: (next) => (state.skillsFilter = next),
-                  onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
-                  onRefresh: () => loadSkills(state, { clearMessages: true }),
-                  onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
-                  onEdit: (key, value) => updateSkillEdit(state, key, value),
-                  onSaveKey: (key) => saveSkillApiKey(state, key),
-                  onInstall: (skillKey, name, installId) =>
-                    installSkill(state, skillKey, name, installId),
-                  onDetailOpen: (key) => (state.skillsDetailKey = key),
-                  onDetailClose: () => (state.skillsDetailKey = null),
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "nodes"
-            ? lazyRender(lazyNodes, (m) =>
-                m.renderNodes({
-                  loading: state.nodesLoading,
-                  nodes: state.nodes,
-                  devicesLoading: state.devicesLoading,
-                  devicesError: state.devicesError,
-                  devicesList: state.devicesList,
-                  configForm:
-                    state.configForm ??
-                    (state.configSnapshot?.config as Record<string, unknown> | null),
-                  configLoading: state.configLoading,
-                  configSaving: state.configSaving,
-                  configDirty: state.configFormDirty,
-                  configFormMode: state.configFormMode,
-                  execApprovalsLoading: state.execApprovalsLoading,
-                  execApprovalsSaving: state.execApprovalsSaving,
-                  execApprovalsDirty: state.execApprovalsDirty,
-                  execApprovalsSnapshot: state.execApprovalsSnapshot,
-                  execApprovalsForm: state.execApprovalsForm,
-                  execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
-                  execApprovalsTarget: state.execApprovalsTarget,
-                  execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
-                  onRefresh: () => loadNodes(state),
-                  onDevicesRefresh: () => loadDevices(state),
-                  onDeviceApprove: (requestId) => approveDevicePairing(state, requestId),
-                  onDeviceReject: (requestId) => rejectDevicePairing(state, requestId),
-                  onDeviceRotate: (deviceId, role, scopes) =>
-                    rotateDeviceToken(state, { deviceId, role, scopes }),
-                  onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                  onLoadConfig: () => loadConfig(state),
-                  onLoadExecApprovals: () => {
-                    const target =
-                      state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
-                        ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
-                        : { kind: "gateway" as const };
-                    return loadExecApprovals(state, target);
-                  },
-                  onBindDefault: (nodeId) => {
-                    if (nodeId) {
-                      updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
-                    } else {
-                      removeConfigFormValue(state, ["tools", "exec", "node"]);
-                    }
-                  },
-                  onBindAgent: (agentIndex, nodeId) => {
-                    const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
-                    if (nodeId) {
-                      updateConfigFormValue(state, basePath, nodeId);
+                    return null;
+                  };
+                  const primary = resolvePrimary() ?? effectivePrimary;
+                  if (normalized.length === 0) {
+                    if (primary) {
+                      updateConfigFormValue(state, basePath, primary);
                     } else {
                       removeConfigFormValue(state, basePath);
                     }
-                  },
-                  onSaveBindings: () => saveConfig(state),
-                  onExecApprovalsTargetChange: (kind, nodeId) => {
-                    state.execApprovalsTarget = kind;
-                    state.execApprovalsTargetNodeId = nodeId;
-                    state.execApprovalsSnapshot = null;
-                    state.execApprovalsForm = null;
-                    state.execApprovalsDirty = false;
-                    state.execApprovalsSelectedAgent = null;
-                  },
-                  onExecApprovalsSelectAgent: (agentId) => {
-                    state.execApprovalsSelectedAgent = agentId;
-                  },
-                  onExecApprovalsPatch: (path, value) =>
-                    updateExecApprovalsFormValue(state, path, value),
-                  onExecApprovalsRemove: (path) => removeExecApprovalsFormValue(state, path),
-                  onSaveExecApprovals: () => {
-                    const target =
-                      state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
-                        ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
-                        : { kind: "gateway" as const };
-                    return saveExecApprovals(state, target);
-                  },
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "chat"
-            ? renderChat({
-                sessionKey: state.sessionKey,
-                onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.chatAttachments = [];
-                  state.chatStream = null;
-                  state.chatStreamStartedAt = null;
-                  state.chatRunId = null;
-                  state.chatQueue = [];
-                  state.resetToolStream();
-                  state.resetChatScroll();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
-                  void loadChatHistory(state);
-                  void refreshChatAvatar(state);
+                    return;
+                  }
+                  if (!primary) {
+                    return;
+                  }
+                  updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
-                thinkingLevel: state.chatThinkingLevel,
-                showThinking,
-                showToolCalls,
-                loading: state.chatLoading,
-                sending: state.chatSending,
-                compactionStatus: state.compactionStatus,
-                fallbackStatus: state.fallbackStatus,
-                assistantAvatarUrl: chatAvatarUrl,
-                messages: state.chatMessages,
-                toolMessages: state.chatToolMessages,
-                streamSegments: state.chatStreamSegments,
-                stream: state.chatStream,
-                streamStartedAt: state.chatStreamStartedAt,
-                draft: state.chatMessage,
-                queue: state.chatQueue,
+                onSetDefault: (agentId) => {
+                  if (!configValue) {
+                    return;
+                  }
+                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                },
+              }),
+            )
+          : nothing}
+        ${state.tab === "skills"
+          ? lazyRender(lazySkills, (m) =>
+              m.renderSkills({
                 connected: state.connected,
-                canSend: state.connected,
-                disabledReason: chatDisabledReason,
-                error: state.lastError,
-                sessions: state.sessionsResult,
-                focusMode: chatFocus,
-                onRefresh: () => {
-                  state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
-                },
-                onToggleFocusMode: () => {
-                  if (state.onboarding) {
-                    return;
+                loading: state.skillsLoading,
+                report: state.skillsReport,
+                error: state.skillsError,
+                filter: state.skillsFilter,
+                statusFilter: state.skillsStatusFilter,
+                edits: state.skillEdits,
+                messages: state.skillMessages,
+                busyKey: state.skillsBusyKey,
+                detailKey: state.skillsDetailKey,
+                clawhubQuery: state.clawhubSearchQuery,
+                clawhubResults: state.clawhubSearchResults,
+                clawhubSearchLoading: state.clawhubSearchLoading,
+                clawhubSearchError: state.clawhubSearchError,
+                clawhubDetail: state.clawhubDetail,
+                clawhubDetailSlug: state.clawhubDetailSlug,
+                clawhubDetailLoading: state.clawhubDetailLoading,
+                clawhubDetailError: state.clawhubDetailError,
+                clawhubInstallSlug: state.clawhubInstallSlug,
+                clawhubInstallMessage: state.clawhubInstallMessage,
+                onFilterChange: (next) => (state.skillsFilter = next),
+                onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
+                onRefresh: () => loadSkills(state, { clearMessages: true }),
+                onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
+                onEdit: (key, value) => updateSkillEdit(state, key, value),
+                onSaveKey: (key) => saveSkillApiKey(state, key),
+                onInstall: (skillKey, name, installId) =>
+                  installSkill(state, skillKey, name, installId),
+                onDetailOpen: (key) => (state.skillsDetailKey = key),
+                onDetailClose: () => (state.skillsDetailKey = null),
+                onClawHubQueryChange: (query) => {
+                  setClawHubSearchQuery(state, query);
+                  if (clawhubSearchTimer) {
+                    clearTimeout(clawhubSearchTimer);
                   }
-                  state.applySettings({
-                    ...state.settings,
-                    chatFocusMode: !state.settings.chatFocusMode,
-                  });
+                  clawhubSearchTimer = setTimeout(() => searchClawHub(state, query), 300);
                 },
-                onChatScroll: (event) => state.handleChatScroll(event),
-                getDraft: () => state.chatMessage,
-                onDraftChange: (next) => (state.chatMessage = next),
-                onRequestUpdate: requestHostUpdate,
-                attachments: state.chatAttachments,
-                onAttachmentsChange: (next) => (state.chatAttachments = next),
-                onSend: () => state.handleSendChat(),
-                canAbort: Boolean(state.chatRunId),
-                onAbort: () => void state.handleAbortChat(),
-                onQueueRemove: (id) => state.removeQueuedMessage(id),
-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
-                onClearHistory: async () => {
-                  if (!state.client || !state.connected) {
-                    return;
-                  }
-                  try {
-                    await state.client.request("sessions.reset", { key: state.sessionKey });
-                    state.chatMessages = [];
-                    state.chatStream = null;
-                    state.chatRunId = null;
-                    await loadChatHistory(state);
-                  } catch (err) {
-                    state.lastError = String(err);
+                onClawHubDetailOpen: (slug) => loadClawHubDetail(state, slug),
+                onClawHubDetailClose: () => closeClawHubDetail(state),
+                onClawHubInstall: (slug) => installFromClawHub(state, slug),
+              }),
+            )
+          : nothing}
+        ${state.tab === "nodes"
+          ? lazyRender(lazyNodes, (m) =>
+              m.renderNodes({
+                loading: state.nodesLoading,
+                nodes: state.nodes,
+                devicesLoading: state.devicesLoading,
+                devicesError: state.devicesError,
+                devicesList: state.devicesList,
+                configForm:
+                  state.configForm ??
+                  (state.configSnapshot?.config as Record<string, unknown> | null),
+                configLoading: state.configLoading,
+                configSaving: state.configSaving,
+                configDirty: state.configFormDirty,
+                configFormMode: state.configFormMode,
+                execApprovalsLoading: state.execApprovalsLoading,
+                execApprovalsSaving: state.execApprovalsSaving,
+                execApprovalsDirty: state.execApprovalsDirty,
+                execApprovalsSnapshot: state.execApprovalsSnapshot,
+                execApprovalsForm: state.execApprovalsForm,
+                execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
+                execApprovalsTarget: state.execApprovalsTarget,
+                execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
+                onRefresh: () => loadNodes(state),
+                onDevicesRefresh: () => loadDevices(state),
+                onDeviceApprove: (requestId) => approveDevicePairing(state, requestId),
+                onDeviceReject: (requestId) => rejectDevicePairing(state, requestId),
+                onDeviceRotate: (deviceId, role, scopes) =>
+                  rotateDeviceToken(state, { deviceId, role, scopes }),
+                onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
+                onLoadConfig: () => loadConfig(state),
+                onLoadExecApprovals: () => {
+                  const target =
+                    state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                      ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                      : { kind: "gateway" as const };
+                  return loadExecApprovals(state, target);
+                },
+                onBindDefault: (nodeId) => {
+                  if (nodeId) {
+                    updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
+                  } else {
+                    removeConfigFormValue(state, ["tools", "exec", "node"]);
                   }
                 },
-                agentsList: state.agentsList,
-                currentAgentId: resolvedAgentId ?? "main",
-                onAgentChange: (agentId: string) => {
-                  state.sessionKey = buildAgentMainSessionKey({ agentId });
+                onBindAgent: (agentIndex, nodeId) => {
+                  const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
+                  if (nodeId) {
+                    updateConfigFormValue(state, basePath, nodeId);
+                  } else {
+                    removeConfigFormValue(state, basePath);
+                  }
+                },
+                onSaveBindings: () => saveConfig(state),
+                onExecApprovalsTargetChange: (kind, nodeId) => {
+                  state.execApprovalsTarget = kind;
+                  state.execApprovalsTargetNodeId = nodeId;
+                  state.execApprovalsSnapshot = null;
+                  state.execApprovalsForm = null;
+                  state.execApprovalsDirty = false;
+                  state.execApprovalsSelectedAgent = null;
+                },
+                onExecApprovalsSelectAgent: (agentId) => {
+                  state.execApprovalsSelectedAgent = agentId;
+                },
+                onExecApprovalsPatch: (path, value) =>
+                  updateExecApprovalsFormValue(state, path, value),
+                onExecApprovalsRemove: (path) => removeExecApprovalsFormValue(state, path),
+                onSaveExecApprovals: () => {
+                  const target =
+                    state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                      ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                      : { kind: "gateway" as const };
+                  return saveExecApprovals(state, target);
+                },
+              }),
+            )
+          : nothing}
+        ${state.tab === "chat"
+          ? renderChat({
+              sessionKey: state.sessionKey,
+              onSessionKeyChange: (next) => {
+                switchChatSession(state, next);
+              },
+              thinkingLevel: state.chatThinkingLevel,
+              showThinking,
+              showToolCalls,
+              loading: state.chatLoading,
+              sending: state.chatSending,
+              compactionStatus: state.compactionStatus,
+              fallbackStatus: state.fallbackStatus,
+              assistantAvatarUrl: chatAvatarUrl,
+              messages: state.chatMessages,
+              sideResult: state.chatSideResult,
+              toolMessages: state.chatToolMessages,
+              streamSegments: state.chatStreamSegments,
+              stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
+              draft: state.chatMessage,
+              queue: state.chatQueue,
+              connected: state.connected,
+              canSend: state.connected,
+              disabledReason: chatDisabledReason,
+              error: state.lastError,
+              sessions: state.sessionsResult,
+              focusMode: chatFocus,
+              autoExpandToolCalls: false,
+              onRefresh: () => {
+                state.chatSideResult = null;
+                state.resetToolStream();
+                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+              },
+              onToggleFocusMode: () => {
+                if (state.onboarding) {
+                  return;
+                }
+                state.applySettings({
+                  ...state.settings,
+                  chatFocusMode: !state.settings.chatFocusMode,
+                });
+              },
+              onChatScroll: (event) => state.handleChatScroll(event),
+              getDraft: () => state.chatMessage,
+              onDraftChange: (next) => (state.chatMessage = next),
+              onRequestUpdate: requestHostUpdate,
+              attachments: state.chatAttachments,
+              onAttachmentsChange: (next) => (state.chatAttachments = next),
+              onSend: () => state.handleSendChat(),
+              canAbort: Boolean(state.chatRunId),
+              onAbort: () => void state.handleAbortChat(),
+              onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onDismissSideResult: () => {
+                state.chatSideResult = null;
+              },
+              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onClearHistory: async () => {
+                if (!state.client || !state.connected) {
+                  return;
+                }
+                try {
+                  await state.client.request("sessions.reset", { key: state.sessionKey });
                   state.chatMessages = [];
+                  state.chatSideResult = null;
                   state.chatStream = null;
                   state.chatRunId = null;
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: state.sessionKey,
-                    lastActiveSessionKey: state.sessionKey,
-                  });
-                  void loadChatHistory(state);
-                  void state.loadAssistantIdentity();
+                  await loadChatHistory(state);
+                } catch (err) {
+                  state.lastError = String(err);
+                }
+              },
+              agentsList: state.agentsList,
+              currentAgentId: resolvedAgentId ?? "main",
+              onAgentChange: (agentId: string) => {
+                switchChatSession(state, buildAgentMainSessionKey({ agentId }));
+              },
+              onNavigateToAgent: () => {
+                state.agentsSelectedId = resolvedAgentId;
+                state.setTab("agents" as import("./navigation.ts").Tab);
+              },
+              onSessionSelect: (key: string) => {
+                switchChatSession(state, key);
+              },
+              showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+              onScrollToBottom: () => state.scrollToBottom(),
+              // Sidebar props for tool output viewing
+              sidebarOpen: state.sidebarOpen,
+              sidebarContent: state.sidebarContent,
+              sidebarError: state.sidebarError,
+              splitRatio: state.splitRatio,
+              canvasHostUrl: state.hello?.canvasHostUrl ?? null,
+              onOpenSidebar: (content) => state.handleOpenSidebar(content),
+              onCloseSidebar: () => state.handleCloseSidebar(),
+              onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+              assistantName: state.assistantName,
+              assistantAvatar: state.assistantAvatar,
+              localMediaPreviewRoots: state.localMediaPreviewRoots,
+              embedSandboxMode: state.embedSandboxMode,
+              allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+              assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+              basePath: state.basePath ?? "",
+            })
+          : nothing}
+        ${renderConfigTabForActiveTab()}
+        ${state.tab === "debug"
+          ? lazyRender(lazyDebug, (m) =>
+              m.renderDebug({
+                loading: state.debugLoading,
+                status: state.debugStatus,
+                health: state.debugHealth,
+                models: state.debugModels,
+                heartbeat: state.debugHeartbeat,
+                eventLog: state.eventLog,
+                methods: (state.hello?.features?.methods ?? []).toSorted(),
+                callMethod: state.debugCallMethod,
+                callParams: state.debugCallParams,
+                callResult: state.debugCallResult,
+                callError: state.debugCallError,
+                onCallMethodChange: (next) => (state.debugCallMethod = next),
+                onCallParamsChange: (next) => (state.debugCallParams = next),
+                onRefresh: () => loadDebug(state),
+                onCall: () => callDebugMethod(state),
+              }),
+            )
+          : nothing}
+        ${state.tab === "logs"
+          ? lazyRender(lazyLogs, (m) =>
+              m.renderLogs({
+                loading: state.logsLoading,
+                error: state.logsError,
+                file: state.logsFile,
+                entries: state.logsEntries,
+                filterText: state.logsFilterText,
+                levelFilters: state.logsLevelFilters,
+                autoFollow: state.logsAutoFollow,
+                truncated: state.logsTruncated,
+                onFilterTextChange: (next) => (state.logsFilterText = next),
+                onLevelToggle: (level, enabled) => {
+                  state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
                 },
-                onNavigateToAgent: () => {
-                  state.agentsSelectedId = resolvedAgentId;
-                  state.setTab("agents" as import("./navigation.ts").Tab);
-                },
-                onSessionSelect: (key: string) => {
-                  switchChatSession(state, key);
-                },
-                showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
-                onScrollToBottom: () => state.scrollToBottom(),
-                // Sidebar props for tool output viewing
-                sidebarOpen: state.sidebarOpen,
-                sidebarContent: state.sidebarContent,
-                sidebarError: state.sidebarError,
-                splitRatio: state.splitRatio,
-                onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
-                onCloseSidebar: () => state.handleCloseSidebar(),
-                onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
-                assistantName: state.assistantName,
-                assistantAvatar: state.assistantAvatar,
-                basePath: state.basePath ?? "",
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "config"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.configFormMode,
-                showModeToggle: true,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.configSearchQuery,
-                activeSection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
-                    ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
-                    ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSection,
-                activeSubsection:
-                  state.configActiveSection &&
-                  (COMMUNICATION_SECTION_KEYS.includes(
-                    state.configActiveSection as CommunicationSectionKey,
-                  ) ||
-                    APPEARANCE_SECTION_KEYS.includes(
-                      state.configActiveSection as AppearanceSectionKey,
-                    ) ||
-                    AUTOMATION_SECTION_KEYS.includes(
-                      state.configActiveSection as AutomationSectionKey,
-                    ) ||
-                    INFRASTRUCTURE_SECTION_KEYS.includes(
-                      state.configActiveSection as InfrastructureSectionKey,
-                    ) ||
-                    AI_AGENTS_SECTION_KEYS.includes(
-                      state.configActiveSection as AiAgentsSectionKey,
-                    ))
-                    ? null
-                    : state.configActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.configSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.configActiveSection = section;
-                  state.configActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                excludeSections: [
-                  ...COMMUNICATION_SECTION_KEYS,
-                  ...AUTOMATION_SECTION_KEYS,
-                  ...INFRASTRUCTURE_SECTION_KEYS,
-                  ...AI_AGENTS_SECTION_KEYS,
-                  "ui",
-                  "wizard",
-                ],
-                includeVirtualSections: false,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "communications"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.communicationsFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.communicationsSearchQuery,
-                activeSection:
-                  state.communicationsActiveSection &&
-                  !COMMUNICATION_SECTION_KEYS.includes(
-                    state.communicationsActiveSection as CommunicationSectionKey,
-                  )
-                    ? null
-                    : state.communicationsActiveSection,
-                activeSubsection:
-                  state.communicationsActiveSection &&
-                  !COMMUNICATION_SECTION_KEYS.includes(
-                    state.communicationsActiveSection as CommunicationSectionKey,
-                  )
-                    ? null
-                    : state.communicationsActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.communicationsFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.communicationsSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.communicationsActiveSection = section;
-                  state.communicationsActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Communication",
-                includeSections: [...COMMUNICATION_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "appearance"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.appearanceFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.appearanceSearchQuery,
-                activeSection:
-                  state.appearanceActiveSection &&
-                  !APPEARANCE_SECTION_KEYS.includes(
-                    state.appearanceActiveSection as AppearanceSectionKey,
-                  )
-                    ? null
-                    : state.appearanceActiveSection,
-                activeSubsection:
-                  state.appearanceActiveSection &&
-                  !APPEARANCE_SECTION_KEYS.includes(
-                    state.appearanceActiveSection as AppearanceSectionKey,
-                  )
-                    ? null
-                    : state.appearanceActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.appearanceFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.appearanceSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.appearanceActiveSection = section;
-                  state.appearanceActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Appearance",
-                includeSections: [...APPEARANCE_SECTION_KEYS],
-                includeVirtualSections: true,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "automation"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.automationFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.automationSearchQuery,
-                activeSection:
-                  state.automationActiveSection &&
-                  !AUTOMATION_SECTION_KEYS.includes(
-                    state.automationActiveSection as AutomationSectionKey,
-                  )
-                    ? null
-                    : state.automationActiveSection,
-                activeSubsection:
-                  state.automationActiveSection &&
-                  !AUTOMATION_SECTION_KEYS.includes(
-                    state.automationActiveSection as AutomationSectionKey,
-                  )
-                    ? null
-                    : state.automationActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.automationFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.automationSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.automationActiveSection = section;
-                  state.automationActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.automationActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Automation",
-                includeSections: [...AUTOMATION_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "infrastructure"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.infrastructureFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.infrastructureSearchQuery,
-                activeSection:
-                  state.infrastructureActiveSection &&
-                  !INFRASTRUCTURE_SECTION_KEYS.includes(
-                    state.infrastructureActiveSection as InfrastructureSectionKey,
-                  )
-                    ? null
-                    : state.infrastructureActiveSection,
-                activeSubsection:
-                  state.infrastructureActiveSection &&
-                  !INFRASTRUCTURE_SECTION_KEYS.includes(
-                    state.infrastructureActiveSection as InfrastructureSectionKey,
-                  )
-                    ? null
-                    : state.infrastructureActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.infrastructureSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.infrastructureActiveSection = section;
-                  state.infrastructureActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Infrastructure",
-                includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "aiAgents"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.aiAgentsFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.aiAgentsSearchQuery,
-                activeSection:
-                  state.aiAgentsActiveSection &&
-                  !AI_AGENTS_SECTION_KEYS.includes(
-                    state.aiAgentsActiveSection as AiAgentsSectionKey,
-                  )
-                    ? null
-                    : state.aiAgentsActiveSection,
-                activeSubsection:
-                  state.aiAgentsActiveSection &&
-                  !AI_AGENTS_SECTION_KEYS.includes(
-                    state.aiAgentsActiveSection as AiAgentsSectionKey,
-                  )
-                    ? null
-                    : state.aiAgentsActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onRequestUpdate: requestHostUpdate,
-                onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.aiAgentsActiveSection = section;
-                  state.aiAgentsActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-                onOpenFile: () => openConfigFile(state),
-                version: state.hello?.server?.version ?? "",
-                theme: state.theme,
-                themeMode: state.themeMode,
-                setTheme: (t, ctx) => state.setTheme(t, ctx),
-                setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
-                gatewayUrl: state.settings.gatewayUrl,
-                assistantName: state.assistantName,
-                configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "AI & Agents",
-                includeSections: [...AI_AGENTS_SECTION_KEYS],
-                includeVirtualSections: false,
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "debug"
-            ? lazyRender(lazyDebug, (m) =>
-                m.renderDebug({
-                  loading: state.debugLoading,
-                  status: state.debugStatus,
-                  health: state.debugHealth,
-                  models: state.debugModels,
-                  heartbeat: state.debugHeartbeat,
-                  eventLog: state.eventLog,
-                  methods: (state.hello?.features?.methods ?? []).toSorted(),
-                  callMethod: state.debugCallMethod,
-                  callParams: state.debugCallParams,
-                  callResult: state.debugCallResult,
-                  callError: state.debugCallError,
-                  onCallMethodChange: (next) => (state.debugCallMethod = next),
-                  onCallParamsChange: (next) => (state.debugCallParams = next),
-                  onRefresh: () => loadDebug(state),
-                  onCall: () => callDebugMethod(state),
-                }),
-              )
-            : nothing
-        }
-
-        ${
-          state.tab === "logs"
-            ? lazyRender(lazyLogs, (m) =>
-                m.renderLogs({
-                  loading: state.logsLoading,
-                  error: state.logsError,
-                  file: state.logsFile,
-                  entries: state.logsEntries,
-                  filterText: state.logsFilterText,
-                  levelFilters: state.logsLevelFilters,
-                  autoFollow: state.logsAutoFollow,
-                  truncated: state.logsTruncated,
-                  onFilterTextChange: (next) => (state.logsFilterText = next),
-                  onLevelToggle: (level, enabled) => {
-                    state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
-                  },
-                  onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                  onRefresh: () => loadLogs(state, { reset: true }),
-                  onExport: (lines, label) => state.exportLogs(lines, label),
-                  onScroll: (event) => state.handleLogsScroll(event),
-                }),
-              )
-            : nothing
-        }
+                onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
+                onRefresh: () => loadLogs(state, { reset: true }),
+                onExport: (lines, label) => state.exportLogs(lines, label),
+                onScroll: (event) => state.handleLogsScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "dreams"
+          ? renderDreaming({
+              active: dreamingOn,
+              shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
+              groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
+              totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
+              promotedCount: state.dreamingStatus?.promotedToday ?? 0,
+              phases: state.dreamingStatus?.phases ?? undefined,
+              shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
+              promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
+              dreamingOf: null,
+              nextCycle: dreamingNextCycle,
+              timezone: state.dreamingStatus?.timezone ?? null,
+              statusLoading: state.dreamingStatusLoading,
+              statusError: state.dreamingStatusError,
+              modeSaving: state.dreamingModeSaving,
+              dreamDiaryLoading: state.dreamDiaryLoading,
+              dreamDiaryActionLoading: state.dreamDiaryActionLoading,
+              dreamDiaryActionMessage: state.dreamDiaryActionMessage,
+              dreamDiaryActionArchivePath: state.dreamDiaryActionArchivePath,
+              dreamDiaryError: state.dreamDiaryError,
+              dreamDiaryPath: state.dreamDiaryPath,
+              dreamDiaryContent: state.dreamDiaryContent,
+              memoryWikiEnabled: isPluginExplicitlyEnabled(state.configSnapshot, "memory-wiki"),
+              wikiImportInsightsLoading: state.wikiImportInsightsLoading,
+              wikiImportInsightsError: state.wikiImportInsightsError,
+              wikiImportInsights: state.wikiImportInsights,
+              wikiMemoryPalaceLoading: state.wikiMemoryPalaceLoading,
+              wikiMemoryPalaceError: state.wikiMemoryPalaceError,
+              wikiMemoryPalace: state.wikiMemoryPalace,
+              onRefresh: refreshDreaming,
+              onRefreshDiary: () => loadDreamDiary(state),
+              onRefreshImports: () => loadWikiImportInsights(state),
+              onRefreshMemoryPalace: () => loadWikiMemoryPalace(state),
+              onOpenConfig: () => openConfigFile(state),
+              onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
+              onBackfillDiary: () => backfillDreamDiary(state),
+              onCopyDreamingArchivePath: () => {
+                void copyDreamingArchivePath(state);
+              },
+              onDedupeDreamDiary: () => dedupeDreamDiary(state),
+              onResetDiary: () => resetDreamDiary(state),
+              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
+              onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
+              onRequestUpdate: requestHostUpdate,
+            })
+          : nothing}
       </main>
-      ${renderExecApprovalPrompt(state)}
-      ${renderGatewayUrlConfirmation(state)}
-      ${nothing}
+      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>
   `;
 }

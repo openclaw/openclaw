@@ -1,58 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { DiscordConfigSchema, SlackConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("DM policy aliases (Slack/Discord)", () => {
   it('rejects discord dmPolicy="open" without allowFrom "*"', () => {
-    const res = validateConfigObject({
-      channels: { discord: { dmPolicy: "open", allowFrom: ["123"] } },
+    const res = DiscordConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["123"],
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.discord.allowFrom");
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("allowFrom");
     }
   });
 
   it('rejects discord dmPolicy="open" with empty allowFrom', () => {
-    const res = validateConfigObject({
-      channels: { discord: { dmPolicy: "open", allowFrom: [] } },
+    const res = DiscordConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: [],
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.discord.allowFrom");
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("allowFrom");
     }
   });
 
   it('rejects discord legacy dm.policy="open" with empty dm.allowFrom', () => {
-    const res = validateConfigObject({
-      channels: { discord: { dm: { policy: "open", allowFrom: [] } } },
+    const res = DiscordConfigSchema.safeParse({
+      dm: { policy: "open", allowFrom: [] },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.discord.dm.allowFrom");
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("dm.allowFrom");
     }
   });
 
   it('accepts discord legacy dm.policy="open" with top-level allowFrom alias', () => {
-    const res = validateConfigObject({
-      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
+    const res = DiscordConfigSchema.safeParse({
+      dm: { policy: "open", allowFrom: ["123"] },
+      allowFrom: ["*"],
     });
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 
   it('rejects slack dmPolicy="open" without allowFrom "*"', () => {
-    const res = validateConfigObject({
-      channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } },
+    const res = SlackConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["U123"],
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.slack.allowFrom");
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("allowFrom");
     }
   });
 
   it('accepts slack legacy dm.policy="open" with top-level allowFrom alias', () => {
-    const res = validateConfigObject({
-      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
+    const res = SlackConfigSchema.safeParse({
+      dm: { policy: "open", allowFrom: ["U123"] },
+      allowFrom: ["*"],
     });
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 });

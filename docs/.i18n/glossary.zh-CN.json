@@ -48,6 +48,42 @@
     "target": "快速开始"
   },
   {
+    "source": "Chutes",
+    "target": "Chutes"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
+    "source": "BytePlus (International)",
+    "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Anthropic (API + Claude CLI)",
+    "target": "Anthropic（API + Claude CLI）"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
+  },
+  {
+    "source": "Additional bundled variants",
+    "target": "其他内置变体"
+  },
+  {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
   },
@@ -140,12 +176,28 @@
     "target": "网络模型"
   },
   {
+    "source": "Bridge protocol (legacy nodes, historical)",
+    "target": "Bridge protocol（旧版节点，历史参考）"
+  },
+  {
     "source": "Doctor",
     "target": "Doctor"
   },
   {
+    "source": "Memory Wiki",
+    "target": "Memory Wiki"
+  },
+  {
+    "source": "wiki",
+    "target": "wiki"
+  },
+  {
     "source": "Polls",
     "target": "投票"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
   },
   {
     "source": "Release Policy",
@@ -196,6 +248,14 @@
     "target": "CLI"
   },
   {
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
+  },
+  {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
+  },
+  {
     "source": "install sanity",
     "target": "安装完整性检查"
   },
@@ -210,6 +270,10 @@
   {
     "source": "FAQ",
     "target": "常见问题"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
   },
   {
     "source": "onboarding",

@@ -1,10 +1,16 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
+import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
+import contextPruningExtension from "../pi-hooks/context-pruning.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: () => undefined,
+  resolveProviderRuntimePlugin: () => undefined,
+}));
 
 function buildSafeguardFactories(cfg: OpenClawConfig) {
   const sessionManager = {} as SessionManager;
@@ -68,5 +74,25 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager: {} as SessionManager,
+      provider: "litellm",
+      modelId: "claude-sonnet-4-6",
+      model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
+    });
+
+    expect(factories).toContain(contextPruningExtension);
   });
 });

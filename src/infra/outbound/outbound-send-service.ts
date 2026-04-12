@@ -1,9 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -27,6 +31,14 @@ export type OutboundSendContext = {
   params: Record<string, unknown>;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  sessionKey?: string;
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
+  mediaAccess?: OutboundMediaAccess;
+  mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -62,17 +74,31 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
-  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
     mediaSources: collectActionMediaSources(params.ctx.params),
+    sessionKey: params.ctx.sessionKey,
+    messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
+    accountId:
+      (params.ctx.sessionKey
+        ? (params.ctx.requesterAccountId ?? params.ctx.accountId)
+        : params.ctx.accountId) ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    requesterSenderName: params.ctx.requesterSenderName,
+    requesterSenderUsername: params.ctx.requesterSenderUsername,
+    requesterSenderE164: params.ctx.requesterSenderE164,
+    mediaAccess: params.ctx.mediaAccess,
+    mediaReadFile: params.ctx.mediaReadFile,
   });
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
-    mediaLocalRoots,
+    mediaAccess,
+    mediaLocalRoots: mediaAccess.localRoots,
+    mediaReadFile: mediaAccess.readFile,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
@@ -138,6 +164,12 @@ export async function executeSendAction(params: {
     to: params.to,
     content: params.message,
     agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.sessionKey,
+    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    requesterSenderName: params.ctx.requesterSenderName,
+    requesterSenderUsername: params.ctx.requesterSenderUsername,
+    requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,

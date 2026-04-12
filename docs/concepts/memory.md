@@ -1,107 +1,190 @@
 ---
-title: "Memory"
-summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
+title: "Memory Overview"
+summary: "How OpenClaw remembers things across sessions"
 read_when:
-  - You want the memory file layout and workflow
-  - You want to tune the automatic pre-compaction memory flush
+  - You want to understand how memory works
+  - You want to know what memory files to write
 ---
 
-# Memory
+# Memory Overview
 
-OpenClaw memory is **plain Markdown in the agent workspace**. The files are the
-source of truth; the model only "remembers" what gets written to disk.
+OpenClaw remembers things by writing **plain Markdown files** in your agent's
+workspace. The model only "remembers" what gets saved to disk -- there is no
+hidden state.
 
-Memory search tools are provided by the active memory plugin (default:
-`memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
+## How it works
 
-## Memory files (Markdown)
+Your agent has three memory-related files:
 
-The default workspace layout uses two memory layers:
+- **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
+  decisions. Loaded at the start of every DM session.
+- **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
+  Today and yesterday's notes are loaded automatically.
+- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
+  summaries for human review, including grounded historical backfill entries.
 
-- `memory/YYYY-MM-DD.md`
-  - Daily log (append-only).
-  - Read today + yesterday at session start.
-- `MEMORY.md` (optional)
-  - Curated long-term memory.
-  - If both `MEMORY.md` and `memory.md` exist at the workspace root, OpenClaw loads both (deduplicated by realpath so symlinks pointing to the same file are not injected twice).
-  - **Only load in the main, private session** (never in group contexts).
+These files live in the agent workspace (default `~/.openclaw/workspace`).
 
-These files live under the workspace (`agents.defaults.workspace`, default
-`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
+<Tip>
+If you want your agent to remember something, just ask it: "Remember that I
+prefer TypeScript." It will write it to the appropriate file.
+</Tip>
 
 ## Memory tools
 
-OpenClaw exposes two agent-facing tools for these Markdown files:
+The agent has two tools for working with memory:
 
-- `memory_search` -- semantic recall over indexed snippets.
-- `memory_get` -- targeted read of a specific Markdown file/line range.
+- **`memory_search`** -- finds relevant notes using semantic search, even when
+  the wording differs from the original.
+- **`memory_get`** -- reads a specific memory file or line range.
 
-`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
-today's daily log before the first write). Both the builtin manager and the QMD
-backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
-handle "nothing recorded yet" and continue their workflow without wrapping the
-tool call in try/catch logic.
+Both tools are provided by the active memory plugin (default: `memory-core`).
 
-## When to write memory
+## Memory Wiki companion plugin
 
-- Decisions, preferences, and durable facts go to `MEMORY.md`.
-- Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
-- If someone says "remember this," write it down (do not keep it in RAM).
-- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
-- If you want something to stick, **ask the bot to write it** into memory.
+If you want durable memory to behave more like a maintained knowledge base than
+just raw notes, use the bundled `memory-wiki` plugin.
 
-## Automatic memory flush (pre-compaction ping)
+`memory-wiki` compiles durable knowledge into a wiki vault with:
 
-When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
-agentic turn** that reminds the model to write durable memory **before** the
-context is compacted. The default prompts explicitly say the model _may reply_,
-but usually `NO_REPLY` is the correct response so the user never sees this turn.
+- deterministic page structure
+- structured claims and evidence
+- contradiction and freshness tracking
+- generated dashboards
+- compiled digests for agent/runtime consumers
+- wiki-native tools like `wiki_search`, `wiki_get`, `wiki_apply`, and `wiki_lint`
 
-This is controlled by `agents.defaults.compaction.memoryFlush`:
+It does not replace the active memory plugin. The active memory plugin still
+owns recall, promotion, and dreaming. `memory-wiki` adds a provenance-rich
+knowledge layer beside it.
 
-```json5
-{
-  agents: {
-    defaults: {
-      compaction: {
-        reserveTokensFloor: 20000,
-        memoryFlush: {
-          enabled: true,
-          softThresholdTokens: 4000,
-          systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
-        },
-      },
-    },
-  },
-}
+See [Memory Wiki](/plugins/memory-wiki).
+
+## Memory search
+
+When an embedding provider is configured, `memory_search` uses **hybrid
+search** -- combining vector similarity (semantic meaning) with keyword matching
+(exact terms like IDs and code symbols). This works out of the box once you have
+an API key for any supported provider.
+
+<Info>
+OpenClaw auto-detects your embedding provider from available API keys. If you
+have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
+enabled automatically.
+</Info>
+
+For details on how search works, tuning options, and provider setup, see
+[Memory Search](/concepts/memory-search).
+
+## Memory backends
+
+<CardGroup cols={3}>
+<Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
+SQLite-based. Works out of the box with keyword search, vector similarity, and
+hybrid search. No extra dependencies.
+</Card>
+<Card title="QMD" icon="search" href="/concepts/memory-qmd">
+Local-first sidecar with reranking, query expansion, and the ability to index
+directories outside the workspace.
+</Card>
+<Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
+AI-native cross-session memory with user modeling, semantic search, and
+multi-agent awareness. Plugin install.
+</Card>
+</CardGroup>
+
+## Knowledge wiki layer
+
+<CardGroup cols={1}>
+<Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
+Compiles durable memory into a provenance-rich wiki vault with claims,
+dashboards, bridge mode, and Obsidian-friendly workflows.
+</Card>
+</CardGroup>
+
+## Automatic memory flush
+
+Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
+runs a silent turn that reminds the agent to save important context to memory
+files. This is on by default -- you do not need to configure anything.
+
+<Tip>
+The memory flush prevents context loss during compaction. If your agent has
+important facts in the conversation that are not yet written to a file, they
+will be saved automatically before the summary happens.
+</Tip>
+
+## Dreaming (experimental)
+
+Dreaming is an optional background consolidation pass for memory. It collects
+short-term signals, scores candidates, and promotes only qualified items into
+long-term memory (`MEMORY.md`).
+
+It is designed to keep long-term memory high signal:
+
+- **Opt-in**: disabled by default.
+- **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron job
+  for a full dreaming sweep.
+- **Thresholded**: promotions must pass score, recall frequency, and query
+  diversity gates.
+- **Reviewable**: phase summaries and diary entries are written to `DREAMS.md`
+  for human review.
+
+For phase behavior, scoring signals, and Dream Diary details, see
+[Dreaming (experimental)](/concepts/dreaming).
+
+## Grounded backfill and live promotion
+
+The dreaming system now has two closely related review lanes:
+
+- **Live dreaming** works from the short-term dreaming store under
+  `memory/.dreams/` and is what the normal deep phase uses when deciding what
+  can graduate into `MEMORY.md`.
+- **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
+  standalone day files and writes structured review output into `DREAMS.md`.
+
+Grounded backfill is useful when you want to replay older notes and inspect what
+the system thinks is durable without manually editing `MEMORY.md`.
+
+When you use:
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
 ```
 
-Details:
+the grounded durable candidates are not promoted directly. They are staged into
+the same short-term dreaming store the normal deep phase already uses. That
+means:
 
-- **Soft threshold**: flush triggers when the session token estimate crosses
-  `contextWindow - reserveTokensFloor - softThresholdTokens`.
-- **Silent** by default: prompts include `NO_REPLY` so nothing is delivered.
-- **Two prompts**: a user prompt plus a system prompt append the reminder.
-- **One flush per compaction cycle** (tracked in `sessions.json`).
-- **Workspace must be writable**: if the session runs sandboxed with
-  `workspaceAccess: "ro"` or `"none"`, the flush is skipped.
+- `DREAMS.md` stays the human review surface.
+- the short-term store stays the machine-facing ranking surface.
+- `MEMORY.md` is still only written by deep promotion.
 
-For the full compaction lifecycle, see
-[Session management + compaction](/reference/session-management-compaction).
+If you decide the replay was not useful, you can remove the staged artifacts
+without touching ordinary diary entries or normal recall state:
 
-## Vector memory search
+```bash
+openclaw memory rem-backfill --rollback
+openclaw memory rem-backfill --rollback-short-term
+```
 
-OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` so
-semantic queries can find related notes even when wording differs. Hybrid search
-(BM25 + vector) is available for combining semantic matching with exact keyword
-lookups.
+## CLI
 
-Memory search supports multiple embedding providers (OpenAI, Gemini, Voyage,
-Mistral, Ollama, and local GGUF models), an optional QMD sidecar backend for
-advanced retrieval, and post-processing features like MMR diversity re-ranking
-and temporal decay.
+```bash
+openclaw memory status          # Check index status and provider
+openclaw memory search "query"  # Search from the command line
+openclaw memory index --force   # Rebuild the index
+```
 
-For the full configuration reference -- including embedding provider setup, QMD
-backend, hybrid search tuning, multimodal memory, and all config knobs -- see
-[Memory configuration reference](/reference/memory-config).
+## Further reading
+
+- [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
+- [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
+- [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
+- [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
+- [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
+  tuning
+- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+  from short-term recall to long-term memory
+- [Memory configuration reference](/reference/memory-config) -- all config knobs
+- [Compaction](/concepts/compaction) -- how compaction interacts with memory

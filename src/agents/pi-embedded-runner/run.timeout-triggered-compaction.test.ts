@@ -2,19 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
-  mockedCoerceToFailoverError,
   mockedCompactDirect,
   mockedContextEngine,
-  mockedDescribeFailoverError,
   mockedGetApiKeyForModel,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
-  mockedResolveFailoverStatus,
   mockedRunEmbeddedAttempt,
   mockedRunPostCompactionSideEffects,
-  mockedSessionLikelyHasOversizedToolResults,
-  mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -38,47 +33,6 @@ describe("timeout-triggered compaction", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedCoerceToFailoverError.mockReset();
-    mockedDescribeFailoverError.mockReset();
-    mockedResolveFailoverStatus.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
-    mockedGlobalHookRunner.runAfterCompaction.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
-    mockedRunPostCompactionSideEffects.mockReset();
-    mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedCoerceToFailoverError.mockReturnValue(null);
-    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
-      message: err instanceof Error ? err.message : String(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
-    });
-    mockedPickFallbackThinkingLevel.mockReturnValue(null);
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
-      apiKey: "test-key",
-      profileId: profileId ?? "test-profile",
-      source: "test",
-      mode: "api-key",
-    }));
-    mockedResolveAuthProfileOrder.mockReturnValue([]);
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
@@ -86,6 +40,19 @@ describe("timeout-triggered compaction", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
+        promptCache: {
+          retention: "short",
+          lastCallUsage: {
+            input: 150000,
+            cacheRead: 32000,
+            total: 182000,
+          },
+          observation: {
+            broke: false,
+            cacheRead: 32000,
+          },
+          lastCacheTouchAt: 1_700_000_000_000,
+        },
         lastAssistant: {
           usage: { input: 150000 },
         } as never,
@@ -113,6 +80,18 @@ describe("timeout-triggered compaction", () => {
         force: true,
         compactionTarget: "budget",
         runtimeContext: expect.objectContaining({
+          promptCache: expect.objectContaining({
+            retention: "short",
+            lastCallUsage: expect.objectContaining({
+              input: 150000,
+              cacheRead: 32000,
+            }),
+            observation: expect.objectContaining({
+              broke: false,
+              cacheRead: 32000,
+            }),
+            lastCacheTouchAt: 1_700_000_000_000,
+          }),
           trigger: "timeout_recovery",
           attempt: 1,
           maxAttempts: 2,
@@ -221,6 +200,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.meta.livenessState).toBe("blocked");
   });
 
   it("does not attempt compaction when prompt token usage is low", async () => {
@@ -240,6 +220,46 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("points idle-timeout errors at the LLM idle timeout config key", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: {
+          usage: { input: 20000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
+  });
+
+  it("retries one silent idle timeout before surfacing an error", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          idleTimedOut: true,
+          assistantTexts: [],
+          lastAssistant: {
+            usage: { input: 20000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
   });
 
   it("does not attempt compaction for low-context timeouts on later retries", async () => {

@@ -1,24 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { ErrorCodes } from "../protocol/index.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { toolsEffectiveHandlers } from "./tools-effective.js";
 
-vi.mock("../../config/config.js", () => ({
+const runtimeMocks = vi.hoisted(() => ({
+  deliveryContextFromSession: vi.fn(() => ({
+    channel: "telegram",
+    to: "channel-1",
+    accountId: "acct-1",
+    threadId: "thread-2",
+  })),
+  listAgentIds: vi.fn(() => ["main"]),
   loadConfig: vi.fn(() => ({})),
-}));
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
-  return {
-    ...actual,
-    listAgentIds: vi.fn(() => ["main"]),
-    resolveDefaultAgentId: vi.fn(() => "main"),
-    resolveSessionAgentId: vi.fn(() => "main"),
-  };
-});
-
-vi.mock("../../agents/tools-effective-inventory.js", () => ({
+  loadSessionEntry: vi.fn(() => ({
+    cfg: {},
+    canonicalKey: "main:abc",
+    entry: {
+      sessionId: "session-1",
+      updatedAt: 1,
+      lastChannel: "telegram",
+      lastAccountId: "acct-1",
+      lastThreadId: "thread-2",
+      lastTo: "channel-1",
+      groupId: "group-4",
+      groupChannel: "#ops",
+      space: "workspace-5",
+      chatType: "group",
+      modelProvider: "openai",
+      model: "gpt-4.1",
+    },
+  })),
   resolveEffectiveToolInventory: vi.fn(() => ({
     agentId: "main",
     profile: "coding",
@@ -39,50 +49,12 @@ vi.mock("../../agents/tools-effective-inventory.js", () => ({
       },
     ],
   })),
-}));
-
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return {
-    ...actual,
-    loadSessionEntry: vi.fn(() => ({
-      cfg: {},
-      canonicalKey: "main:abc",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        lastChannel: "telegram",
-        lastAccountId: "acct-1",
-        lastThreadId: "thread-2",
-        lastTo: "channel-1",
-        groupId: "group-4",
-        groupChannel: "#ops",
-        space: "workspace-5",
-        chatType: "group",
-        modelProvider: "openai",
-        model: "gpt-4.1",
-      },
-    })),
-    resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
-  };
-});
-
-vi.mock("../../utils/delivery-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../utils/delivery-context.js")>();
-  return {
-    ...actual,
-    deliveryContextFromSession: vi.fn(() => ({
-      channel: "telegram",
-      to: "channel-1",
-      accountId: "acct-1",
-      threadId: "thread-2",
-    })),
-  };
-});
-
-vi.mock("../../auto-reply/reply/reply-threading.js", () => ({
   resolveReplyToMode: vi.fn(() => "first"),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
 }));
+
+vi.mock("./tools-effective.runtime.js", () => runtimeMocks);
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
@@ -147,7 +119,7 @@ describe("tools.effective handler", () => {
   });
 
   it("rejects unknown session keys", async () => {
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
       canonicalKey: "missing-session",
       entry: undefined,
@@ -178,7 +150,7 @@ describe("tools.effective handler", () => {
         },
       ],
     });
-    expect(vi.mocked(resolveEffectiveToolInventory)).toHaveBeenCalledWith(
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: false,
         currentChannelId: "channel-1",
@@ -195,6 +167,47 @@ describe("tools.effective handler", () => {
     );
   });
 
+  it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "main:abc",
+      entry: {
+        sessionId: "session-origin-thread",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastAccountId: "acct-1",
+        lastTo: "channel-1",
+        origin: {
+          provider: "telegram",
+          accountId: "acct-1",
+          threadId: 42,
+        },
+        groupId: "group-4",
+        groupChannel: "#ops",
+        space: "workspace-5",
+        chatType: "group",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+    runtimeMocks.deliveryContextFromSession.mockReturnValueOnce({
+      channel: "telegram",
+      to: "channel-1",
+      accountId: "acct-1",
+      threadId: "42",
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentThreadTs: "42",
+      }),
+    );
+    expect((respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
   it("passes senderIsOwner=true for admin-scoped callers", async () => {
     const respond = vi.fn();
     await toolsEffectiveHandlers["tools.effective"]({
@@ -207,7 +220,7 @@ describe("tools.effective handler", () => {
       req: { type: "req", id: "req-1", method: "tools.effective" },
       isWebchatConnect: () => false,
     });
-    expect(vi.mocked(resolveEffectiveToolInventory)).toHaveBeenCalledWith(
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
     );
   });
@@ -217,7 +230,7 @@ describe("tools.effective handler", () => {
       sessionKey: "main:abc",
       agentId: "other",
     });
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
       canonicalKey: "main:abc",
       entry: {
