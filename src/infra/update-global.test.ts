@@ -139,6 +139,7 @@ describe("update global helpers", () => {
       "i",
       "-g",
       "openclaw@latest",
+      "--force",
       "--no-fund",
       "--no-audit",
       "--loglevel=error",

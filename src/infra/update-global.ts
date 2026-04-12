@@ -18,6 +18,7 @@ const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
+const NPM_GLOBAL_INSTALL_FORCE_FLAGS = ["--force", ...NPM_GLOBAL_INSTALL_QUIET_FLAGS] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
@@ -288,7 +289,7 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_FORCE_FLAGS];
 }
 
 export function globalInstallFallbackArgs(
