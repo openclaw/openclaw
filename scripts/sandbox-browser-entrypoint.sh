@@ -206,6 +206,7 @@ if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
   fi
 
   mkdir -p "${HOME}/.vnc"
+  echo "[sandbox] noVNC password: ${NOVNC_PASSWORD}"
   x11vnc -storepasswd "${NOVNC_PASSWORD}" "${HOME}/.vnc/passwd" >/dev/null
   chmod 600 "${HOME}/.vnc/passwd"
 
