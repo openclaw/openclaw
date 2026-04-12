@@ -10,6 +10,7 @@ import {
   type Model,
 } from "@mariozechner/pi-ai";
 import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -104,8 +105,6 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-const CODEX_RESPONSES_PREFLIGHT_SAFE_CONTEXT_RATIO = 0.7;
-const CODEX_RESPONSES_PREFLIGHT_CHARS_PER_TOKEN = 3;
 const CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE =
   "Context overflow: prompt too large for the model (precheck).";
 
@@ -653,47 +652,107 @@ function createOpenAIResponsesClient(
   });
 }
 
-function parsePositiveContextWindow(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
+function estimateTextTokens(text: string): number {
+  if (!text) {
+    return 0;
   }
-  return Math.max(1, Math.trunc(value));
+  return estimateTokens({ role: "user", content: text, timestamp: 0 } as never);
 }
 
-function estimateCodexResponsesPayloadTokens(payload: unknown): number {
-  try {
-    const serialized = JSON.stringify(payload);
-    if (!serialized) {
-      return 0;
+function estimateResponseInputContentTokens(input: unknown): number {
+  if (!Array.isArray(input)) {
+    return 0;
+  }
+  let total = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      continue;
     }
-    return Math.ceil(serialized.length / CODEX_RESPONSES_PREFLIGHT_CHARS_PER_TOKEN);
-  } catch {
-    return Number.POSITIVE_INFINITY;
+    const record = item as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : undefined;
+
+    if (type === "message") {
+      const content = Array.isArray(record.content) ? record.content : [];
+      for (const part of content) {
+        if (!part || typeof part !== "object") {
+          continue;
+        }
+        const partRecord = part as Record<string, unknown>;
+        if (typeof partRecord.text === "string") {
+          total += estimateTextTokens(partRecord.text);
+        }
+        if (typeof partRecord.refusal === "string") {
+          total += estimateTextTokens(partRecord.refusal);
+        }
+      }
+      continue;
+    }
+
+    if (type === "function_call") {
+      if (typeof record.arguments === "string") {
+        total += estimateTextTokens(record.arguments);
+      }
+      continue;
+    }
+
+    if (type === "function_call_output") {
+      const output = record.output;
+      if (typeof output === "string") {
+        total += estimateTextTokens(output);
+      } else if (Array.isArray(output)) {
+        for (const part of output) {
+          if (!part || typeof part !== "object") {
+            continue;
+          }
+          const partRecord = part as Record<string, unknown>;
+          if (typeof partRecord.text === "string") {
+            total += estimateTextTokens(partRecord.text);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (type === "reasoning") {
+      if (typeof record.content === "string") {
+        total += estimateTextTokens(record.content);
+      }
+      if (typeof record.summary === "string") {
+        total += estimateTextTokens(record.summary);
+      }
+      if (typeof record.encrypted_content === "string") {
+        total += estimateTextTokens(record.encrypted_content);
+      }
+    }
   }
+  return total;
 }
 
-function enforceOpenAICodexResponsesPreflightGuard(model: Model<Api>, payload: unknown): void {
+function enforceOpenAICodexResponsesPreflightGuard(
+  model: Model<Api>,
+  payload: OpenAIResponsesRequestParams,
+): void {
   if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
     return;
   }
-  const contextWindow = parsePositiveContextWindow(
-    (model as { contextWindow?: unknown }).contextWindow,
-  );
+  const contextWindow =
+    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+      ? Math.max(1, Math.trunc(model.contextWindow))
+      : undefined;
   if (!contextWindow) {
     return;
   }
-  const safeThreshold = Math.max(
-    1_000,
-    Math.floor(contextWindow * CODEX_RESPONSES_PREFLIGHT_SAFE_CONTEXT_RATIO),
-  );
-  const estimatedTokens = estimateCodexResponsesPayloadTokens(payload);
-  if (estimatedTokens > safeThreshold) {
+  const threshold = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  }).compactThreshold;
+  const estimatedTokens = estimateResponseInputContentTokens(payload.input);
+  if (estimatedTokens > threshold) {
     log.warn("provider_payload_overflow_prevented", {
       provider: model.provider,
       model: model.id,
       estimatedTokens,
       contextWindow,
-      threshold: safeThreshold,
+      threshold,
       action: "prevented_before_submit",
       recovery: "overflow_compaction_path",
     });
@@ -1454,6 +1513,6 @@ function mapStopReason(reason: string | null) {
 export const __testing = {
   processOpenAICompletionsStream,
   enforceOpenAICodexResponsesPreflightGuard,
-  estimateCodexResponsesPayloadTokens,
+  estimateResponseInputContentTokens,
   CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE,
 };

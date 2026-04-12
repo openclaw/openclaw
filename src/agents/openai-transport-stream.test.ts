@@ -1716,17 +1716,43 @@ describe("openai transport stream", () => {
     } satisfies Model<"openai-codex-responses">;
 
     const payload = {
+      model: "gpt-5.4",
+      stream: true,
       input: [
         {
+          type: "message",
           role: "user",
-          content: [{ type: "input_text", text: "x".repeat(3000) }],
+          content: [{ type: "input_text", text: "payload token ".repeat(2500) }],
         },
       ],
     };
 
     expect(() =>
-      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload),
+      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload as never),
     ).toThrow(__testing.CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE);
+  });
+
+  it("estimates content-bearing input tokens without counting wrapper metadata", () => {
+    const minimal = __testing.estimateResponseInputContentTokens([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello world" }],
+      },
+    ]);
+    const inflatedWrapper = __testing.estimateResponseInputContentTokens([
+      {
+        type: "message",
+        role: "user",
+        id: "msg_123",
+        status: "completed",
+        metadata: { a: "b", trace: "x".repeat(5000) },
+        content: [{ type: "input_text", text: "hello world" }],
+      },
+    ]);
+
+    expect(minimal).toBeGreaterThan(0);
+    expect(inflatedWrapper).toBe(minimal);
   });
 
   it("does not throw the codex precheck for non-codex providers", () => {
@@ -1744,8 +1770,11 @@ describe("openai transport stream", () => {
     } satisfies Model<"openai-responses">;
 
     const payload = {
+      model: "gpt-5.4",
+      stream: true,
       input: [
         {
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: "x".repeat(3000) }],
         },
@@ -1753,7 +1782,7 @@ describe("openai transport stream", () => {
     };
 
     expect(() =>
-      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload),
+      __testing.enforceOpenAICodexResponsesPreflightGuard(model as never, payload as never),
     ).not.toThrow();
   });
 });
