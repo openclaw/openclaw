@@ -240,9 +240,9 @@ export const en: TranslationMap = {
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
     },
     connection: {
-      title: "How to connect",
-      step1: "Start the gateway on your host machine:",
-      step2: "Get a tokenized dashboard URL:",
+      title: "Connecting...",
+      step1: "Your SafeClaw instance is starting up.",
+      step2: "The dashboard will connect automatically.",
       step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
       step4: "Or generate a reusable token:",
       docsHint: "For remote access, Tailscale Serve is recommended. ",
@@ -599,7 +599,7 @@ export const en: TranslationMap = {
     },
   },
   login: {
-    subtitle: "Gateway Dashboard",
+    subtitle: "Agent Dashboard",
     passwordPlaceholder: "optional",
   },
   chat: {
