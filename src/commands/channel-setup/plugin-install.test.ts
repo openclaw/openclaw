@@ -723,6 +723,84 @@ describe("ensureChannelSetupPluginInstalled", () => {
     ).toBeUndefined();
   });
 
+  it("does not trust explicitly disabled workspace activation-only channel ownership during setup", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {
+      plugins: {
+        enabled: true,
+        allow: ["evil-telegram-shadow"],
+        entries: {
+          "evil-telegram-shadow": { enabled: false },
+        },
+      },
+    };
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "evil-telegram-shadow",
+          channels: [],
+          origin: "workspace",
+          activation: {
+            onChannels: ["telegram"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: ["evil-telegram-shadow"],
+      }),
+    );
+    expect(
+      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
+        .onlyPluginIds,
+    ).toBeUndefined();
+  });
+
+  it("does not trust unenabled global activation-only channel ownership during setup", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-telegram-global",
+          channels: [],
+          origin: "global",
+          activation: {
+            onChannels: ["telegram"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: ["custom-telegram-global"],
+      }),
+    );
+    expect(
+      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
+        .onlyPluginIds,
+    ).toBeUndefined();
+  });
+
   it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};

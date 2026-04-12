@@ -62,36 +62,23 @@ function resolveEffectiveChannelOwnershipConfig(
   return applyPluginAutoEnable({ config, env }).config;
 }
 
-function isChannelPluginEligibleForSetupDiscovery(params: {
+function isBundledChannelOwner(plugin: PluginManifestRecord): boolean {
+  return plugin.origin === "bundled";
+}
+
+function hasExplicitNonBundledChannelOwnerTrust(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  rootConfig: OpenClawConfig;
 }): boolean {
-  if (params.plugin.origin !== "workspace") {
-    return true;
-  }
-  const activation = resolveEffectivePluginActivationState({
-    id: params.plugin.id,
-    origin: params.plugin.origin,
-    config: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
-  });
-  if (activation.activated) {
-    return true;
-  }
   return (
-    params.normalizedConfig.enabled &&
-    !params.normalizedConfig.deny.includes(params.plugin.id) &&
-    params.normalizedConfig.allow.includes(params.plugin.id) &&
-    params.normalizedConfig.entries[params.plugin.id]?.enabled === false
+    params.normalizedConfig.allow.includes(params.plugin.id) ||
+    params.normalizedConfig.entries[params.plugin.id]?.enabled === true
   );
 }
 
-function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
+function passesExplicitChannelOwnershipPolicy(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  rootConfig: OpenClawConfig;
 }): boolean {
   if (!params.normalizedConfig.enabled) {
     return false;
@@ -108,8 +95,45 @@ function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
   ) {
     return false;
   }
-  if (params.plugin.origin !== "workspace") {
+  return true;
+}
+
+function isChannelPluginEligibleForSetupDiscovery(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig: OpenClawConfig;
+}): boolean {
+  if (isBundledChannelOwner(params.plugin)) {
     return true;
+  }
+  if (!passesExplicitChannelOwnershipPolicy(params)) {
+    return false;
+  }
+  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
+    return hasExplicitNonBundledChannelOwnerTrust(params);
+  }
+  return resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+    enabledByDefault: params.plugin.enabledByDefault,
+  }).activated;
+}
+
+function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig: OpenClawConfig;
+}): boolean {
+  if (isBundledChannelOwner(params.plugin)) {
+    return true;
+  }
+  if (!passesExplicitChannelOwnershipPolicy(params)) {
+    return false;
+  }
+  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
+    return hasExplicitNonBundledChannelOwnerTrust(params);
   }
   return resolveEffectivePluginActivationState({
     id: params.plugin.id,

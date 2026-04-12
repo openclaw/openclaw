@@ -81,6 +81,17 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "global-activation-channel-plugin",
+        channels: [],
+        activation: {
+          onChannels: ["global-activation-channel"],
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "voice-call",
         channels: [],
         origin: "bundled",
@@ -380,5 +391,30 @@ describe("resolveConfiguredChannelPluginIds", () => {
         env: process.env,
       }),
     ).toEqual([]);
+  });
+
+  it("filters untrusted global activation owners from configured-channel runtime planning", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: createStartupConfig({
+          channelIds: ["global-activation-channel"],
+        }),
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps explicitly enabled global activation owners eligible for configured-channel runtime planning", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: createStartupConfig({
+          channelIds: ["global-activation-channel"],
+          enabledPluginIds: ["global-activation-channel-plugin"],
+        }),
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["global-activation-channel-plugin"]);
   });
 });
