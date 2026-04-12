@@ -8,6 +8,24 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
 
+/** Strip NUL bytes so JSON blocks stay valid for downstream spawn/env surfaces (e.g. iMessage fields). */
+function sanitizeJsonSerializableValue<T>(value: T): T {
+  if (typeof value === "string") {
+    return (value.includes("\0") ? value.replaceAll("\0", "") : value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonSerializableValue(item)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeJsonSerializableValue(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function formatConversationTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -66,7 +84,7 @@ export function buildInboundMetaSystemPrompt(
   // omit the channel field entirely rather than falling back to an unrelated provider.
   const channelValue = resolveInboundChannel(ctx);
 
-  const payload = {
+  const payload = sanitizeJsonSerializableValue({
     schema: "openclaw.inbound_meta.v1",
     chat_id: normalizeOptionalString(ctx.OriginatingTo),
     account_id: normalizeOptionalString(ctx.AccountId),
@@ -76,7 +94,7 @@ export function buildInboundMetaSystemPrompt(
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
     response_format:
       options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
-  };
+  });
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
   return [
@@ -110,7 +128,7 @@ export function buildInboundUserContextPrefix(
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
 
-  const conversationInfo = {
+  const conversationInfo = sanitizeJsonSerializableValue({
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.ReplyToId) : undefined,
     sender_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.SenderId) : undefined,
@@ -137,7 +155,7 @@ export function buildInboundUserContextPrefix(
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length
         : undefined,
-  };
+  });
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
       [
@@ -149,7 +167,7 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  const senderInfo = {
+  const senderInfo = sanitizeJsonSerializableValue({
     label: resolveSenderLabel({
       name: normalizeOptionalString(ctx.SenderName),
       username: normalizeOptionalString(ctx.SenderUsername),
@@ -162,7 +180,7 @@ export function buildInboundUserContextPrefix(
     username: normalizeOptionalString(ctx.SenderUsername),
     tag: normalizeOptionalString(ctx.SenderTag),
     e164: normalizeOptionalString(ctx.SenderE164),
-  };
+  });
   if (senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
@@ -176,7 +194,7 @@ export function buildInboundUserContextPrefix(
       [
         "Thread starter (untrusted, for context):",
         "```json",
-        JSON.stringify({ body: ctx.ThreadStarterBody }, null, 2),
+        JSON.stringify(sanitizeJsonSerializableValue({ body: ctx.ThreadStarterBody }), null, 2),
         "```",
       ].join("\n"),
     );
@@ -188,11 +206,11 @@ export function buildInboundUserContextPrefix(
         "Replied message (untrusted, for context):",
         "```json",
         JSON.stringify(
-          {
+          sanitizeJsonSerializableValue({
             sender_label: normalizeOptionalString(ctx.ReplyToSender),
             is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
             body: ctx.ReplyToBody,
-          },
+          }),
           null,
           2,
         ),
@@ -207,7 +225,7 @@ export function buildInboundUserContextPrefix(
         "Forwarded message context (untrusted metadata):",
         "```json",
         JSON.stringify(
-          {
+          sanitizeJsonSerializableValue({
             from: normalizeOptionalString(ctx.ForwardedFrom),
             type: normalizeOptionalString(ctx.ForwardedFromType),
             username: normalizeOptionalString(ctx.ForwardedFromUsername),
@@ -215,7 +233,7 @@ export function buildInboundUserContextPrefix(
             signature: normalizeOptionalString(ctx.ForwardedFromSignature),
             chat_type: normalizeOptionalString(ctx.ForwardedFromChatType),
             date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
-          },
+          }),
           null,
           2,
         ),
@@ -230,11 +248,13 @@ export function buildInboundUserContextPrefix(
         "Chat history since last reply (untrusted, for context):",
         "```json",
         JSON.stringify(
-          ctx.InboundHistory.map((entry) => ({
-            sender: entry.sender,
-            timestamp_ms: entry.timestamp,
-            body: entry.body,
-          })),
+          sanitizeJsonSerializableValue(
+            ctx.InboundHistory.map((entry) => ({
+              sender: entry.sender,
+              timestamp_ms: entry.timestamp,
+              body: entry.body,
+            })),
+          ),
           null,
           2,
         ),

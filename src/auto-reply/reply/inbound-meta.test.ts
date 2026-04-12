@@ -446,4 +446,16 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("strips NUL bytes from untrusted strings before JSON serialization", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "m1",
+      SenderName: "bad\u0000name",
+    } as TemplateContext);
+
+    expect(text.includes("\0")).toBe(false);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toBe("badname");
+  });
 });

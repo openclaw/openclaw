@@ -228,6 +228,42 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(200_000);
   });
 
+  it("defaults claude-sonnet-4-6 to 1M without context1m when models.providers omits it", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {},
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("respects explicit models.providers contextWindow for claude-sonnet-4-6", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
       cfg: {

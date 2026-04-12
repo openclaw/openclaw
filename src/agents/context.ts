@@ -381,6 +381,18 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+/** Sonnet 4.6 ships with a 1M context window; discovery catalogs may still list 200k. */
+function isAnthropicSonnet46Native1mModel(provider: string, model: string): boolean {
+  if (normalizeLowercaseStringOrEmpty(provider) !== "anthropic") {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(model);
+  const modelId = normalized.includes("/")
+    ? (normalized.split("/").at(-1) ?? normalized)
+    : normalized;
+  return modelId === "claude-sonnet-4-6";
+}
+
 export function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -419,6 +431,9 @@ export function resolveContextTokensForModel(params: {
       if (configuredWindow !== undefined) {
         return configuredWindow;
       }
+    }
+    if (isAnthropicSonnet46Native1mModel(ref.provider, ref.model)) {
+      return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
   }
 
