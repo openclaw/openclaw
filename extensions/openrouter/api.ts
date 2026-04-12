@@ -1,4 +1,7 @@
-export { buildOpenrouterProvider } from "./provider-catalog.js";
+export {
+  buildDynamicOpenRouterModel,
+  buildOpenrouterProvider,
+} from "./provider-catalog.js";
 export {
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,

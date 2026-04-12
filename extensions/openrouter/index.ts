@@ -1,26 +1,22 @@
 import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  buildProviderReplayFamilyHooks,
-  DEFAULT_CONTEXT_TOKENS,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildProviderStreamFamilyHooks,
-  getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildOpenrouterProvider } from "./provider-catalog.js";
+import {
+  buildDynamicOpenRouterModel,
+  buildOpenrouterProvider,
+} from "./provider-catalog.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "openrouter";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
   "moonshot/",
@@ -37,23 +33,6 @@ export default definePluginEntry({
       family: "passthrough-gemini",
     });
     const _OPENROUTER_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("openrouter-thinking");
-    function buildDynamicOpenRouterModel(
-      ctx: ProviderResolveDynamicModelContext,
-    ): ProviderRuntimeModel {
-      const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
-      return {
-        id: ctx.modelId,
-        name: capabilities?.name ?? ctx.modelId,
-        api: "openai-completions",
-        provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
-        reasoning: capabilities?.reasoning ?? false,
-        input: capabilities?.input ?? ["text"],
-        cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
-      };
-    }
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
@@ -101,7 +80,7 @@ export default definePluginEntry({
           };
         },
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx.modelId),
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },

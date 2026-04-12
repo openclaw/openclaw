@@ -191,6 +191,7 @@ export {
 export { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
 export { createToolStreamWrapper, createZaiToolStreamWrapper };
 export {
+  ensureOpenRouterModelCache,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "../agents/pi-embedded-runner/openrouter-model-capabilities.js";

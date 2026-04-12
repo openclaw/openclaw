@@ -9,7 +9,8 @@ cat > "${OPENCLAW_STATE_DIR:-/tmp/.openclaw}/openclaw.json" << 'EOF'
     "bind": "lan",
     "port": 10000,
     "controlUi": {
-      "dangerouslyAllowHostHeaderOriginFallback": true
+      "dangerouslyAllowHostHeaderOriginFallback": true,
+      "dangerouslyDisableDeviceAuth": true
     }
   }
 }
