@@ -4,6 +4,8 @@ export type BlueskyChannelConfig = {
   appPassword?: string;
   /** Personal Data Server URL — defaults to https://bsky.social */
   pdsUrl?: string;
+  /** Explicit default account id used when no accountId is supplied to outbound sends. */
+  defaultAccount?: string;
   accounts?: Record<string, BlueskyAccountConfig>;
 };
 
