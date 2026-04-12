@@ -111,8 +111,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.timedOut ||
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.didSendDeterministicApprovalPrompt
   ) {
     return null;
   }

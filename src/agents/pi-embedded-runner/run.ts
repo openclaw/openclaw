@@ -1552,6 +1552,40 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // When payloads is empty but an error indicator is present, surface a
+          // synthetic error so the UI never renders an infinite spinner.
+          if (
+            payloads.length === 0 &&
+            !timedOut &&
+            !incompleteTurnText &&
+            (attempt.lastToolError || attempt.lastAssistant?.stopReason === "error")
+          ) {
+            const toolErrorText = attempt.lastToolError
+              ? attempt.lastToolError.message || "A tool execution error occurred."
+              : attempt.lastAssistant?.errorMessage ||
+                "The AI service returned an error. Please try again.";
+            return {
+              payloads: [
+                {
+                  text: toolErrorText,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
