@@ -77,6 +77,39 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBeNull();
     expect(extractTextCached(message)).toBeNull();
   });
+
+  it("strips <final> tags from assistant content", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "<final>Hello</final>" }],
+    };
+    expect(extractText(message)).toBe("Hello");
+    expect(extractTextCached(message)).toBe("Hello");
+  });
+
+  it("strips multiline <final> blocks from assistant content", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "<final>\n\nHello there\n\n</final>" }],
+    };
+    expect(extractText(message)).toBe("Hello there\n\n");
+  });
+
+  it("strips mixed <think> and <final> tags from assistant content", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "<think>reasoning\n</think>\n\n<final>Hello</final>" }],
+    };
+    expect(extractText(message)).toBe("Hello");
+  });
+
+  it("strips <final> tags from assistant text property", () => {
+    const message = {
+      role: "assistant",
+      text: "<final>Hello world</final>",
+    };
+    expect(extractText(message)).toBe("Hello world");
+  });
 });
 
 describe("extractThinkingCached", () => {
