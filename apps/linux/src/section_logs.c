@@ -16,6 +16,25 @@ static GtkWidget *logs_text_view = NULL;
 static GtkWidget *logs_filter_entry = NULL;
 static gboolean logs_fetch_in_flight = FALSE;
 static gint64 logs_last_fetch_us = 0;
+static guint logs_generation = 1;
+
+typedef struct {
+    guint generation;
+} LogsRequestContext;
+
+static LogsRequestContext* logs_request_context_new(void) {
+    LogsRequestContext *ctx = g_new0(LogsRequestContext, 1);
+    ctx->generation = logs_generation;
+    return ctx;
+}
+
+static gboolean logs_request_context_is_stale(const LogsRequestContext *ctx) {
+    return !ctx || ctx->generation != logs_generation;
+}
+
+static void logs_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 static void logs_trigger_fetch(gboolean force);
 
@@ -26,12 +45,18 @@ static void logs_set_text(const gchar *text) {
 }
 
 static void on_logs_tail_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    LogsRequestContext *ctx = (LogsRequestContext *)user_data;
+    if (logs_request_context_is_stale(ctx)) {
+        logs_request_context_free(ctx);
+        return;
+    }
+    logs_request_context_free(ctx);
+
     logs_fetch_in_flight = FALSE;
 
     if (!logs_status_label) return;
 
-    if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         gtk_label_set_text(GTK_LABEL(logs_status_label), "Failed to load logs");
         logs_set_text("Could not fetch logs.tail");
         return;
@@ -181,10 +206,12 @@ static void logs_trigger_fetch(gboolean force) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    LogsRequestContext *ctx = logs_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("logs.tail", params, 0,
-                                                on_logs_tail_response, NULL);
+                                                on_logs_tail_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        logs_request_context_free(ctx);
         logs_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(logs_status_label), "Failed to request logs.tail");
     }
@@ -195,6 +222,8 @@ static void logs_refresh(void) {
 }
 
 static void logs_destroy(void) {
+    logs_generation++;
+
     logs_status_label = NULL;
     logs_text_view = NULL;
     logs_filter_entry = NULL;

@@ -1,7 +1,7 @@
 /*
  * diagnostics.h
  *
- * Diagnostics window and debug payload generation.
+ * Diagnostics text payload generation.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
@@ -10,5 +10,4 @@
 
 #include <glib.h>
 
-void diagnostics_show_window(void);
 gchar* build_diagnostics_text(void);

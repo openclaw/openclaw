@@ -70,6 +70,20 @@ void onboarding_reset(void) {
 static GtkWidget *onboard_window = NULL;
 static GtkWidget *onboard_carousel = NULL;
 static GtkWidget *onboard_indicator = NULL;
+static OnboardingRoute onboard_current_route = ONBOARDING_SHOW_SHORTENED;
+
+static GtkWidget *onboard_gateway_explanation_label = NULL;
+static GtkWidget *onboard_gateway_stage_config_icon = NULL;
+static GtkWidget *onboard_gateway_stage_config_detail = NULL;
+static GtkWidget *onboard_gateway_stage_service_icon = NULL;
+static GtkWidget *onboard_gateway_stage_service_detail = NULL;
+static GtkWidget *onboard_gateway_stage_connection_icon = NULL;
+static GtkWidget *onboard_gateway_stage_connection_detail = NULL;
+static GtkWidget *onboard_gateway_next_action_box = NULL;
+static GtkWidget *onboard_gateway_next_action_value = NULL;
+
+static GtkWidget *onboard_whats_next_guidance_label = NULL;
+static GtkWidget *onboard_whats_next_dashboard_button = NULL;
 
 typedef struct {
     AppState state;
@@ -90,6 +104,11 @@ typedef struct {
 static gboolean onboard_has_render_snapshot = FALSE;
 static OnboardingRenderSnapshot onboard_last_snapshot = {0};
 
+static void onboarding_refresh_live_content(void);
+static GtkWidget* build_gateway_page(GtkWidget *carousel);
+static GtkWidget* build_environment_page(GtkWidget *carousel);
+static GtkWidget* build_whats_next_page(GtkWidget *carousel);
+
 static void snapshot_free(OnboardingRenderSnapshot *snap) {
     g_free(snap->next_action);
     snap->next_action = NULL;
@@ -101,6 +120,17 @@ static void on_onboard_destroy(GtkWindow *window, gpointer user_data) {
     onboard_window = NULL;
     onboard_carousel = NULL;
     onboard_indicator = NULL;
+    onboard_gateway_explanation_label = NULL;
+    onboard_gateway_stage_config_icon = NULL;
+    onboard_gateway_stage_config_detail = NULL;
+    onboard_gateway_stage_service_icon = NULL;
+    onboard_gateway_stage_service_detail = NULL;
+    onboard_gateway_stage_connection_icon = NULL;
+    onboard_gateway_stage_connection_detail = NULL;
+    onboard_gateway_next_action_box = NULL;
+    onboard_gateway_next_action_value = NULL;
+    onboard_whats_next_guidance_label = NULL;
+    onboard_whats_next_dashboard_button = NULL;
     onboard_has_render_snapshot = FALSE;
     snapshot_free(&onboard_last_snapshot);
 }
@@ -188,11 +218,16 @@ static const char* stage_detail_for_connection(OnboardingStageState state) {
     }
 }
 
-static GtkWidget* build_stage_row(const char *label, OnboardingStageState state, const char *detail) {
+static GtkWidget* build_stage_row(const char *label,
+                                  OnboardingStageState state,
+                                  const char *detail,
+                                  GtkWidget **out_icon,
+                                  GtkWidget **out_detail) {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_top(row, 2);
 
     GtkWidget *icon = gtk_label_new(stage_icon(state));
+    if (out_icon) *out_icon = icon;
     gtk_box_append(GTK_BOX(row), icon);
 
     GtkWidget *text_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
@@ -204,6 +239,7 @@ static GtkWidget* build_stage_row(const char *label, OnboardingStageState state,
     gtk_box_append(GTK_BOX(text_col), title);
 
     GtkWidget *detail_lbl = gtk_label_new(detail);
+    if (out_detail) *out_detail = detail_lbl;
     gtk_widget_add_css_class(detail_lbl, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(detail_lbl), 0.0);
     gtk_label_set_wrap(GTK_LABEL(detail_lbl), TRUE);
@@ -260,6 +296,156 @@ static GtkWidget* build_welcome_page(GtkWidget *carousel) {
     return page;
 }
 
+static void onboarding_update_gateway_content(AppState current,
+                                              const ReadinessInfo *ri,
+                                              const OnboardingStageProgress *progress,
+                                              const ChatGateInfo *gate) {
+    if (onboard_gateway_explanation_label) {
+        if (current == STATE_NEEDS_SETUP) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "OpenClaw is not bootstrapped yet. The companion app needs a local gateway service to function.");
+        } else if (current == STATE_NEEDS_GATEWAY_INSTALL) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "A configuration exists, but the gateway service is not installed.");
+        } else if (current == STATE_NEEDS_ONBOARDING) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "Local bootstrap is incomplete. The onboarding wizard needs to finish configuring the gateway.");
+        } else if (!gate->ready) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "Gateway bootstrap is complete. Open Config -> Provider & Model Setup, configure a provider, reload models, and set a default model to unlock chat.");
+        } else {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "The gateway service is installed and configured.");
+        }
+    }
+
+    if (onboard_gateway_stage_config_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_config_icon),
+                           stage_icon(progress->configuration));
+    }
+    if (onboard_gateway_stage_config_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_config_detail),
+                           stage_detail_for_config(progress->configuration));
+    }
+
+    if (onboard_gateway_stage_service_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_service_icon),
+                           stage_icon(progress->service_gateway));
+    }
+    if (onboard_gateway_stage_service_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_service_detail),
+                           stage_detail_for_service(progress->service_gateway));
+    }
+
+    if (onboard_gateway_stage_connection_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_connection_icon),
+                           stage_icon(progress->connection));
+    }
+    if (onboard_gateway_stage_connection_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_connection_detail),
+                           stage_detail_for_connection(progress->connection));
+    }
+
+    const gchar *next_action = gate->next_action ? gate->next_action : ri->next_action;
+    if (onboard_gateway_next_action_value) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_next_action_value),
+                           next_action ? next_action : "");
+    }
+    if (onboard_gateway_next_action_box) {
+        gtk_widget_set_visible(onboard_gateway_next_action_box,
+                               next_action != NULL && next_action[0] != '\0');
+    }
+}
+
+static void onboarding_update_whats_next_content(const ReadinessInfo *ri,
+                                                 const ChatGateInfo *gate) {
+    if (onboard_whats_next_guidance_label) {
+        if (gate->ready) {
+            gtk_label_set_text(GTK_LABEL(onboard_whats_next_guidance_label),
+                               "Your gateway is running. Open the Dashboard to start interacting with your AI agent, or explore the companion app to monitor and manage your gateway.");
+        } else {
+            const gchar *guidance_text = gate->next_action ? gate->next_action : ri->next_action;
+            g_autofree gchar *guided = g_strdup_printf(
+                "%s Then open Config -> Provider & Model Setup to finish provider/model readiness in-app.",
+                guidance_text ? guidance_text : "");
+            gtk_label_set_text(GTK_LABEL(onboard_whats_next_guidance_label), guided);
+        }
+    }
+    if (onboard_whats_next_dashboard_button) {
+        gtk_widget_set_visible(onboard_whats_next_dashboard_button, gate->ready);
+    }
+}
+
+static void onboarding_refresh_live_content(void) {
+    AppState current = state_get_current();
+    ReadinessInfo ri;
+    readiness_evaluate(current, state_get_health(), state_get_systemd(), &ri);
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
+    OnboardingStageProgress progress;
+    readiness_build_onboarding_progress(current, state_get_health(), state_get_systemd(), &progress);
+
+    onboarding_update_gateway_content(current, &ri, &progress, &gate);
+    onboarding_update_whats_next_content(&ri, &gate);
+}
+
+static void onboarding_build_pages(OnboardingRoute route) {
+    GtkWidget *welcome = build_welcome_page(onboard_carousel);
+    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), welcome);
+
+    if (route == ONBOARDING_SHOW_FULL) {
+        GtkWidget *gateway = build_gateway_page(onboard_carousel);
+        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), gateway);
+
+        GtkWidget *env = build_environment_page(onboard_carousel);
+        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), env);
+    }
+
+    GtkWidget *whats_next = build_whats_next_page(onboard_carousel);
+    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), whats_next);
+
+    onboard_current_route = route;
+    onboarding_refresh_live_content();
+}
+
+static void onboarding_rebuild_pages(OnboardingRoute route) {
+    if (!onboard_carousel) return;
+
+    guint page_count = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(onboard_carousel));
+    guint current_pos = (guint)adw_carousel_get_position(ADW_CAROUSEL(onboard_carousel));
+
+    while (page_count > 0) {
+        GtkWidget *child = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(onboard_carousel), 0));
+        if (!child) break;
+        adw_carousel_remove(ADW_CAROUSEL(onboard_carousel), child);
+        page_count--;
+    }
+
+    onboard_gateway_explanation_label = NULL;
+    onboard_gateway_stage_config_icon = NULL;
+    onboard_gateway_stage_config_detail = NULL;
+    onboard_gateway_stage_service_icon = NULL;
+    onboard_gateway_stage_service_detail = NULL;
+    onboard_gateway_stage_connection_icon = NULL;
+    onboard_gateway_stage_connection_detail = NULL;
+    onboard_gateway_next_action_box = NULL;
+    onboard_gateway_next_action_value = NULL;
+    onboard_whats_next_guidance_label = NULL;
+    onboard_whats_next_dashboard_button = NULL;
+
+    onboarding_build_pages(route);
+
+    guint new_count = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(onboard_carousel));
+    if (new_count > 0) {
+        guint clamped = current_pos < new_count ? current_pos : (new_count - 1);
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(onboard_carousel), clamped));
+        if (target) {
+            adw_carousel_scroll_to(ADW_CAROUSEL(onboard_carousel), target, FALSE);
+        }
+    }
+}
+
 static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
     gtk_widget_set_margin_start(page, 40);
@@ -276,6 +462,9 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     AppState current = state_get_current();
     SystemdState *sys = state_get_systemd();
     HealthState *health = state_get_health();
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
 
     ReadinessInfo ri;
     readiness_evaluate(current, health, sys, &ri);
@@ -294,6 +483,9 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     } else if (current == STATE_NEEDS_ONBOARDING) {
         gtk_label_set_text(GTK_LABEL(explanation),
             "Local bootstrap is incomplete. The onboarding wizard needs to finish configuring the gateway.");
+    } else if (!gate.ready) {
+        gtk_label_set_text(GTK_LABEL(explanation),
+            "Gateway bootstrap is complete. Open Config -> Provider & Model Setup, configure a provider, reload models, and set a default model to unlock chat.");
     } else {
         gtk_label_set_text(GTK_LABEL(explanation),
             "The gateway service is installed and configured.");
@@ -301,6 +493,7 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     gtk_label_set_wrap(GTK_LABEL(explanation), TRUE);
     gtk_label_set_xalign(GTK_LABEL(explanation), 0.0);
     gtk_box_append(GTK_BOX(page), explanation);
+    onboard_gateway_explanation_label = explanation;
 
     GtkWidget *stage_heading = gtk_label_new("Setup progress");
     gtk_widget_add_css_class(stage_heading, "heading");
@@ -313,42 +506,48 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     gtk_box_append(GTK_BOX(stages),
                    build_stage_row("Configuration",
                                    progress.configuration,
-                                   stage_detail_for_config(progress.configuration)));
+                                   stage_detail_for_config(progress.configuration),
+                                   &onboard_gateway_stage_config_icon,
+                                   &onboard_gateway_stage_config_detail));
     gtk_box_append(GTK_BOX(stages),
                    build_stage_row("Service / Gateway",
                                    progress.service_gateway,
-                                   stage_detail_for_service(progress.service_gateway)));
+                                   stage_detail_for_service(progress.service_gateway),
+                                   &onboard_gateway_stage_service_icon,
+                                   &onboard_gateway_stage_service_detail));
     gtk_box_append(GTK_BOX(stages),
                    build_stage_row("Connection",
                                    progress.connection,
-                                   stage_detail_for_connection(progress.connection)));
+                                   stage_detail_for_connection(progress.connection),
+                                   &onboard_gateway_stage_connection_icon,
+                                   &onboard_gateway_stage_connection_detail));
     gtk_box_append(GTK_BOX(page), stages);
 
-    if (ri.next_action) {
-        GtkWidget *action_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-        gtk_widget_set_margin_top(action_box, 16);
-        gtk_widget_set_margin_bottom(action_box, 16);
-        
-        GtkWidget *action_label = gtk_label_new("Next step:");
-        gtk_widget_add_css_class(action_label, "dim-label");
-        gtk_label_set_xalign(GTK_LABEL(action_label), 0.0);
-        gtk_box_append(GTK_BOX(action_box), action_label);
+    const gchar *next_action = gate.next_action ? gate.next_action : ri.next_action;
+    GtkWidget *action_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(action_box, 16);
+    gtk_widget_set_margin_bottom(action_box, 16);
 
-        /* Present the exact command as a selectable monospace block */
-        GtkWidget *cmd_label = gtk_label_new(ri.next_action);
-        gtk_widget_add_css_class(cmd_label, "accent");
-        gtk_label_set_wrap(GTK_LABEL(cmd_label), TRUE);
-        gtk_label_set_selectable(GTK_LABEL(cmd_label), TRUE);
-        gtk_label_set_xalign(GTK_LABEL(cmd_label), 0.0);
-        
-        /* Apply a subtle background/border to make it look like a terminal snippet */
-        GtkWidget *frame = gtk_frame_new(NULL);
-        gtk_widget_set_margin_top(frame, 4);
-        gtk_frame_set_child(GTK_FRAME(frame), cmd_label);
-        gtk_box_append(GTK_BOX(action_box), frame);
+    GtkWidget *action_label = gtk_label_new("Next step:");
+    gtk_widget_add_css_class(action_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(action_label), 0.0);
+    gtk_box_append(GTK_BOX(action_box), action_label);
 
-        gtk_box_append(GTK_BOX(page), action_box);
-    }
+    GtkWidget *cmd_label = gtk_label_new(next_action ? next_action : "");
+    gtk_widget_add_css_class(cmd_label, "accent");
+    gtk_label_set_wrap(GTK_LABEL(cmd_label), TRUE);
+    gtk_label_set_selectable(GTK_LABEL(cmd_label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(cmd_label), 0.0);
+
+    GtkWidget *frame = gtk_frame_new(NULL);
+    gtk_widget_set_margin_top(frame, 4);
+    gtk_frame_set_child(GTK_FRAME(frame), cmd_label);
+    gtk_box_append(GTK_BOX(action_box), frame);
+
+    gtk_widget_set_visible(action_box, next_action != NULL && next_action[0] != '\0');
+    gtk_box_append(GTK_BOX(page), action_box);
+    onboard_gateway_next_action_box = action_box;
+    onboard_gateway_next_action_value = cmd_label;
 
     GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
@@ -415,6 +614,8 @@ static GtkWidget* build_environment_page(GtkWidget *carousel) {
         gtk_box_append(GTK_BOX(page), row);
     }
 
+    environment_check_result_clear(&ecr);
+
     g_free(config_path);
     g_free(state_dir);
     g_free(profile);
@@ -457,33 +658,33 @@ static GtkWidget* build_whats_next_page(GtkWidget *carousel) {
     AppState current = state_get_current();
     ReadinessInfo ri;
     readiness_evaluate(current, state_get_health(), state_get_systemd(), &ri);
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
 
-    if (current == STATE_RUNNING || current == STATE_RUNNING_WITH_WARNING) {
-        GtkWidget *msg = gtk_label_new(
-            "Your gateway is running. Open the Dashboard to start interacting "
-            "with your AI agent, or explore the companion app to monitor and "
-            "manage your gateway.");
-        gtk_label_set_wrap(GTK_LABEL(msg), TRUE);
-        gtk_label_set_xalign(GTK_LABEL(msg), 0.0);
-        gtk_box_append(GTK_BOX(page), msg);
+    const gchar *guidance_text = gate.next_action ? gate.next_action : ri.next_action;
+    g_autofree gchar *guided = gate.ready
+        ? g_strdup("Your gateway is running. Open the Dashboard to start interacting with your AI agent, or explore the companion app to monitor and manage your gateway.")
+        : g_strdup_printf("%s Then open Config -> Provider & Model Setup to finish provider/model readiness in-app.",
+                          guidance_text ? guidance_text : "");
+    GtkWidget *guidance = gtk_label_new(guided);
+    gtk_widget_add_css_class(guidance, "accent");
+    gtk_label_set_wrap(GTK_LABEL(guidance), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(guidance), 0.0);
+    gtk_box_append(GTK_BOX(page), guidance);
+    onboard_whats_next_guidance_label = guidance;
 
-        GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
-        gtk_widget_set_margin_top(btn_row, 12);
+    GtkWidget *dash_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(dash_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(dash_row, 12);
 
-        GtkWidget *dash_btn = gtk_button_new_with_label("Open Dashboard");
-        gtk_widget_add_css_class(dash_btn, "suggested-action");
-        g_signal_connect(dash_btn, "clicked", G_CALLBACK(on_open_dashboard_clicked), NULL);
-        gtk_box_append(GTK_BOX(btn_row), dash_btn);
-
-        gtk_box_append(GTK_BOX(page), btn_row);
-    } else if (ri.next_action) {
-        GtkWidget *guidance = gtk_label_new(ri.next_action);
-        gtk_widget_add_css_class(guidance, "accent");
-        gtk_label_set_wrap(GTK_LABEL(guidance), TRUE);
-        gtk_label_set_xalign(GTK_LABEL(guidance), 0.0);
-        gtk_box_append(GTK_BOX(page), guidance);
-    }
+    GtkWidget *dash_btn = gtk_button_new_with_label("Open Dashboard");
+    gtk_widget_add_css_class(dash_btn, "suggested-action");
+    g_signal_connect(dash_btn, "clicked", G_CALLBACK(on_open_dashboard_clicked), NULL);
+    gtk_box_append(GTK_BOX(dash_row), dash_btn);
+    gtk_widget_set_visible(dash_row, gate.ready);
+    gtk_box_append(GTK_BOX(page), dash_row);
+    onboard_whats_next_dashboard_button = dash_row;
 
     /* Documentation links */
     GtkWidget *links_label = gtk_label_new("Documentation:");
@@ -541,23 +742,7 @@ void onboarding_show(void) {
 
     onboard_carousel = adw_carousel_new();
     adw_carousel_set_allow_long_swipes(ADW_CAROUSEL(onboard_carousel), TRUE);
-
-    /* Page 1: Welcome + Security (always shown) */
-    GtkWidget *welcome = build_welcome_page(onboard_carousel);
-    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), welcome);
-
-    if (route == ONBOARDING_SHOW_FULL) {
-        /* Full flow: Gateway & Service + Environment Check */
-        GtkWidget *gateway = build_gateway_page(onboard_carousel);
-        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), gateway);
-
-        GtkWidget *env = build_environment_page(onboard_carousel);
-        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), env);
-    }
-
-    /* Final page: What's Next (always shown) */
-    GtkWidget *whats_next = build_whats_next_page(onboard_carousel);
-    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), whats_next);
+    onboarding_build_pages(route);
 
     /* Carousel indicator dots */
     onboard_indicator = adw_carousel_indicator_dots_new();
@@ -591,6 +776,10 @@ void onboarding_check_and_show(void) {
     OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE, "onboarding: showing %s flow",
                 route == ONBOARDING_SHOW_FULL ? "full" : "shortened");
     onboarding_show();
+}
+
+gboolean onboarding_is_visible(void) {
+    return onboard_window != NULL;
 }
 
 void onboarding_refresh(void) {
@@ -671,45 +860,14 @@ void onboarding_refresh(void) {
         return; /* No material change, skip rebuild */
     }
 
-    /* We need to rebuild the carousel pages with the current state.
-       We preserve the current page index if possible. */
-    double current_position = adw_carousel_get_position(ADW_CAROUSEL(onboard_carousel));
-
-    /* Remove all existing pages */
-    GtkWidget *child;
-    while ((child = gtk_widget_get_first_child(onboard_carousel)) != NULL) {
-        adw_carousel_remove(ADW_CAROUSEL(onboard_carousel), child);
-    }
-
-    /* Rebuild and append pages */
-    GtkWidget *welcome = build_welcome_page(onboard_carousel);
-    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), welcome);
-
-    if (route == ONBOARDING_SHOW_FULL) {
-        GtkWidget *gateway = build_gateway_page(onboard_carousel);
-        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), gateway);
-
-        GtkWidget *env = build_environment_page(onboard_carousel);
-        adw_carousel_append(ADW_CAROUSEL(onboard_carousel), env);
-    }
-
-    GtkWidget *whats_next = build_whats_next_page(onboard_carousel);
-    adw_carousel_append(ADW_CAROUSEL(onboard_carousel), whats_next);
-
-    /* Restore position if valid */
-    guint n_pages = adw_carousel_get_n_pages(ADW_CAROUSEL(onboard_carousel));
-    if (n_pages > 0) {
-        guint target_idx = (guint)(current_position + 0.5);
-        if (target_idx >= n_pages) {
-            target_idx = n_pages - 1;
-        }
-        GtkWidget *target_page = adw_carousel_get_nth_page(ADW_CAROUSEL(onboard_carousel), target_idx);
-        if (target_page) {
-            adw_carousel_scroll_to(ADW_CAROUSEL(onboard_carousel), target_page, FALSE);
-        }
+    if (new_snap.route != onboard_current_route) {
+        onboarding_rebuild_pages(new_snap.route);
+    } else {
+        onboarding_refresh_live_content();
     }
 
     snapshot_free(&onboard_last_snapshot);
     onboard_last_snapshot = new_snap;
     onboard_has_render_snapshot = TRUE;
+    return;
 }

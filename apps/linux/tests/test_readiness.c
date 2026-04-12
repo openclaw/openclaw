@@ -397,6 +397,185 @@ static void test_onboarding_progress_operational_ready_only_when_running(void) {
     g_assert_true(progress.operational_ready);
 }
 
+static void test_chat_gate_bootstrap_complete_but_model_missing(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = TRUE;
+    snap.default_model_configured = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_DEFAULT_MODEL_MISSING;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_DEFAULT_MODEL_MISSING);
+    assert_contains(gate.status, "default model", "chat_gate_model_missing.status");
+    g_assert_nonnull(gate.next_action);
+    assert_contains(gate.next_action, "default model", "chat_gate_model_missing.next_action");
+}
+
+static void test_chat_gate_provider_missing(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = FALSE;
+    snap.default_model_configured = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_PROVIDER_MISSING;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_PROVIDER_MISSING);
+    assert_contains(gate.status, "provider", "chat_gate_provider_missing.status");
+    g_assert_nonnull(gate.next_action);
+}
+
+static void test_chat_gate_service_down(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_SERVICE_INACTIVE;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_SERVICE_INACTIVE);
+    assert_contains(gate.status, "not active", "chat_gate_service_inactive.status");
+}
+
+static void test_chat_gate_catalog_unavailable(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = TRUE;
+    snap.default_model_configured = TRUE;
+    snap.model_catalog_available = FALSE;
+    snap.selected_model_resolved = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_MODEL_CATALOG_EMPTY;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_MODEL_CATALOG_EMPTY);
+    assert_contains(gate.status, "catalog", "chat_gate_catalog_unavailable.status");
+    assert_contains(gate.next_action, "Reload models", "chat_gate_catalog_unavailable.next_action");
+}
+
+static void test_chat_gate_selected_model_unresolved(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = TRUE;
+    snap.default_model_configured = TRUE;
+    snap.model_catalog_available = TRUE;
+    snap.selected_model_resolved = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED);
+    assert_contains(gate.status, "not available", "chat_gate_selected_model_unresolved.status");
+    assert_contains(gate.next_action, "choose", "chat_gate_selected_model_unresolved.next_action");
+}
+
+static void test_chat_gate_agents_unavailable(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = TRUE;
+    snap.default_model_configured = TRUE;
+    snap.model_catalog_available = TRUE;
+    snap.selected_model_resolved = TRUE;
+    snap.agents_available = FALSE;
+    snap.desktop_chat_ready = FALSE;
+    snap.chat_block_reason = CHAT_BLOCK_AGENTS_UNAVAILABLE;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_false(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_AGENTS_UNAVAILABLE);
+    assert_contains(gate.status, "agents", "chat_gate_agents_unavailable.status");
+    assert_contains(gate.next_action, "Agents", "chat_gate_agents_unavailable.next_action");
+}
+
+static void test_chat_gate_ready(void) {
+    DesktopReadinessSnapshot snap = {0};
+    snap.config_present = TRUE;
+    snap.config_valid = TRUE;
+    snap.wizard_completed = TRUE;
+    snap.service_installed = TRUE;
+    snap.service_active = TRUE;
+    snap.gateway_http_ok = TRUE;
+    snap.gateway_ws_ok = TRUE;
+    snap.gateway_rpc_ok = TRUE;
+    snap.gateway_auth_ok = TRUE;
+    snap.provider_configured = TRUE;
+    snap.default_model_configured = TRUE;
+    snap.model_catalog_available = TRUE;
+    snap.selected_model_resolved = TRUE;
+    snap.agents_available = TRUE;
+    snap.desktop_chat_ready = TRUE;
+    snap.chat_block_reason = CHAT_BLOCK_NONE;
+
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(&snap, &gate);
+
+    g_assert_true(gate.ready);
+    g_assert_cmpint(gate.reason, ==, CHAT_BLOCK_NONE);
+    assert_contains(gate.status, "ready", "chat_gate_ready.status");
+    g_assert_null(gate.next_action);
+}
+
 /* ── Registration ── */
 
 int main(int argc, char **argv) {
@@ -434,6 +613,13 @@ int main(int argc, char **argv) {
     g_test_add_func("/readiness/onboarding_progress/service_inactive", test_onboarding_progress_service_inactive);
     g_test_add_func("/readiness/onboarding_progress/connecting_service_active", test_onboarding_progress_connecting_service_active);
     g_test_add_func("/readiness/onboarding_progress/operational_ready_running", test_onboarding_progress_operational_ready_only_when_running);
+    g_test_add_func("/readiness/chat_gate/bootstrap_complete_model_missing", test_chat_gate_bootstrap_complete_but_model_missing);
+    g_test_add_func("/readiness/chat_gate/provider_missing", test_chat_gate_provider_missing);
+    g_test_add_func("/readiness/chat_gate/service_inactive", test_chat_gate_service_down);
+    g_test_add_func("/readiness/chat_gate/catalog_unavailable", test_chat_gate_catalog_unavailable);
+    g_test_add_func("/readiness/chat_gate/selected_model_unresolved", test_chat_gate_selected_model_unresolved);
+    g_test_add_func("/readiness/chat_gate/agents_unavailable", test_chat_gate_agents_unavailable);
+    g_test_add_func("/readiness/chat_gate/ready", test_chat_gate_ready);
 
     return g_test_run();
 }

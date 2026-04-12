@@ -55,6 +55,7 @@ static GtkWidget *refresh_item = NULL;
 
 /* App navigation */
 static GtkWidget *settings_item = NULL;
+static GtkWidget *diagnostics_item = NULL;
 
 static void send_action(const char *action) {
     g_print("ACTION:%s\n", action);
@@ -68,6 +69,7 @@ static void on_stop_clicked(GtkMenuItem *item, gpointer data) { (void)item; (voi
 static void on_restart_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("RESTART"); }
 static void on_refresh_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("REFRESH"); }
 static void on_settings_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_SETTINGS"); }
+static void on_diagnostics_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_DIAGNOSTICS"); }
 static void on_quit_clicked(GtkMenuItem *item, gpointer data) { 
     (void)item; (void)data;
     send_action("QUIT"); 
@@ -188,6 +190,10 @@ int main(int argc, char **argv) {
     settings_item = gtk_menu_item_new_with_label("Settings");
     g_signal_connect(settings_item, "activate", G_CALLBACK(on_settings_clicked), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), settings_item);
+
+    diagnostics_item = gtk_menu_item_new_with_label("Diagnostics");
+    g_signal_connect(diagnostics_item, "activate", G_CALLBACK(on_diagnostics_clicked), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), diagnostics_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 

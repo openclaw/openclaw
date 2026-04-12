@@ -382,7 +382,7 @@ static void test_env_all_ok(void) {
     /* Use /tmp as a writable dir and /dev/null as a readable file */
     environment_check_build(&sys, "/dev/null", "/tmp", &ecr);
 
-    g_assert_cmpint(ecr.count, >=, 7);
+    g_assert_cmpint(ecr.count, >=, 8);
     /* systemd session */
     g_assert_true(ecr.rows[0].passed);
     /* D-Bus */
@@ -391,12 +391,16 @@ static void test_env_all_ok(void) {
     g_assert_true(ecr.rows[2].passed);
     /* Config exists */
     g_assert_true(ecr.rows[3].passed);
-    /* State dir resolved */
+    /* Config dir exists */
     g_assert_true(ecr.rows[4].passed);
-    /* State dir exists */
+    /* State dir resolved */
     g_assert_true(ecr.rows[5].passed);
-    /* Unit present */
+    /* State dir exists */
     g_assert_true(ecr.rows[6].passed);
+    /* Unit present */
+    g_assert_true(ecr.rows[7].passed);
+
+    environment_check_result_clear(&ecr);
 }
 
 static void test_env_systemd_unavailable(void) {
@@ -408,6 +412,8 @@ static void test_env_systemd_unavailable(void) {
 
     g_assert_false(ecr.rows[0].passed); /* systemd */
     g_assert_false(ecr.rows[1].passed); /* D-Bus */
+
+    environment_check_result_clear(&ecr);
 }
 
 static void test_env_no_config_path(void) {
@@ -417,13 +423,17 @@ static void test_env_no_config_path(void) {
 
     g_assert_false(ecr.rows[2].passed); /* config path resolved */
     g_assert_false(ecr.rows[3].passed); /* config exists */
-    g_assert_false(ecr.rows[4].passed); /* state dir resolved */
-    g_assert_false(ecr.rows[5].passed); /* state dir exists */
+    g_assert_false(ecr.rows[4].passed); /* config dir exists */
+    g_assert_false(ecr.rows[5].passed); /* state dir resolved */
+    g_assert_false(ecr.rows[6].passed); /* state dir exists */
 
     g_assert_cmpstr(ecr.rows[2].detail, ==, "No config path resolved.");
     g_assert_cmpstr(ecr.rows[3].detail, ==, "No (path unresolved)");
-    g_assert_cmpstr(ecr.rows[4].detail, ==, "No state directory resolved.");
-    g_assert_cmpstr(ecr.rows[5].detail, ==, "No (path unresolved)");
+    g_assert_cmpstr(ecr.rows[4].detail, ==, "No (path unresolved)");
+    g_assert_cmpstr(ecr.rows[5].detail, ==, "No state directory resolved.");
+    g_assert_cmpstr(ecr.rows[6].detail, ==, "No (path unresolved)");
+
+    environment_check_result_clear(&ecr);
 }
 
 static void test_env_resolved_but_missing_targets(void) {
@@ -437,8 +447,63 @@ static void test_env_resolved_but_missing_targets(void) {
 
     g_assert_true(ecr.rows[2].passed);  /* config path resolved */
     g_assert_false(ecr.rows[3].passed); /* config exists */
-    g_assert_true(ecr.rows[4].passed);  /* state dir resolved */
-    g_assert_false(ecr.rows[5].passed); /* state dir exists */
+    g_assert_true(ecr.rows[4].passed);  /* config dir exists */
+    g_assert_true(ecr.rows[5].passed);  /* state dir resolved */
+    g_assert_false(ecr.rows[6].passed); /* state dir exists */
+
+    environment_check_result_clear(&ecr);
+}
+
+static void test_runtime_path_status_uses_loaded_path_precedence(void) {
+    RuntimePathStatus status = {0};
+    runtime_path_status_build("/tmp/runtime-config.json",
+                              "/tmp/state-dir",
+                              "/tmp/loaded-config.json",
+                              &status);
+
+    g_assert_true(status.config_path_resolved);
+    g_assert_cmpstr(status.config_path, ==, "/tmp/loaded-config.json");
+    g_assert_true(status.state_dir_resolved);
+    g_assert_cmpstr(status.state_dir, ==, "/tmp/state-dir");
+    runtime_path_status_clear(&status);
+}
+
+static void test_runtime_path_status_derives_state_dir_from_config(void) {
+    RuntimePathStatus status = {0};
+    runtime_path_status_build("/tmp/openclaw-test/config.json", NULL, NULL, &status);
+
+    g_assert_true(status.config_path_resolved);
+    g_assert_true(status.state_dir_resolved);
+    g_assert_cmpstr(status.state_dir, ==, "/tmp/openclaw-test");
+    runtime_path_status_clear(&status);
+}
+
+static void test_runtime_path_status_invalid_utf8_paths_are_display_safe(void) {
+    const gchar invalid_path[] = {'/', 't', 'm', 'p', '/', 'x', (gchar)0xFF, '\0'};
+    RuntimePathStatus status = {0};
+    runtime_path_status_build(invalid_path, NULL, NULL, &status);
+
+    g_assert_true(status.config_path_resolved);
+    g_assert_nonnull(status.config_path);
+    g_assert_true(g_utf8_validate(status.config_path, -1, NULL));
+    g_assert_true(status.state_dir_resolved);
+    g_assert_nonnull(status.state_dir);
+    g_assert_true(g_utf8_validate(status.state_dir, -1, NULL));
+
+    runtime_path_status_clear(&status);
+}
+
+static void test_environment_check_result_clear_resets_owned_details(void) {
+    SystemdState sys = {0};
+    EnvironmentCheckResult ecr;
+    environment_check_build(&sys, "/dev/null", "/tmp", &ecr);
+
+    g_assert_cmpint(ecr.count, >, 0);
+    g_assert_nonnull(ecr.rows[0].detail);
+
+    environment_check_result_clear(&ecr);
+    g_assert_cmpint(ecr.count, ==, 0);
+    g_assert_null(ecr.rows[0].detail);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -654,6 +719,10 @@ int main(int argc, char **argv) {
     g_test_add_func("/display_model/env/systemd_unavailable", test_env_systemd_unavailable);
     g_test_add_func("/display_model/env/no_config_path", test_env_no_config_path);
     g_test_add_func("/display_model/env/resolved_but_missing_targets", test_env_resolved_but_missing_targets);
+    g_test_add_func("/display_model/runtime_paths/loaded_path_precedence", test_runtime_path_status_uses_loaded_path_precedence);
+    g_test_add_func("/display_model/runtime_paths/derive_state_dir_from_config", test_runtime_path_status_derives_state_dir_from_config);
+    g_test_add_func("/display_model/runtime_paths/invalid_utf8_display_safe", test_runtime_path_status_invalid_utf8_paths_are_display_safe);
+    g_test_add_func("/display_model/env/result_clear_resets_details", test_environment_check_result_clear_resets_owned_details);
 
     /* Onboarding routing */
     g_test_add_func("/display_model/onboarding/first_run_healthy",

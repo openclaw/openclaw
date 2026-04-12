@@ -579,6 +579,238 @@ static void test_readiness_startup_hydration_to_running(void) {
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
+static void test_readiness_snapshot_no_setup(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_false(snap->config_present);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_NO_CONFIG);
+}
+
+static void test_readiness_snapshot_minimal_bootstrap_provider_missing(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = FALSE;
+    hs.has_default_model_config = FALSE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->config_present);
+    g_assert_true(snap->wizard_completed);
+    g_assert_false(snap->provider_configured);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_PROVIDER_MISSING);
+}
+
+static void test_readiness_snapshot_provider_present_default_model_missing(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = FALSE;
+    hs.model_catalog_available = TRUE;
+    hs.selected_model_resolved = FALSE;
+    hs.agents_available = TRUE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->provider_configured);
+    g_assert_false(snap->default_model_configured);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_DEFAULT_MODEL_MISSING);
+}
+
+static void test_readiness_snapshot_fully_ready(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.model_catalog_available = TRUE;
+    hs.selected_model_resolved = TRUE;
+    hs.agents_available = TRUE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_NONE);
+}
+
+static void test_readiness_snapshot_provider_default_set_catalog_unavailable(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(FALSE, 0, FALSE);
+    state_set_agents_fact(TRUE, 1);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_false(snap->model_catalog_available);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_MODEL_CATALOG_EMPTY);
+}
+
+static void test_readiness_snapshot_healthy_without_dependency_refresh(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->provider_configured);
+    g_assert_true(snap->default_model_configured);
+    g_assert_false(snap->model_catalog_available);
+    g_assert_false(snap->selected_model_resolved);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_MODEL_CATALOG_EMPTY);
+}
+
+static void test_readiness_snapshot_selected_model_unresolved(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(TRUE, 3, FALSE);
+    state_set_agents_fact(TRUE, 1);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->model_catalog_available);
+    g_assert_false(snap->selected_model_resolved);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED);
+}
+
+static void test_readiness_snapshot_agents_unavailable_with_resolved_model(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(TRUE, 2, TRUE);
+    state_set_agents_fact(TRUE, 0);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->model_catalog_available);
+    g_assert_true(snap->selected_model_resolved);
+    g_assert_false(snap->agents_available);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_AGENTS_UNAVAILABLE);
+}
+
 /* ── Wizard Marker Tests (Task 9) ── */
 
 static void test_wizard_absent_needs_onboarding(void) {
@@ -744,6 +976,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/wizard_marker/present_runtime_healthy", test_wizard_present_runtime_healthy);
     g_test_add_func("/state/wizard_marker/absent_model_config_present", test_wizard_absent_model_config_present);
     g_test_add_func("/state/wizard_marker/present_model_config_absent", test_wizard_present_model_config_absent);
+    g_test_add_func("/state/readiness_snapshot/no_setup", test_readiness_snapshot_no_setup);
+    g_test_add_func("/state/readiness_snapshot/minimal_bootstrap_provider_missing", test_readiness_snapshot_minimal_bootstrap_provider_missing);
+    g_test_add_func("/state/readiness_snapshot/provider_present_default_model_missing", test_readiness_snapshot_provider_present_default_model_missing);
+    g_test_add_func("/state/readiness_snapshot/fully_ready", test_readiness_snapshot_fully_ready);
+    g_test_add_func("/state/readiness_snapshot/provider_default_set_catalog_unavailable", test_readiness_snapshot_provider_default_set_catalog_unavailable);
+    g_test_add_func("/state/readiness_snapshot/healthy_without_dependency_refresh", test_readiness_snapshot_healthy_without_dependency_refresh);
+    g_test_add_func("/state/readiness_snapshot/selected_model_unresolved", test_readiness_snapshot_selected_model_unresolved);
+    g_test_add_func("/state/readiness_snapshot/agents_unavailable_with_resolved_model", test_readiness_snapshot_agents_unavailable_with_resolved_model);
 
     return g_test_run();
 }

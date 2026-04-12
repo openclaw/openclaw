@@ -21,6 +21,8 @@
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "display_model.h"
+#include "onboarding.h"
+#include "test_seams.h"
 
 static GSubprocess *helper_process = NULL;
 static GOutputStream *helper_stdin = NULL;
@@ -51,7 +53,29 @@ extern void systemd_start_gateway(void);
 extern void systemd_stop_gateway(void);
 extern void systemd_restart_gateway(void);
 extern void gateway_client_refresh(void);
-extern void diagnostics_show_window(void);
+
+static void handle_helper_action(const gchar *action);
+
+static void handle_open_settings_request(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, onboarding_is_visible());
+    if (action == TRAY_UI_ACTION_SHOW_SETTINGS) {
+        app_window_show();
+        app_window_navigate_to(SECTION_GENERAL);
+    }
+}
+
+static void handle_open_diagnostics_request(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_DIAGNOSTICS, onboarding_is_visible());
+    if (action == TRAY_UI_ACTION_SHOW_DIAGNOSTICS) {
+        app_window_show();
+        app_window_navigate_to(SECTION_DIAGNOSTICS);
+    }
+}
+
+void tray_debug_dispatch_action(const gchar *action) {
+    if (!action) return;
+    handle_helper_action(action);
+}
 
 static void handle_helper_action(const gchar *action) {
     guint seq = ++helper_seq;
@@ -80,7 +104,9 @@ static void handle_helper_action(const gchar *action) {
             }
         }
     } else if (g_strcmp0(action, "OPEN_SETTINGS") == 0) {
-        app_window_navigate_to(SECTION_GENERAL);
+        handle_open_settings_request();
+    } else if (g_strcmp0(action, "OPEN_DIAGNOSTICS") == 0) {
+        handle_open_diagnostics_request();
     } else if (g_strcmp0(action, "QUIT") == 0) {
         GApplication *app = g_application_get_default();
         if (app) g_application_quit(app);

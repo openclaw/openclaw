@@ -139,3 +139,16 @@ gchar* find_nearest_existing_ancestor(const gchar *path) {
     g_free(current);
     return NULL;
 }
+
+/* ── Tray dispatch decisions (from tray.c) ────────────────────────── */
+
+TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_visible) {
+    (void)onboarding_visible;
+    switch (request) {
+        case TRAY_UI_REQUEST_DIAGNOSTICS:
+            return TRAY_UI_ACTION_SHOW_DIAGNOSTICS;
+        case TRAY_UI_REQUEST_SETTINGS:
+        default:
+            return TRAY_UI_ACTION_SHOW_SETTINGS;
+    }
+}

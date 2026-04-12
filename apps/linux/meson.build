@@ -50,6 +50,8 @@ sources = [
   'src/markdown_render.c',
   'src/chat_blocks.c',
   'src/format_utils.c',
+  'src/ui_model_utils.c',
+  'src/config_setup_transform.c',
   'src/app_window.c',
   'src/section_chat.c',
   'src/section_agents.c',
@@ -114,7 +116,7 @@ test_runtime_mode_pres_exe = executable('test_runtime_mode_presentation',
 test('runtime_mode_presentation', test_runtime_mode_pres_exe)
 
 test_config_exe = executable('test_config',
-  ['tests/test_config.c', 'src/gateway_config.c', 'src/log.c'],
+  ['tests/test_config.c', 'src/gateway_config.c', 'src/config_setup_transform.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('config', test_config_exe)
 

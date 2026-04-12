@@ -35,6 +35,13 @@ typedef struct {
     gboolean operational_ready;
 } OnboardingStageProgress;
 
+typedef struct {
+    gboolean ready;
+    ChatBlockReason reason;
+    const char *status;
+    const char *next_action;
+} ChatGateInfo;
+
 void readiness_evaluate(AppState state, const HealthState *health,
                         const SystemdState *sys, ReadinessInfo *out);
 
@@ -42,5 +49,9 @@ void readiness_build_onboarding_progress(AppState state,
                                          const HealthState *health,
                                          const SystemdState *sys,
                                          OnboardingStageProgress *out);
+
+const char* readiness_chat_block_reason_to_string(ChatBlockReason reason);
+void readiness_describe_chat_gate(const DesktopReadinessSnapshot *snapshot,
+                                  ChatGateInfo *out);
 
 #endif /* OPENCLAW_LINUX_READINESS_H */

@@ -1,29 +1,20 @@
 /*
  * diagnostics.c
  *
- * Diagnostics window and debug payload generation.
+ * Diagnostics text payload generation.
  *
- * Provides a plain-text Adwaita window detailing the gateway client
- * connectivity state: systemd service context and native HTTP/WebSocket
- * health. Exposes a canonical formatter to ensure the displayed text
- * and the copied clipboard payload are always identical.
+ * Provides a canonical formatter detailing gateway client readiness,
+ * runtime mode, connectivity, and path/environment truth.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
-#include <gtk/gtk.h>
-#include <adwaita.h>
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "diagnostics.h"
 #include "state.h"
 #include "readiness.h"
-
-static GtkWidget *diag_window = NULL;
-static GtkWidget *copy_btn = NULL;
-static guint copy_timeout_id = 0;
-static guint auto_refresh_timeout_id = 0;
-static GtkWidget *text_view = NULL;
+#include "display_model.h"
 
 static gchar* format_age(gint64 timestamp_us) {
     if (timestamp_us == 0) {
@@ -42,6 +33,7 @@ gchar* build_diagnostics_text(void) {
     AppState current = state_get_current();
     SystemdState *sys = state_get_systemd();
     HealthState *health = state_get_health();
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
 
     ReadinessInfo ri;
     readiness_evaluate(current, health, sys, &ri);
@@ -59,6 +51,19 @@ gchar* build_diagnostics_text(void) {
     if (ri.next_action) {
         g_string_append_printf(out, "Next:   %s\n", ri.next_action);
     }
+    g_string_append_printf(out, "Chat Ready: %s\n", snapshot && snapshot->desktop_chat_ready ? "Yes" : "No");
+    g_string_append_printf(out, "Chat Block Reason: %s\n",
+                           snapshot ? readiness_chat_block_reason_to_string(snapshot->chat_block_reason) : "Unknown");
+    g_string_append_printf(out, "Provider Configured: %s\n",
+                           snapshot && snapshot->provider_configured ? "Yes" : "No");
+    g_string_append_printf(out, "Default Model Configured: %s\n",
+                           snapshot && snapshot->default_model_configured ? "Yes" : "No");
+    g_string_append_printf(out, "Model Catalog Available: %s\n",
+                           snapshot && snapshot->model_catalog_available ? "Yes" : "No");
+    g_string_append_printf(out, "Selected Model Resolved: %s\n",
+                           snapshot && snapshot->selected_model_resolved ? "Yes" : "No");
+    g_string_append_printf(out, "Agents Available: %s\n",
+                           snapshot && snapshot->agents_available ? "Yes" : "No");
 
     /* Runtime mode */
     RuntimeMode rm = state_get_runtime_mode();
@@ -102,14 +107,38 @@ gchar* build_diagnostics_text(void) {
     /* Configuration */
     g_string_append_printf(out, "\n=== Configuration ===\n");
     const GatewayConfig *cfg = gateway_client_get_config();
-    g_string_append_printf(out, "Config Path: %s\n", 
-        cfg && cfg->config_path ? cfg->config_path : "N/A");
-    
-    gboolean config_file_exists = FALSE;
-    if (cfg && cfg->config_path) {
-        config_file_exists = g_file_test(cfg->config_path, G_FILE_TEST_EXISTS);
+
+    g_autofree gchar *profile = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *config_path = NULL;
+    extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfigContext cfg_ctx = {0};
+    cfg_ctx.explicit_config_path = config_path;
+    cfg_ctx.effective_state_dir = state_dir;
+    cfg_ctx.profile = profile;
+    g_autofree gchar *resolved_config_path = gateway_config_resolve_path(&cfg_ctx);
+
+    const gchar *effective_config_path = NULL;
+    if (cfg && cfg->config_path && cfg->config_path[0] != '\0') {
+        effective_config_path = cfg->config_path;
+    } else if (resolved_config_path && resolved_config_path[0] != '\0') {
+        effective_config_path = resolved_config_path;
+    } else if (config_path && config_path[0] != '\0') {
+        effective_config_path = config_path;
     }
-    g_string_append_printf(out, "Config Exists: %s\n", config_file_exists ? "Yes" : "No");
+
+    RuntimePathStatus paths = {0};
+    runtime_path_status_build(effective_config_path, state_dir, NULL, &paths);
+
+    g_string_append_printf(out, "Config Path: %s\n",
+                           paths.config_path_resolved ? paths.config_path : "N/A");
+    g_string_append_printf(out, "Config Exists: %s\n", paths.config_file_exists ? "Yes" : "No");
+    g_string_append_printf(out, "Config Dir Exists: %s\n", paths.config_dir_exists ? "Yes" : "No");
+    g_string_append_printf(out, "State Dir: %s\n",
+                           paths.state_dir_resolved ? paths.state_dir : "N/A");
+    g_string_append_printf(out, "State Dir Exists: %s\n", paths.state_dir_exists ? "Yes" : "No");
     g_string_append_printf(out, "Setup Detected: %s\n", health->setup_detected ? "Yes" : "No");
     g_string_append_printf(out, "Config Valid: %s\n", health->config_valid ? "Yes" : "No");
     
@@ -127,136 +156,7 @@ gchar* build_diagnostics_text(void) {
     g_string_append_printf(out, "Config Issues: %d\n", health->config_issues_count);
     g_string_append_printf(out, "Last Error: %s\n", health->last_error ? health->last_error : "None");
 
+    runtime_path_status_clear(&paths);
+
     return g_string_free(out, FALSE);
-}
-
-static gboolean refresh_diagnostics_view(gpointer user_data) {
-    (void)user_data;
-    if (diag_window && text_view) {
-        gchar *info_text = build_diagnostics_text();
-        GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_view));
-        gtk_text_buffer_set_text(buffer, info_text, -1);
-        g_free(info_text);
-        return G_SOURCE_CONTINUE;
-    }
-    return G_SOURCE_REMOVE;
-}
-
-static gboolean reset_copy_button(gpointer user_data) {
-    (void)user_data;
-    if (copy_btn) {
-        gtk_button_set_label(GTK_BUTTON(copy_btn), "Copy Diagnostics");
-    }
-    copy_timeout_id = 0;
-    return G_SOURCE_REMOVE;
-}
-
-static void on_copy_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    (void)user_data;
-    
-    gchar *payload = build_diagnostics_text();
-    GdkClipboard *clipboard = gdk_display_get_clipboard(gdk_display_get_default());
-    gdk_clipboard_set_text(clipboard, payload);
-    g_free(payload);
-
-    if (copy_btn) {
-        gtk_button_set_label(GTK_BUTTON(copy_btn), "Copied!");
-        
-        if (copy_timeout_id > 0) {
-            g_source_remove(copy_timeout_id);
-        }
-        copy_timeout_id = g_timeout_add(2000, reset_copy_button, NULL);
-    }
-}
-
-static void on_diag_window_close(GtkWindow *window, gpointer user_data) {
-    (void)window;
-    (void)user_data;
-    if (copy_timeout_id > 0) {
-        g_source_remove(copy_timeout_id);
-        copy_timeout_id = 0;
-    }
-    if (auto_refresh_timeout_id > 0) {
-        g_source_remove(auto_refresh_timeout_id);
-        auto_refresh_timeout_id = 0;
-    }
-    copy_btn = NULL;
-    text_view = NULL;
-    diag_window = NULL;
-}
-
-void diagnostics_show_window(void) {
-    if (diag_window) {
-        gtk_window_present(GTK_WINDOW(diag_window));
-        return;
-    }
-
-    GApplication *app = g_application_get_default();
-    
-    diag_window = adw_window_new();
-    gtk_window_set_application(GTK_WINDOW(diag_window), GTK_APPLICATION(app));
-    gtk_window_set_title(GTK_WINDOW(diag_window), "OpenClaw Diagnostics");
-    gtk_window_set_default_size(GTK_WINDOW(diag_window), 550, 550);
-
-    GtkWidget *content_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    
-    GtkWidget *header_bar = adw_header_bar_new();
-    GtkWidget *close_header_btn = gtk_button_new_from_icon_name("window-close-symbolic");
-    gtk_widget_set_valign(close_header_btn, GTK_ALIGN_CENTER);
-    g_signal_connect_swapped(close_header_btn, "clicked", G_CALLBACK(gtk_window_destroy), diag_window);
-    adw_header_bar_pack_end(ADW_HEADER_BAR(header_bar), close_header_btn);
-    gtk_box_append(GTK_BOX(content_vbox), header_bar);
-
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_set_margin_start(vbox, 20);
-    gtk_widget_set_margin_end(vbox, 20);
-    gtk_widget_set_margin_top(vbox, 20);
-    gtk_widget_set_margin_bottom(vbox, 20);
-    gtk_widget_set_vexpand(vbox, TRUE);
-    gtk_box_append(GTK_BOX(content_vbox), vbox);
-
-    adw_window_set_content(ADW_WINDOW(diag_window), content_vbox);
-
-    gchar *info_text = build_diagnostics_text();
-    
-    GtkTextBuffer *buffer = gtk_text_buffer_new(NULL);
-    gtk_text_buffer_set_text(buffer, info_text, -1);
-    g_free(info_text);
-
-    text_view = gtk_text_view_new_with_buffer(buffer);
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(text_view), FALSE);
-    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(text_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(text_view), GTK_WRAP_WORD_CHAR);
-    gtk_text_view_set_monospace(GTK_TEXT_VIEW(text_view), TRUE);
-    gtk_widget_set_vexpand(text_view, TRUE);
-
-    GtkWidget *scrolled_window = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled_window), text_view);
-    gtk_widget_set_vexpand(scrolled_window, TRUE);
-    gtk_box_append(GTK_BOX(vbox), scrolled_window);
-
-    GtkWidget *action_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_widget_set_halign(action_row, GTK_ALIGN_END);
-    gtk_widget_set_margin_top(action_row, 10);
-
-    copy_btn = gtk_button_new_with_label("Copy Diagnostics");
-    g_signal_connect(copy_btn, "clicked", G_CALLBACK(on_copy_clicked), NULL);
-    
-    GtkWidget *close_btn = gtk_button_new_with_label("Close");
-    g_signal_connect_swapped(close_btn, "clicked", G_CALLBACK(gtk_window_destroy), diag_window);
-
-    gtk_box_append(GTK_BOX(action_row), copy_btn);
-    gtk_box_append(GTK_BOX(action_row), close_btn);
-    gtk_box_append(GTK_BOX(vbox), action_row);
-
-    g_signal_connect(diag_window, "destroy", G_CALLBACK(on_diag_window_close), NULL);
-
-    // Refresh diagnostics text every 1 second while window is open.
-    // Note: This auto-refresh updates ONLY the displayed text from already-held 
-    // in-memory state. It does NOT trigger additional CLI work. Lane timers 
-    // and lane subprocesses remain completely separate.
-    auto_refresh_timeout_id = g_timeout_add_seconds(1, refresh_diagnostics_view, NULL);
-
-    gtk_window_present(GTK_WINDOW(diag_window));
 }

@@ -13,6 +13,111 @@
 #include "readiness.h"
 #include <stddef.h>
 
+const char* readiness_chat_block_reason_to_string(ChatBlockReason reason) {
+    switch (reason) {
+    case CHAT_BLOCK_NONE:
+        return "Ready";
+    case CHAT_BLOCK_NO_CONFIG:
+        return "No config detected";
+    case CHAT_BLOCK_CONFIG_INVALID:
+        return "Config invalid";
+    case CHAT_BLOCK_BOOTSTRAP_INCOMPLETE:
+        return "Bootstrap incomplete";
+    case CHAT_BLOCK_SERVICE_INACTIVE:
+        return "Service inactive";
+    case CHAT_BLOCK_GATEWAY_UNREACHABLE:
+        return "Gateway unreachable";
+    case CHAT_BLOCK_AUTH_INVALID:
+        return "Auth not usable";
+    case CHAT_BLOCK_PROVIDER_MISSING:
+        return "Provider missing";
+    case CHAT_BLOCK_DEFAULT_MODEL_MISSING:
+        return "Default model missing";
+    case CHAT_BLOCK_MODEL_CATALOG_EMPTY:
+        return "Model catalog unavailable";
+    case CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED:
+        return "Selected model unresolved";
+    case CHAT_BLOCK_AGENTS_UNAVAILABLE:
+        return "Agents unavailable";
+    case CHAT_BLOCK_UNKNOWN:
+    default:
+        return "Unknown";
+    }
+}
+
+void readiness_describe_chat_gate(const DesktopReadinessSnapshot *snapshot,
+                                  ChatGateInfo *out) {
+    if (!out) return;
+
+    out->ready = FALSE;
+    out->reason = CHAT_BLOCK_UNKNOWN;
+    out->status = "Chat readiness unknown.";
+    out->next_action = "Refresh gateway status.";
+
+    if (!snapshot) {
+        return;
+    }
+
+    out->ready = snapshot->desktop_chat_ready;
+    out->reason = snapshot->chat_block_reason;
+
+    switch (snapshot->chat_block_reason) {
+    case CHAT_BLOCK_NONE:
+        out->status = "Chat is ready.";
+        out->next_action = NULL;
+        break;
+    case CHAT_BLOCK_NO_CONFIG:
+        out->status = "No OpenClaw config detected.";
+        out->next_action = "Run 'openclaw onboard --install-daemon' to bootstrap OpenClaw.";
+        break;
+    case CHAT_BLOCK_CONFIG_INVALID:
+        out->status = "Gateway configuration is invalid.";
+        out->next_action = "Open Config and fix validation errors in openclaw.json.";
+        break;
+    case CHAT_BLOCK_BOOTSTRAP_INCOMPLETE:
+        out->status = "Gateway bootstrapped, but onboarding is incomplete.";
+        out->next_action = "Complete onboarding setup, then configure provider/model.";
+        break;
+    case CHAT_BLOCK_SERVICE_INACTIVE:
+        out->status = "Gateway service is not active.";
+        out->next_action = "Start the service from Dashboard or run 'openclaw gateway run'.";
+        break;
+    case CHAT_BLOCK_GATEWAY_UNREACHABLE:
+        out->status = "Gateway connection is not fully established.";
+        out->next_action = "Wait for connection or restart the gateway service.";
+        break;
+    case CHAT_BLOCK_AUTH_INVALID:
+        out->status = "Gateway auth handshake is not complete.";
+        out->next_action = "Check gateway auth config and reconnect.";
+        break;
+    case CHAT_BLOCK_PROVIDER_MISSING:
+        out->status = "No provider configured yet.";
+        out->next_action = "Open Config and add a model provider.";
+        break;
+    case CHAT_BLOCK_DEFAULT_MODEL_MISSING:
+        out->status = "No default model selected yet.";
+        out->next_action = "Open Config and select a default model.";
+        break;
+    case CHAT_BLOCK_MODEL_CATALOG_EMPTY:
+        out->status = "Model catalog is unavailable.";
+        out->next_action = "Reload models after provider configuration.";
+        break;
+    case CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED:
+        out->status = "Configured default model is not available in the current catalog.";
+        out->next_action = "Reload models and choose an available default model.";
+        break;
+    case CHAT_BLOCK_AGENTS_UNAVAILABLE:
+        out->status = "No agents available for chat.";
+        out->next_action = "Create or enable an agent in Agents.";
+        break;
+    case CHAT_BLOCK_UNKNOWN:
+    default:
+        out->status = "Chat prerequisites are not yet satisfied.";
+        out->next_action = "Refresh gateway status and review diagnostics.";
+        break;
+    }
+}
+
 void readiness_evaluate(AppState state, const HealthState *health,
                         const SystemdState *sys, ReadinessInfo *out) {
     if (!out) return;

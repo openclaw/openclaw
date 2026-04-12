@@ -11,17 +11,38 @@
 #include "format_utils.h"
 #include "gateway_rpc.h"
 #include "json_access.h"
+#include "ui_model_utils.h"
 
 static GtkWidget *usage_status_label = NULL;
 static GtkWidget *usage_summary_label = NULL;
 static GtkWidget *usage_cost_label = NULL;
 static GtkWidget *usage_retros_box = NULL;
 static GtkWidget *usage_days_dropdown = NULL;
+static GtkStringList *usage_days_model = NULL;
 
 static gboolean usage_fetch_in_flight = FALSE;
 static gint64 usage_last_fetch_us = 0;
+static guint usage_generation = 1;
 
 static gint usage_selected_days = 30;
+
+typedef struct {
+    guint generation;
+} UsageRequestContext;
+
+static UsageRequestContext* usage_request_context_new(void) {
+    UsageRequestContext *ctx = g_new0(UsageRequestContext, 1);
+    ctx->generation = usage_generation;
+    return ctx;
+}
+
+static gboolean usage_request_context_is_stale(const UsageRequestContext *ctx) {
+    return !ctx || ctx->generation != usage_generation;
+}
+
+static void usage_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 static void usage_clear_retros(void) {
     if (!usage_retros_box) return;
@@ -39,10 +60,16 @@ static void usage_add_retros_line(const gchar *text) {
 static void usage_request_sessions_usage(void);
 
 static void on_usage_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
+    if (usage_request_context_is_stale(ctx)) {
+        usage_request_context_free(ctx);
+        return;
+    }
+    usage_request_context_free(ctx);
+
     usage_clear_retros();
 
-    if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         usage_add_retros_line("Failed to load session usage details.");
         return;
     }
@@ -107,20 +134,27 @@ static void usage_request_sessions_usage(void) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    UsageRequestContext *ctx = usage_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("sessions.usage", params, 0,
-                                                on_usage_sessions_response, NULL);
+                                                on_usage_sessions_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        usage_request_context_free(ctx);
         usage_add_retros_line("Failed to request sessions.usage.");
     }
 }
 
 static void on_usage_cost_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
+    if (usage_request_context_is_stale(ctx)) {
+        usage_request_context_free(ctx);
+        return;
+    }
+    usage_request_context_free(ctx);
 
     if (!usage_cost_label) return;
 
-    if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         gtk_label_set_text(GTK_LABEL(usage_cost_label), "Cost: unavailable");
         usage_request_sessions_usage();
         return;
@@ -153,12 +187,18 @@ static void on_usage_cost_response(const GatewayRpcResponse *response, gpointer 
 }
 
 static void on_usage_status_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
+    if (usage_request_context_is_stale(ctx)) {
+        usage_request_context_free(ctx);
+        return;
+    }
+    usage_request_context_free(ctx);
+
     usage_fetch_in_flight = FALSE;
 
     if (!usage_status_label || !usage_summary_label) return;
 
-    if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         gtk_label_set_text(GTK_LABEL(usage_status_label), "Failed to load usage status");
         return;
     }
@@ -221,10 +261,12 @@ static void on_usage_status_response(const GatewayRpcResponse *response, gpointe
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    UsageRequestContext *cost_ctx = usage_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("usage.cost", params, 0,
-                                                on_usage_cost_response, NULL);
+                                                on_usage_cost_response, cost_ctx);
     json_node_unref(params);
     if (!rid) {
+        usage_request_context_free(cost_ctx);
         gtk_label_set_text(GTK_LABEL(usage_cost_label), "Cost: unavailable");
         usage_request_sessions_usage();
     }
@@ -267,13 +309,12 @@ static GtkWidget* usage_build(void) {
     gtk_label_set_xalign(GTK_LABEL(usage_cost_label), 0.0);
     gtk_box_append(GTK_BOX(page), usage_cost_label);
 
-    GtkStringList *days_model = gtk_string_list_new((const char*[]){"7 days", "14 days", "30 days", NULL});
-    usage_days_dropdown = gtk_drop_down_new(G_LIST_MODEL(days_model), NULL);
+    usage_days_model = gtk_string_list_new((const char*[]){"7 days", "14 days", "30 days", NULL});
+    usage_days_dropdown = gtk_drop_down_new(G_LIST_MODEL(usage_days_model), NULL);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(usage_days_dropdown), 2);
     g_signal_connect(usage_days_dropdown, "notify::selected",
                      G_CALLBACK(on_usage_days_changed), NULL);
     gtk_box_append(GTK_BOX(page), usage_days_dropdown);
-    g_object_unref(days_model);
 
     GtkWidget *retros_title = gtk_label_new("Session Usage (Top 10)");
     gtk_widget_add_css_class(retros_title, "heading");
@@ -299,20 +340,26 @@ static void usage_refresh(void) {
     if (!section_is_stale(&usage_last_fetch_us)) return;
 
     usage_fetch_in_flight = TRUE;
+    UsageRequestContext *ctx = usage_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("usage.status", NULL, 0,
-                                                on_usage_status_response, NULL);
+                                                on_usage_status_response, ctx);
     if (!rid) {
+        usage_request_context_free(ctx);
         usage_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(usage_status_label), "Failed to request usage.status");
     }
 }
 
 static void usage_destroy(void) {
+    usage_generation++;
+
     usage_status_label = NULL;
     usage_summary_label = NULL;
     usage_cost_label = NULL;
     usage_retros_box = NULL;
+    ui_dropdown_detach_model(usage_days_dropdown, (gpointer *)&usage_days_model);
     usage_days_dropdown = NULL;
+    usage_days_model = NULL;
     usage_fetch_in_flight = FALSE;
     usage_last_fetch_us = 0;
     usage_selected_days = 30;

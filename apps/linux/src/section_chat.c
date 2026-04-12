@@ -14,7 +14,10 @@
 #include "gateway_ws.h"
 #include "json_access.h"
 #include "markdown_render.h"
+#include "readiness.h"
 #include "session_filter.h"
+#include "state.h"
+#include "ui_model_utils.h"
 
 typedef struct {
     gchar *id;
@@ -72,6 +75,26 @@ static guint chat_event_listener_id = 0;
 static gboolean chat_guard_agent_change = FALSE;
 static gboolean chat_guard_model_change = FALSE;
 static gboolean chat_guard_session_change = FALSE;
+static guint chat_generation = 1;
+static ChatGateInfo chat_gate_info = {0};
+
+typedef struct {
+    guint generation;
+} ChatRequestContext;
+
+static ChatRequestContext* chat_request_context_new(void) {
+    ChatRequestContext *ctx = g_new0(ChatRequestContext, 1);
+    ctx->generation = chat_generation;
+    return ctx;
+}
+
+static gboolean chat_request_context_is_stale(const ChatRequestContext *ctx) {
+    return !ctx || ctx->generation != chat_generation;
+}
+
+static void chat_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 static void chat_agent_choice_free(ChatAgentChoice *a) {
     if (!a) return;
@@ -89,7 +112,110 @@ static void chat_queued_assistant_free(ChatQueuedAssistant *m) {
 }
 
 static void chat_rebuild_model_dropdown(void);
+static void chat_set_model_dropdown_error_placeholder(const gchar *label);
+static void chat_clear_pending_state(void);
+static void chat_rebuild_messages_ui(void);
 static gboolean chat_pending_is_for_selected_session(void);
+
+static void chat_attach_agent_dropdown_model(GtkStringList *new_model,
+                                             guint selected,
+                                             gboolean enabled) {
+    if (!new_model) return;
+    if (chat_agent_dropdown && GTK_IS_DROP_DOWN(chat_agent_dropdown)) {
+        chat_guard_agent_change = TRUE;
+        ui_dropdown_replace_model(chat_agent_dropdown,
+                                  (gpointer *)&chat_agent_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+        chat_guard_agent_change = FALSE;
+    } else {
+        ui_dropdown_replace_model(NULL,
+                                  (gpointer *)&chat_agent_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+    }
+}
+
+static void chat_attach_model_dropdown_model(GtkStringList *new_model,
+                                             guint selected,
+                                             gboolean enabled) {
+    if (!new_model) return;
+    if (chat_model_dropdown && GTK_IS_DROP_DOWN(chat_model_dropdown)) {
+        chat_guard_model_change = TRUE;
+        ui_dropdown_replace_model(chat_model_dropdown,
+                                  (gpointer *)&chat_model_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+        chat_guard_model_change = FALSE;
+    } else {
+        ui_dropdown_replace_model(NULL,
+                                  (gpointer *)&chat_model_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+    }
+}
+
+static void chat_attach_session_dropdown_model(GtkStringList *new_model,
+                                               guint selected,
+                                               gboolean enabled) {
+    if (!new_model) return;
+    if (chat_session_dropdown && GTK_IS_DROP_DOWN(chat_session_dropdown)) {
+        chat_guard_session_change = TRUE;
+        ui_dropdown_replace_model(chat_session_dropdown,
+                                  (gpointer *)&chat_session_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+        chat_guard_session_change = FALSE;
+    } else {
+        ui_dropdown_replace_model(NULL,
+                                  (gpointer *)&chat_session_model,
+                                  G_LIST_MODEL(new_model),
+                                  selected,
+                                  enabled);
+    }
+}
+
+static void chat_set_agent_dropdown_placeholder(const gchar *label, gboolean enabled) {
+    GtkStringList *new_model = gtk_string_list_new(NULL);
+    gtk_string_list_append(new_model, label && label[0] != '\0' ? label : "No agents available");
+    chat_attach_agent_dropdown_model(new_model, 0, enabled);
+}
+
+static void chat_set_session_dropdown_placeholder(const gchar *label, gboolean enabled) {
+    GtkStringList *new_model = gtk_string_list_new(NULL);
+    gtk_string_list_append(new_model, label && label[0] != '\0' ? label : "No sessions yet");
+    chat_attach_session_dropdown_model(new_model, 0, enabled);
+}
+
+static void chat_render_blocked_state(const ChatGateInfo *gate) {
+    const gchar *status = (gate && gate->status) ? gate->status : "Chat unavailable.";
+    const gchar *next_action = (gate && gate->next_action) ? gate->next_action : "Check gateway status.";
+
+    if (chat_status_label) {
+        g_autofree gchar *line = g_strdup_printf("%s Next: %s", status, next_action);
+        gtk_label_set_text(GTK_LABEL(chat_status_label), line);
+    }
+
+    chat_set_agent_dropdown_placeholder("Chat blocked", FALSE);
+    if (gate && gate->reason == CHAT_BLOCK_PROVIDER_MISSING) {
+        chat_set_model_dropdown_error_placeholder("No provider configured");
+    } else if (gate && gate->reason == CHAT_BLOCK_DEFAULT_MODEL_MISSING) {
+        chat_set_model_dropdown_error_placeholder("No model selected");
+    } else if (gate && gate->reason == CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED) {
+        chat_set_model_dropdown_error_placeholder("Selected model unavailable");
+    } else {
+        chat_set_model_dropdown_error_placeholder("Model list unavailable");
+    }
+    chat_set_session_dropdown_placeholder("No sessions yet", FALSE);
+
+    chat_clear_pending_state();
+    chat_rebuild_messages_ui();
+}
 
 static void chat_model_choice_free(ChatModelChoice *m) {
     if (!m) return;
@@ -184,7 +310,7 @@ static void chat_render_message_object(JsonObject *msg_obj, gboolean is_pending)
 
 static void chat_set_send_enabled(void) {
     if (!chat_send_btn || !chat_compose_view) return;
-    gboolean connected = gateway_rpc_is_ready();
+    gboolean connected = chat_gate_info.ready;
     gboolean has_session = (chat_selected_session_key && chat_selected_session_key[0] != '\0');
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(chat_compose_view));
     GtkTextIter start, end;
@@ -197,8 +323,11 @@ static void chat_set_send_enabled(void) {
 static void chat_rebuild_messages_ui(void) {
     chat_clear_messages_ui();
 
-    if (!gateway_rpc_is_ready()) {
-        chat_append_line("<i>Gateway disconnected. Reconnect to send and stream messages.</i>", "dim-label");
+    if (!chat_gate_info.ready) {
+        const gchar *status = chat_gate_info.status ? chat_gate_info.status : "Chat is not ready.";
+        const gchar *next = chat_gate_info.next_action ? chat_gate_info.next_action : "Check gateway status.";
+        g_autofree gchar *line = g_strdup_printf("<i>%s %s</i>", status, next);
+        chat_append_line(line, "dim-label");
         return;
     }
 
@@ -373,14 +502,7 @@ static void chat_rebuild_agent_dropdown(void) {
             selected_index = i;
         }
     }
-    if (chat_agent_dropdown) {
-        chat_guard_agent_change = TRUE;
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_agent_dropdown), G_LIST_MODEL(new_model));
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(chat_agent_dropdown), selected_index);
-        chat_guard_agent_change = FALSE;
-    }
-    if (chat_agent_model) g_object_unref(chat_agent_model);
-    chat_agent_model = new_model;
+    chat_attach_agent_dropdown_model(new_model, selected_index, TRUE);
 }
 
 static void chat_rebuild_model_dropdown(void) {
@@ -394,14 +516,14 @@ static void chat_rebuild_model_dropdown(void) {
             selected_index = i + 1;
         }
     }
-    if (chat_model_dropdown) {
-        chat_guard_model_change = TRUE;
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_model_dropdown), G_LIST_MODEL(new_model));
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(chat_model_dropdown), selected_index);
-        chat_guard_model_change = FALSE;
-    }
-    if (chat_model_model) g_object_unref(chat_model_model);
-    chat_model_model = new_model;
+    chat_attach_model_dropdown_model(new_model, selected_index, TRUE);
+}
+
+static void chat_set_model_dropdown_error_placeholder(const gchar *label) {
+    GtkStringList *new_model = gtk_string_list_new(NULL);
+    gtk_string_list_append(new_model, label && label[0] != '\0' ? label : "Model list unavailable");
+
+    chat_attach_model_dropdown_model(new_model, 0, FALSE);
 }
 
 static void chat_rebuild_session_dropdown(void) {
@@ -412,23 +534,26 @@ static void chat_rebuild_session_dropdown(void) {
         gtk_string_list_append(new_model, choice->label);
         if (chat_selected_session_key && g_strcmp0(chat_selected_session_key, choice->key) == 0) selected_index = i;
     }
-    if (chat_session_dropdown) {
-        chat_guard_session_change = TRUE;
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_session_dropdown), G_LIST_MODEL(new_model));
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(chat_session_dropdown), selected_index);
-        chat_guard_session_change = FALSE;
-    }
-    if (chat_session_model) g_object_unref(chat_session_model);
-    chat_session_model = new_model;
+    chat_attach_session_dropdown_model(new_model, selected_index, TRUE);
 }
 
 static void on_chat_history_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
+    if (!chat_status_label) {
+        return;
+    }
+
     chat_history_in_flight = FALSE;
 
     if (chat_history_messages) g_ptr_array_set_size(chat_history_messages, 0);
 
-    if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to load chat.history");
         chat_rebuild_messages_ui();
         return;
@@ -474,9 +599,11 @@ static void chat_request_history_for_selected(void) {
     g_object_unref(b);
 
     chat_history_in_flight = TRUE;
-    g_autofree gchar *rid = gateway_rpc_request("chat.history", params, 0, on_chat_history_response, NULL);
+    ChatRequestContext *ctx = chat_request_context_new();
+    g_autofree gchar *rid = gateway_rpc_request("chat.history", params, 0, on_chat_history_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        chat_request_context_free(ctx);
         chat_history_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Gateway not connected");
         chat_rebuild_messages_ui();
@@ -484,11 +611,22 @@ static void chat_request_history_for_selected(void) {
 }
 
 static void on_chat_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
+    if (!chat_status_label) {
+        return;
+    }
+
     chat_sessions_in_flight = FALSE;
 
-    if (!response->ok || !response->payload) {
+    if (!response || !response->ok || !response->payload) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to load sessions.list");
+        chat_set_session_dropdown_placeholder("No sessions yet", FALSE);
         return;
     }
 
@@ -522,6 +660,8 @@ static void on_chat_sessions_response(const GatewayRpcResponse *response, gpoint
         SessionChoice *c = g_ptr_array_index(chat_session_choices, 0);
         g_free(chat_selected_session_key);
         chat_selected_session_key = g_strdup(c->key);
+    } else if (chat_session_choices->len == 0) {
+        g_clear_pointer(&chat_selected_session_key, g_free);
     }
     g_free(previous);
 
@@ -547,18 +687,31 @@ static void chat_request_sessions_for_selected_agent(void) {
     g_object_unref(b);
 
     chat_sessions_in_flight = TRUE;
-    g_autofree gchar *rid = gateway_rpc_request("sessions.list", params, 0, on_chat_sessions_response, NULL);
+    ChatRequestContext *ctx = chat_request_context_new();
+    g_autofree gchar *rid = gateway_rpc_request("sessions.list", params, 0, on_chat_sessions_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        chat_request_context_free(ctx);
         chat_sessions_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to request sessions.list");
     }
 }
 
 static void on_models_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
     g_autoptr(GPtrArray) parsed_models =
         g_ptr_array_new_with_free_func((GDestroyNotify)chat_model_choice_free);
+
+    if (!chat_status_label) {
+        chat_dependency_complete();
+        return;
+    }
 
     if (response->ok && response->payload && JSON_NODE_HOLDS_OBJECT(response->payload)) {
         JsonObject *obj = json_node_get_object(response->payload);
@@ -586,26 +739,44 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
         }
     } else if (chat_status_label) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to load models.list");
+        chat_set_model_dropdown_error_placeholder("Model list unavailable");
+        chat_dependency_complete();
+        return;
     }
 
-    if (parsed_models->len > 0) {
-        if (chat_models) g_ptr_array_unref(chat_models);
-        chat_models = g_steal_pointer(&parsed_models);
-        chat_rebuild_model_dropdown();
+    if (chat_models) g_ptr_array_unref(chat_models);
+    chat_models = g_steal_pointer(&parsed_models);
+    chat_rebuild_model_dropdown();
+
+    if (!chat_models || chat_models->len == 0) {
+        gtk_label_set_text(GTK_LABEL(chat_status_label), "No models available. Configure provider/model first.");
+        chat_set_model_dropdown_error_placeholder("No model selected");
     }
     chat_dependency_complete();
 }
 
 static void on_agents_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
     g_autoptr(GPtrArray) parsed_agents =
         g_ptr_array_new_with_free_func((GDestroyNotify)chat_agent_choice_free);
     const gchar *default_id = NULL;
+
+    if (!chat_status_label) {
+        chat_dependency_complete();
+        return;
+    }
 
     if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
         if (chat_status_label) {
             gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to load agents.list");
         }
+        chat_set_agent_dropdown_placeholder("No agents available", FALSE);
         chat_dependency_complete();
         return;
     }
@@ -652,14 +823,31 @@ static void on_agents_response(const GatewayRpcResponse *response, gpointer user
         }
     }
 
+    if (!chat_agents || chat_agents->len == 0) {
+        chat_set_agent_dropdown_placeholder("No agents available", FALSE);
+        gtk_label_set_text(GTK_LABEL(chat_status_label), "No agents available for chat.");
+        chat_dependency_complete();
+        return;
+    }
+
     chat_rebuild_agent_dropdown();
     chat_request_sessions_for_selected_agent();
     chat_dependency_complete();
 }
 
 static void on_chat_send_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
-    if (!response->ok) {
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
+    if (!chat_status_label) {
+        return;
+    }
+
+    if (!response || !response->ok) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "chat.send failed");
         chat_clear_pending_state();
         chat_rebuild_messages_ui();
@@ -667,7 +855,7 @@ static void on_chat_send_response(const GatewayRpcResponse *response, gpointer u
 }
 
 static void chat_send_current_message(void) {
-    if (!gateway_rpc_is_ready() || !chat_selected_session_key || !chat_compose_view) return;
+    if (!chat_gate_info.ready || !chat_selected_session_key || !chat_compose_view) return;
 
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(chat_compose_view));
     GtkTextIter start, end;
@@ -701,9 +889,11 @@ static void chat_send_current_message(void) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    g_autofree gchar *rid = gateway_rpc_request("chat.send", params, 0, on_chat_send_response, NULL);
+    ChatRequestContext *ctx = chat_request_context_new();
+    g_autofree gchar *rid = gateway_rpc_request("chat.send", params, 0, on_chat_send_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        chat_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Unable to send while disconnected");
         chat_clear_pending_state();
         chat_rebuild_messages_ui();
@@ -744,6 +934,8 @@ static void on_send_clicked(GtkButton *button, gpointer user_data) {
 
 static void on_chat_event(const gchar *event_type, const JsonNode *payload, gpointer user_data) {
     (void)user_data;
+    if (!chat_status_label || !chat_messages_box) return;
+
     /* Rust bridge handles both legacy chat events and unified agent stream events. */
     if (g_strcmp0(event_type, "chat") != 0 && g_strcmp0(event_type, "agent") != 0) return;
     if (!payload || json_node_get_node_type((JsonNode *)payload) != JSON_NODE_OBJECT) return;
@@ -878,8 +1070,18 @@ static void on_chat_session_changed(GtkDropDown *dropdown, GParamSpec *pspec, gp
 }
 
 static void on_chat_model_patch_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
-    if (response->ok) {
+    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
+    if (chat_request_context_is_stale(ctx)) {
+        chat_request_context_free(ctx);
+        return;
+    }
+    chat_request_context_free(ctx);
+
+    if (!chat_status_label) {
+        return;
+    }
+
+    if (response && response->ok) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Session model updated");
     } else {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to patch session model");
@@ -900,7 +1102,7 @@ static void on_chat_model_changed(GtkDropDown *dropdown, GParamSpec *pspec, gpoi
     g_free(chat_selected_model_id);
     chat_selected_model_id = model_id ? g_strdup(model_id) : NULL;
 
-    if (!chat_selected_session_key || !gateway_rpc_is_ready()) return;
+    if (!chat_selected_session_key || !chat_gate_info.ready) return;
 
     JsonBuilder *b = json_builder_new();
     json_builder_begin_object(b);
@@ -912,10 +1114,12 @@ static void on_chat_model_changed(GtkDropDown *dropdown, GParamSpec *pspec, gpoi
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
+    ChatRequestContext *ctx = chat_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("sessions.patch", params, 0,
-                                                on_chat_model_patch_response, NULL);
+                                                on_chat_model_patch_response, ctx);
     json_node_unref(params);
     if (!rid) {
+        chat_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to send sessions.patch");
     }
 }
@@ -953,14 +1157,18 @@ static GtkWidget* chat_build(void) {
     gtk_box_append(GTK_BOX(page), chat_status_label);
 
     GtkWidget *controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    chat_agent_model = gtk_string_list_new(NULL);
-    chat_model_model = gtk_string_list_new(NULL);
-    chat_session_model = gtk_string_list_new(NULL);
+    chat_agent_model = NULL;
+    chat_model_model = NULL;
+    chat_session_model = NULL;
 
-    chat_agent_dropdown = gtk_drop_down_new(G_LIST_MODEL(chat_agent_model), NULL);
-    chat_model_dropdown = gtk_drop_down_new(G_LIST_MODEL(chat_model_model), NULL);
-    chat_session_dropdown = gtk_drop_down_new(G_LIST_MODEL(chat_session_model), NULL);
+    chat_agent_dropdown = gtk_drop_down_new(NULL, NULL);
+    chat_model_dropdown = gtk_drop_down_new(NULL, NULL);
+    chat_session_dropdown = gtk_drop_down_new(NULL, NULL);
     gtk_widget_set_hexpand(chat_session_dropdown, TRUE);
+
+    chat_attach_agent_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
+    chat_attach_model_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
+    chat_attach_session_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
 
     g_signal_connect(chat_agent_dropdown, "notify::selected", G_CALLBACK(on_chat_agent_changed), NULL);
     g_signal_connect(chat_model_dropdown, "notify::selected", G_CALLBACK(on_chat_model_changed), NULL);
@@ -1005,6 +1213,10 @@ static GtkWidget* chat_build(void) {
     }
     chat_event_listener_id = gateway_ws_event_subscribe(on_chat_event, NULL);
 
+    chat_rebuild_agent_dropdown();
+    chat_rebuild_model_dropdown();
+    chat_rebuild_session_dropdown();
+
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
     chat_set_send_enabled();
     return scrolled;
@@ -1012,47 +1224,57 @@ static GtkWidget* chat_build(void) {
 
 static void chat_refresh(void) {
     if (!chat_status_label || chat_fetch_in_flight || chat_sessions_in_flight || chat_history_in_flight) return;
-    if (!gateway_rpc_is_ready()) {
-        gtk_label_set_text(GTK_LABEL(chat_status_label), "Gateway not connected");
-        chat_clear_pending_state();
-        chat_rebuild_messages_ui();
+
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    readiness_describe_chat_gate(snapshot, &chat_gate_info);
+    if (!chat_gate_info.ready) {
+        chat_render_blocked_state(&chat_gate_info);
         chat_set_send_enabled();
         return;
     }
+
     if (!section_is_stale(&chat_last_fetch_us)) {
+        if (!chat_selected_session_key) {
+            chat_set_session_dropdown_placeholder("No sessions yet", FALSE);
+        }
         chat_set_send_enabled();
         return;
     }
 
     chat_fetch_in_flight = TRUE;
     chat_dependencies_pending = 0;
-    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0, on_agents_response, NULL);
+    ChatRequestContext *agents_ctx = chat_request_context_new();
+    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0, on_agents_response, agents_ctx);
     if (agents_rid) chat_dependencies_pending++;
-    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0, on_models_response, NULL);
+    else chat_request_context_free(agents_ctx);
+
+    ChatRequestContext *models_ctx = chat_request_context_new();
+    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0, on_models_response, models_ctx);
     if (models_rid) chat_dependencies_pending++;
+    else chat_request_context_free(models_ctx);
+
     if (!agents_rid || !models_rid) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to request chat dependencies");
         chat_fetch_in_flight = FALSE;
         chat_dependencies_pending = 0;
+        chat_set_agent_dropdown_placeholder("No agents available", FALSE);
+        chat_set_model_dropdown_error_placeholder("Model list unavailable");
+        chat_set_session_dropdown_placeholder("No sessions yet", FALSE);
     }
     chat_set_send_enabled();
 }
 
 static void chat_destroy(void) {
+    chat_generation++;
+
     if (chat_event_listener_id) {
         gateway_ws_event_unsubscribe(chat_event_listener_id);
         chat_event_listener_id = 0;
     }
 
-    if (chat_agent_dropdown) {
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_agent_dropdown), NULL);
-    }
-    if (chat_model_dropdown) {
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_model_dropdown), NULL);
-    }
-    if (chat_session_dropdown) {
-        gtk_drop_down_set_model(GTK_DROP_DOWN(chat_session_dropdown), NULL);
-    }
+    ui_dropdown_detach_model(chat_agent_dropdown, (gpointer *)&chat_agent_model);
+    ui_dropdown_detach_model(chat_model_dropdown, (gpointer *)&chat_model_model);
+    ui_dropdown_detach_model(chat_session_dropdown, (gpointer *)&chat_session_model);
 
     chat_status_label = NULL;
     chat_messages_box = NULL;
@@ -1064,9 +1286,6 @@ static void chat_destroy(void) {
     chat_compose_view = NULL;
     chat_send_btn = NULL;
 
-    if (chat_agent_model) g_object_unref(chat_agent_model);
-    if (chat_model_model) g_object_unref(chat_model_model);
-    if (chat_session_model) g_object_unref(chat_session_model);
     chat_agent_model = NULL;
     chat_model_model = NULL;
     chat_session_model = NULL;
@@ -1098,6 +1317,10 @@ static void chat_destroy(void) {
     chat_last_fetch_us = 0;
     chat_show_thinking = FALSE;
     chat_show_tools = TRUE;
+    chat_gate_info.ready = FALSE;
+    chat_gate_info.reason = CHAT_BLOCK_UNKNOWN;
+    chat_gate_info.status = NULL;
+    chat_gate_info.next_action = NULL;
 }
 
 static void chat_invalidate(void) {

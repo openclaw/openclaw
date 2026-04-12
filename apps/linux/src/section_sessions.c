@@ -26,6 +26,7 @@ static GtkWidget *sessions_status_label = NULL;
 static GatewaySessionsData *sessions_data_cache = NULL;
 static gboolean sessions_fetch_in_flight = FALSE;
 static gint64 sessions_last_fetch_us = 0;
+static guint sessions_generation = 1;
 
 typedef struct {
     gchar *id;
@@ -33,6 +34,24 @@ typedef struct {
 } SessionModelChoice;
 
 static GPtrArray *session_model_choices = NULL;
+
+typedef struct {
+    guint generation;
+} SessionsRequestContext;
+
+static SessionsRequestContext* sessions_request_context_new(void) {
+    SessionsRequestContext *ctx = g_new0(SessionsRequestContext, 1);
+    ctx->generation = sessions_generation;
+    return ctx;
+}
+
+static gboolean sessions_request_context_is_stale(const SessionsRequestContext *ctx) {
+    return !ctx || ctx->generation != sessions_generation;
+}
+
+static void sessions_request_context_free(gpointer data) {
+    g_free(data);
+}
 
 static void session_model_choice_free(SessionModelChoice *choice) {
     if (!choice) return;
@@ -69,12 +88,18 @@ static gchar* sessions_default_model_label(void) {
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    SessionsRequestContext *ctx = (SessionsRequestContext *)user_data;
+    if (sessions_request_context_is_stale(ctx)) {
+        sessions_request_context_free(ctx);
+        return;
+    }
+    sessions_request_context_free(ctx);
+
     if (!sessions_status_label) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         g_autofree gchar *msg = g_strdup_printf("Error: %s",
-            response->error_msg ? response->error_msg : "unknown");
+            response && response->error_msg ? response->error_msg : "unknown");
         gtk_label_set_text(GTK_LABEL(sessions_status_label), msg);
     }
 
@@ -117,8 +142,10 @@ static void on_session_reset_response(GObject *source, GAsyncResult *result, gpo
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Resetting…");
 
-    g_autofree gchar *req = mutation_sessions_reset(key, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_reset(key, on_mutation_done, ctx);
     if (!req && sessions_status_label) {
+        sessions_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
@@ -132,8 +159,10 @@ static void on_session_compact(GtkButton *btn, gpointer user_data) {
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Compacting\u2026");
 
-    g_autofree gchar *req = mutation_sessions_compact(key, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_compact(key, on_mutation_done, ctx);
     if (!req) {
+        sessions_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (sessions_status_label)
             gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
@@ -153,8 +182,10 @@ static void on_thinking_changed(GObject *gobject, GParamSpec *pspec, gpointer us
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating\u2026");
 
-    g_autofree gchar *req = mutation_sessions_patch(key, level, NULL, NULL, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_patch(key, level, NULL, NULL, on_mutation_done, ctx);
     if (!req && sessions_status_label) {
+        sessions_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
@@ -172,8 +203,10 @@ static void on_verbose_changed(GObject *gobject, GParamSpec *pspec, gpointer use
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating\u2026");
 
-    g_autofree gchar *req = mutation_sessions_patch(key, NULL, level, NULL, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_patch(key, NULL, level, NULL, on_mutation_done, ctx);
     if (!req && sessions_status_label) {
+        sessions_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
@@ -193,8 +226,10 @@ static void on_model_changed(GObject *gobject, GParamSpec *pspec, gpointer user_
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating…");
 
-    g_autofree gchar *req = mutation_sessions_patch(key, NULL, NULL, model, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_patch(key, NULL, NULL, model, on_mutation_done, ctx);
     if (!req && sessions_status_label) {
+        sessions_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
@@ -213,8 +248,10 @@ static void on_delete_dialog_response(GObject *source, GAsyncResult *result, gpo
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Deleting\u2026");
 
-    g_autofree gchar *req = mutation_sessions_delete(key, TRUE, on_mutation_done, NULL);
+    SessionsRequestContext *ctx = sessions_request_context_new();
+    g_autofree gchar *req = mutation_sessions_delete(key, TRUE, on_mutation_done, ctx);
     if (!req && sessions_status_label) {
+        sessions_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
@@ -546,7 +583,12 @@ static void sessions_rebuild_list(void) {
 }
 
 static void on_sessions_models_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    SessionsRequestContext *ctx = (SessionsRequestContext *)user_data;
+    if (sessions_request_context_is_stale(ctx)) {
+        sessions_request_context_free(ctx);
+        return;
+    }
+    sessions_request_context_free(ctx);
 
     if (session_model_choices) g_ptr_array_unref(session_model_choices);
     session_model_choices = g_ptr_array_new_with_free_func((GDestroyNotify)session_model_choice_free);
@@ -594,15 +636,21 @@ static void on_sessions_models_response(const GatewayRpcResponse *response, gpoi
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_sessions_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    SessionsRequestContext *ctx = (SessionsRequestContext *)user_data;
+    if (sessions_request_context_is_stale(ctx)) {
+        sessions_request_context_free(ctx);
+        return;
+    }
+    sessions_request_context_free(ctx);
+
     sessions_fetch_in_flight = FALSE;
 
     if (!sessions_list_box) return;
 
-    if (!response->ok) {
+    if (!response || !response->ok) {
         if (sessions_status_label) {
             g_autofree gchar *msg = g_strdup_printf("Error: %s",
-                response->error_msg ? response->error_msg : "unknown");
+                response && response->error_msg ? response->error_msg : "unknown");
             gtk_label_set_text(GTK_LABEL(sessions_status_label), msg);
         }
         return;
@@ -636,12 +684,18 @@ static void sessions_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     sessions_fetch_in_flight = TRUE;
+    SessionsRequestContext *sessions_ctx = sessions_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "sessions.list", NULL, 0, on_sessions_rpc_response, NULL);
+        "sessions.list", NULL, 0, on_sessions_rpc_response, sessions_ctx);
+    SessionsRequestContext *models_ctx = sessions_request_context_new();
     g_autofree gchar *models_req_id = gateway_rpc_request(
-        "models.list", NULL, 0, on_sessions_models_response, NULL);
+        "models.list", NULL, 0, on_sessions_models_response, models_ctx);
     if (!req_id) {
+        sessions_request_context_free(sessions_ctx);
         sessions_fetch_in_flight = FALSE;
+    }
+    if (!models_req_id) {
+        sessions_request_context_free(models_ctx);
     }
     (void)models_req_id;
 }
@@ -699,19 +753,27 @@ static void sessions_refresh(void) {
     if (!section_is_stale(&sessions_last_fetch_us)) return;
 
     sessions_fetch_in_flight = TRUE;
+    SessionsRequestContext *sessions_ctx = sessions_request_context_new();
     g_autofree gchar *req_id = gateway_rpc_request(
-        "sessions.list", NULL, 0, on_sessions_rpc_response, NULL);
+        "sessions.list", NULL, 0, on_sessions_rpc_response, sessions_ctx);
+    SessionsRequestContext *models_ctx = sessions_request_context_new();
     g_autofree gchar *models_req_id = gateway_rpc_request(
-        "models.list", NULL, 0, on_sessions_models_response, NULL);
+        "models.list", NULL, 0, on_sessions_models_response, models_ctx);
     if (!req_id) {
+        sessions_request_context_free(sessions_ctx);
         sessions_fetch_in_flight = FALSE;
         if (sessions_status_label)
             gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
+    }
+    if (!models_req_id) {
+        sessions_request_context_free(models_ctx);
     }
     (void)models_req_id;
 }
 
 static void sessions_destroy(void) {
+    sessions_generation++;
+
     sessions_list_box = NULL;
     sessions_status_label = NULL;
     sessions_fetch_in_flight = FALSE;
