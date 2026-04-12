@@ -52,6 +52,8 @@ export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
 
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
+  supportsStickerPayload?: boolean;
+  supportedPayloadTypes?: readonly string[];
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
