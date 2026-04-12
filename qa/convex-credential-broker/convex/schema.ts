@@ -8,6 +8,7 @@ const leaseEventType = v.union(
   v.literal("acquire_failed"),
   v.literal("release"),
 );
+const adminEventType = v.union(v.literal("add"), v.literal("disable"), v.literal("disable_failed"));
 
 export default defineSchema({
   credential_sets: defineTable({
@@ -39,6 +40,20 @@ export default defineSchema({
     ownerId: v.string(),
     occurredAtMs: v.number(),
     credentialId: v.optional(v.id("credential_sets")),
+    code: v.optional(v.string()),
+    message: v.optional(v.string()),
+  })
+    .index("by_occurredAtMs", ["occurredAtMs"])
+    .index("by_kind_occurredAtMs", ["kind", "occurredAtMs"])
+    .index("by_credential_occurredAtMs", ["credentialId", "occurredAtMs"]),
+
+  admin_events: defineTable({
+    eventType: adminEventType,
+    actorRole,
+    actorId: v.string(),
+    occurredAtMs: v.number(),
+    credentialId: v.optional(v.id("credential_sets")),
+    kind: v.optional(v.string()),
     code: v.optional(v.string()),
     message: v.optional(v.string()),
   })

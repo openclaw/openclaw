@@ -7,6 +7,9 @@ This broker exposes:
 - `POST /qa-credentials/v1/acquire`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
+- `POST /qa-credentials/v1/admin/add`
+- `POST /qa-credentials/v1/admin/remove`
+- `POST /qa-credentials/v1/admin/list`
 
 The implementation matches the contract documented in
 `docs/help/testing.md` for `--credential-source convex`.
@@ -18,6 +21,7 @@ The implementation matches the contract documented in
 - Secrets: separate maintainer/CI secrets (shared fallback supported)
 - Outage behavior: callers fail fast
 - Lease event retention: 2 days (hourly cleanup cron)
+- Admin event retention: 30 days (hourly cleanup cron)
 - App-level encryption: not included in v1
 
 ## Quick start
@@ -42,27 +46,25 @@ npx convex deploy
 - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
 - `OPENCLAW_QA_CONVEX_SECRET_CI`
 
-Optional fallback:
+Optional fallback (lease endpoints only):
 
 - `OPENCLAW_QA_CONVEX_SECRET` (shared secret accepted for either role)
 
-## Seed credentials
+## Manage credentials from qa-lab CLI
 
-Use the Convex dashboard Data page to insert rows into `credential_sets`.
+Maintainers can manage rows without using the Convex dashboard:
 
-Required fields:
+```bash
+pnpm openclaw qa credentials add \
+  --kind telegram \
+  --payload-file qa/telegram-credential.json
 
-- `kind` (for Telegram v1, use `"telegram"`)
-- `status` (`"active"` or `"disabled"`)
-- `payload` (opaque JSON object; for Telegram: `{ "groupId": "...", "driverToken": "...", "sutToken": "..." }`)
-- `createdAtMs` (number, Unix ms)
-- `updatedAtMs` (number, Unix ms)
-- `lastLeasedAtMs` (number, use `0` for new rows)
+pnpm openclaw qa credentials list --kind telegram
 
-Optional:
+pnpm openclaw qa credentials remove --credential-id <credential-id>
+```
 
-- `note`
-- `lease` (normally omitted; broker manages this field)
+Admin endpoints require `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`.
 
 ## Local request examples
 
@@ -111,5 +113,46 @@ curl -sS -X POST "<site-url>/qa-credentials/v1/release" \
     "actorRole":"maintainer",
     "credentialId":"<credential-id>",
     "leaseToken":"<lease-token>"
+  }'
+```
+
+Admin add (maintainer token only):
+
+```bash
+curl -sS -X POST "<site-url>/qa-credentials/v1/admin/add" \
+  -H "authorization: Bearer <maintainer-token>" \
+  -H "content-type: application/json" \
+  -d '{
+    "kind":"telegram",
+    "actorId":"local-maintainer",
+    "payload":{
+      "groupId":"-100123",
+      "driverToken":"driver-token",
+      "sutToken":"sut-token"
+    }
+  }'
+```
+
+Admin list (default redacted):
+
+```bash
+curl -sS -X POST "<site-url>/qa-credentials/v1/admin/list" \
+  -H "authorization: Bearer <maintainer-token>" \
+  -H "content-type: application/json" \
+  -d '{
+    "kind":"telegram",
+    "status":"all"
+  }'
+```
+
+Admin remove (soft disable, fails when lease is active):
+
+```bash
+curl -sS -X POST "<site-url>/qa-credentials/v1/admin/remove" \
+  -H "authorization: Bearer <maintainer-token>" \
+  -H "content-type: application/json" \
+  -d '{
+    "credentialId":"<credential-id>",
+    "actorId":"local-maintainer"
   }'
 ```

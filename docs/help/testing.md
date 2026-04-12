@@ -118,6 +118,19 @@ Optional env vars:
 - `OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX` (default `/qa-credentials/v1`)
 - `OPENCLAW_QA_CREDENTIAL_OWNER_ID` (optional trace id)
 
+Maintainer admin commands (pool add/remove/list) require
+`OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` specifically.
+
+CLI helpers for maintainers:
+
+```bash
+pnpm openclaw qa credentials add --kind telegram --payload-file qa/telegram-credential.json
+pnpm openclaw qa credentials list --kind telegram
+pnpm openclaw qa credentials remove --credential-id <credential-id>
+```
+
+Use `--json` for machine-readable output in scripts and CI utilities.
+
 Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`):
 
 - `POST /acquire`
@@ -130,6 +143,16 @@ Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`)
 - `POST /release`
   - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken }`
   - Success: `{ status: "ok" }` (or empty `2xx`)
+- `POST /admin/add` (maintainer secret only)
+  - Request: `{ kind, actorId, payload, note?, status? }`
+  - Success: `{ status: "ok", credential }`
+- `POST /admin/remove` (maintainer secret only)
+  - Request: `{ credentialId, actorId }`
+  - Success: `{ status: "ok", changed, credential }`
+  - Active lease guard: `{ status: "error", code: "LEASE_ACTIVE", ... }`
+- `POST /admin/list` (maintainer secret only)
+  - Request: `{ kind?, status?, includePayload?, limit? }`
+  - Success: `{ status: "ok", credentials, count }`
 
 Payload shape for Telegram kind:
 

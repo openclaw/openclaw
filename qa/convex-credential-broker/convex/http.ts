@@ -71,6 +71,37 @@ function resolveAuthRole(token: string | null): AuthRole {
   throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker shared secret is invalid.");
 }
 
+function assertMaintainerAdminAuth(token: string | null) {
+  if (!token) {
+    throw new BrokerHttpError(
+      401,
+      "AUTH_REQUIRED",
+      "Missing Authorization: Bearer <secret> header.",
+    );
+  }
+  const maintainerSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
+  if (!maintainerSecret) {
+    throw new BrokerHttpError(
+      500,
+      "SERVER_MISCONFIGURED",
+      "Admin endpoints require OPENCLAW_QA_CONVEX_SECRET_MAINTAINER on this deployment.",
+    );
+  }
+  if (token === maintainerSecret) {
+    return;
+  }
+  const ciSecret = process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
+  const sharedSecret = process.env.OPENCLAW_QA_CONVEX_SECRET?.trim();
+  if ((ciSecret && token === ciSecret) || (sharedSecret && token === sharedSecret)) {
+    throw new BrokerHttpError(
+      403,
+      "AUTH_ROLE_MISMATCH",
+      "Admin endpoints require maintainer credentials.",
+    );
+  }
+  throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker shared secret is invalid.");
+}
+
 function asObject(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -104,6 +135,27 @@ function requireString(body: Record<string, unknown>, key: string) {
   return value;
 }
 
+function optionalString(body: Record<string, unknown>, key: string) {
+  if (!(key in body) || body[key] === undefined || body[key] === null) {
+    return undefined;
+  }
+  const raw = body[key];
+  if (typeof raw !== "string") {
+    throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a string.`);
+  }
+  const value = raw.trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function requireObject(body: Record<string, unknown>, key: string) {
+  const raw = body[key];
+  const parsed = asObject(raw);
+  if (!parsed) {
+    throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a JSON object.`);
+  }
+  return parsed;
+}
+
 function optionalPositiveInteger(body: Record<string, unknown>, key: string) {
   if (!(key in body) || body[key] === undefined || body[key] === null) {
     return undefined;
@@ -113,6 +165,46 @@ function optionalPositiveInteger(body: Record<string, unknown>, key: string) {
     throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a positive integer.`);
   }
   return raw;
+}
+
+function optionalBoolean(body: Record<string, unknown>, key: string) {
+  if (!(key in body) || body[key] === undefined || body[key] === null) {
+    return undefined;
+  }
+  if (typeof body[key] !== "boolean") {
+    throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a boolean.`);
+  }
+  return body[key];
+}
+
+function optionalCredentialStatus(body: Record<string, unknown>, key: string) {
+  const value = optionalString(body, key);
+  if (!value) {
+    return undefined;
+  }
+  if (value !== "active" && value !== "disabled") {
+    throw new BrokerHttpError(
+      400,
+      "INVALID_BODY",
+      `Expected "${key}" to be "active" or "disabled".`,
+    );
+  }
+  return value;
+}
+
+function optionalListStatus(body: Record<string, unknown>, key: string) {
+  const value = optionalString(body, key);
+  if (!value) {
+    return undefined;
+  }
+  if (value !== "active" && value !== "disabled" && value !== "all") {
+    throw new BrokerHttpError(
+      400,
+      "INVALID_BODY",
+      `Expected "${key}" to be "active", "disabled", or "all".`,
+    );
+  }
+  return value;
 }
 
 function parseActorRole(body: Record<string, unknown>) {
@@ -253,6 +345,70 @@ http.route({
         leaseToken: requireString(body, "leaseToken"),
       });
 
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/admin/add",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      assertMaintainerAdminAuth(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const result = await ctx.runMutation(internal.credentials.addCredentialSet, {
+        kind: requireString(body, "kind"),
+        payload: requireObject(body, "payload"),
+        note: optionalString(body, "note"),
+        actorId: optionalString(body, "actorId"),
+        status: optionalCredentialStatus(body, "status"),
+      });
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/admin/remove",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      assertMaintainerAdminAuth(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const result = await ctx.runMutation(internal.credentials.disableCredentialSet, {
+        credentialId: normalizeCredentialId(
+          requireString(body, "credentialId"),
+        ) as Id<"credential_sets">,
+        actorId: optionalString(body, "actorId"),
+      });
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/admin/list",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      assertMaintainerAdminAuth(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const result = await ctx.runQuery(internal.credentials.listCredentialSets, {
+        kind: optionalString(body, "kind"),
+        status: optionalListStatus(body, "status"),
+        includePayload: optionalBoolean(body, "includePayload"),
+        limit: optionalPositiveInteger(body, "limit"),
+      });
       return jsonResponse(200, result);
     } catch (error) {
       const normalized = normalizeError(error);
