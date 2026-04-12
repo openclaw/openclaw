@@ -19,6 +19,7 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -44,6 +45,7 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+const log = createSubsystemLogger("agents.openai-transport-stream");
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -686,6 +688,15 @@ function enforceOpenAICodexResponsesPreflightGuard(model: Model<Api>, payload: u
   );
   const estimatedTokens = estimateCodexResponsesPayloadTokens(payload);
   if (estimatedTokens > safeThreshold) {
+    log.warn("provider_payload_overflow_prevented", {
+      provider: model.provider,
+      model: model.id,
+      estimatedTokens,
+      contextWindow,
+      threshold: safeThreshold,
+      action: "prevented_before_submit",
+      recovery: "overflow_compaction_path",
+    });
     throw new Error(CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE);
   }
 }
