@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { evaluateToolCall } from "./governance/rationalization-engine.js";
+import { recordHit } from "./governance/rationalization-sink.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -162,6 +163,9 @@ export async function runBeforeToolCallHook(args: {
     if (ratEval.matched && ratEval.rule) {
       const counts = (sessionState.rationalizationCounts ??= new Map());
       counts.set(ratEval.rule.id, (counts.get(ratEval.rule.id) ?? 0) + 1);
+
+      // RI-011 — persist to daily rollup (fire-and-forget, never throws)
+      recordHit(ratEval.rule.id, ratEval.rule.severity, ratEval.action ?? "warn", ratEval.rule.category);
 
       if (ratEval.action === "block" || ratEval.action === "require_override") {
         log.error(
