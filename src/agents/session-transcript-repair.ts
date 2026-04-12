@@ -176,7 +176,7 @@ function isReplaySafeThinkingAssistantTurn(
       return false;
     }
   }
-  return sawToolCall || content.some((block) => isThinkingLikeBlock(block));
+  return sawToolCall;
 }
 
 function makeMissingToolResult(params: {
@@ -232,6 +232,7 @@ export type ToolCallInputRepairReport = {
 
 export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
+  preserveImmutableThinkingTurns?: boolean;
 };
 
 export type ErroredAssistantResultPolicy = "preserve" | "drop";
@@ -269,6 +270,7 @@ export function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  const preserveImmutableThinkingTurns = options?.preserveImmutableThinkingTurns === true;
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -281,7 +283,11 @@ export function repairToolCallInputs(
       continue;
     }
 
-    if (msg.content.some((block) => isThinkingLikeBlock(block))) {
+    if (
+      preserveImmutableThinkingTurns &&
+      msg.content.some((block) => isThinkingLikeBlock(block)) &&
+      countRawToolCallBlocks(msg.content) > 0
+    ) {
       // Signed Anthropic thinking blocks must remain byte-for-byte stable on
       // replay. Preserve the turn only if every sibling tool call is already
       // valid and requires no redaction or normalization. Otherwise drop the

@@ -403,7 +403,10 @@ describe("sanitizeToolCallInputs", () => {
       },
     ]);
 
-    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      preserveImmutableThinkingTurns: true,
+    });
 
     expect(out).toEqual([]);
   });
@@ -432,10 +435,50 @@ describe("sanitizeToolCallInputs", () => {
       },
     ]);
 
-    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["sessions_spawn"] });
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      preserveImmutableThinkingTurns: true,
+    });
 
     expect(out).toEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me normalize this tool name.",
+            thinkingSignature: "sig_generic",
+          },
+          {
+            type: "toolCall",
+            id: "call_read",
+            name: " read ",
+            arguments: { path: "README.md" },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Let me normalize this tool name.",
+        thinkingSignature: "sig_generic",
+      },
+      {
+        type: "toolCall",
+        id: "call_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
   });
 
   it.each([
