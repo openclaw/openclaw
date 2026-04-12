@@ -155,9 +155,20 @@ async function callSubagentGateway(
   // "agent" → write) keep their least-privilege scope so that the gateway does
   // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  const cfg = subagentSpawnDeps.loadConfig();
+  const configuredMs = cfg.agents?.defaults?.subagents?.gatewayTimeoutMs;
+  const floorMs =
+    typeof configuredMs === "number" && configuredMs > 0
+      ? configuredMs
+      : params.method === "agent"
+        ? 30_000
+        : 20_000;
+  const effectiveTimeoutMs = Math.max(params.timeoutMs ?? 0, floorMs);
+
   return await subagentSpawnDeps.callGateway({
     ...params,
     ...(scopes != null ? { scopes } : {}),
+    timeoutMs: effectiveTimeoutMs,
   });
 }
 
