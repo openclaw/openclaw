@@ -56,6 +56,42 @@ export function formatCronState(job: CronJob) {
   return `${status} · next ${next} · last ${last}`;
 }
 
+function parsePositiveCronStep(field: string): number | null {
+  const match = field.match(/^\*\/([1-9]\d*)$/);
+  if (!match) {
+    return null;
+  }
+  const step = Number(match[1]);
+  return Number.isSafeInteger(step) ? step : null;
+}
+
+function formatCronIntervalUnit(value: number, unit: "minute" | "hour"): string {
+  return `${value} ${unit}${value === 1 ? "" : "s"}`;
+}
+
+function formatCommonCronExpression(expr: string): string | null {
+  const [minute, hour, dayOfMonth, month, dayOfWeek, extra] = expr.trim().split(/\s+/);
+  if (extra !== undefined || !minute || !hour || !dayOfMonth || !month || !dayOfWeek) {
+    return null;
+  }
+  if (dayOfMonth !== "*" || month !== "*" || dayOfWeek !== "*") {
+    return null;
+  }
+  if (minute === "0") {
+    const hourStep = parsePositiveCronStep(hour);
+    if (hourStep !== null) {
+      return `Every ${formatCronIntervalUnit(hourStep, "hour")}`;
+    }
+  }
+  if (hour === "*") {
+    const minuteStep = parsePositiveCronStep(minute);
+    if (minuteStep !== null) {
+      return `Every ${formatCronIntervalUnit(minuteStep, "minute")}`;
+    }
+  }
+  return null;
+}
+
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
@@ -64,6 +100,10 @@ export function formatCronSchedule(job: CronJob) {
   }
   if (s.kind === "every") {
     return `Every ${formatDurationHuman(s.everyMs)}`;
+  }
+  const commonCron = formatCommonCronExpression(s.expr);
+  if (commonCron) {
+    return `${commonCron}${s.tz ? ` (${s.tz})` : ""}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
