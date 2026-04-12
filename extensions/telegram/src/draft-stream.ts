@@ -240,16 +240,18 @@ export function createTelegramDraftStream(params: {
     // Resolve effective parse mode: disabled for this generation after a prior parse error.
     const effectiveParseMode =
       parseModeDisabledForGeneration === sendGeneration ? undefined : renderedParseMode;
-    const effectiveText = effectiveParseMode ? renderedText : plainText;
+    const effectiveText =
+      parseModeDisabledForGeneration === sendGeneration ? plainText : renderedText;
 
-    if (typeof streamMessageId === "number") {
+    const editTargetId = streamMessageId;
+    if (typeof editTargetId === "number") {
       try {
         if (effectiveParseMode) {
-          await params.api.editMessageText(chatId, streamMessageId, effectiveText, {
+          await params.api.editMessageText(chatId, editTargetId, effectiveText, {
             parse_mode: effectiveParseMode,
           });
         } else {
-          await params.api.editMessageText(chatId, streamMessageId, effectiveText);
+          await params.api.editMessageText(chatId, editTargetId, effectiveText);
         }
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
@@ -259,9 +261,11 @@ export function createTelegramDraftStream(params: {
         if (effectiveParseMode && isTelegramHtmlParseError(err)) {
           // HTML rejected by Telegram — retry as plain text and disable
           // parse_mode for the rest of this generation.
-          parseModeDisabledForGeneration = sendGeneration;
+          if (sendGeneration === generation) {
+            parseModeDisabledForGeneration = sendGeneration;
+          }
           params.warn?.("telegram stream preview edit: HTML parse error, retrying as plain text");
-          await params.api.editMessageText(chatId, streamMessageId, plainText);
+          await params.api.editMessageText(chatId, editTargetId, plainText);
           return true;
         }
         throw err;
@@ -282,7 +286,9 @@ export function createTelegramDraftStream(params: {
     } catch (err) {
       if (effectiveParseMode && isTelegramHtmlParseError(err)) {
         // HTML rejected on first send — retry as plain text.
-        parseModeDisabledForGeneration = sendGeneration;
+        if (sendGeneration === generation) {
+          parseModeDisabledForGeneration = sendGeneration;
+        }
         actualSentText = plainText;
         actualSentParseMode = undefined;
         params.warn?.("telegram stream preview send: HTML parse error, retrying as plain text");
@@ -337,7 +343,8 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     const effectiveParseMode =
       parseModeDisabledForGeneration === sendGeneration ? undefined : renderedParseMode;
-    const effectiveText = effectiveParseMode ? renderedText : plainText;
+    const effectiveText =
+      parseModeDisabledForGeneration === sendGeneration ? plainText : renderedText;
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
     const buildDraftParams = (parseMode: "HTML" | undefined) => {
@@ -354,7 +361,9 @@ export function createTelegramDraftStream(params: {
       await resolvedDraftApi!(chatId, draftId, effectiveText, buildDraftParams(effectiveParseMode));
     } catch (err) {
       if (effectiveParseMode && isTelegramHtmlParseError(err)) {
-        parseModeDisabledForGeneration = sendGeneration;
+        if (sendGeneration === generation) {
+          parseModeDisabledForGeneration = sendGeneration;
+        }
         params.warn?.("telegram stream draft preview: HTML parse error, retrying as plain text");
         await resolvedDraftApi!(chatId, draftId, plainText, buildDraftParams(undefined));
       } else {
@@ -455,7 +464,9 @@ export function createTelegramDraftStream(params: {
       // update will arrive with more text that may produce valid HTML, and
       // the transport functions already disable parse_mode for this generation.
       if (isTelegramHtmlParseError(err)) {
-        parseModeDisabledForGeneration = sendGeneration;
+        if (sendGeneration === generation) {
+          parseModeDisabledForGeneration = sendGeneration;
+        }
         params.warn?.(
           `telegram stream preview: HTML parse error escaped to outer handler (degrading to plain text)`,
         );
