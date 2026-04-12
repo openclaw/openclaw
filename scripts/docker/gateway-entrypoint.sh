@@ -21,6 +21,7 @@ ensure_node_writable_dir() {
 
 export COREPACK_HOME="${COREPACK_HOME:-/home/node/.cache/node/corepack}"
 ensure_node_writable_dir /home/node/.cache
+ensure_node_writable_dir /home/node/.npm
 ensure_node_writable_dir "${PNPM_HOME:-/home/node/.local/share/pnpm}"
 ensure_node_writable_dir "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}"
 ensure_node_writable_dir "${GOPATH:-/home/node/go}"
