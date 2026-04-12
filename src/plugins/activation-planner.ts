@@ -4,6 +4,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type PluginActivationPlannerTrigger =
   | { kind: "command"; command: string }
@@ -20,10 +21,7 @@ export function resolveManifestActivationPluginIds(params: {
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIds =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0
-      ? new Set(params.onlyPluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
-      : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
 
   return [
     ...new Set(
@@ -35,7 +33,7 @@ export function resolveManifestActivationPluginIds(params: {
         .plugins.filter(
           (plugin) =>
             (!params.origin || plugin.origin === params.origin) &&
-            (!onlyPluginIds || onlyPluginIds.has(plugin.id)) &&
+            (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
             matchesManifestActivationTrigger(plugin, params.trigger),
         )
         .map((plugin) => plugin.id),

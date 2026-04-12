@@ -7,6 +7,7 @@ import {
   resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
+import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
@@ -99,7 +100,7 @@ function resolvePluginProviderLoadBase(params: {
       })
     : [];
   const requestedPluginIds =
-    params.onlyPluginIds ||
+    hasExplicitPluginIdScope(params.onlyPluginIds) ||
     params.providerRefs?.length ||
     params.modelRefs?.length ||
     providerOwnedPluginIds.length > 0 ||

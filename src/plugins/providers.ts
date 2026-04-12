@@ -7,6 +7,7 @@ import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { createPluginIdScopeSet } from "./plugin-scope.js";
 
 export function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
@@ -22,7 +23,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -45,7 +46,7 @@ export function resolveEnabledProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -76,7 +77,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   onlyPluginIds?: readonly string[];
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,

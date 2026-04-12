@@ -156,4 +156,20 @@ describe("ensurePluginRegistryLoaded", () => {
       expect.objectContaining({ onlyPluginIds: ["demo-b"] }),
     );
   });
+
+  it("forwards explicit empty scopes without widening to channel resolution", () => {
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: {} as never,
+      onlyPluginIds: [],
+    });
+
+    expect(mocks.resolveConfiguredChannelPluginIds).not.toHaveBeenCalled();
+    expect(mocks.resolveChannelPluginIds).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
 });
