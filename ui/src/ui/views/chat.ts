@@ -1180,7 +1180,7 @@ export function renderChat(props: ChatProps) {
     <div
       class="chat-thread"
       role="log"
-      aria-live="polite"
+      aria-live=${isBusy ? "off" : "polite"}
       @scroll=${props.onChatScroll}
       @click=${handleCodeBlockCopy}
     >

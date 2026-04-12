@@ -251,6 +251,41 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("keeps the chat thread live region polite when idle", () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps()), container);
+
+    expect(container.querySelector(".chat-thread")?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("turns the chat thread live region off while streaming", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          stream: "partial reply",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thread")?.getAttribute("aria-live")).toBe("off");
+  });
+
+  it("turns the chat thread live region off while sending", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sending: true,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-thread")?.getAttribute("aria-live")).toBe("off");
+  });
+
   it("renders BTW side results outside transcript history", () => {
     const container = document.createElement("div");
     render(
