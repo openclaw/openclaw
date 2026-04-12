@@ -21,7 +21,6 @@ export function resolveManifestActivationPluginIds(params: {
   cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
-  cache?: boolean;
 }): string[] {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
 

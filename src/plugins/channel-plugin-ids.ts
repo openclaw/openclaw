@@ -1,5 +1,4 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemoryDreamingConfig,
@@ -53,13 +52,6 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
         .filter((channelId): channelId is string => Boolean(channelId)),
     ),
   ).toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveEffectiveChannelOwnershipConfig(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): OpenClawConfig {
-  return applyPluginAutoEnable({ config, env }).config;
 }
 
 function isBundledChannelOwner(plugin: PluginManifestRecord): boolean {
@@ -146,6 +138,7 @@ function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
 
 function resolveScopedChannelOwnerPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
@@ -156,14 +149,14 @@ function resolveScopedChannelOwnerPluginIds(params: {
   if (channelIds.length === 0) {
     return [];
   }
-  const effectiveConfig = resolveEffectiveChannelOwnershipConfig(params.config, params.env);
   const registry = loadPluginManifestRegistry({
-    config: effectiveConfig,
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     cache: params.cache,
   });
-  const normalizedConfig = normalizePluginsConfig(effectiveConfig.plugins);
+  const trustConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
   const candidateIds = dedupeSortedPluginIds(
     channelIds.flatMap((channelId) => {
       return resolveManifestActivationPluginIds({
@@ -171,7 +164,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
           kind: "channel",
           channel: channelId,
         },
-        config: effectiveConfig,
+        config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
         cache: params.cache,
@@ -191,12 +184,12 @@ function resolveScopedChannelOwnerPluginIds(params: {
         ? isChannelPluginEligibleForSetupDiscovery({
             plugin,
             normalizedConfig,
-            rootConfig: effectiveConfig,
+            rootConfig: trustConfig,
           })
         : isChannelPluginEligibleForRuntimeOwnerActivation({
             plugin,
             normalizedConfig,
-            rootConfig: effectiveConfig,
+            rootConfig: trustConfig,
           });
     })
     .map((plugin) => plugin.id)
@@ -205,6 +198,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
 
 export function resolveScopedChannelPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
@@ -218,6 +212,7 @@ export function resolveScopedChannelPluginIds(params: {
 
 export function resolveDiscoverableScopedChannelPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;

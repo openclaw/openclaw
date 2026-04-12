@@ -465,6 +465,22 @@ describe("resolveConfiguredChannelPluginIds", () => {
     ).toEqual(["global-activation-channel-plugin"]);
   });
 
+  it("does not treat auto-enabled non-bundled channel owners as explicitly trusted", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: createStartupConfig({
+          channelIds: ["global-activation-channel"],
+          enabledPluginIds: ["global-activation-channel-plugin"],
+        }),
+        activationSourceConfig: createStartupConfig({
+          channelIds: ["global-activation-channel"],
+        }),
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
+  });
+
   it("blocks bundled activation owners when explicitly disabled", () => {
     expect(
       resolveConfiguredChannelPluginIds({
