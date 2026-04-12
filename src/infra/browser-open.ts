@@ -14,11 +14,27 @@ export type BrowserOpenSupport = {
   command?: string;
 };
 
+const ALLOWED_BROWSER_OPEN_PROTOCOLS = new Set(["http:", "https:"]);
+const FORBIDDEN_BROWSER_OPEN_CHARS = /["\r\n\t]/;
+
 function shouldSkipBrowserOpenInTests(): boolean {
   if (process.env.VITEST) {
     return true;
   }
   return process.env.NODE_ENV === "test";
+}
+
+function resolveSafeBrowserOpenUrl(url: string): string | null {
+  const candidate = url.trim();
+  if (!candidate || FORBIDDEN_BROWSER_OPEN_CHARS.test(candidate)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(candidate);
+    return ALLOWED_BROWSER_OPEN_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
@@ -80,12 +96,16 @@ export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;
   }
+  const safeUrl = resolveSafeBrowserOpenUrl(url);
+  if (!safeUrl) {
+    return false;
+  }
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
     return false;
   }
   const command = [...resolved.argv];
-  command.push(url);
+  command.push(safeUrl);
   try {
     await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return true;
@@ -98,6 +118,10 @@ export async function openUrlInBackground(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;
   }
+  const safeUrl = resolveSafeBrowserOpenUrl(url);
+  if (!safeUrl) {
+    return false;
+  }
   if (process.platform !== "darwin") {
     return false;
   }
@@ -106,7 +130,7 @@ export async function openUrlInBackground(url: string): Promise<boolean> {
     return false;
   }
   try {
-    await runCommandWithTimeout(["open", "-g", url], { timeoutMs: 5_000 });
+    await runCommandWithTimeout(["open", "-g", safeUrl], { timeoutMs: 5_000 });
     return true;
   } catch {
     return false;

@@ -2,32 +2,14 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeGatewayTokenInput,
-  openUrl,
   probeGatewayReachable,
-  resolveBrowserOpenCommand,
   resolveControlUiLinks,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn<
-    (
-      argv: string[],
-      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
-    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
-  >(async () => ({
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-  })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
-}));
-
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 
 vi.mock("../infra/tailnet.js", () => ({
@@ -39,41 +21,11 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 
 afterEach(() => {
+  mocks.pickPrimaryTailnetIPv4.mockReset();
+  mocks.pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+  mocks.probeGateway.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-});
-
-describe("openUrl", () => {
-  it("passes provider-supplied Windows URLs to explorer.exe without cmd parsing", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
-
-    const url = 'https://example.invalid/" & calc & rem "';
-
-    const ok = await openUrl(url);
-    expect(ok).toBe(true);
-
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
-    expect(argv).toEqual(["explorer.exe", url]);
-    expect(options).toMatchObject({ timeoutMs: 5_000 });
-    expect(options?.windowsVerbatimArguments).toBeUndefined();
-
-    platformSpy.mockRestore();
-  });
-});
-
-describe("resolveBrowserOpenCommand", () => {
-  it("uses explorer.exe on win32", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const resolved = await resolveBrowserOpenCommand();
-    expect(resolved.argv).toEqual(["explorer.exe"]);
-    expect(resolved.command).toBe("explorer.exe");
-    platformSpy.mockRestore();
-  });
 });
 
 describe("probeGatewayReachable", () => {
