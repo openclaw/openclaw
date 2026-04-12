@@ -1367,6 +1367,7 @@ export async function runEmbeddedAttempt(
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
+      let externalAbort = false;
       let yieldAborted = false;
       let timedOut = false;
       let idleTimedOut = false;
@@ -1584,6 +1585,7 @@ export async function runEmbeddedAttempt(
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
       const onAbort = () => {
+        externalAbort = true;
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
         if (
@@ -2338,6 +2340,7 @@ export async function runEmbeddedAttempt(
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,
+        externalAbort,
         timedOut,
         idleTimedOut,
         timedOutDuringCompaction,
