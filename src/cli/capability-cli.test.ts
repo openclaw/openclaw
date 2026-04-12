@@ -337,6 +337,12 @@ describe("capability cli", () => {
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
+    const localOpts = mocks.agentCommand.mock.calls[0]?.[0] as {
+      sessionId?: string;
+      sessionKey?: string;
+    };
+    expect(localOpts.sessionId).toMatch(/^cap-model-run-/);
+    expect(localOpts.sessionKey).toBe(`agent:main:explicit:${localOpts.sessionId}`);
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: "model.run",
