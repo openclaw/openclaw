@@ -205,6 +205,7 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
+  stateDir?: string;
   moduleUrl?: string;
 }): ResolvedAcpxPluginConfig {
   const parsed = parseAcpxPluginConfig(params.rawConfig);
@@ -215,7 +216,9 @@ export function resolveAcpxPluginConfig(params: {
   const workspaceDir = params.workspaceDir?.trim() || process.cwd();
   const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
-  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
+  const stateDir = path.resolve(
+    normalized.stateDir?.trim() || params.stateDir?.trim() || path.join(workspaceDir, "state"),
+  );
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,

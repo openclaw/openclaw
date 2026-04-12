@@ -4,6 +4,19 @@ import { describe, expect, it } from "vitest";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 describe("embedded acpx plugin config", () => {
+  it("prefers the provided plugin service stateDir over the workspace fallback", () => {
+    const workspaceDir = "/tmp/openclaw-acpx";
+    const stateDir = "/tmp/openclaw-state";
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: undefined,
+      workspaceDir,
+      stateDir,
+    });
+
+    expect(resolved.cwd).toBe(workspaceDir);
+    expect(resolved.stateDir).toBe(path.resolve(stateDir));
+  });
+
   it("resolves workspace stateDir and cwd by default", () => {
     const workspaceDir = "/tmp/openclaw-acpx";
     const resolved = resolveAcpxPluginConfig({

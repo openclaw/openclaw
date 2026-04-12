@@ -112,6 +112,42 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("uses the plugin service context stateDir by default", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const probeAvailability = vi.fn(async () => {
+      await fs.access(ctx.stateDir);
+    });
+    const runtimeFactory = vi.fn(
+      () =>
+        ({
+          ensureSession: vi.fn(),
+          runTurn: vi.fn(),
+          cancel: vi.fn(),
+          close: vi.fn(),
+          probeAvailability,
+          isHealthy: () => true,
+          doctor: async () => ({ ok: true, message: "ok" }),
+        }) as never,
+    );
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          stateDir: ctx.stateDir,
+        }),
+      }),
+    );
+    expect(probeAvailability).toHaveBeenCalledOnce();
+
+    await service.stop?.(ctx);
+  });
+
   it("passes the default runtime timeout to the embedded runtime factory", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

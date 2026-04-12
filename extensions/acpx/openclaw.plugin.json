@@ -85,7 +85,7 @@
     },
     "stateDir": {
       "label": "State Directory",
-      "help": "Directory used for embedded ACP session state and persistence."
+      "help": "Directory used for embedded ACP session state and persistence. Defaults to the plugin service state directory when available."
     },
     "permissionMode": {
       "label": "Permission Mode",

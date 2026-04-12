@@ -99,6 +99,7 @@ export function createAcpxRuntimeService(
       const pluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
+        stateDir: ctx.stateDir,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       warnOnIgnoredLegacyCompatibilityConfig({
@@ -117,7 +118,9 @@ export function createAcpxRuntimeService(
         runtime,
         healthy: () => runtime?.isHealthy() ?? false,
       });
-      ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+      ctx.logger.info(
+        `embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd}, stateDir: ${pluginConfig.stateDir})`,
+      );
 
       if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
         return;

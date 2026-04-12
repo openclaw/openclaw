@@ -102,9 +102,10 @@ Required behavior when ACP backend is unavailable:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in the bundled ACPX plugin package
-   - verify `${ACPX_CMD} --version`
-3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
+   - the embedded ACP runtime loads from the `acpx` npm package; no separate binary install is needed for this path
+   - run `pnpm install --filter ./extensions/acpx` to restore missing dependencies
+   - verify the gateway can load the ACPX plugin after reinstall
+3. After repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
 5. Only if repair+retry fails, report the concrete error and then offer fallback options.
 
@@ -123,8 +124,9 @@ For this repo, direct `acpx` calls must follow the same pinned policy as the `@o
    - `${ACPX_PLUGIN_ROOT}/node_modules/.bin/acpx`
 2. Resolve pinned version from extension dependency:
    - `node -e "console.log(require(process.env.ACPX_PLUGIN_ROOT + '/package.json').dependencies.acpx)"`
-3. If binary is missing or version mismatched, install plugin-local pinned version:
-   - `cd "$ACPX_PLUGIN_ROOT" && npm install --omit=dev --no-save acpx@<pinnedVersion>`
+3. If binary is missing or version mismatched, repair via workspace install:
+   - `pnpm install --filter ./extensions/acpx`
+   - Do not run bare `npm install` inside the plugin root; the plugin directory may be read-only on global or packaged installs.
 4. Verify before use:
    - `${ACPX_PLUGIN_ROOT}/node_modules/.bin/acpx --version`
 5. If install/repair changed ACPX artifacts, restart the gateway and offer to run the restart.
@@ -228,7 +230,7 @@ If your local Cursor install still exposes ACP as `agent acp`, set that as the `
 ### Failure handling
 
 - `acpx: command not found`:
-  - for thread-spawn ACP requests, install plugin-local pinned acpx in the bundled ACPX plugin package immediately
+  - for thread-spawn ACP requests, repair via `pnpm install --filter ./extensions/acpx` (do not run bare `npm install` inside the plugin root; it may be read-only)
   - restart gateway after install and offer to run the restart automatically
   - then retry once
   - do not ask for install permission first unless policy explicitly requires it

@@ -47,7 +47,7 @@ When ACPX integration changes here, prefer this sequence:
 
 - Prefer the plugin-local ACPX binary under `extensions/acpx/node_modules/.bin/acpx`.
 - Do not rely on a globally installed `acpx` binary for OpenClaw ACP validation.
-- If the plugin-local ACPX binary is missing or on the wrong version, reinstall it from the version pinned in `extensions/acpx/package.json`.
+- If the plugin-local ACPX binary is missing or on the wrong version, repair via `pnpm install --filter ./extensions/acpx`. Do not run bare `npm install` inside the plugin root; the directory may be read-only on global or packaged installs.
 
 ## Boundary Rule
 
