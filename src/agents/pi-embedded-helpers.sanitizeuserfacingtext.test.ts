@@ -349,6 +349,28 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
     expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
   });
+
+  it("strips tool_call XML tags from text", () => {
+    const text =
+      'Here is my response <tool_call>{"name": "exec", "arguments": {"command": "echo test"}}</tool_call>';
+    expect(sanitizeUserFacingText(text)).toBe("Here is my response");
+  });
+
+  it("strips multiple tool_call tags", () => {
+    const text =
+      'Before <tool_call>{"name": "read"}</tool_call> middle <tool_call>{"name": "write"}</tool_call> after';
+    expect(sanitizeUserFacingText(text)).toBe("Before  middle  after");
+  });
+
+  it("strips tool_result XML tags from text", () => {
+    const text = "Response <tool_result>some output</tool_result> continues";
+    expect(sanitizeUserFacingText(text)).toBe("Response  continues");
+  });
+
+  it("strips multiline tool_call tags", () => {
+    const text = 'Hello <tool_call>\n{"name": "exec",\n"arguments": {}}\n</tool_call> world';
+    expect(sanitizeUserFacingText(text)).toBe("Hello  world");
+  });
 });
 
 describe("stripThoughtSignatures", () => {
