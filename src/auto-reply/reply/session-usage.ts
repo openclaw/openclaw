@@ -30,6 +30,7 @@ function applyCliSessionIdToSessionPatch(
     return {
       ...patch,
       suppressCliHistoryImport: nextEntry.suppressCliHistoryImport,
+      suppressCliHistoryImportProviders: nextEntry.suppressCliHistoryImportProviders,
       cliSessionIds: nextEntry.cliSessionIds,
       cliSessionBindings: nextEntry.cliSessionBindings,
       claudeCliSessionId: nextEntry.claudeCliSessionId,
@@ -41,6 +42,7 @@ function applyCliSessionIdToSessionPatch(
     return {
       ...patch,
       suppressCliHistoryImport: nextEntry.suppressCliHistoryImport,
+      suppressCliHistoryImportProviders: nextEntry.suppressCliHistoryImportProviders,
       cliSessionIds: nextEntry.cliSessionIds,
       cliSessionBindings: nextEntry.cliSessionBindings,
       claudeCliSessionId: nextEntry.claudeCliSessionId,

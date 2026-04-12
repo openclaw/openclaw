@@ -5,6 +5,7 @@ import {
   clearCliSession,
   getCliSessionBinding,
   hashCliSessionText,
+  resolveSuppressedCliHistoryImportProviders,
   resolveCliSessionReuse,
   setCliSessionBinding,
 } from "./cli-session.js";
@@ -186,11 +187,13 @@ describe("cli-session helpers", () => {
 
     clearCliSession(entry, "codex-cli");
     expect(entry.suppressCliHistoryImport).toBe(true);
+    expect(entry.suppressCliHistoryImportProviders).toEqual(["claude-cli"]);
     expect(getCliSessionBinding(entry, "codex-cli")).toBeUndefined();
     expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("claude-session");
 
     setCliSessionBinding(entry, "codex-cli", { sessionId: "replacement-codex-session" });
-    expect(entry.suppressCliHistoryImport).toBeUndefined();
+    expect(entry.suppressCliHistoryImport).toBe(true);
+    expect(entry.suppressCliHistoryImportProviders).toEqual(["claude-cli"]);
   });
 
   it("keeps reset CLI import suppression when the preserved session is rebound unchanged", () => {
@@ -210,6 +213,30 @@ describe("cli-session helpers", () => {
 
     expect(entry.suppressCliHistoryImport).toBe(true);
     expect(getCliSessionBinding(entry, "codex-cli")?.sessionId).toBe("preserved-codex-session");
+  });
+
+  it("keeps reset suppression scoped to other preserved providers after a fresh rebind", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+      suppressCliHistoryImport: true,
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "preserved-claude-session" },
+        "codex-cli": { sessionId: "preserved-codex-session" },
+      },
+      cliSessionIds: {
+        "claude-cli": "preserved-claude-session",
+        "codex-cli": "preserved-codex-session",
+      },
+      claudeCliSessionId: "preserved-claude-session",
+    };
+
+    setCliSessionBinding(entry, "codex-cli", { sessionId: "fresh-codex-session" });
+
+    expect(entry.suppressCliHistoryImport).toBe(true);
+    expect(resolveSuppressedCliHistoryImportProviders(entry)).toEqual(["claude-cli"]);
+    expect(getCliSessionBinding(entry, "codex-cli")?.sessionId).toBe("fresh-codex-session");
+    expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("preserved-claude-session");
   });
 
   it("hashes trimmed extra system prompts consistently", () => {

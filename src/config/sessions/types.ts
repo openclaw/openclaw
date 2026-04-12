@@ -236,6 +236,11 @@ export type SessionEntry = {
    * their previous external CLI bindings are still preserved.
    */
   suppressCliHistoryImport?: boolean;
+  /**
+   * Provider-scoped CLI transcript backfill suppression for reset-preserved
+   * external bindings. Absent means legacy/global semantics keyed by the bool.
+   */
+  suppressCliHistoryImportProviders?: string[];
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;

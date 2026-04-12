@@ -520,6 +520,66 @@ describe("cli session history", () => {
     });
   });
 
+  it("keeps reset suppression scoped to preserved providers after another provider rebounds", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-history-suppress-scope-"));
+    const homeDir = path.join(root, "home");
+    const originalHome = process.env.HOME;
+    const claudeSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+    const codexSessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
+    const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const codexSessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+    await fs.mkdir(claudeProjectsDir, { recursive: true });
+    await fs.mkdir(codexSessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeProjectsDir, `${claudeSessionId}.jsonl`),
+      createClaudeHistoryLines(claudeSessionId),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(codexSessionsDir, `rollout-2026-04-11T15-38-33-${codexSessionId}.jsonl`),
+      createCodexHistoryLines(codexSessionId),
+      "utf-8",
+    );
+    process.env.HOME = homeDir;
+    try {
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "fresh-session",
+          updatedAt: Date.now(),
+          suppressCliHistoryImport: true,
+          suppressCliHistoryImportProviders: ["claude-cli"],
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: claudeSessionId,
+            },
+            "codex-cli": {
+              sessionId: codexSessionId,
+            },
+          },
+        },
+        provider: undefined,
+        localMessages: [],
+        homeDir,
+      });
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        __openclaw: { importedFrom: "codex-cli", cliSessionId: codexSessionId },
+      });
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("imports codex user content from text elements and attachments", async () => {
     await withCodexSessionsDir(
       async ({ homeDir, sessionId }) => {
