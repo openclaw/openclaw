@@ -15,6 +15,8 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
+  resolveAgentPersonalityMode,
+  resolveAgentPersonalityModel,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
@@ -105,6 +107,7 @@ import {
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { buildPersonalityHybridModelName, classifyTurnIntent } from "./run/personality-routing.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
@@ -410,6 +413,31 @@ export async function runEmbeddedPiAgent(
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
+
+      // Hybrid personality mode: route turns to execution model or personality
+      // model based on intent classification. The user sees a synthetic model
+      // name like `gpt-5.4-psn` so the switching is invisible.
+      const personalityMode = resolveAgentPersonalityMode(params.config, sessionAgentId) ?? "off";
+      // The personality model ref and turn intent are resolved upfront for
+      // the full turn-routing integration (routing different turns to
+      // different models). Currently only the agentMeta.model display name
+      // is overridden; the actual model-switch dispatch for personality
+      // turns will be wired in a follow-up once the live-model-switch
+      // infrastructure supports intent-based routing.
+      const _personalityModelRef =
+        personalityMode === "hybrid"
+          ? resolveAgentPersonalityModel(params.config, sessionAgentId)
+          : undefined;
+      const _turnIntent =
+        personalityMode === "hybrid"
+          ? classifyTurnIntent({
+              prompt: params.prompt,
+              trigger: params.trigger,
+              disableTools: params.disableTools,
+            })
+          : ("execution" as const);
+      void _personalityModelRef;
+      void _turnIntent;
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
@@ -1487,7 +1515,12 @@ export async function runEmbeddedPiAgent(
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
-            model: sessionLastAssistant?.model ?? model.id,
+            // In hybrid personality mode, show the synthetic `-psn` model name
+            // so the execution↔personality switching is invisible to the user.
+            model:
+              personalityMode === "hybrid"
+                ? buildPersonalityHybridModelName(model.id)
+                : (sessionLastAssistant?.model ?? model.id),
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
