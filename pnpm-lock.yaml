@@ -20,7 +20,7 @@ overrides:
   minimatch: 10.2.4
   path-to-regexp: 8.4.0
   qs: 6.14.2
-  node-domexception: npm:@nolyfill/domexception@^1.0.28
+  node-domexception: 1.0.0
   '@sinclair/typebox': 0.34.49
   tar: 7.5.13
   tough-cookie: 4.1.3
@@ -2868,10 +2868,6 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
-
-  '@nolyfill/domexception@1.0.28':
-    resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
-    engines: {node: '>=12.4.0'}
 
   '@opentelemetry/api-logs@0.214.0':
     resolution: {integrity: sha512-40lSJeqYO8Uz2Yj7u94/SJWE/wONa7rmMKjI1ZcIjgf3MHNHv1OZUCrCETGuaRF62d5pQD1wKIW+L4lmSMTzZA==}
@@ -6259,6 +6255,11 @@ packages:
 
   node-api-headers@1.8.0:
     resolution: {integrity: sha512-jfnmiKWjRAGbdD1yQS28bknFM1tbHC1oucyuMPjmkEs+kpiu76aRs40WlTmBmyEgzDM76ge1DQ7XJ3R5deiVjQ==}
+
+  node-domexception@1.0.0:
+    resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
+    engines: {node: '>=10.5.0'}
+    deprecated: Use your platform's native DOMException instead
 
   node-downloader-helper@2.1.11:
     resolution: {integrity: sha512-882fH2C9AWdiPCwz/2beq5t8FGMZK9Dx8TJUOIxzMCbvG7XUKM5BuJwN5f0NKo4SCQK6jR4p2TPm54mYGdGchQ==}
@@ -9887,8 +9888,6 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@nolyfill/domexception@1.0.28': {}
-
   '@opentelemetry/api-logs@0.214.0':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -12376,7 +12375,7 @@ snapshots:
 
   fetch-blob@3.2.0:
     dependencies:
-      node-domexception: '@nolyfill/domexception@1.0.28'
+      node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
   file-type@22.0.1:
@@ -13477,6 +13476,8 @@ snapshots:
     optional: true
 
   node-api-headers@1.8.0: {}
+
+  node-domexception@1.0.0: {}
 
   node-downloader-helper@2.1.11: {}
 
