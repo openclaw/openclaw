@@ -76,7 +76,7 @@ const DETAILS_STATE_KEY = "chat:details_state";
 function saveDetailsState(id: string, isOpen: boolean) {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) return;
+    if (!storage) {return;}
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     state[id] = isOpen;
     storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
@@ -86,9 +86,9 @@ function saveDetailsState(id: string, isOpen: boolean) {
 function getDetailsState(id: string): boolean {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) return true;
+    if (!storage) {return true;}
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
-    if (state[id] === undefined) return true;
+    if (state[id] === undefined) {return true;}
     return state[id] === true;
   } catch {
     return true;
@@ -117,12 +117,12 @@ function extractImages(message: unknown): ImageBlock[] {
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
           const mediaType = (source.media_type as string) || "image/png";
-          const raw = source.data as string;
+          const raw = source.data;
           const url = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
           const filename = typeof b.filename === "string" ? b.filename : undefined;
           images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
-          const u = b.url as string;
+          const u = b.url;
           const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
                                  u.startsWith("http://127.0.0.1:18791/");
           const httpUrl = isMediaServerUrl ? u : undefined;
@@ -132,7 +132,7 @@ function extractImages(message: unknown): ImageBlock[] {
       } else if (b.type === "image_url") {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          const u = imageUrl.url as string;
+          const u = imageUrl.url;
           const isMediaServerUrl = u.startsWith("http://localhost:18791/") || 
                                  u.startsWith("http://127.0.0.1:18791/");
           const httpUrl = isMediaServerUrl ? u : undefined;
@@ -1413,8 +1413,8 @@ function renderGroupedMessage(
     : '';
   
   const resizeRef = (el: HTMLElement | undefined) => {
-    if (!isResizable || !el) return;
-    if (el.hasAttribute('data-resize-initialized')) return;
+    if (!isResizable || !el) {return;}
+    if (el.hasAttribute('data-resize-initialized')) {return;}
     el.setAttribute('data-resize-initialized', 'true');
     setTimeout(() => {
       setupResizeHandles(el, 'bottom-right', messageId);

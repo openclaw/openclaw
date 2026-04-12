@@ -13,7 +13,7 @@ const RESIZE_STORAGE_KEY = 'chat:message_sizes';
 export function getStoredMessageSize(messageId: string): ResizeState | null {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) return null;
+    if (!storage) {return null;}
     const sizes = JSON.parse(storage.getItem(RESIZE_STORAGE_KEY) || '{}');
     return sizes[messageId] || null;
   } catch {
@@ -104,7 +104,7 @@ handleRight.style.border = '1px solid white';
   });
   
   function onMouseMove(e: MouseEvent) {
-    if (!isResizing || !currentHandle) return;
+    if (!isResizing || !currentHandle) {return;}
     e.preventDefault();
     e.stopPropagation();
     

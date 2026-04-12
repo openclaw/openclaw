@@ -34,8 +34,8 @@ export {
 } from "./pi-tools.params.js";
 
 const normalizeToolParams = (params: unknown): Record<string, unknown> | undefined => {
-  if (!params) return undefined;
-  if (typeof params === "object") return params as Record<string, unknown>;
+  if (!params) {return undefined;}
+  if (typeof params === "object") {return params as Record<string, unknown>;}
   return undefined;
 };
 
@@ -254,7 +254,7 @@ async function executeReadWithAdaptivePaging(params: {
         ["image", "audio", "video"].includes((block as { type: string }).type),
     );
 
-    if (hasMediaBlock) return pageResult;
+    if (hasMediaBlock) {return pageResult;}
 
     const rawText = getToolResultText(pageResult);
     if (typeof rawText !== "string") {
@@ -610,8 +610,8 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac", "op
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "avi", "mov", "mkv", "m4v"]);
 
 function getImageMimeType(ext: string): string {
-  if (ext === "svg") return "image/svg+xml";
-  if (ext === "jpg") return "image/jpeg";
+  if (ext === "svg") {return "image/svg+xml";}
+  if (ext === "jpg") {return "image/jpeg";}
   return `image/${ext}`;
 }
 
