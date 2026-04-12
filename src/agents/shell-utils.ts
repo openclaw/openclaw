@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-Command"];
+const DEFAULT_SHELL_ARGS = ["-c"];
+const CMD_ARGS = ["/c"];
+
+type ShellConfig = { shell: string; args: string[] };
+
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
@@ -40,6 +46,11 @@ export function resolvePowerShellPath(): string {
 
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
+    const configuredShell = resolveConfiguredWindowsShell();
+    if (configuredShell) {
+      return { shell: configuredShell.shell, args: configuredShell.args };
+    }
+
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
@@ -47,7 +58,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // PowerShell properly captures and redirects their output to stdout.
     return {
       shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      args: POWERSHELL_ARGS,
     };
   }
 
@@ -97,20 +108,97 @@ function normalizeShellName(value: string): string {
     .replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
+function unwrapPairedQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function isWindowsPosixPath(value: string): boolean {
+  return value.startsWith("/") && !value.startsWith("//");
+}
+
+function looksLikeExplicitPath(value: string): boolean {
+  return (
+    value.includes("\\") || value.includes("/") || value.includes(":") || value.startsWith(".")
+  );
+}
+
+function isUnixLikeShellName(name: string): boolean {
+  return (
+    name === "nu" ||
+    name === "nushell" ||
+    name === "fish" ||
+    name.includes("bash") ||
+    name.includes("zsh") ||
+    name.includes("ksh") ||
+    name.includes("sh")
+  );
+}
+
+function resolveConfiguredWindowsShellValue(
+  value: string | undefined,
+): (ShellConfig & { runtimeShell: string }) | undefined {
+  const trimmed = value ? unwrapPairedQuotes(value) : undefined;
+  if (!trimmed || isWindowsPosixPath(trimmed)) {
+    return undefined;
+  }
+
+  const runtimeShell = normalizeShellName(trimmed);
+  if (!runtimeShell) {
+    return undefined;
+  }
+
+  if (
+    !looksLikeExplicitPath(trimmed) &&
+    runtimeShell !== "cmd" &&
+    runtimeShell !== "powershell" &&
+    runtimeShell !== "pwsh" &&
+    !isUnixLikeShellName(runtimeShell)
+  ) {
+    return undefined;
+  }
+
+  if (runtimeShell === "cmd") {
+    return { shell: trimmed, args: CMD_ARGS, runtimeShell };
+  }
+  if (runtimeShell === "powershell" || runtimeShell === "pwsh") {
+    return { shell: trimmed, args: POWERSHELL_ARGS, runtimeShell };
+  }
+  return { shell: trimmed, args: DEFAULT_SHELL_ARGS, runtimeShell };
+}
+
+function resolveConfiguredWindowsShell(): (ShellConfig & { runtimeShell: string }) | undefined {
+  const configuredShells = [process.env.OPENCLAW_SHELL, process.env.SHELL];
+  for (const shellValue of configuredShells) {
+    const resolved = resolveConfiguredWindowsShellValue(shellValue);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
 export function detectRuntimeShell(): string | undefined {
+  if (process.platform === "win32") {
+    const configuredShell = resolveConfiguredWindowsShell();
+    if (configuredShell) {
+      return configuredShell.runtimeShell;
+    }
+    if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
+      return "pwsh";
+    }
+    return "powershell";
+  }
+
   const overrideShell = process.env.OPENCLAW_SHELL?.trim();
   if (overrideShell) {
     const name = normalizeShellName(overrideShell);
     if (name) {
       return name;
     }
-  }
-
-  if (process.platform === "win32") {
-    if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
-      return "pwsh";
-    }
-    return "powershell";
   }
 
   const envShell = process.env.SHELL?.trim();

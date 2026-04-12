@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  detectRuntimeShell,
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -26,7 +31,12 @@ describe("getShellConfig", () => {
   const tempDirs: string[] = [];
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL", "PATH"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_SHELL",
+      "SHELL",
+      "PATH",
+      "POWERSHELL_DISTRIBUTION_CHANNEL",
+    ]);
     if (!isWin) {
       process.env.SHELL = "/usr/bin/fish";
     }
@@ -44,6 +54,45 @@ describe("getShellConfig", () => {
       const { shell } = getShellConfig();
       const normalized = shell.toLowerCase();
       expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+    });
+
+    it("prefers OPENCLAW_SHELL over SHELL on Windows", () => {
+      process.env.OPENCLAW_SHELL = "C:\\Program Files\\Git\\bin\\bash.exe";
+      process.env.SHELL = "cmd.exe";
+
+      expect(getShellConfig()).toEqual({
+        shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+        args: ["-c"],
+      });
+    });
+
+    it("strips paired quotes from configured Windows shell paths", () => {
+      process.env.OPENCLAW_SHELL = '"C:\\Program Files\\Git\\bin\\bash.exe"';
+
+      expect(getShellConfig()).toEqual({
+        shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+        args: ["-c"],
+      });
+    });
+
+    it("falls back to SHELL when OPENCLAW_SHELL is an invalid POSIX path", () => {
+      process.env.OPENCLAW_SHELL = "/usr/bin/bash";
+      process.env.SHELL = "cmd.exe";
+
+      expect(getShellConfig()).toEqual({
+        shell: "cmd.exe",
+        args: ["/c"],
+      });
+    });
+
+    it("ignores non-shell OPENCLAW_SHELL markers on Windows", () => {
+      process.env.OPENCLAW_SHELL = "exec";
+      process.env.SHELL = "pwsh";
+
+      expect(getShellConfig()).toEqual({
+        shell: "pwsh",
+        args: ["-NoProfile", "-NonInteractive", "-Command"],
+      });
     });
     return;
   }
@@ -205,5 +254,79 @@ describe("resolvePowerShellPath", () => {
     delete process.env.WINDIR;
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
+  });
+});
+
+describe("detectRuntimeShell", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_SHELL",
+      "SHELL",
+      "POWERSHELL_DISTRIBUTION_CHANNEL",
+      "BASH_VERSION",
+      "ZSH_VERSION",
+      "FISH_VERSION",
+      "KSH_VERSION",
+      "NU_VERSION",
+      "NUSHELL_VERSION",
+    ]);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
+  if (isWin) {
+    it("reports the configured custom shell on Windows", () => {
+      process.env.OPENCLAW_SHELL = "C:\\Program Files\\Git\\bin\\bash.exe";
+
+      expect(detectRuntimeShell()).toBe("bash");
+    });
+
+    it("detects quoted custom shell paths on Windows", () => {
+      process.env.OPENCLAW_SHELL = '"C:\\Program Files\\Git\\bin\\bash.exe"';
+
+      expect(detectRuntimeShell()).toBe("bash");
+    });
+
+    it("falls back to SHELL when OPENCLAW_SHELL is invalid on Windows", () => {
+      process.env.OPENCLAW_SHELL = "/usr/bin/bash";
+      process.env.SHELL = "pwsh";
+
+      expect(detectRuntimeShell()).toBe("pwsh");
+    });
+
+    it("ignores non-shell OPENCLAW_SHELL markers when detecting runtime shell on Windows", () => {
+      process.env.OPENCLAW_SHELL = "exec";
+      process.env.SHELL = "cmd.exe";
+
+      expect(detectRuntimeShell()).toBe("cmd");
+    });
+
+    it("falls back to PowerShell detection on Windows", () => {
+      delete process.env.OPENCLAW_SHELL;
+      delete process.env.SHELL;
+      process.env.POWERSHELL_DISTRIBUTION_CHANNEL = "OpenClaw";
+
+      expect(detectRuntimeShell()).toBe("pwsh");
+    });
+    return;
+  }
+
+  it("prefers OPENCLAW_SHELL on non-Windows", () => {
+    process.env.OPENCLAW_SHELL = "/bin/zsh";
+    process.env.SHELL = "/bin/bash";
+
+    expect(detectRuntimeShell()).toBe("zsh");
+  });
+
+  it("falls back to environment markers on non-Windows", () => {
+    delete process.env.OPENCLAW_SHELL;
+    delete process.env.SHELL;
+    process.env.NU_VERSION = "0.98.0";
+
+    expect(detectRuntimeShell()).toBe("nu");
   });
 });
