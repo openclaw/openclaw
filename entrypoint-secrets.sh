@@ -37,6 +37,7 @@ require_secret GOOGLE_MAPS_API_KEY GOOGLE_MAPS_API_KEY_PATH
 require_secret LINEAR_API_KEY LINEAR_API_KEY_PATH
 require_secret LINEAR_WEBHOOK_SECRET LINEAR_WEBHOOK_SECRET_PATH
 require_secret LINEAR_ALLOWED_TEAM_IDS LINEAR_ALLOWED_TEAM_IDS_PATH
+require_secret GRANOLA_API_KEY GRANOLA_API_KEY_PATH
 
 # Backward-compat aliases for older local scripts/workflows.
 if [ -z "${NOTION_KEY:-}" ]; then
@@ -52,5 +53,23 @@ if [ -f /run/secrets/github_deploy_key ]; then
   install -m 600 /run/secrets/github_deploy_key /home/node/.ssh/id_ed25519
   install -m 644 /run/secrets/github_known_hosts /home/node/.ssh/known_hosts 2>/dev/null || true
 fi
+
+# Run pipeline preflight when pipeline deps are baked into the image.
+# Non-fatal for the gateway — a warning is logged but the gateway continues.
+if [ -x "/usr/local/bin/preflight-pipeline.sh" ] && [ -d "${OCPIPELINE_VENV:-/opt/ocpipeline}" ]; then
+  /usr/local/bin/preflight-pipeline.sh \
+    || echo "[entrypoint-secrets] WARNING: pipeline preflight failed (non-fatal for gateway)" >&2
+fi
+
+# Start obsidian headless sync daemon in background.
+# ob is installed globally at /usr/local/bin/ob (baked into image via npm install -g obsidian-headless).
+# The while loop auto-restarts if ob exits. Logs → /home/node/obsidian-sync.log.
+nohup sh -c '
+  while true; do
+    ob sync --continuous --path /home/node/obsidian
+    echo "[obsidian-sync] ob exited. Restarting in 5 seconds..."
+    sleep 5
+  done
+' >> /home/node/obsidian-sync.log 2>&1 &
 
 exec "$@"
