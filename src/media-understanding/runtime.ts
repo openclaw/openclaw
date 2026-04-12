@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeMediaProviderId } from "./provider-registry.js";
+import { normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -32,6 +33,23 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
   image: "image.description",
   video: "video.description",
 };
+
+function resolveDecisionFailureReason(
+  decision: Awaited<ReturnType<typeof runCapability>>["decision"],
+): string | undefined {
+  for (const attachment of decision.attachments) {
+    for (const attempt of attachment.attempts) {
+      if (attempt.outcome !== "failed") {
+        continue;
+      }
+      const reason = normalizeDecisionReason(attempt.reason);
+      if (reason) {
+        return reason;
+      }
+    }
+  }
+  return undefined;
+}
 
 function buildFileContext(params: { filePath: string; mime?: string }) {
   return {
@@ -75,6 +93,12 @@ export async function runMediaUnderstandingFile(
       config,
       activeModel: params.activeModel,
     });
+    if (result.outputs.length === 0 && result.decision.outcome === "failed") {
+      throw new Error(
+        resolveDecisionFailureReason(result.decision) ??
+          `${params.capability} understanding failed`,
+      );
+    }
     const output = result.outputs.find(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );

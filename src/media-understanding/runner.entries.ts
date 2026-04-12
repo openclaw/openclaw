@@ -452,11 +452,28 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
         .filter((value): value is string => Boolean(value));
     })
     .find((value) => value.trim().length > 0);
-  const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+  const shortReason = summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+export function normalizeDecisionReason(reason?: string): string | undefined {
+  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^Error:\s*/i, "").trim();
+  return normalized || undefined;
+}
+
+export function summarizeDecisionReason(reason?: string): string | undefined {
+  const normalized = normalizeDecisionReason(reason);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.split(":")[0]?.trim() || undefined;
 }
 
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {

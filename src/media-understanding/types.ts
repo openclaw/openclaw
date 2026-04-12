@@ -32,6 +32,7 @@ export type MediaUnderstandingOutput = {
 
 export type MediaUnderstandingDecisionOutcome =
   | "success"
+  | "failed"
   | "skipped"
   | "disabled"
   | "no-attachment"
