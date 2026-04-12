@@ -229,6 +229,14 @@ type AnthropicToolResultContentBlock = {
   toolUseId?: unknown;
 };
 
+function isThinkingLikeReplayBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -280,6 +288,10 @@ function sanitizeReplayToolCallInputs(
       continue;
     }
     if (!Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+    if (message.content.some((block) => isThinkingLikeReplayBlock(block))) {
       out.push(message);
       continue;
     }
