@@ -816,7 +816,7 @@ describe("sanitizeSessionHistory", () => {
       messages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-sonnet-4-6",
       sessionManager,
       sessionId: TEST_SESSION_ID,
     });
@@ -856,7 +856,7 @@ describe("sanitizeSessionHistory", () => {
       messages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-sonnet-4-6",
       sessionManager,
       sessionId: TEST_SESSION_ID,
     });

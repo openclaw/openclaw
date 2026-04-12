@@ -907,7 +907,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      { validateAnthropicTurns: true } as never,
+    );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -935,7 +939,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      { validateAnthropicTurns: true } as never,
+    );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -964,7 +972,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      { validateAnthropicTurns: true } as never,
+    );
     const stream = wrapped(
       { api: "anthropic-messages" } as never,
       { messages } as never,
@@ -1012,6 +1024,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
       baseFn as never,
       new Set(["sessions_spawn"]),
+      { validateAnthropicTurns: true } as never,
     );
     const stream = wrapped(
       { api: "anthropic-messages" } as never,
@@ -1055,6 +1068,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
       baseFn as never,
       new Set(["sessions_spawn"]),
+      { validateAnthropicTurns: true } as never,
     );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
@@ -1071,6 +1085,40 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     };
     expect(toolCall.name).toBe("sessions_spawn");
     expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
+  });
+
+  it("keeps non-Anthropic thinking turns mutable when Anthropic replay validation is off", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_read", name: " read ", arguments: { path: "README.md" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: unknown[] }>;
+    };
+    expect(seenContext.messages[0]?.content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "call_read", name: "read", arguments: { path: "README.md" } },
+    ]);
   });
 
   it("preserves allowlisted tool names that contain punctuation", async () => {
