@@ -583,6 +583,39 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
+  it("preserves signed-thinking turns when a tool result carries both stale and current id aliases", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "tool-current", name: "gateway", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "tool-stale",
+            toolCallId: "tool-current",
+            content: [{ type: "text", text: "ok" }],
+          },
+          { type: "text", text: "Continue" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    expect((result[1] as { content?: unknown[] }).content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "tool-current", name: "gateway", arguments: {} },
+    ]);
+  });
+
   it("drops signed-thinking turns whose sibling tool calls are dangling", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
