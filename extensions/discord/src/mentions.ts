@@ -6,7 +6,7 @@ import {
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
-const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
+const MENTION_CANDIDATE_PATTERN = /(^|[^\p{L}\p{N}])@([\p{L}\p{N}_.-]{1,32}(?:#[0-9]{4})?)/giu;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
