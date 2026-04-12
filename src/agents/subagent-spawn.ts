@@ -54,7 +54,7 @@ export type SpawnSubagentContext = {
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "auto-announces on completion, do not poll/sleep. The response will be sent back as an user message.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
-  "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+  "persistent subagent session stays active after this task; continue in-session for follow-ups.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -118,11 +118,9 @@ async function ensureThreadBindingForSubagentSpawn(params: {
 }): Promise<{ status: "ok" } | { status: "error"; error: string }> {
   const hookRunner = params.hookRunner;
   if (!hookRunner?.hasHooks("subagent_spawning")) {
-    return {
-      status: "error",
-      error:
-        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
-    };
+    // Room-scoped or hookless sessions can still keep the child session active
+    // without a channel-specific thread binding adapter.
+    return { status: "ok" };
   }
 
   try {

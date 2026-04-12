@@ -10,6 +10,7 @@ import {
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
+  hasSubagentSpawningHook: true,
   hasSubagentEndedHook: true,
   runSubagentSpawning: vi.fn(async (event: unknown) => {
     const input = event as {
@@ -39,7 +40,7 @@ const hookRunnerMocks = vi.hoisted(() => ({
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
     hasHooks: (hookName: string) =>
-      hookName === "subagent_spawning" ||
+      (hookName === "subagent_spawning" && hookRunnerMocks.hasSubagentSpawningHook) ||
       hookName === "subagent_spawned" ||
       (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
     runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
@@ -68,6 +69,7 @@ function mockAgentStartFailure() {
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    hookRunnerMocks.hasSubagentSpawningHook = true;
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
@@ -273,6 +275,32 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       key: details.childSessionKey,
       emitLifecycleHooks: false,
     });
+  });
+
+  it("keeps the session active when no subagent_spawning hook is registered", async () => {
+    hookRunnerMocks.hasSubagentSpawningHook = false;
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "signal",
+      agentTo: "+123",
+    });
+
+    const result = await tool.execute("call4c", {
+      task: "do thing",
+      runTimeoutSeconds: 1,
+      thread: true,
+      mode: "session",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      mode: "session",
+      note: "persistent subagent session stays active after this task; continue in-session for follow-ups.",
+    });
+    expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
+    expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
+    const methods = getGatewayMethods();
+    expect(methods).not.toContain("sessions.delete");
   });
 
   it("rejects mode=session when thread=true is not requested", async () => {
