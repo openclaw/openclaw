@@ -1431,6 +1431,34 @@ module.exports = { id: "throws-after-import", register() {} };`,
     run();
   });
 
+  it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
+    useNoBundledPlugins();
+    const allowed = writePlugin({
+      id: "allowed-empty-scope",
+      filename: "allowed-empty-scope.cjs",
+      body: `module.exports = { id: "allowed-empty-scope", register() {} };`,
+    });
+    const extra = writePlugin({
+      id: "extra-empty-scope",
+      filename: "extra-empty-scope.cjs",
+      body: `module.exports = { id: "extra-empty-scope", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          load: { paths: [allowed.file, extra.file] },
+          allow: ["allowed-empty-scope", "extra-empty-scope"],
+        },
+      },
+      onlyPluginIds: [],
+    });
+
+    expect(registry.plugins).toEqual([]);
+  });
+
   it("only publishes plugin commands to the global registry during activating loads", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
