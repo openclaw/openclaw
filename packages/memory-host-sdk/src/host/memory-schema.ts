@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../../../src/infra/errors.js";
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
+
 function quoteTable(table: string): string {
   return table
     .split(".")
@@ -49,7 +50,7 @@ export function ensureMemoryIndexSchema(params: {
     );
   `);
   if (params.cacheEnabled) {
-    const quotedCacheTable = quoteIdentifier(params.embeddingCacheTable);
+    const quotedCacheTable = quoteTable(params.embeddingCacheTable);
     params.db.exec(`
       CREATE TABLE IF NOT EXISTS ${quotedCacheTable} (
         provider TEXT NOT NULL,
@@ -73,7 +74,7 @@ export function ensureMemoryIndexSchema(params: {
     try {
       const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      const quotedFtsTable = quoteIdentifier(params.ftsTable);
+      const quotedFtsTable = quoteTable(params.ftsTable);
       params.db.exec(
         `CREATE VIRTUAL TABLE IF NOT EXISTS ${quotedFtsTable} USING fts5(\n` +
           `  text,\n` +
@@ -107,7 +108,7 @@ function ensureColumn(
   column: string,
   definition: string,
 ): void {
-  const quotedTable = quoteIdentifier(table);
+  const quotedTable = quoteTable(table);
   const rows = db.prepare(`PRAGMA table_info(${quotedTable})`).all() as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) {
     return;
