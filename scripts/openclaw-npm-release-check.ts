@@ -55,7 +55,18 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const REQUIRED_PACKED_PATH_RULES = [
+  {
+    path: "dist/control-ui/index.html",
+    describe: (requiredPath: string) =>
+      `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+  },
+  {
+    path: "qa/scenarios/index.md",
+    describe: (requiredPath: string) =>
+      `npm package is missing required QA scenario pack path "${requiredPath}". Include qa/scenarios in the published tarball so completion cache and QA CLI registration do not fail.`,
+  },
+] as const;
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
   {
@@ -406,11 +417,9 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   const assetPaths = [...packedPaths].filter((path) => path.startsWith(CONTROL_UI_ASSET_PREFIX));
   const errors: string[] = [];
 
-  for (const requiredPath of REQUIRED_PACKED_PATHS) {
-    if (!packedPaths.has(requiredPath)) {
-      errors.push(
-        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
-      );
+  for (const rule of REQUIRED_PACKED_PATH_RULES) {
+    if (!packedPaths.has(rule.path)) {
+      errors.push(rule.describe(rule.path));
     }
   }
 

@@ -278,8 +278,16 @@ describe("parseNpmPackJsonOutput", () => {
 });
 
 describe("collectControlUiPackErrors", () => {
-  it("rejects packs that ship the dashboard HTML without the asset payload", () => {
+  it("rejects packs missing required published paths", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
+      'npm package is missing required QA scenario pack path "qa/scenarios/index.md". Include qa/scenarios in the published tarball so completion cache and QA CLI registration do not fail.',
+      'npm package is missing Control UI asset payload under "dist/control-ui/assets/". Refuse release when the dashboard tarball would be empty.',
+    ]);
+  });
+
+  it("rejects packs missing the dashboard HTML entrypoint", () => {
+    expect(collectControlUiPackErrors(["qa/scenarios/index.md"])).toEqual([
+      'npm package is missing required path "dist/control-ui/index.html". Ensure UI assets are built and included before publish.',
       'npm package is missing Control UI asset payload under "dist/control-ui/assets/". Refuse release when the dashboard tarball would be empty.',
     ]);
   });
@@ -290,6 +298,7 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/index.html",
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
+        "qa/scenarios/index.md",
       ]),
     ).toEqual([]);
   });
