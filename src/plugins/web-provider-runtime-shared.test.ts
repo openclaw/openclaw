@@ -130,4 +130,32 @@ describe("web-provider-runtime-shared", () => {
       }),
     );
   });
+
+  it("preserves explicit scopes when config is omitted in direct runtime resolution", () => {
+    const mapRegistryProviders = vi.fn(() => []);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue({} as never);
+
+    resolveRuntimeWebProviders(
+      {
+        onlyPluginIds: ["alpha"],
+      },
+      {
+        snapshotCache: createWebProviderSnapshotCache(),
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["alpha"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(undefined);
+    expect(mapRegistryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["alpha"],
+      }),
+    );
+  });
 });

@@ -229,7 +229,7 @@ export function resolveRuntimeWebProviders<TEntry>(
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,
-      onlyPluginIds: loadOptions?.onlyPluginIds,
+      onlyPluginIds: loadOptions?.onlyPluginIds ?? params.onlyPluginIds,
     });
   }
   return resolvePluginWebProviders(params, deps);
