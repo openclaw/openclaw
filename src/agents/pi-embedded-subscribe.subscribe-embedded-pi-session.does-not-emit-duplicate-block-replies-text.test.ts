@@ -107,4 +107,25 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(subscription.assistantTexts).toEqual(["Response from non-streaming model"]);
   });
+
+  it("populates assistantTexts when non-streaming message_end content is a plain string", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      blockReplyChunking: { minChars: 50, maxChars: 200 },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: "String-backed assistant reply",
+      } as unknown as AssistantMessage,
+    });
+
+    expect(subscription.assistantTexts).toEqual(["String-backed assistant reply"]);
+  });
 });
