@@ -630,6 +630,10 @@ export async function runEmbeddedPiAgent(
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
+          // Clear the one-shot continuation instruction after it's been consumed
+          // so it doesn't leak into a subsequent planning-only retry or error
+          // retry that `continue`s back to this point.
+          autoContinuationInstruction = null;
           const prompt =
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
@@ -1749,8 +1753,6 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
-          // Clear continuation instruction on normal exit.
-          autoContinuationInstruction = null;
           // --- End auto-continuation check ---
 
           log.debug(
