@@ -617,6 +617,9 @@ fi
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
+# Also recreate the tool/cache dirs that disappear behind a fresh
+# OPENCLAW_HOME_VOLUME so onboarding and later runtime shells can still write
+# pnpm, npm, Go, and cache state as `node`.
 # Keep the long-running gateway on the image default `node` user so routine
 # `docker compose exec openclaw-gateway ...` flows do not leave root-owned
 # state behind; this one-shot root container is the ownership repair step.
@@ -630,7 +633,13 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+  'mkdir -p /home/node/.cache /home/node/.npm \
+      "${PNPM_HOME:-/home/node/.local/share/pnpm}" \
+      "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}/bin" \
+      "${GOPATH:-/home/node/go}/bin"; \
+   chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm \
+      /home/node/.npm-global /home/node/go; \
+   find /home/node/.openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""

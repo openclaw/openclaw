@@ -164,6 +164,8 @@ ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
 ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
 ENV PATH="/usr/local/go/bin:${PNPM_HOME}:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 RUN chown node:node /app
+# Keep these dirs writable in the baked image; docker-compose.yml also repairs
+# them at container start when OPENCLAW_HOME_VOLUME hides /home/node.
 RUN mkdir -p /home/node/.cache "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${COREPACK_HOME}" \
     "${GOPATH}/bin" "${HOMEBREW_REPOSITORY}" "${HOMEBREW_CELLAR}" "${HOMEBREW_PREFIX}/bin" && \
     chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm-global /home/node/go /home/linuxbrew "${COREPACK_HOME}"
