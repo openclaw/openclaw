@@ -53,11 +53,6 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     }
     return "telegram:btw";
   }
-  // Approval callback_queries need their own lane so they bypass a blocked agent
-  // turn that is waiting on plugin.approval.waitDecision. Without this, the
-  // sequentializer deadlocks: the callback can't run because the lane is held,
-  // and the lane can't release because it's waiting for the callback.
-  // Same pattern as abort requests (telegram:<chatId>:control).
   const callbackData = ctx.update?.callback_query?.data;
   if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
     if (typeof chatId === "number") {

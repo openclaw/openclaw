@@ -94,7 +94,6 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
       "telegram:123:control",
     ],
-    // Approval callback_queries get a separate lane to avoid sequentializer deadlock
     [
       {
         update: {
@@ -128,7 +127,6 @@ describe("getTelegramSequentialKey", () => {
       },
       "telegram:789:approval",
     ],
-    // Non-approval callback_queries use normal chat key
     [
       {
         update: {
