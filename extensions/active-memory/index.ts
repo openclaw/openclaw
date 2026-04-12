@@ -26,6 +26,7 @@ const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const DEFAULT_QUERY_MODE = "recent" as const;
+const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const TOGGLE_STATE_FILE = "session-toggles.json";
 
@@ -81,7 +82,12 @@ type ActiveRecallPluginConfig = {
   cacheTtlMs?: number;
   persistTranscripts?: boolean;
   transcriptDir?: string;
+  qmd?: {
+    searchMode?: ActiveMemoryQmdSearchMode;
+  };
 };
+
+type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
 
 type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
@@ -111,6 +117,9 @@ type ResolvedActiveRecallPluginConfig = {
   cacheTtlMs: number;
   persistTranscripts: boolean;
   transcriptDir: string;
+  qmd: {
+    searchMode: ActiveMemoryQmdSearchMode;
+  };
 };
 
 type ActiveRecallRecentTurn = {
@@ -123,13 +132,29 @@ type PluginDebugEntry = {
   lines: string[];
 };
 
+type ActiveMemorySearchDebug = {
+  backend?: string;
+  configuredMode?: string;
+  effectiveMode?: string;
+  fallback?: string;
+  searchMs?: number;
+  hits?: number;
+};
+
 type ActiveRecallResult =
   | {
       status: "empty" | "timeout" | "unavailable";
       elapsedMs: number;
       summary: string | null;
+      searchDebug?: ActiveMemorySearchDebug;
     }
-  | { status: "ok"; elapsedMs: number; rawReply: string; summary: string };
+  | {
+      status: "ok";
+      elapsedMs: number;
+      rawReply: string;
+      summary: string;
+      searchDebug?: ActiveMemorySearchDebug;
+    };
 
 type CachedActiveRecallResult = {
   expiresAt: number;
@@ -236,6 +261,18 @@ function normalizeTranscriptDir(value: unknown): string {
 function normalizePromptConfigText(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text ? text : undefined;
+}
+
+function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
+  if (value === "inherit" || value === "search" || value === "vsearch" || value === "query") {
+    return value;
+  }
+  return DEFAULT_QMD_SEARCH_MODE;
+}
+
+function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
+  const raw = asRecord(pluginConfig);
+  return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
 function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
@@ -566,6 +603,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
+  const qmd = asRecord(raw.qmd);
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
@@ -613,6 +651,36 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     cacheTtlMs: clampInt(raw.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 1000, 120_000),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
+    qmd: {
+      searchMode: resolveQmdSearchMode(qmd?.searchMode),
+    },
+  };
+}
+
+function applyActiveMemoryRuntimeConfigSnapshot(
+  cfg: OpenClawConfig,
+  pluginConfig: ResolvedActiveRecallPluginConfig,
+): OpenClawConfig {
+  const existingEntry = asRecord(cfg.plugins?.entries?.["active-memory"]);
+  const existingPluginConfig = asRecord(existingEntry?.config);
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        "active-memory": {
+          ...existingEntry,
+          config: {
+            ...existingPluginConfig,
+            qmd: {
+              ...asRecord(existingPluginConfig?.qmd),
+              searchMode: pluginConfig.qmd.searchMode,
+            },
+          },
+        },
+      },
+    },
   };
 }
 
@@ -943,12 +1011,48 @@ function buildPluginStatusLine(params: {
   return parts.join(" ");
 }
 
-function buildPluginDebugLine(summary: string | null | undefined): string | null {
-  const cleaned = sanitizeDebugText(summary ?? "");
-  if (!cleaned) {
-    return null;
+function buildPluginDebugLine(params: {
+  summary?: string | null;
+  searchDebug?: ActiveMemorySearchDebug;
+}): string | null {
+  const cleaned = sanitizeDebugText(params.summary ?? "");
+  const debugParts: string[] = [];
+  const backend = sanitizeDebugText(params.searchDebug?.backend ?? "");
+  if (backend) {
+    debugParts.push(`backend=${backend}`);
   }
-  return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${cleaned}`;
+  const configuredMode = sanitizeDebugText(params.searchDebug?.configuredMode ?? "");
+  if (configuredMode) {
+    debugParts.push(`configuredMode=${configuredMode}`);
+  }
+  const effectiveMode = sanitizeDebugText(params.searchDebug?.effectiveMode ?? "");
+  if (effectiveMode) {
+    debugParts.push(`effectiveMode=${effectiveMode}`);
+  }
+  const fallback = sanitizeDebugText(params.searchDebug?.fallback ?? "");
+  if (fallback) {
+    debugParts.push(`fallback=${fallback}`);
+  }
+  if (
+    typeof params.searchDebug?.searchMs === "number" &&
+    Number.isFinite(params.searchDebug.searchMs)
+  ) {
+    debugParts.push(`searchMs=${Math.max(0, Math.round(params.searchDebug.searchMs))}`);
+  }
+  if (typeof params.searchDebug?.hits === "number" && Number.isFinite(params.searchDebug.hits)) {
+    debugParts.push(`hits=${Math.max(0, Math.floor(params.searchDebug.hits))}`);
+  }
+  const prefix = debugParts.join(" ");
+  if (prefix && cleaned) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${cleaned}`;
+  }
+  if (prefix) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix}`;
+  }
+  if (cleaned) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${cleaned}`;
+  }
+  return null;
 }
 
 function sanitizeDebugText(text: string): string {
@@ -969,12 +1073,16 @@ async function persistPluginStatusLines(params: {
   sessionKey?: string;
   statusLine?: string;
   debugSummary?: string | null;
+  searchDebug?: ActiveMemorySearchDebug;
 }): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  const debugLine = buildPluginDebugLine(params.debugSummary);
+  const debugLine = buildPluginDebugLine({
+    summary: params.debugSummary,
+    searchDebug: params.searchDebug,
+  });
   const agentId = params.agentId.trim();
   if (!agentId && (params.statusLine || debugLine)) {
     return;
@@ -1033,6 +1141,99 @@ async function persistPluginStatusLines(params: {
       `active-memory: failed to persist session status note (${error instanceof Error ? error.message : String(error)})`,
     );
   }
+}
+
+async function readActiveMemorySearchDebug(
+  sessionFile: string,
+): Promise<ActiveMemorySearchDebug | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionFile, "utf8");
+  } catch {
+    return undefined;
+  }
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      const record = asRecord(parsed);
+      const nestedMessage = asRecord(record?.message);
+      const topLevelMessage =
+        record?.role === "toolResult" || record?.toolName === "memory_search" ? record : undefined;
+      const message = nestedMessage ?? topLevelMessage;
+      if (!message) {
+        continue;
+      }
+      const role = normalizeOptionalString(message.role);
+      const toolName = normalizeOptionalString(message.toolName);
+      if (role !== "toolResult" || toolName !== "memory_search") {
+        continue;
+      }
+      const details = asRecord(message.details);
+      const debug = asRecord(details?.debug);
+      if (!debug) {
+        continue;
+      }
+      return {
+        backend: normalizeOptionalString(debug.backend),
+        configuredMode: normalizeOptionalString(debug.configuredMode),
+        effectiveMode: normalizeOptionalString(debug.effectiveMode),
+        fallback: normalizeOptionalString(debug.fallback),
+        searchMs:
+          typeof debug.searchMs === "number" && Number.isFinite(debug.searchMs)
+            ? debug.searchMs
+            : undefined,
+        hits:
+          typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
+  const debug = asRecord(value);
+  if (!debug) {
+    return undefined;
+  }
+  const normalized: ActiveMemorySearchDebug = {
+    backend: normalizeOptionalString(debug.backend),
+    configuredMode: normalizeOptionalString(debug.configuredMode),
+    effectiveMode: normalizeOptionalString(debug.effectiveMode),
+    fallback: normalizeOptionalString(debug.fallback),
+    searchMs:
+      typeof debug.searchMs === "number" && Number.isFinite(debug.searchMs)
+        ? debug.searchMs
+        : undefined,
+    hits: typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+  };
+  return normalized.backend ||
+    normalized.configuredMode ||
+    normalized.effectiveMode ||
+    normalized.fallback ||
+    typeof normalized.searchMs === "number" ||
+    typeof normalized.hits === "number"
+    ? normalized
+    : undefined;
+}
+
+function readActiveMemorySearchDebugFromRunResult(
+  result: unknown,
+): ActiveMemorySearchDebug | undefined {
+  const record = asRecord(result);
+  const meta = asRecord(record?.meta);
+  return (
+    normalizeSearchDebug(meta?.activeMemorySearchDebug) ??
+    normalizeSearchDebug(meta?.memorySearchDebug) ??
+    normalizeSearchDebug(record?.activeMemorySearchDebug) ??
+    normalizeSearchDebug(record?.memorySearchDebug)
+  );
 }
 
 function escapeXml(str: string): string {
@@ -1237,35 +1438,22 @@ function getModelRef(
     modelProviderId?: string;
     modelId?: string;
   },
-): {
-  modelRef?: {
-    provider: string;
-    model: string;
-  };
-  source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback" | "none";
-} {
+): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const agentPrimaryModel = resolveAgentEffectiveModelPrimary(api.config, agentId);
-  const candidates: Array<{
-    source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback";
-    value?: string;
-  }> = [
-    { source: "plugin-model", value: config.model },
-    { source: "session-model", value: currentRunModel },
-    { source: "agent-primary", value: agentPrimaryModel },
-    { source: "config-fallback", value: config.modelFallback },
+  const candidates = [
+    config.model,
+    currentRunModel,
+    resolveAgentEffectiveModelPrimary(api.config, agentId),
+    config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate.value);
+    const parsed = parseModelCandidate(candidate);
     if (parsed) {
-      return {
-        modelRef: parsed,
-        source: candidate.source,
-      };
+      return parsed;
     }
   }
-  return { source: "none" };
+  return undefined;
 }
 
 async function runRecallSubagent(params: {
@@ -1280,10 +1468,14 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   abortSignal?: AbortSignal;
-}): Promise<{ rawReply: string; transcriptPath?: string }> {
+}): Promise<{
+  rawReply: string;
+  transcriptPath?: string;
+  searchDebug?: ActiveMemorySearchDebug;
+}> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
-  const { modelRef } = getModelRef(params.api, params.agentId, params.config, {
+  const modelRef = getModelRef(params.api, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
@@ -1337,6 +1529,7 @@ async function runRecallSubagent(params: {
   });
 
   try {
+    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -1346,7 +1539,7 @@ async function runRecallSubagent(params: {
       sessionFile,
       workspaceDir,
       agentDir,
-      config: params.api.config,
+      config: embeddedConfig,
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
@@ -1379,9 +1572,13 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
+    const searchDebug =
+      (await readActiveMemorySearchDebug(sessionFile)) ??
+      readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
       transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+      searchDebug,
     };
   } finally {
     if (tempDir) {
@@ -1418,6 +1615,7 @@ async function maybeResolveActiveRecall(params: {
       sessionKey: params.sessionKey,
       statusLine: `${buildPluginStatusLine({ result: cached, config: params.config })} cached`,
       debugSummary: cached.summary,
+      searchDebug: cached.searchDebug,
     });
     if (params.config.logging) {
       params.api.logger.info?.(
@@ -1440,7 +1638,7 @@ async function maybeResolveActiveRecall(params: {
   timeoutId.unref?.();
 
   try {
-    const { rawReply, transcriptPath } = await runRecallSubagent({
+    const { rawReply, transcriptPath, searchDebug } = await runRecallSubagent({
       ...params,
       abortSignal: controller.signal,
     });
@@ -1458,11 +1656,13 @@ async function maybeResolveActiveRecall(params: {
             elapsedMs: Date.now() - startedAt,
             rawReply,
             summary,
+            searchDebug,
           }
         : {
             status: "empty",
             elapsedMs: Date.now() - startedAt,
             summary: null,
+            searchDebug,
           };
     if (params.config.logging) {
       params.api.logger.info?.(
@@ -1475,6 +1675,7 @@ async function maybeResolveActiveRecall(params: {
       sessionKey: params.sessionKey,
       statusLine: buildPluginStatusLine({ result, config: params.config }),
       debugSummary: result.summary,
+      searchDebug: result.searchDebug,
     });
     if (shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
@@ -1497,6 +1698,7 @@ async function maybeResolveActiveRecall(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         statusLine: buildPluginStatusLine({ result, config: params.config }),
+        searchDebug: result.searchDebug,
       });
       return result;
     }
@@ -1514,6 +1716,7 @@ async function maybeResolveActiveRecall(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       statusLine: buildPluginStatusLine({ result, config: params.config }),
+      searchDebug: result.searchDebug,
     });
     return result;
   } finally {
@@ -1527,11 +1730,20 @@ export default definePluginEntry({
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
     let config = normalizePluginConfig(api.pluginConfig);
+    const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
+      if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
+        api.logger.warn?.(
+          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly if you want a fallback model",
+        );
+      }
+    };
+    warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      config = normalizePluginConfig(
+      const livePluginConfig =
         resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
-          api.pluginConfig,
-      );
+        api.pluginConfig;
+      config = normalizePluginConfig(livePluginConfig);
+      warnDeprecatedModelFallbackPolicy(livePluginConfig);
     };
     api.registerCommand({
       name: "active-memory",

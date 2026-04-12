@@ -1,9 +1,7 @@
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
-import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
-import type { SubagentEndReason } from "../context-engine/types.js";
+import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -75,9 +73,9 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof subagentAnnounceModule.runSubagentAnnounceFlow;
-  ensureContextEnginesInitialized?: typeof ensureContextEnginesInitializedFn;
+  ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
-  resolveContextEngine?: typeof resolveContextEngineFn;
+  resolveContextEngine?: (cfg: OpenClawConfig) => Promise<ContextEngine>;
 };
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {

@@ -473,6 +473,79 @@ describe("active-memory plugin", () => {
       model: "gpt-5.4-mini",
       messageProvider: "webchat",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
+      config: {
+        plugins: {
+          entries: {
+            "active-memory": {
+              config: {
+                qmd: {
+                  searchMode: "search",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("lets active memory inherit the main QMD search mode when configured", async () => {
+    api.config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-5.4-mini",
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+        },
+      },
+    };
+    api.pluginConfig = {
+      agents: ["main"],
+      qmd: {
+        searchMode: "inherit",
+      },
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what wings should i order? inherit-qmd-mode-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            searchMode: "query",
+          },
+        },
+        plugins: {
+          entries: {
+            "active-memory": {
+              config: {
+                qmd: {
+                  searchMode: "inherit",
+                },
+              },
+            },
+          },
+        },
+      },
     });
   });
 
@@ -770,12 +843,12 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
-  it("uses config.modelFallback before the built-in default fallback", async () => {
+  it("uses config.modelFallback when no session or agent model resolves", async () => {
     api.config = {};
     api.pluginConfig = {
       agents: ["main"],
       modelFallback: "google/gemini-3-flash",
-      modelFallbackPolicy: "resolved-only",
+      modelFallbackPolicy: "default-remote",
     };
     await plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -793,6 +866,9 @@ describe("active-memory plugin", () => {
       provider: "google",
       model: "gemini-3-flash-preview",
     });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("config.modelFallbackPolicy is deprecated"),
+    );
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -823,13 +899,25 @@ describe("active-memory plugin", () => {
       sessionId: "s-main",
       updatedAt: 0,
     };
-    runEmbeddedPiAgent.mockResolvedValueOnce({
-      payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+    runEmbeddedPiAgent.mockImplementationOnce(async () => {
+      return {
+        meta: {
+          activeMemorySearchDebug: {
+            backend: "qmd",
+            configuredMode: "search",
+            effectiveMode: "query",
+            fallback: "unsupported-search-flags",
+            searchMs: 2590,
+            hits: 3,
+          },
+        },
+        payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+      };
     });
 
     await hooks.before_prompt_build(
       {
-        prompt: "what wings should i order?",
+        prompt: "what wings should i order? debug telemetry",
         messages: [],
       },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
@@ -852,7 +940,7 @@ describe("active-memory plugin", () => {
         lines: expect.arrayContaining([
           expect.stringContaining("🧩 Active Memory: ok"),
           expect.stringContaining(
-            "🔎 Active Memory Debug: User prefers lemon pepper wings, and blue cheese still wins.",
+            "🔎 Active Memory Debug: backend=qmd configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
           ),
         ]),
       },
