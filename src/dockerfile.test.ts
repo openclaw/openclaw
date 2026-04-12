@@ -57,6 +57,12 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
+    expect(dockerfile).toContain(
+      'if [ -d "dist/$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules" ]; then \\',
+    );
+    expect(dockerfile).toContain(
+      'cp -a "dist/$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules" "$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules"',
+    );
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

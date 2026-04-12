@@ -116,6 +116,13 @@ RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
     done && \
     cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml && \
     CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      if [ -d "dist/$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules" ]; then \
+        rm -rf "$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules" && \
+        mkdir -p "$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext" && \
+        cp -a "dist/$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules" "$OPENCLAW_BUNDLED_PLUGIN_DIR/$ext/node_modules"; \
+      fi; \
+    done && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
