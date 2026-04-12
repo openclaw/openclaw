@@ -36,6 +36,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
   switchChatSession,
+  toggleCommandPalette,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -421,5 +422,41 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
     });
+  });
+});
+
+describe("toggleCommandPalette", () => {
+  it("opens the palette and loads the runtime catalog for the active agent", () => {
+    const state = {
+      paletteOpen: false,
+      paletteQuery: "stale",
+      paletteActiveIndex: 4,
+      sessionKey: "agent:research:main",
+    } as unknown as AppViewState;
+
+    loadChatCommandCatalogMock.mockClear();
+
+    toggleCommandPalette(state);
+
+    expect(state.paletteOpen).toBe(true);
+    expect(state.paletteQuery).toBe("");
+    expect(state.paletteActiveIndex).toBe(0);
+    expect(loadChatCommandCatalogMock).toHaveBeenCalledWith(state, "research");
+  });
+
+  it("closes the palette without loading the runtime catalog", () => {
+    const state = {
+      paletteOpen: true,
+      paletteQuery: "office",
+      paletteActiveIndex: 1,
+      sessionKey: "main",
+    } as unknown as AppViewState;
+
+    loadChatCommandCatalogMock.mockClear();
+
+    toggleCommandPalette(state);
+
+    expect(state.paletteOpen).toBe(false);
+    expect(loadChatCommandCatalogMock).not.toHaveBeenCalled();
   });
 });

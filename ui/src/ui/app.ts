@@ -29,6 +29,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { toggleCommandPalette as toggleCommandPaletteInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -188,6 +189,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatCommandCatalogLoading = false;
   @state() chatCommandCatalogLoadingAgentId: string | null = null;
+  @state() chatCommandCatalogAgentId: string | null = null;
   @state() chatCommandCatalogRequestId = 0;
   @state() chatCommandCatalogError: string | null = null;
   @state() chatCommandCatalogResult: CommandCatalogResult | null = null;
@@ -520,11 +522,7 @@ export class OpenClawApp extends LitElement {
   private globalKeydownHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
       e.preventDefault();
-      this.paletteOpen = !this.paletteOpen;
-      if (this.paletteOpen) {
-        this.paletteQuery = "";
-        this.paletteActiveIndex = 0;
-      }
+      toggleCommandPaletteInternal(this);
     }
   };
 
@@ -695,7 +693,9 @@ export class OpenClawApp extends LitElement {
   }
 
   async refreshChatCommandCatalog() {
-    await loadChatCommandCatalogInternal(this, resolveAgentIdFromSessionKey(this.sessionKey));
+    await loadChatCommandCatalogInternal(this, resolveAgentIdFromSessionKey(this.sessionKey), {
+      force: true,
+    });
   }
 
   async handleWhatsAppStart(force: boolean) {

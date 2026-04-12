@@ -45,6 +45,7 @@ export type ChatHost = {
   chatModelCatalog: ModelCatalogEntry[];
   chatCommandCatalogLoading: boolean;
   chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogAgentId: string | null;
   chatCommandCatalogRequestId: number;
   chatCommandCatalogError: string | null;
   chatCommandCatalogResult: CommandCatalogResult | null;
@@ -493,11 +494,14 @@ async function refreshChatCommandCatalog(host: ChatHost) {
   if (!host.client || !host.connected) {
     host.chatCommandCatalogLoading = false;
     host.chatCommandCatalogLoadingAgentId = null;
+    host.chatCommandCatalogAgentId = null;
     host.chatCommandCatalogError = null;
     host.chatCommandCatalogResult = null;
     return;
   }
-  await loadChatCommandCatalog(host, resolveAgentIdFromSessionKey(host.sessionKey));
+  await loadChatCommandCatalog(host, resolveAgentIdFromSessionKey(host.sessionKey), {
+    force: true,
+  });
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

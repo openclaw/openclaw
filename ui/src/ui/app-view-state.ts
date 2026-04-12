@@ -91,6 +91,7 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   chatCommandCatalogLoading: boolean;
   chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogAgentId: string | null;
   chatCommandCatalogRequestId: number;
   chatCommandCatalogError: string | null;
   chatCommandCatalogResult: CommandCatalogResult | null;

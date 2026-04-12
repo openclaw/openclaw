@@ -56,6 +56,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelCatalog: [],
     chatCommandCatalogLoading: false,
     chatCommandCatalogLoadingAgentId: null,
+    chatCommandCatalogAgentId: null,
     chatCommandCatalogRequestId: 0,
     chatCommandCatalogError: null,
     chatCommandCatalogResult: null,

@@ -45,6 +45,8 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
+type CommandPaletteHost = AppViewState;
+
 export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "settings" | "password">,
 ) {
@@ -66,6 +68,17 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
     return mainKey;
   }
   return "main";
+}
+
+export function toggleCommandPalette(state: CommandPaletteHost, opts?: { open?: boolean }) {
+  const nextOpen = opts?.open ?? !state.paletteOpen;
+  state.paletteOpen = nextOpen;
+  if (!nextOpen) {
+    return;
+  }
+  state.paletteQuery = "";
+  state.paletteActiveIndex = 0;
+  void loadChatCommandCatalog(state, resolveAgentIdFromSessionKey(state.sessionKey));
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {

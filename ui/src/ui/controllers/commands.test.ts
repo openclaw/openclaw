@@ -13,6 +13,7 @@ function createState(): {
     connected: true,
     chatCommandCatalogLoading: false,
     chatCommandCatalogLoadingAgentId: null,
+    chatCommandCatalogAgentId: null,
     chatCommandCatalogRequestId: 0,
     chatCommandCatalogError: null,
     chatCommandCatalogResult: null,
@@ -55,6 +56,7 @@ describe("loadChatCommandCatalog", () => {
       includeArgs: true,
     });
     expect(state.chatCommandCatalogResult).toEqual(payload);
+    expect(state.chatCommandCatalogAgentId).toBe("main");
     expect(state.chatCommandCatalogError).toBeNull();
     expect(state.chatCommandCatalogLoading).toBe(false);
   });
@@ -115,8 +117,69 @@ describe("loadChatCommandCatalog", () => {
         },
       ],
     });
+    expect(state.chatCommandCatalogAgentId).toBe("research");
     expect(state.chatCommandCatalogError).toBeNull();
     expect(state.chatCommandCatalogLoading).toBe(false);
+  });
+
+  it("allows a forced same-agent refresh to supersede an older in-flight request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const firstPending = loadChatCommandCatalog(state, "main");
+    const secondPending = loadChatCommandCatalog(state, "main", { force: true });
+
+    resolvers[1]?.({
+      commands: [
+        {
+          name: "office_hours",
+          textAliases: ["/office_hours"],
+          description: "Run office hours workflow.",
+          acceptsArgs: true,
+          source: "skill",
+          scope: "both",
+          category: "tools",
+        },
+      ],
+    });
+    await secondPending;
+
+    resolvers[0]?.({
+      commands: [
+        {
+          name: "help",
+          textAliases: ["/help"],
+          description: "Show available commands.",
+          acceptsArgs: false,
+          source: "native",
+          scope: "both",
+          category: "status",
+        },
+      ],
+    });
+    await firstPending;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatCommandCatalogAgentId).toBe("main");
+    expect(state.chatCommandCatalogResult).toEqual({
+      commands: [
+        {
+          name: "office_hours",
+          textAliases: ["/office_hours"],
+          description: "Run office hours workflow.",
+          acceptsArgs: true,
+          source: "skill",
+          scope: "both",
+          category: "tools",
+        },
+      ],
+    });
   });
 
   it("captures request errors so UI callers can fall back to static commands", async () => {

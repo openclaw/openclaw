@@ -10,18 +10,27 @@ export type ChatCommandCatalogState = {
   connected: boolean;
   chatCommandCatalogLoading: boolean;
   chatCommandCatalogLoadingAgentId: string | null;
+  chatCommandCatalogAgentId: string | null;
   chatCommandCatalogRequestId: number;
   chatCommandCatalogError: string | null;
   chatCommandCatalogResult: CommandCatalogResult | null;
 };
 
-export async function loadChatCommandCatalog(state: ChatCommandCatalogState, agentId: string) {
+export async function loadChatCommandCatalog(
+  state: ChatCommandCatalogState,
+  agentId: string,
+  opts?: { force?: boolean },
+) {
   const resolvedAgentId = agentId.trim();
+  const hasCurrentAgentCatalog =
+    state.chatCommandCatalogAgentId === resolvedAgentId && state.chatCommandCatalogResult !== null;
+  const sameAgentRequestInFlight =
+    state.chatCommandCatalogLoading && state.chatCommandCatalogLoadingAgentId === resolvedAgentId;
   if (
     !state.client ||
     !state.connected ||
     !resolvedAgentId ||
-    (state.chatCommandCatalogLoading && state.chatCommandCatalogLoadingAgentId === resolvedAgentId)
+    (!opts?.force && (hasCurrentAgentCatalog || sameAgentRequestInFlight))
   ) {
     return;
   }
@@ -31,7 +40,10 @@ export async function loadChatCommandCatalog(state: ChatCommandCatalogState, age
   state.chatCommandCatalogLoading = true;
   state.chatCommandCatalogLoadingAgentId = resolvedAgentId;
   state.chatCommandCatalogError = null;
-  state.chatCommandCatalogResult = null;
+  if (state.chatCommandCatalogAgentId !== resolvedAgentId) {
+    state.chatCommandCatalogAgentId = null;
+    state.chatCommandCatalogResult = null;
+  }
   try {
     const res = await state.client.request<CommandCatalogResult>("commands.list", {
       agentId: resolvedAgentId,
@@ -41,6 +53,7 @@ export async function loadChatCommandCatalog(state: ChatCommandCatalogState, age
     if (shouldIgnoreResponse()) {
       return;
     }
+    state.chatCommandCatalogAgentId = resolvedAgentId;
     state.chatCommandCatalogResult = res;
   } catch (err) {
     if (shouldIgnoreResponse()) {

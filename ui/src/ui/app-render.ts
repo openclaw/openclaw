@@ -17,6 +17,7 @@ import {
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
   switchChatSession,
+  toggleCommandPalette,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -856,9 +857,7 @@ export function renderApp(state: AppViewState) {
       query: state.paletteQuery,
       activeIndex: state.paletteActiveIndex,
       commandCatalog: state.chatCommandCatalogResult?.commands ?? null,
-      onToggle: () => {
-        state.paletteOpen = !state.paletteOpen;
-      },
+      onToggle: () => toggleCommandPalette(state),
       onQueryChange: (q) => {
         state.paletteQuery = q;
       },
@@ -909,7 +908,7 @@ export function renderApp(state: AppViewState) {
             <button
               class="topbar-search"
               @click=${() => {
-                state.paletteOpen = !state.paletteOpen;
+                toggleCommandPalette(state);
               }}
               title="Search or jump to… (⌘K)"
               aria-label="Open command palette"
@@ -1886,7 +1885,9 @@ export function renderApp(state: AppViewState) {
                 return Promise.all([
                   loadChatHistory(state),
                   refreshChatAvatar(state),
-                  loadChatCommandCatalog(state, resolveAgentIdFromSessionKey(state.sessionKey)),
+                  loadChatCommandCatalog(state, resolveAgentIdFromSessionKey(state.sessionKey), {
+                    force: true,
+                  }),
                 ]);
               },
               onToggleFocusMode: () => {
