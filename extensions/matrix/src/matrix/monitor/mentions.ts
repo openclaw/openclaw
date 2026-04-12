@@ -81,6 +81,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(localpart) : null,
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
+    params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
@@ -163,13 +164,13 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
-  // m.mentions.user_ids is the authoritative mention source per MSC3952.
-  // Previously this also required a visible text or formatted_body mention,
-  // which caused messages from non-OpenClaw clients that send proper
-  // m.mentions metadata without an @-mention in the body to be silently
-  // ignored when requireMention was enabled (#64785).
+  // Matrix clients can mention users through m.mentions metadata plus a visible
+  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
+  // hidden metadata-only mentions do not trigger the handler.
   const metadataBackedUserMention = Boolean(
-    params.userId && mentionedUsers.has(params.userId),
+    params.userId &&
+    mentionedUsers.has(params.userId) &&
+    (mentionedInFormattedBody || textMentioned),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =

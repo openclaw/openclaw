@@ -34,10 +34,7 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
-    it("detects mention via m.mentions.user_ids even without visible text mention (#64785)", () => {
-      // MSC3952: m.mentions.user_ids is the authoritative mention source.
-      // Non-OpenClaw Matrix clients (Element, standalone bots) may set
-      // m.mentions without including @bot in the visible message body.
+    it("does not trust m.mentions.user_ids without a visible text or formatted mention", () => {
       const result = resolveMentions({
         content: {
           msgtype: "m.text",
@@ -48,8 +45,8 @@ describe("resolveMentions", () => {
         text: "please reply",
         mentionRegexes,
       });
-      expect(result.wasMentioned).toBe(true);
-      expect(result.hasExplicitMention).toBe(true);
+      expect(result.wasMentioned).toBe(false);
+      expect(result.hasExplicitMention).toBe(false);
     });
 
     it("detects room mention via visible @room text", () => {
@@ -210,6 +207,24 @@ describe("resolveMentions", () => {
         mentionRegexes: [],
       });
       expect(result.wasMentioned).toBe(true);
+    });
+
+    it("detects mention when the visible label is @displayName with Unicode text", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "@欢欢 please reply",
+          formatted_body:
+            '<a href="https://matrix.to/#/@huanhuan:localhost">@欢欢</a> please reply',
+          "m.mentions": { user_ids: ["@huanhuan:localhost"] },
+        },
+        userId: "@huanhuan:localhost",
+        displayName: "欢欢",
+        text: "@欢欢 please reply",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.hasExplicitMention).toBe(true);
     });
 
     it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {

@@ -180,7 +180,7 @@ describe("matrix monitor handler pairing account scope", () => {
       await handler("!room:example.org", makeEvent("$event1"));
       await handler("!room:example.org", makeEvent("$event2"));
       expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toContain(
+      expect(JSON.stringify(sendMessageMatrixMock.mock.calls[0]?.[1] ?? {})).toContain(
         "Pairing request is still pending approval.",
       );
 
@@ -461,6 +461,30 @@ describe("matrix monitor handler pairing account scope", () => {
           msgtype: "m.text",
           body: "Tom Servo: hello",
           formatted_body: '<a href="https://matrix.to/#/@bot:example.org">Tom Servo</a>: hello',
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("processes room messages mentioned via @displayName in Unicode formatted_body", async () => {
+    const recordInboundSession = vi.fn(async () => {});
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      getMemberDisplayName: async () => "欢欢",
+      recordInboundSession,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixRoomMessageEvent({
+        eventId: "$unicode-display-name-mention",
+        content: {
+          msgtype: "m.text",
+          body: "@欢欢 please reply",
+          formatted_body: '<a href="https://matrix.to/#/@bot:example.org">@欢欢</a> please reply',
+          "m.mentions": { user_ids: ["@bot:example.org"] },
         },
       }),
     );
