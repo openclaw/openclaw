@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-11 (run 18)
+**Date:** 2026-04-12 (run 19)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -21,7 +21,7 @@
 
 **Status:** MERGED (merged_at: 2026-03-29T05:15:58Z)
 
-Confirmed via branch history this run. Squash-merge commit `14fd49c362b7d84b8fda157967befe2a0ca730f5`
+Confirmed via branch history. Squash-merge commit `14fd49c362b7d84b8fda157967befe2a0ca730f5`
 is present on the fork branch with subject `fix: keep telegram plugin fallback explicit (#45911) (thanks @suboss87)`.
 Fork's `main` has not been synced with upstream yet (merge commit not in `origin/main`).
 No action required.
@@ -43,9 +43,9 @@ No action required.
 | `569a0bdfab` | 2026-04-06 | chore(protocol): regenerate Swift models for freshSession cron field | Legitimate (CI fix)       |
 | `46e2b30607` | 2026-04-06 | chore(format): fix markdown formatting in pr-monitor-report       | **Monitoring artifact**   |
 
-**Fork-local conflict check (git merge-tree vs origin/main):**
-One conflict: `tasks/pr-monitor-report.md` — this is the monitoring artifact file accidentally
-committed to the PR branch in earlier runs. Real cron source files have no conflicts with fork/main.
+**Fork-local conflict check:**
+One conflict: `tasks/pr-monitor-report.md` — monitoring artifact file accidentally committed to
+the PR branch in earlier runs. Real cron source files have no conflicts with fork/main.
 
 **Upstream conflict (carried from run 16 — GitHub API confirmed):**
 `mergeable: false`, `mergeable_state: dirty` — conflicts with `openclaw/openclaw:main`.
@@ -58,7 +58,7 @@ Upstream not reachable from this environment; automated rebase not possible.
 - `chatgpt-codex-connector[bot]`: `freshSession` propagation — already implemented in `src/cron/service/jobs.ts`.
 No human maintainer reviews; no `CHANGES_REQUESTED`.
 
-**No new activity since run 9 (2026-04-06).**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 18.**
 
 **Needs human attention:**
 1. **Upstream rebase required** — dirty against `openclaw/openclaw:main`; cannot be done from this environment.
@@ -92,7 +92,7 @@ No action required.
 | `d18c8771bb` | 2026-04-06 | chore(format): fix markdown formatting in pr-monitor-report           | **Monitoring artifact**   |
 | `f052129db4` | 2026-04-06 | chore(tasks): update PR monitor report for suboss87 PRs (2026-04-06 run 9) | **Monitoring artifact** |
 
-**Fork-local conflict check (git merge-tree vs origin/main):**
+**Fork-local conflict check:**
 One conflict: `tasks/pr-monitor-report.md` — monitoring artifact only. Real PR source files
 (`src/` changes) have no conflicts with fork/main.
 
@@ -129,7 +129,7 @@ changes are not causing node-layer failures.
 - No human maintainer reviews; no `CHANGES_REQUESTED`.
 - Community: `MoltyCel` confirmed fix logic and tests look correct (2026-04-06/07).
 
-**No new activity since run 9 (2026-04-06).**
+**No new activity since run 9 (2026-04-06). Branch tip unchanged since run 18.**
 
 **Needs human attention:**
 1. **CI investigation** — confirm whether `security-fast`, `checks-fast-contracts-protocol`, and
@@ -142,19 +142,25 @@ changes are not causing node-layer failures.
 
 ---
 
-## Actions Taken This Run (run 18 — 2026-04-11)
+## Actions Taken This Run (run 19 — 2026-04-12)
 
 **GitHub API access:** PARTIAL — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
 installed; `openclaw/openclaw` PRs are not accessible via MCP.
 
-**Branch data (from fork):** Successfully fetched all PR branches from `origin` (fork proxy):
-- Confirmed all four branch tip SHAs via `git fetch origin` + `git log`.
-- All branch tips **unchanged since run 9 (2026-04-06)** — no new commits on any PR branch.
-- Fork-local conflict analysis: both open PRs (#45584 and #54730) have conflicts ONLY in
-  `tasks/pr-monitor-report.md` (monitoring artifact); real code files are clean vs fork/main.
+**Branch data (from fork):** Successfully fetched all four PR branch tips from `suboss87/openclaw`:
+
+| Branch                                  | SHA (tip)                                  | Changed since run 18? |
+| --------------------------------------- | ------------------------------------------ | --------------------- |
+| fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No                    |
+| feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No                    |
+| fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No                    |
+| fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No                    |
+
+All branch tips are **unchanged since run 9 (2026-04-06)**. No new commits on any PR branch in
+the past 6 days.
 
 **CI/Review/Upstream status:** Carried forward from run 16 (last run with full GitHub API access).
-Treat CI/review data as potentially stale (5 days).
+CI and review data are now approximately 1 week stale.
 
 **No code changes made.** No new review feedback detected; no rebases performed (upstream
 unreachable); no branch modifications.
@@ -169,7 +175,7 @@ unreachable); no branch modifications.
 | openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium |
 | openclaw/openclaw#54730 | Confirm CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) pre-existing vs PR-caused | High |
 | openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium |
-| openclaw/openclaw#54730 | Needs human maintainer review (none yet) | Medium |
+| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 6 days stale) | Medium |
 
 ---
 
@@ -178,8 +184,8 @@ unreachable); no branch modifications.
 - `gh` CLI not installed in this environment (`command not found`).
 - GitHub MCP server is configured for `suboss87/openclaw` only; `openclaw/openclaw` PRs, CI
   check runs, and review comments are inaccessible via MCP.
-- Upstream `openclaw/openclaw` remote not configured; `git ls-remote` via proxy returns 502.
-- Fork git proxy (`http://127.0.0.1:54561/git/suboss87/openclaw`) works for fork branches only.
+- Upstream `openclaw/openclaw` remote not configured; git proxy returns 502 for upstream.
+- Fork git proxy (`http://127.0.0.1:54055/git/suboss87/openclaw`) works for fork branches only.
 - **Action required by operator:** Install `gh` CLI (authenticated) or extend MCP scope to
   `openclaw/openclaw` to restore full monitoring capability.
 
