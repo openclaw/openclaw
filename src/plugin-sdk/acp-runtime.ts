@@ -60,13 +60,17 @@ export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
 ): Promise<PluginHookReplyDispatchResult | void> {
-  if (event.sendPolicy === "deny" && !hasExplicitCommandCandidate(event.ctx)) {
+  if (
+    event.sendPolicy === "deny" &&
+    !hasExplicitCommandCandidate(event.ctx) &&
+    !event.isTailDispatch
+  ) {
     return;
   }
   const runtime = await loadDispatchAcpRuntime();
   const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(event.ctx, ctx.cfg);
 
-  if (event.sendPolicy === "deny" && !bypassForCommand) {
+  if (event.sendPolicy === "deny" && !bypassForCommand && !event.isTailDispatch) {
     return;
   }
 

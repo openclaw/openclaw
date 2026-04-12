@@ -117,6 +117,36 @@ describe("tryDispatchAcpReplyHook", () => {
     expect(dispatchMock).toHaveBeenCalledOnce();
   });
 
+  it("allows tail dispatch through when sendPolicy is deny", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        sendPolicy: "deny",
+        isTailDispatch: true,
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          BodyForCommands: "continue after reset",
+          BodyForAgent: "continue after reset",
+        }),
+      },
+      ctx,
+    );
+
+    // Tail dispatch should proceed despite deny — delivery suppression is handled downstream
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      handled: true,
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+  });
+
   it("does not let ACP claim reset commands before local command handling", async () => {
     bypassMock.mockResolvedValue(true);
     dispatchMock.mockResolvedValue(undefined);

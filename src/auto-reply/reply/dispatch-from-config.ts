@@ -630,7 +630,7 @@ export async function dispatchReplyFromConfig(
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
         let routedFinalCount = 0;
-        if (text) {
+        if (text && sendPolicy !== "deny") {
           const handledReply = await sendFinalPayload({ text });
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;

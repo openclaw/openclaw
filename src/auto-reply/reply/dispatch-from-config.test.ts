@@ -3004,6 +3004,28 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+    });
+    // Hook handled the message (no model dispatch)
+    expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalled();
+    // But delivery must be suppressed
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
   it("continues default dispatch when hook returns not handled", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
     const dispatcher = createDispatcher();
