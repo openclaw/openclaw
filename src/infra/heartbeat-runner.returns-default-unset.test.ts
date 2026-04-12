@@ -506,6 +506,28 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("does not bypass disabled agents for targeted event wakes", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main", heartbeat: { every: "1h" } }, { id: "ops" }],
+      },
+    };
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      agentId: "ops",
+      reason: "exec-event",
+      sessionKey: "agent:ops:discord:alerts",
+      allowEventWakeWithoutHeartbeat: true,
+    });
+
+    expect(res.status).toBe("skipped");
+    if (res.status === "skipped") {
+      expect(res.reason).toBe("disabled");
+    }
+  });
+
   it("skips outside active hours", async () => {
     const cfg: OpenClawConfig = {
       agents: {

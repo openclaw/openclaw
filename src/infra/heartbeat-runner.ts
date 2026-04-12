@@ -549,11 +549,11 @@ export async function runHeartbeatOnce(opts: {
       reasonKind === "hook");
   const allowEventWakeWithoutHeartbeat =
     opts.allowEventWakeWithoutHeartbeat === true && isSessionScopedEventWake;
+  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    return { status: "skipped", reason: "disabled" };
+  }
   if (!allowEventWakeWithoutHeartbeat) {
     if (!areHeartbeatsEnabled()) {
-      return { status: "skipped", reason: "disabled" };
-    }
-    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
       return { status: "skipped", reason: "disabled" };
     }
     if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
