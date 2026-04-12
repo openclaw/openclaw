@@ -555,7 +555,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
-  it("preserves signed-thinking turns when the matching tool result is embedded in user content", () => {
+  it("drops signed-thinking turns when the only matching tool result is embedded in user content", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -577,13 +577,13 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
 
     expect(result).toHaveLength(3);
+    expect((result[1] as { role?: unknown }).role).toBe("assistant");
     expect((result[1] as { content?: unknown[] }).content).toEqual([
-      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-      { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
+      { type: "text", text: "[tool calls omitted]" },
     ]);
   });
 
-  it("preserves signed-thinking turns when a tool result carries both stale and current id aliases", () => {
+  it("preserves signed-thinking turns when a trusted tool result carries both stale and current id aliases", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -594,22 +594,19 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
         ],
       },
       {
-        role: "user",
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "tool-stale",
-            toolCallId: "tool-current",
-            content: [{ type: "text", text: "ok" }],
-          },
-          { type: "text", text: "Continue" },
-        ],
+        role: "toolResult",
+        toolUseId: "tool-stale",
+        toolCallId: "tool-current",
+        toolName: "gateway",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
       },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
     ]);
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(4);
     expect((result[1] as { content?: unknown[] }).content).toEqual([
       { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
       { type: "toolCall", id: "tool-current", name: "gateway", arguments: {} },
@@ -683,9 +680,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
 
     expect(result).toHaveLength(3);
     const assistantContent = (result[1] as { content?: unknown[] }).content;
-    expect(assistantContent).toEqual([
-      { type: "text", text: "[tool calls omitted]" },
-    ]);
+    expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
   });
 
   it("is replay-safe across repeated validation passes", () => {

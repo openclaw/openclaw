@@ -120,22 +120,6 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
     addMatch(extractToolResultMatchIds(record), extractToolResultMatchName(record));
   }
 
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return matches;
-  }
-
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type !== "toolResult" && record.type !== "tool") {
-      continue;
-    }
-    addMatch(extractToolResultMatchIds(record), extractToolResultMatchName(record));
-  }
-
   return matches;
 }
 
