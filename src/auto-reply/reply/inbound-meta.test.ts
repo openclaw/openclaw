@@ -57,6 +57,13 @@ function parseSenderInfoPayload(text: string): Record<string, unknown> {
   return parseUntrustedJsonBlock(text, "Sender (untrusted metadata):") as Record<string, unknown>;
 }
 
+function parseHistoryPayload(text: string): Array<Record<string, unknown>> {
+  return parseUntrustedJsonBlock(
+    text,
+    "Chat history since last reply (untrusted, for context):",
+  ) as Array<Record<string, unknown>>;
+}
+
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -525,5 +532,37 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(withForwardedFrom).toContain("Forwarded message context (untrusted metadata):");
     expect(withForwardedFrom).toContain('"from": "source"');
+  });
+
+  it("truncates oversized untrusted strings before serializing them into prompt context", () => {
+    const oversized = "x".repeat(2_500);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ThreadStarterBody: oversized,
+    } as TemplateContext);
+
+    expect(text).not.toContain(oversized);
+    expect(text).toContain("…[truncated]");
+    expect(text).toContain('"body": "');
+  });
+
+  it("caps serialized inbound history to the most recent bounded tail", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: Array.from({ length: 25 }, (_, index) => ({
+        sender: `sender-${index}`,
+        body: `body-${index}`,
+        timestamp: index,
+      })),
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["history_count"]).toBe(20);
+    expect(conversationInfo["history_truncated"]).toBe(true);
+
+    const history = parseHistoryPayload(text);
+    expect(history).toHaveLength(20);
+    expect(history[0]?.["body"]).toBe("body-5");
+    expect(history.at(-1)?.["body"]).toBe("body-24");
   });
 });

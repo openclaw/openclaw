@@ -4,9 +4,13 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
+
+const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
+const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -33,9 +37,16 @@ function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
 }
 
+function truncateUntrustedJsonString(value: string): string {
+  if (value.length <= MAX_UNTRUSTED_JSON_STRING_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, MAX_UNTRUSTED_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
+}
+
 function sanitizeUntrustedJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
-    return neutralizeMarkdownFences(value);
+    return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
   }
   if (Array.isArray(value)) {
     return value.map((entry) => sanitizeUntrustedJsonValue(entry));
@@ -158,6 +169,8 @@ export function buildInboundUserContextPrefix(
   const messageIdFull = normalizePromptMetadataString(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
+  const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+  const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
@@ -189,10 +202,8 @@ export function buildInboundUserContextPrefix(
     has_reply_context: sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
-    history_count:
-      Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
-        ? ctx.InboundHistory.length
-        : undefined,
+    history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
+    history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
@@ -254,11 +265,11 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  if (Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0) {
+  if (boundedHistory.length > 0) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Chat history since last reply (untrusted, for context):",
-        ctx.InboundHistory.map((entry) => ({
+        boundedHistory.map((entry) => ({
           sender: sanitizePromptBody(entry.sender),
           timestamp_ms: entry.timestamp,
           body: sanitizePromptBody(entry.body),
