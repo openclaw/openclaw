@@ -10,6 +10,7 @@ import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
+  shouldStartIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
@@ -87,6 +88,7 @@ export function createIMessagePluginBase(params: {
     configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,
+      isEnabled: (account, cfg) => shouldStartIMessageAccount({ cfg, account }),
       isConfigured: (account) => account.configured,
       describeAccount: (account) =>
         describeAccountSnapshot({
