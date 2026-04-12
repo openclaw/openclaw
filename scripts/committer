@@ -4,7 +4,7 @@ set -euo pipefail
 # Disable glob expansion to handle brackets in file paths
 set -f
 usage() {
-  printf 'Usage: %s [--force] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
+  printf 'Usage: %s [--force] [--fast] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -13,10 +13,22 @@ if [ "$#" -lt 2 ]; then
 fi
 
 force_delete_lock=false
-if [ "${1:-}" = "--force" ]; then
-  force_delete_lock=true
-  shift
-fi
+fast_commit=false
+while [[ "${1:-}" == --* ]]; do
+  case "${1:-}" in
+    --force)
+      force_delete_lock=true
+      shift
+      ;;
+    --fast)
+      fast_commit=true
+      shift
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
 
 if [ "$#" -lt 2 ]; then
   usage
@@ -190,8 +202,15 @@ if git diff --staged --quiet; then
 fi
 
 committed=false
-if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
-  committed=true
+if [ "$fast_commit" = true ]; then
+  declare -a commit_env=(FAST_COMMIT=1)
+  if run_git_with_lock_retry "commit" env "${commit_env[@]}" git commit -m "$commit_message" -- "${files[@]}"; then
+    committed=true
+  fi
+else
+  if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
+    committed=true
+  fi
 fi
 
 if [ "$committed" = false ]; then

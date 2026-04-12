@@ -10,8 +10,8 @@ import {
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type SystemEvent = {
   text: string;
