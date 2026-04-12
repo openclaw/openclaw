@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
+  createConfiguredMatrixDefaultAccountConfig,
+  createLegacyMatrixTopLevelConfig,
+  createMatrixTokenAddAccountPrompter,
   installMatrixOnboardingEnvRestoreHooks,
   createMatrixWizardPrompter,
   runMatrixAddAccountAllowlistConfigure,
@@ -43,18 +46,7 @@ describe("matrix onboarding", () => {
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              default: {
-                homeserver: "https://matrix.main.example.org",
-                accessToken: "main-token",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixDefaultAccountConfig(),
       prompter,
       shouldPromptAccountIds: true,
       configured: true,
@@ -116,18 +108,7 @@ describe("matrix onboarding", () => {
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              default: {
-                homeserver: "https://matrix.main.example.org",
-                accessToken: "main-token",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixDefaultAccountConfig(),
       prompter,
       shouldPromptAccountIds: true,
       configured: true,
@@ -154,31 +135,10 @@ describe("matrix onboarding", () => {
   it("promotes legacy top-level Matrix config before adding a named account", async () => {
     installMatrixTestRuntime();
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-        "Matrix homeserver URL": "https://matrix.ops.example.org",
-        "Matrix access token": "ops-token",
-        "Matrix device name (optional)": "",
-      },
-      onConfirm: async () => false,
-    });
+    const prompter = createMatrixTokenAddAccountPrompter();
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.main.example.org",
-            userId: "@main:example.org",
-            accessToken: "main-token",
-            avatarUrl: "mxc://matrix.main.example.org/main-avatar",
-          },
-        },
-      } as CoreConfig,
+      cfg: createLegacyMatrixTopLevelConfig(),
       prompter,
       shouldPromptAccountIds: true,
       configured: true,
@@ -208,28 +168,14 @@ describe("matrix onboarding", () => {
   it("reuses an existing raw default-like key during onboarding promotion when defaultAccount is unset", async () => {
     installMatrixTestRuntime();
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-        "Matrix homeserver URL": "https://matrix.ops.example.org",
-        "Matrix access token": "ops-token",
-        "Matrix device name (optional)": "",
-      },
-      onConfirm: async () => false,
-    });
+    const prompter = createMatrixTokenAddAccountPrompter();
 
     const result = await runMatrixInteractiveConfigure({
       cfg: {
+        ...createLegacyMatrixTopLevelConfig(),
         channels: {
           matrix: {
-            homeserver: "https://matrix.main.example.org",
-            userId: "@main:example.org",
-            accessToken: "main-token",
-            avatarUrl: "mxc://matrix.main.example.org/main-avatar",
+            ...createLegacyMatrixTopLevelConfig().channels?.matrix,
             accounts: {
               Default: {
                 enabled: true,
