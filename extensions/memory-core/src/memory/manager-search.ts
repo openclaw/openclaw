@@ -33,7 +33,17 @@ function extractRelevantSnippet(
   // Use the same tokenizer as the search engine so CJK terms and
   // conversational queries produce correct anchor terms.
   const lowerText = text.toLowerCase();
-  const queryTerms = extractKeywords(query).toSorted((a, b) => b.length - a.length);
+  let queryTerms = extractKeywords(query).toSorted((a, b) => b.length - a.length);
+
+  // extractKeywords drops pure-numeric tokens (e.g. "404", "2024").
+  // Fall back to raw alphanumeric tokens so numeric queries still anchor.
+  if (queryTerms.length === 0) {
+    queryTerms = query
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .filter((t) => t.length >= 2)
+      .toSorted((a, b) => b.length - a.length);
+  }
 
   let matchIndex = -1;
 
