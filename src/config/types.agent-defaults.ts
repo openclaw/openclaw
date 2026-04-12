@@ -248,6 +248,22 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Auto-continuation mode for multi-step tasks:
+     * - auto: when the model shows intent to continue (planning language after a tool call),
+     *   inject a "continue" prompt and loop instead of returning to the user.
+     * - prompt (default for non-strict-agentic): return to the user between steps.
+     * - off: never auto-continue, even for strict-agentic.
+     *
+     * Default for strict-agentic GPT-5 runs: "auto".
+     */
+    continuationMode?: "auto" | "prompt" | "off";
+    /**
+     * Maximum auto-continuation turns before returning to the user.
+     * Only meaningful when `continuationMode` is `"auto"`.
+     * Default: 5.
+     */
+    continuationBudget?: number;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

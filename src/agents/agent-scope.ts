@@ -183,6 +183,41 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export type AgentContinuationMode = "auto" | "prompt" | "off";
+
+const DEFAULT_CONTINUATION_BUDGET = 5;
+
+export function resolveAgentContinuationMode(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): AgentContinuationMode | undefined {
+  const defaultMode = cfg?.agents?.defaults?.embeddedPi?.continuationMode;
+  if (!cfg || !agentId) {
+    return defaultMode;
+  }
+  // Per-agent embeddedPi may carry continuationMode if the runtime zod schema
+  // includes it. Fall back to the defaults-level value when the per-agent
+  // entry doesn't have the field (or the generated type hasn't caught up yet).
+  const agentEmbeddedPi = resolveAgentConfig(cfg, agentId)?.embeddedPi as
+    | { continuationMode?: AgentContinuationMode }
+    | undefined;
+  return agentEmbeddedPi?.continuationMode ?? defaultMode;
+}
+
+export function resolveAgentContinuationBudget(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): number {
+  const defaultBudget = cfg?.agents?.defaults?.embeddedPi?.continuationBudget;
+  if (!cfg || !agentId) {
+    return defaultBudget ?? DEFAULT_CONTINUATION_BUDGET;
+  }
+  const agentEmbeddedPi = resolveAgentConfig(cfg, agentId)?.embeddedPi as
+    | { continuationBudget?: number }
+    | undefined;
+  return agentEmbeddedPi?.continuationBudget ?? defaultBudget ?? DEFAULT_CONTINUATION_BUDGET;
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

@@ -103,6 +103,8 @@ export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
+export const AUTO_CONTINUATION_INSTRUCTION =
+  "Continue. Do not recap or summarize what you just did. Take the next concrete action immediately.";
 
 export type PlanningOnlyPlanDetails = {
   explanation: string;
@@ -377,4 +379,32 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     return null;
   }
   return PLANNING_ONLY_RETRY_INSTRUCTION;
+}
+
+/**
+ * Detect continuation intent in a successful turn's visible text. Returns
+ * true when the text contains promise patterns ("I'll", "let me", "going
+ * to") that signal the model intends to keep working but stopped the turn
+ * before acting. Used by the auto-continuation loop in `run.ts` to decide
+ * whether to inject a "continue" prompt instead of returning to the user.
+ */
+export function hasContinuationIntent(texts: readonly string[]): boolean {
+  const text = texts.join("\n\n").trim();
+  if (!text || text.length > 1500) {
+    return false;
+  }
+  return PLANNING_ONLY_PROMISE_RE.test(text);
+}
+
+/**
+ * Detect completion language indicating the model considers the task done.
+ * When this returns true, the auto-continuation loop should NOT continue —
+ * the model is signaling it's finished, not planning more work.
+ */
+export function hasCompletionLanguage(texts: readonly string[]): boolean {
+  const text = texts.join("\n\n").trim();
+  if (!text) {
+    return false;
+  }
+  return PLANNING_ONLY_COMPLETION_RE.test(text);
 }

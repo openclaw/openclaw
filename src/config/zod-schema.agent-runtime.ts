@@ -833,6 +833,10 @@ export const AgentEntrySchema = z
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        continuationMode: z
+          .union([z.literal("auto"), z.literal("prompt"), z.literal("off")])
+          .optional(),
+        continuationBudget: z.number().int().min(1).max(20).optional(),
       })
       .strict()
       .optional(),

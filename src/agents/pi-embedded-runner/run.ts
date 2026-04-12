@@ -14,6 +14,8 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
+  resolveAgentContinuationBudget,
+  resolveAgentContinuationMode,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
@@ -100,6 +102,9 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
+  AUTO_CONTINUATION_INSTRUCTION,
+  hasContinuationIntent,
+  hasCompletionLanguage,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
 } from "./run/incomplete-turn.js";
@@ -428,6 +433,16 @@ export async function runEmbeddedPiAgent(
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
+      // Auto-continuation: when the model shows intent to keep working but
+      // stops the turn, inject a "continue" prompt and loop instead of
+      // returning to the user. Defaults to "auto" for strict-agentic GPT-5
+      // runs and "prompt" for everything else.
+      const continuationMode = strictAgenticActive
+        ? (resolveAgentContinuationMode(params.config, sessionAgentId) ?? "auto")
+        : (resolveAgentContinuationMode(params.config, sessionAgentId) ?? "prompt");
+      const continuationBudget = resolveAgentContinuationBudget(params.config, sessionAgentId);
+      let autoContinuationCount = 0;
+      let autoContinuationInstruction: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
@@ -611,6 +626,7 @@ export async function runEmbeddedPiAgent(
           const promptAdditions = [
             ackExecutionFastPathInstruction,
             planningOnlyRetryInstruction,
+            autoContinuationInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -1697,6 +1713,41 @@ export async function runEmbeddedPiAgent(
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
+
+          // --- Auto-continuation check ---
+          // When the model produced real tool work AND its visible text shows
+          // intent to continue ("I'll", "let me", "next I'll") WITHOUT
+          // completion language ("done", "finished"), keep going instead of
+          // returning to the user. This is the runtime-level fix for the
+          // "one step, return with plan, ask for permission" pattern.
+          if (
+            continuationMode === "auto" &&
+            autoContinuationCount < continuationBudget &&
+            !aborted &&
+            !timedOut &&
+            !attempt.clientToolCall &&
+            !attempt.yieldDetected &&
+            !attempt.lastToolError &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            attempt.toolMetas.some((entry) => entry.toolName !== "update_plan") &&
+            hasContinuationIntent(attempt.assistantTexts) &&
+            !hasCompletionLanguage(attempt.assistantTexts)
+          ) {
+            autoContinuationInstruction = AUTO_CONTINUATION_INSTRUCTION;
+            autoContinuationCount += 1;
+            // Reset planning-only state so the detector starts fresh.
+            planningOnlyRetryInstruction = null;
+            planningOnlyRetryAttempts = 0;
+            log.info(
+              `auto-continuation ${autoContinuationCount}/${continuationBudget}: ` +
+                `model showed continuation intent after tool work, injecting continue prompt`,
+            );
+            continue;
+          }
+          // Clear continuation instruction on normal exit.
+          autoContinuationInstruction = null;
+          // --- End auto-continuation check ---
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
