@@ -676,14 +676,13 @@ export async function dispatchReplyFromConfig(
       }
     }
 
-    if (sendPolicy === "deny") {
+    // When sendPolicy is "deny", we still let the agent process the inbound message
+    // (context, memory, tool calls) but suppress all outbound delivery.
+    const suppressDelivery = sendPolicy === "deny";
+    if (suppressDelivery) {
       logVerbose(
-        `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
+        `Delivery suppressed by send policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
       );
-      const counts = dispatcher.getQueuedCounts();
-      recordProcessed("completed", { reason: "send_policy_deny" });
-      markIdle("message_completed");
-      return { queuedFinal: false, counts };
     }
 
     const toolStartStatusesSent = new Set<string>();
@@ -710,6 +709,9 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
+      if (suppressDelivery) {
+        return;
+      }
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
         !shouldEmitVerboseProgress() ||
@@ -735,7 +737,7 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (!shouldEmitVerboseProgress()) {
+      if (suppressDelivery || !shouldEmitVerboseProgress()) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -818,7 +820,8 @@ export async function dispatchReplyFromConfig(
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping:
+        suppressDelivery || params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -833,6 +836,9 @@ export async function dispatchReplyFromConfig(
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            if (suppressDelivery) {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
@@ -881,6 +887,9 @@ export async function dispatchReplyFromConfig(
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            if (suppressDelivery) {
+              return;
+            }
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -971,63 +980,65 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    for (const reply of replies) {
-      // Suppress reasoning payloads from channel delivery — channels using this
-      // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
-        continue;
-      }
-      const finalReply = await sendFinalPayload(reply);
-      queuedFinal = finalReply.queuedFinal || queuedFinal;
-      routedFinalCount += finalReply.routedFinalCount;
-    }
-
-    const ttsMode = resolveConfiguredTtsMode(cfg);
-    // Generate TTS-only reply after block streaming completes (when there's no final reply).
-    // This handles the case where block streaming succeeds and drops final payloads,
-    // but we still want TTS audio to be generated from the accumulated block content.
-    if (
-      ttsMode === "final" &&
-      replies.length === 0 &&
-      blockCount > 0 &&
-      accumulatedBlockText.trim()
-    ) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-          payload: { text: accumulatedBlockText },
-          cfg,
-          channel: ttsChannel,
-          kind: "final",
-          inboundAudio,
-          ttsAuto: sessionTtsAuto,
-        });
-        // Only send if TTS was actually applied (mediaUrl exists)
-        if (ttsSyntheticReply.mediaUrl) {
-          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
-          const ttsOnlyPayload: ReplyPayload = {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          };
-          const result = await routeReplyToOriginating(ttsOnlyPayload);
-          if (result) {
-            queuedFinal = result.ok || queuedFinal;
-            if (result.ok) {
-              routedFinalCount += 1;
-            }
-            if (!result.ok) {
-              logVerbose(
-                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-              );
-            }
-          } else {
-            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
-          }
+    if (!suppressDelivery) {
+      for (const reply of replies) {
+        // Suppress reasoning payloads from channel delivery — channels using this
+        // generic dispatch path do not have a dedicated reasoning lane.
+        if (reply.isReasoning === true) {
+          continue;
         }
-      } catch (err) {
-        logVerbose(
-          `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
-        );
+        const finalReply = await sendFinalPayload(reply);
+        queuedFinal = finalReply.queuedFinal || queuedFinal;
+        routedFinalCount += finalReply.routedFinalCount;
+      }
+
+      const ttsMode = resolveConfiguredTtsMode(cfg);
+      // Generate TTS-only reply after block streaming completes (when there's no final reply).
+      // This handles the case where block streaming succeeds and drops final payloads,
+      // but we still want TTS audio to be generated from the accumulated block content.
+      if (
+        ttsMode === "final" &&
+        replies.length === 0 &&
+        blockCount > 0 &&
+        accumulatedBlockText.trim()
+      ) {
+        try {
+          const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
+            payload: { text: accumulatedBlockText },
+            cfg,
+            channel: ttsChannel,
+            kind: "final",
+            inboundAudio,
+            ttsAuto: sessionTtsAuto,
+          });
+          // Only send if TTS was actually applied (mediaUrl exists)
+          if (ttsSyntheticReply.mediaUrl) {
+            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+            const ttsOnlyPayload: ReplyPayload = {
+              mediaUrl: ttsSyntheticReply.mediaUrl,
+              audioAsVoice: ttsSyntheticReply.audioAsVoice,
+            };
+            const result = await routeReplyToOriginating(ttsOnlyPayload);
+            if (result) {
+              queuedFinal = result.ok || queuedFinal;
+              if (result.ok) {
+                routedFinalCount += 1;
+              }
+              if (!result.ok) {
+                logVerbose(
+                  `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
+                );
+              }
+            } else {
+              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+              queuedFinal = didQueue || queuedFinal;
+            }
+          }
+        } catch (err) {
+          logVerbose(
+            `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
+          );
+        }
       }
     }
 
