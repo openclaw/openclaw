@@ -10,7 +10,6 @@ import {
   type Model,
 } from "@mariozechner/pi-ai";
 import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -35,6 +34,7 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
+import { estimateOpenAIResponsesInputTokens } from "./openai-responses-preflight-estimator.js";
 import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
@@ -652,82 +652,6 @@ function createOpenAIResponsesClient(
   });
 }
 
-function estimateTextTokens(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return estimateTokens({ role: "user", content: text, timestamp: 0 } as never);
-}
-
-function estimateResponseInputContentTokens(input: unknown): number {
-  if (!Array.isArray(input)) {
-    return 0;
-  }
-  let total = 0;
-  for (const item of input) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const record = item as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : undefined;
-
-    if (type === "message") {
-      const content = Array.isArray(record.content) ? record.content : [];
-      for (const part of content) {
-        if (!part || typeof part !== "object") {
-          continue;
-        }
-        const partRecord = part as Record<string, unknown>;
-        if (typeof partRecord.text === "string") {
-          total += estimateTextTokens(partRecord.text);
-        }
-        if (typeof partRecord.refusal === "string") {
-          total += estimateTextTokens(partRecord.refusal);
-        }
-      }
-      continue;
-    }
-
-    if (type === "function_call") {
-      if (typeof record.arguments === "string") {
-        total += estimateTextTokens(record.arguments);
-      }
-      continue;
-    }
-
-    if (type === "function_call_output") {
-      const output = record.output;
-      if (typeof output === "string") {
-        total += estimateTextTokens(output);
-      } else if (Array.isArray(output)) {
-        for (const part of output) {
-          if (!part || typeof part !== "object") {
-            continue;
-          }
-          const partRecord = part as Record<string, unknown>;
-          if (typeof partRecord.text === "string") {
-            total += estimateTextTokens(partRecord.text);
-          }
-        }
-      }
-      continue;
-    }
-
-    if (type === "reasoning") {
-      if (typeof record.content === "string") {
-        total += estimateTextTokens(record.content);
-      }
-      if (typeof record.summary === "string") {
-        total += estimateTextTokens(record.summary);
-      }
-      if (typeof record.encrypted_content === "string") {
-        total += estimateTextTokens(record.encrypted_content);
-      }
-    }
-  }
-  return total;
-}
-
 function enforceOpenAICodexResponsesPreflightGuard(
   model: Model<Api>,
   payload: OpenAIResponsesRequestParams,
@@ -745,7 +669,7 @@ function enforceOpenAICodexResponsesPreflightGuard(
   const threshold = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   }).compactThreshold;
-  const estimatedTokens = estimateResponseInputContentTokens(payload.input);
+  const estimatedTokens = estimateOpenAIResponsesInputTokens(payload.input);
   if (estimatedTokens > threshold) {
     log.warn("provider_payload_overflow_prevented", {
       provider: model.provider,
@@ -1513,6 +1437,6 @@ function mapStopReason(reason: string | null) {
 export const __testing = {
   processOpenAICompletionsStream,
   enforceOpenAICodexResponsesPreflightGuard,
-  estimateResponseInputContentTokens,
+  estimateOpenAIResponsesInputTokens,
   CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE,
 };

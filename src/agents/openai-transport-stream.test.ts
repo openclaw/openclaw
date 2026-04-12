@@ -1,5 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { estimateOpenAIResponsesInputTokens } from "./openai-responses-preflight-estimator.js";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
@@ -1732,27 +1733,43 @@ describe("openai transport stream", () => {
     ).toThrow(__testing.CODEX_RESPONSES_PREFLIGHT_OVERFLOW_MESSAGE);
   });
 
-  it("estimates content-bearing input tokens without counting wrapper metadata", () => {
-    const minimal = __testing.estimateResponseInputContentTokens([
+  it("estimates content-bearing input tokens across nested response shapes without counting wrapper metadata", () => {
+    const minimal = estimateOpenAIResponsesInputTokens([
       {
         type: "message",
         role: "user",
         content: [{ type: "input_text", text: "hello world" }],
       },
     ]);
-    const inflatedWrapper = __testing.estimateResponseInputContentTokens([
+    const nestedVariants = estimateOpenAIResponsesInputTokens([
       {
         type: "message",
         role: "user",
         id: "msg_123",
         status: "completed",
         metadata: { a: "b", trace: "x".repeat(5000) },
-        content: [{ type: "input_text", text: "hello world" }],
+        content: [
+          { type: "input_text", text: "hello world" },
+          { type: "input_text", text: "nested text" },
+        ],
+      },
+      {
+        type: "function_call",
+        arguments: JSON.stringify({ query: "search me" }),
+      },
+      {
+        type: "function_call_output",
+        output: [{ text: "tool output" }, { note: "ignored" }],
+      },
+      {
+        type: "reasoning",
+        summary: "reason summary",
+        encrypted_content: "encrypted payload",
       },
     ]);
 
     expect(minimal).toBeGreaterThan(0);
-    expect(inflatedWrapper).toBe(minimal);
+    expect(nestedVariants).toBeGreaterThan(minimal);
   });
 
   it("does not throw the codex precheck for non-codex providers", () => {
