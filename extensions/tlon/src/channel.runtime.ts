@@ -3,7 +3,6 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -228,7 +227,9 @@ export async function probeTlonAccount(account: ConfiguredTlonAccount) {
 }
 
 export async function startTlonGatewayAccount(
-  ctx: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0],
+  ctx: Parameters<
+    NonNullable<NonNullable<ChannelPlugin<ResolvedTlonAccount>["gateway"]>["startAccount"]>
+  >[0],
 ) {
   const account = ctx.account;
   ctx.setStatus({

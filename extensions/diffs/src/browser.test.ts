@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import plugin from "../index.js";
+import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
@@ -106,7 +106,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const { pages, browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({
@@ -196,12 +196,16 @@ describe("diffs plugin registration", () => {
     type RegisteredTool = {
       execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     };
+    type HttpRouteHandler = (
+      req: IncomingMessage,
+      res: ServerResponse,
+    ) => boolean | Promise<boolean>;
     type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
     let registeredToolFactory:
       | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
       | undefined;
-    let registeredHttpRouteHandler: RegisteredHttpRouteParams["handler"] | undefined;
+    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
     const on = vi.fn();
 
     const api = createTestPluginApi({
@@ -234,12 +238,12 @@ describe("diffs plugin registration", () => {
         registeredToolFactory = typeof tool === "function" ? tool : () => tool;
       },
       registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler;
+        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
       },
       on,
     });
 
-    plugin.register?.(api as unknown as OpenClawPluginApi);
+    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
     expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");

@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -13,6 +13,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -45,6 +46,14 @@ export type ProviderAuthResolver = (
   profileId?: string;
 };
 
+type AuthProfileStoreInput =
+  | ReturnType<typeof ensureAuthProfileStore>
+  | (() => ReturnType<typeof ensureAuthProfileStore>);
+
+function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
+  return typeof input === "function" ? input() : input;
+}
+
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 export function normalizeApiKeyConfig(value: string): string {
@@ -54,7 +63,7 @@ export function normalizeApiKeyConfig(value: string): string {
 }
 
 export function toDiscoveryApiKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
     return undefined;
   }
@@ -320,42 +329,52 @@ export function resolveMissingProviderApiKey(params: {
 
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
-    if (fromProfiles?.apiKey) {
-      return {
-        apiKey: fromProfiles.apiKey,
-        discoveryApiKey: fromProfiles.discoveryApiKey,
-      };
-    }
     const fromConfig = resolveConfigBackedProviderAuth({
-      provider,
+      provider: authProvider,
       config,
     });
-    return {
-      apiKey: fromConfig?.apiKey,
-      discoveryApiKey: fromConfig?.discoveryApiKey,
-    };
+    if (fromConfig?.apiKey) {
+      return {
+        apiKey: fromConfig.apiKey,
+        discoveryApiKey: fromConfig.discoveryApiKey,
+      };
+    }
+    const fromProfiles = resolveApiKeyFromProfiles({
+      provider: authProvider,
+      store: resolveAuthProfileStoreInput(authStoreInput),
+      env,
+    });
+    return fromProfiles?.apiKey
+      ? {
+          apiKey: fromProfiles.apiKey,
+          discoveryApiKey: fromProfiles.discoveryApiKey,
+        }
+      : { apiKey: undefined, discoveryApiKey: undefined };
   };
 }
 
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const ids = listProfilesForProvider(authStore, provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
+    const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const ids = listProfilesForProvider(authStore, authProvider);
+
     let oauthCandidate:
       | {
           apiKey: string | undefined;
@@ -396,7 +415,7 @@ export function createProviderAuthResolver(
       return oauthCandidate;
     }
 
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
@@ -407,7 +426,7 @@ export function createProviderAuthResolver(
     }
 
     const fromConfig = resolveConfigBackedProviderAuth({
-      provider,
+      provider: authProvider,
       config,
     });
     if (fromConfig) {
@@ -418,7 +437,6 @@ export function createProviderAuthResolver(
         source: "none",
       };
     }
-
     return {
       apiKey: undefined,
       discoveryApiKey: undefined,
@@ -439,16 +457,16 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
-  const synthetic =
-    resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
+  const authProvider = resolveProviderIdForAuth(params.provider, { config: params.config });
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: authProvider,
+    config: params.config,
+    context: {
       config: params.config,
-      context: {
-        config: params.config,
-        provider: params.provider,
-        providerConfig: params.config?.models?.providers?.[params.provider],
-      },
-    }) ?? resolveXaiConfigFallbackAuth(params);
+      provider: authProvider,
+      providerConfig: params.config?.models?.providers?.[authProvider],
+    },
+  });
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
     return undefined;
@@ -466,75 +484,4 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
         mode: "api_key",
         source: "config",
       };
-}
-
-function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenClawConfig }):
-  | {
-      apiKey: string;
-      source: string;
-      mode: "api-key";
-    }
-  | undefined {
-  if (params.provider.trim().toLowerCase() !== "xai") {
-    return undefined;
-  }
-  const xaiPluginEntry = params.config?.plugins?.entries?.xai;
-  if (xaiPluginEntry?.enabled === false) {
-    return undefined;
-  }
-  const pluginApiKey = normalizeOptionalSecretInput(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKey) {
-    return {
-      apiKey: pluginApiKey,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  const pluginApiKeyRef = coerceSecretRef(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKeyRef) {
-    return {
-      apiKey:
-        pluginApiKeyRef.source === "env"
-          ? pluginApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source),
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  const legacyGrokApiKey = normalizeOptionalSecretInput(
-    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
-      ?.apiKey,
-  );
-  if (legacyGrokApiKey) {
-    return {
-      apiKey: legacyGrokApiKey,
-      source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
-    };
-  }
-  const legacyGrokApiKeyRef = coerceSecretRef(
-    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
-      ?.apiKey,
-  );
-  if (legacyGrokApiKeyRef) {
-    return {
-      apiKey:
-        legacyGrokApiKeyRef.source === "env"
-          ? legacyGrokApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(legacyGrokApiKeyRef.source),
-      source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
-    };
-  }
-  return undefined;
 }

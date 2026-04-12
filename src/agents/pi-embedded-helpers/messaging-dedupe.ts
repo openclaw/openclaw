@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
 
 /**
@@ -8,9 +10,7 @@ const MIN_DUPLICATE_TEXT_LENGTH = 10;
  * - Collapses multiple spaces to single space
  */
 export function normalizeTextForComparison(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(text)
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
     .replace(/\s+/g, " ")
     .trim();

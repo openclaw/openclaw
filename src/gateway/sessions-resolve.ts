@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -56,11 +57,11 @@ export async function resolveSessionKeyFromResolveParams(params: {
 }): Promise<SessionsResolveResult> {
   const { cfg, p } = params;
 
-  const key = typeof p.key === "string" ? p.key.trim() : "";
+  const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
-  const sessionId = typeof p.sessionId === "string" ? p.sessionId.trim() : "";
+  const sessionId = normalizeOptionalString(p.sessionId) ?? "";
   const hasSessionId = sessionId.length > 0;
-  const hasLabel = typeof p.label === "string" && p.label.trim().length > 0;
+  const hasLabel = (normalizeOptionalString(p.label) ?? "").length > 0;
   const selectionCount = [hasKey, hasSessionId, hasLabel].filter(Boolean).length;
   if (selectionCount > 1) {
     return {
@@ -151,7 +152,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    return { ok: true, key: String(matches[0]?.key ?? "") };
+    return { ok: true, key: matches[0].key };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -196,5 +197,5 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  return { ok: true, key: String(list.sessions[0]?.key ?? "") };
+  return { ok: true, key: list.sessions[0].key };
 }

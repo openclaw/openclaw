@@ -1,9 +1,11 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
@@ -82,12 +84,12 @@ export interface DetectedImageRef {
  * Checks if a file extension indicates an image file.
  */
 function isImageExtension(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return IMAGE_EXTENSIONS.has(ext);
 }
 
 function normalizeRefForDedupe(raw: string): string {
-  return process.platform === "win32" ? raw.toLowerCase() : raw;
+  return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
 }
 
 export function mergePromptAttachmentImages(params: {
@@ -379,7 +381,7 @@ export async function loadImageFromRef(
       return { type: "image", data, mimeType };
     } catch (err) {
       log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
       );
       return null;
     }
@@ -402,7 +404,7 @@ export async function loadImageFromRef(
         targetPath = resolved.resolved;
       } catch (err) {
         log.debug(
-          `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+          `Native image: sandbox validation failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
         );
         return null;
       }
@@ -440,9 +442,7 @@ export async function loadImageFromRef(
     return { type: "image", data, mimeType };
   } catch (err) {
     // Log the actual error for debugging (size limits, network failures, etc.)
-    log.debug(
-      `Native image: failed to load ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
     return null;
   }
 }

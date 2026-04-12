@@ -11,6 +11,11 @@ const VYDRA_API_KEY = process.env.VYDRA_API_KEY?.trim() ?? "";
 const ENABLE_VYDRA_VIDEO_LIVE = process.env.OPENCLAW_LIVE_VYDRA_VIDEO === "1";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_VYDRA_IMAGE_MODEL?.trim() || "grok-imagine";
 const LIVE_VIDEO_MODEL = process.env.OPENCLAW_LIVE_VYDRA_VIDEO_MODEL?.trim() || "veo3";
+const DEFAULT_LIVE_KLING_IMAGE_URL =
+  "https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/showcase/roof-camera-sky.jpg";
+const LIVE_KLING_IMAGE_URL =
+  process.env.OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL?.trim() || DEFAULT_LIVE_KLING_IMAGE_URL;
+const VYDRA_KLING_TIMEOUT_MS = 12 * 60_000;
 
 const registerVydraPlugin = () =>
   registerProviderPlugin({
@@ -18,6 +23,19 @@ const registerVydraPlugin = () =>
     id: "vydra",
     name: "Vydra Provider",
   });
+
+function expectBufferedAsset(
+  asset: { buffer?: Buffer; mimeType: string } | undefined,
+  kind: "image" | "video",
+  minBytes: number,
+): void {
+  expect(asset).toBeDefined();
+  expect(asset?.mimeType.startsWith(`${kind}/`)).toBe(true);
+  if (!asset?.buffer) {
+    throw new Error(`expected generated ${kind} buffer`);
+  }
+  expect(asset.buffer.byteLength).toBeGreaterThan(minBytes);
+}
 
 describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
   it("generates an image through the registered provider", async () => {
@@ -33,8 +51,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
     });
 
     expect(result.images.length).toBeGreaterThan(0);
-    expect(result.images[0]?.mimeType.startsWith("image/")).toBe(true);
-    expect(result.images[0]?.buffer.byteLength).toBeGreaterThan(512);
+    expectBufferedAsset(result.images[0], "image", 512);
   }, 60_000);
 
   it("synthesizes speech through the registered provider", async () => {
@@ -73,9 +90,30 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
       });
 
       expect(result.videos.length).toBeGreaterThan(0);
-      expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-      expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(1024);
+      expectBufferedAsset(result.videos[0], "video", 1024);
     },
     8 * 60_000,
+  );
+
+  it.skipIf(!ENABLE_VYDRA_VIDEO_LIVE)(
+    "generates a kling image-to-video clip from a remote image url",
+    async () => {
+      const { videoProviders } = await registerVydraPlugin();
+      const provider = requireRegisteredProvider(videoProviders, "vydra");
+
+      const result = await provider.generateVideo({
+        provider: "vydra",
+        model: "kling",
+        prompt: "Animate the scene with subtle camera drift and soft cloud motion.",
+        cfg: { plugins: { enabled: true } } as never,
+        agentDir: "/tmp/openclaw-live-vydra-kling",
+        inputImages: [{ url: LIVE_KLING_IMAGE_URL }],
+        timeoutMs: VYDRA_KLING_TIMEOUT_MS,
+      });
+
+      expect(result.videos.length).toBeGreaterThan(0);
+      expectBufferedAsset(result.videos[0], "video", 1024);
+    },
+    15 * 60_000,
   );
 });

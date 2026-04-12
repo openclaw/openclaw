@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
@@ -62,10 +67,10 @@ const EFFECT_MAP: Record<string, string> = {
 };
 
 function resolveEffectId(raw?: string): string | undefined {
-  if (!raw) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
   if (EFFECT_MAP[trimmed]) {
     return EFFECT_MAP[trimmed];
   }
@@ -137,8 +142,9 @@ function extractChatGuid(chat: BlueBubblesChatRecord): string | null {
     chat.chat_identifier,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
+    const value = normalizeOptionalString(candidate);
+    if (value) {
+      return value;
     }
   }
   return null;
@@ -159,8 +165,7 @@ function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
   if (parts.length < 3) {
     return null;
   }
-  const identifier = parts[2]?.trim();
-  return identifier ? identifier : null;
+  return normalizeOptionalString(parts[2]) ?? null;
 }
 
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
@@ -360,7 +365,7 @@ export async function createChatForHandle(params: {
     if (
       res.status === 400 ||
       res.status === 403 ||
-      errorText.toLowerCase().includes("private api")
+      normalizeLowercaseStringOrEmpty(errorText).includes("private api")
     ) {
       throw new Error(
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,
@@ -479,7 +484,7 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
+  const wantsReplyThread = normalizeOptionalString(opts.replyToMessageGuid) !== undefined;
   const wantsEffect = Boolean(effectId);
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,

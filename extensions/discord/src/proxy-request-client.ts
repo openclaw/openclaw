@@ -6,6 +6,7 @@ import {
   type RequestData,
   type RequestClientOptions,
 } from "@buape/carbon";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 export type ProxyRequestClientOptions = RequestClientOptions & {
   fetch?: typeof fetch;
@@ -33,10 +34,7 @@ type Attachment = {
   description?: string;
 };
 
-const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHeader" | "fetch">> & {
-  baseUrl: string;
-  tokenHeader: "Bot" | "Bearer";
-} = {
+const defaultOptions = {
   tokenHeader: "Bot",
   baseUrl: "https://discord.com/api",
   apiVersion: 10,
@@ -44,11 +42,12 @@ const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHead
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
+  runtimeProfile: "persistent",
+  scheduler: {},
+} satisfies Omit<ProxyRequestClientOptions, "fetch"> & {
+  runtimeProfile: string;
+  scheduler: object;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function getMultipartFiles(payload: unknown): MultipartFile[] {
   if (!isRecord(payload)) {

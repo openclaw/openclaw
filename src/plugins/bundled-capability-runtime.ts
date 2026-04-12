@@ -12,6 +12,7 @@ import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -33,7 +34,11 @@ function applyVitestCapabilityAliasOverrides(params: {
     return params.aliasMap;
   }
 
-  const { ["openclaw/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } = params.aliasMap;
+  const {
+    ["openclaw/plugin-sdk"]: _ignoredLegacyRootAlias,
+    ["@openclaw/plugin-sdk"]: _ignoredScopedRootAlias,
+    ...scopedAliasMap
+  } = params.aliasMap;
   return {
     ...scopedAliasMap,
     // Capability contract loads only need a narrow SDK slice. Keep those
@@ -42,16 +47,31 @@ function applyVitestCapabilityAliasOverrides(params: {
     "openclaw/plugin-sdk/llm-task": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/llm-task": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/config-runtime": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
+    ),
+    "@openclaw/plugin-sdk/config-runtime": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
     ),
     "openclaw/plugin-sdk/media-runtime": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/media-runtime": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/provider-onboard": fileURLToPath(
       new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
     ),
+    "@openclaw/plugin-sdk/provider-onboard": fileURLToPath(
+      new URL("../plugin-sdk/provider-onboard.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/speech-core": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
+    ),
+    "@openclaw/plugin-sdk/speech-core": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
     ),
   };
@@ -76,12 +96,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -120,6 +135,7 @@ function createCapabilityPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [],
+    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
@@ -131,6 +147,7 @@ function createCapabilityPluginRecord(params: {
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -282,6 +299,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     try {
       const captured = createCapturedPluginRegistration();
       void register(captured.api);
+      record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
       record.realtimeTranscriptionProviderIds.push(
@@ -307,8 +325,27 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.memoryEmbeddingProviderIds.push(
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
+      record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
+      registry.cliBackends?.push(
+        ...captured.cliBackends.map((backend) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          backend,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.textTransforms.push(
+        ...captured.textTransforms.map((transforms) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          transforms,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
       registry.providers.push(
         ...captured.providers.map((provider) => ({
           pluginId: record.id,
@@ -404,6 +441,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.agentHarnesses.push(
+        ...captured.agentHarnesses.map((harness) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          harness,
           source: record.source,
           rootDir: record.rootDir,
         })),

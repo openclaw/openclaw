@@ -1,6 +1,7 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSetupWizardAdapter,
@@ -14,6 +15,7 @@ import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
+import { blueBubblesSetupAdapter, blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   inferBlueBubblesTargetChatType,
   isAllowedBlueBubblesSender,
@@ -26,7 +28,6 @@ import {
 import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 async function createBlueBubblesConfigureAdapter() {
-  const { blueBubblesSetupAdapter, blueBubblesSetupWizard } = await import("./setup-surface.js");
   const plugin = {
     id: "bluebubbles",
     meta: {
@@ -35,6 +36,9 @@ async function createBlueBubblesConfigureAdapter() {
       selectionLabel: "BlueBubbles",
       docsPath: "/channels/bluebubbles",
       blurb: "iMessage via BlueBubbles",
+    },
+    capabilities: {
+      chatTypes: ["direct", "group"],
     },
     config: {
       listAccountIds: () => [DEFAULT_ACCOUNT_ID],
@@ -140,7 +144,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("disables the channel through the setup wizard", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
     const next = blueBubblesSetupWizard.disable?.({
       channels: {
         bluebubbles: {
@@ -154,8 +157,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("reads the named-account DM policy instead of the channel root", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     expect(
       blueBubblesSetupWizard.dmPolicy?.getCurrent(
         {
@@ -178,8 +179,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("reports account-scoped config keys for named accounts", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "work")).toEqual({
       policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
       allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
@@ -187,8 +186,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const cfg = {
       channels: {
         bluebubbles: {
@@ -213,13 +210,16 @@ describe("bluebubbles setup surface", () => {
     });
 
     const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    const workAccount = next?.channels?.bluebubbles?.accounts?.work as
+      | {
+          dmPolicy?: string;
+        }
+      | undefined;
     expect(next?.channels?.bluebubbles?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it("uses configured defaultAccount when accountId is omitted in account resolution", async () => {
-    const { resolveBlueBubblesAccount } = await import("./accounts.js");
-
     const resolved = resolveBlueBubblesAccount({
       cfg: {
         channels: {
@@ -246,8 +246,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const configured = await blueBubblesSetupWizard.status.resolveConfigured({
       cfg: {
         channels: {
@@ -274,8 +272,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(
       {
         channels: {
@@ -294,12 +290,15 @@ describe("bluebubbles setup surface", () => {
       "work",
     );
 
+    const workAccount = next?.channels?.bluebubbles?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
     expect(next?.channels?.bluebubbles?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.bluebubbles?.accounts?.work?.allowFrom).toEqual([
-      "user@example.com",
-      "*",
-    ]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["user@example.com", "*"]);
   });
 });
 
@@ -323,6 +322,36 @@ describe("resolveBlueBubblesAccount", () => {
 
     expect(resolved.configured).toBe(true);
     expect(resolved.baseUrl).toBe("http://localhost:1234");
+  });
+
+  it("strips stale legacy private-network aliases after canonical normalization", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              allowPrivateNetwork: true,
+            },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret", // pragma: allowlist secret
+                network: {
+                  dangerouslyAllowPrivateNetwork: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.network).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+    });
+    expect("allowPrivateNetwork" in resolved.config).toBe(false);
+    expect(isPrivateNetworkOptInEnabled(resolved.config)).toBe(false);
   });
 });
 
@@ -439,7 +468,6 @@ describe("bluebubbles group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveBlueBubblesGroupRequireMention({ cfg, groupId: "chat:primary" })).toBe(false);

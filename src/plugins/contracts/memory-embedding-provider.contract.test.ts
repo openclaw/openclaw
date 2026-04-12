@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
-import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./testkit.js";
 
 describe("memory embedding provider registration", () => {
   it("rejects non-memory plugins that did not declare the capability contract", () => {

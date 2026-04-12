@@ -2,26 +2,16 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import plugin from "./index.js";
 
 describe("kilocode provider plugin", () => {
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "kilocode",
-        modelApi: "openai-completions",
-        modelId: "gemini-2.5-pro",
-      } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      sanitizeThoughtSignatures: {
-        allowBase64Only: true,
-        includeCamelCase: true,
-      },
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "kilocode",
+      modelId: "gemini-2.5-pro",
+      sanitizeThoughtSignatures: true,
     });
   });
 
@@ -77,5 +67,40 @@ describe("kilocode provider plugin", () => {
     );
 
     expect(capturedPayload).not.toHaveProperty("reasoning");
+  });
+
+  it("publishes configured Kilo models through plugin-owned catalog augmentation", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.augmentModelCatalog?.({
+        config: {
+          models: {
+            providers: {
+              kilocode: {
+                models: [
+                  {
+                    id: "google/gemini-3-pro-preview",
+                    name: "Gemini 3 Pro Preview",
+                    input: ["text", "image"],
+                    reasoning: true,
+                    contextWindow: 1048576,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual([
+      {
+        provider: "kilocode",
+        id: "google/gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
   });
 });

@@ -5,6 +5,37 @@ import { t } from "../i18n/index.ts";
 
 export { formatRelativeTimestamp, formatDurationHuman };
 
+export function formatUnknownText(
+  value: unknown,
+  opts: { fallback?: string; pretty?: boolean } = {},
+): string {
+  const fallback = opts.fallback ?? "";
+  if (value == null) {
+    return fallback;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  try {
+    const serialized = JSON.stringify(value, null, opts.pretty ? 2 : undefined);
+    if (serialized !== undefined) {
+      return serialized;
+    }
+  } catch {
+    // Fall back when value is not JSON-serializable.
+  }
+  if (value instanceof Error) {
+    return value.message || value.name;
+  }
+  return Object.prototype.toString.call(value);
+}
+
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) {
     return t("common.na");
@@ -49,13 +80,6 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function parseList(input: string): string[] {
-  return input
-    .split(/[,\n]/)
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
-}
-
 export function stripThinkingTags(value: string): string {
   return stripAssistantInternalScaffolding(value);
 }
@@ -89,11 +113,4 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   }
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
-}
-
-export function formatPercent(value: number | null | undefined, fallback = "—"): string {
-  if (value == null || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return `${(value * 100).toFixed(1)}%`;
 }

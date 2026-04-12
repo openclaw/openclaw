@@ -1,4 +1,5 @@
-import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -6,8 +7,21 @@ const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  for (const plugin of iterateBootstrapChannelPlugins()) {
-    entries.push(...(plugin.secrets?.secretTargetRegistryEntries ?? []));
+
+  for (const record of loadPluginManifestRegistry({}).plugins) {
+    if (record.origin !== "bundled") {
+      continue;
+    }
+    const channelIds = record.channels;
+    if (channelIds.length === 0) {
+      continue;
+    }
+    try {
+      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
+    } catch {
+      // Ignore bundled channels that do not expose a usable secret contract artifact.
+    }
   }
   return entries;
 }
@@ -434,9 +448,19 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   },
 ];
 
-const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  ...CORE_SECRET_TARGET_REGISTRY,
-  ...listChannelSecretTargetRegistryEntries(),
-];
+let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
-export { SECRET_TARGET_REGISTRY };
+export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return CORE_SECRET_TARGET_REGISTRY;
+}
+
+export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  if (cachedSecretTargetRegistry) {
+    return cachedSecretTargetRegistry;
+  }
+  cachedSecretTargetRegistry = [
+    ...CORE_SECRET_TARGET_REGISTRY,
+    ...listChannelSecretTargetRegistryEntries(),
+  ];
+  return cachedSecretTargetRegistry;
+}

@@ -1,7 +1,7 @@
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
-import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import {
@@ -16,7 +16,14 @@ import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boo
 
 export const readBooleanParam = readBooleanParamShared;
 
-const SANDBOX_MEDIA_PARAM_KEYS = ["media", "path", "filePath", "mediaUrl", "fileUrl"] as const;
+const SANDBOX_MEDIA_PARAM_KEYS = [
+  "media",
+  "path",
+  "filePath",
+  "mediaUrl",
+  "fileUrl",
+  "image",
+] as const;
 
 function readMediaParam(
   args: Record<string, unknown>,

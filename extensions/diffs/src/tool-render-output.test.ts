@@ -80,7 +80,7 @@ function createApi(): OpenClawPluginApi {
       },
     },
     runtime: {} as OpenClawPluginApi["runtime"],
-  }) as OpenClawPluginApi;
+  });
 }
 
 function createPngScreenshotter(

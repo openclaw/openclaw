@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -36,6 +36,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -370,7 +371,7 @@ function pruneInactiveGatewayAuthCredentials(params: {
     return [];
   }
   const auth = authRaw as Record<string, unknown>;
-  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+  const mode = normalizeOptionalString(auth.mode) ?? "";
 
   const removedPaths: string[] = [];
   const remove = (key: "token" | "password") => {
@@ -1132,7 +1133,7 @@ export async function runConfigSet(opts: {
     if (removedGatewayAuthPaths.length > 0) {
       runtime.log(
         info(
-          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
         ),
       );
     }

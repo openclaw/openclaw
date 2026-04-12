@@ -23,10 +23,11 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
-- Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime. The remaining core env-var
-  map is now just for non-plugin/core providers and a few generic-precedence
-  cases such as Anthropic API-key-first onboarding.
+- Provider manifests can declare `providerAuthEnvVars` and
+  `providerAuthAliases` so generic env-based auth probes and provider variants
+  do not need to load plugin runtime. The remaining core env-var map is now
+  just for non-plugin/core providers and a few generic-precedence cases such
+  as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
@@ -49,6 +50,13 @@ For model selection rules, see [/concepts/models](/concepts/models).
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
+- The bundled `codex` provider is paired with the bundled Codex agent harness.
+  Use `codex/gpt-*` when you want Codex-owned login, model discovery, native
+  thread resume, and app-server execution. Plain `openai/gpt-*` refs continue
+  to use the OpenAI provider and the normal OpenClaw provider transport.
+  Codex-only deployments can disable automatic PI fallback with
+  `agents.defaults.embeddedHarness.fallback: "none"`; see
+  [Codex Harness](/plugins/codex-harness).
 
 ## Plugin-owned provider behavior
 
@@ -165,11 +173,13 @@ Current bundled examples:
   wrappers, provider-family metadata, bundled image-generation provider
   registration for `gpt-image-1`, and bundled video-generation provider
   registration for `sora-2`
-- `google`: Gemini 3.1 forward-compat fallback, native Gemini replay
-  validation, bootstrap replay sanitation, tagged reasoning-output mode,
-  modern-model matching, bundled image-generation provider registration for
-  Gemini image-preview models, and bundled video-generation provider
-  registration for Veo models
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, modern-model matching, bundled image-generation
+  provider registration for Gemini image-preview models, and bundled
+  video-generation provider registration for Veo models; Gemini CLI OAuth also
+  owns auth-profile token formatting, usage-token parsing, and quota endpoint
+  fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
@@ -271,8 +281,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: for Anthropic in OpenClaw, the practical split is **API key** or **Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription. Our local repros also show the OpenClaw-identifying prompt string does not reproduce on the Anthropic SDK + API-key path.
-- Anthropic setup-token is available again as a legacy/manual OpenClaw path. Use it with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
+- Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
+- Anthropic setup-token remains available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ```json5
 {
@@ -347,10 +357,21 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   (or legacy `cached_content`) to forward a provider-native
   `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
-### Google Vertex
+### Google Vertex and Gemini CLI
 
-- Provider: `google-vertex`
-- Auth: gcloud ADC
+- Providers: `google-vertex`, `google-gemini-cli`
+- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Install Gemini CLI first:
+    - `brew install gemini-cli`
+    - or `npm install -g @google/gemini-cli`
+  - Enable: `openclaw plugins enable google`
+  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+  - Default model: `google-gemini-cli/gemini-3-flash-preview`
+  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
+  - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
   - Gemini CLI JSON replies are parsed from `response`; usage falls back to
     `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 
@@ -358,7 +379,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5`
+- Example model: `zai/glm-5.1`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface

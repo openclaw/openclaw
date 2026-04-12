@@ -1,4 +1,4 @@
-import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, proto, WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -6,7 +6,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
-import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
+import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
+import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -28,9 +29,18 @@ import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+}
+
+function isRetryableSendDisconnectError(err: unknown): boolean {
+  return /closed|reset|timed\s*out|disconnect|no active socket/i.test(formatError(err));
+}
+
+function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
+  return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
 export async function monitorWebInbox(options: {
@@ -47,6 +57,20 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Optional shared socket reference so reply closures can follow reconnects. */
+  socketRef?: { current: WASocket | null };
+  /** Whether send retries should wait for a reconnect. */
+  shouldRetryDisconnect?: () => boolean;
+  /** Reconnect timing for waiting through transient socket replacement gaps. */
+  disconnectRetryPolicy?: {
+    initialMs: number;
+    maxMs: number;
+    factor: number;
+    jitter: number;
+    maxAttempts: number;
+  };
+  /** Abort in-flight reconnect waits when shutdown becomes terminal. */
+  disconnectRetryAbortSignal?: AbortSignal;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -55,6 +79,16 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  if (options.socketRef) {
+    options.socketRef.current = sock;
+  }
+  const getCurrentSock = () => (options.socketRef ? options.socketRef.current : sock);
+  const shouldRetryDisconnect = () => options.shouldRetryDisconnect?.() === true;
+  const disconnectRetryPolicy = options.disconnectRetryPolicy ?? DEFAULT_RECONNECT_POLICY;
+  const sendRetryMaxAttempts =
+    disconnectRetryPolicy.maxAttempts > 0
+      ? disconnectRetryPolicy.maxAttempts
+      : DEFAULT_RECONNECT_POLICY.maxAttempts;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -147,7 +181,7 @@ export async function monitorWebInbox(options: {
   const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
     const messageId =
       typeof result === "object" && result && "key" in result
-        ? String((result as { key?: { id?: string } }).key?.id ?? "")
+        ? ((result as { key?: { id?: string } }).key?.id ?? "")
         : "";
     if (!messageId) {
       return;
@@ -160,9 +194,43 @@ export async function monitorWebInbox(options: {
   };
 
   const sendTrackedMessage = async (jid: string, content: AnyMessageContent) => {
-    const result = await sock.sendMessage(jid, content);
-    rememberOutboundMessage(jid, result);
-    return result;
+    let lastErr: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
+    for (let attempt = 1; ; attempt++) {
+      const currentSock = getCurrentSock();
+      if (currentSock) {
+        try {
+          const result = await currentSock.sendMessage(jid, content);
+          rememberOutboundMessage(jid, result);
+          return result;
+        } catch (err) {
+          if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {
+            throw err;
+          }
+          lastErr = err;
+          if (
+            shouldClearSocketRefAfterSendFailure(err) &&
+            options.socketRef?.current === currentSock
+          ) {
+            options.socketRef.current = null;
+          }
+        }
+      } else if (!shouldRetryDisconnect()) {
+        throw lastErr;
+      }
+
+      if (attempt >= sendRetryMaxAttempts) {
+        throw lastErr;
+      }
+      const delayMs = computeBackoff(disconnectRetryPolicy, attempt);
+      logVerbose(
+        `Waiting ${delayMs}ms for WhatsApp reconnect before retrying send to ${jid}: ${formatError(lastErr)}`,
+      );
+      try {
+        await sleepWithAbort(delayMs, options.disconnectRetryAbortSignal);
+      } catch {
+        throw lastErr;
+      }
+    }
   };
 
   const getGroupMeta = async (jid: string) => {
@@ -379,8 +447,12 @@ export async function monitorWebInbox(options: {
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        return;
+      }
       try {
-        await sock.sendPresenceUpdate("composing", chatJid);
+        await currentSock.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logVerbose(`Presence update failed: ${String(err)}`);
       }
@@ -502,6 +574,9 @@ export async function monitorWebInbox(options: {
   ) => {
     try {
       if (update.connection === "close") {
+        if (options.socketRef?.current === sock) {
+          options.socketRef.current = null;
+        }
         const status = getStatusCode(update.lastDisconnect?.error);
         resolveClose({
           status,
@@ -550,7 +625,13 @@ export async function monitorWebInbox(options: {
   const sendApi = createWebSendApi({
     sock: {
       sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
-      sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
+      sendPresenceUpdate: async (presence, jid?: string) => {
+        const currentSock = getCurrentSock();
+        if (!currentSock) {
+          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+        }
+        return currentSock.sendPresenceUpdate(presence, jid);
+      },
     },
     defaultAccountId: options.accountId,
   });

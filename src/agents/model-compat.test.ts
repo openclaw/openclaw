@@ -5,14 +5,22 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
-}));
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
+  };
+});
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
 
@@ -456,6 +464,20 @@ describe("isHighSignalLiveModelRef", () => {
       isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
     ).toBe(false);
   });
+
+  it("drops Gemini families older than major version 3 from the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-2.5-flash-lite" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "google/gemini-2.5-pro" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-flash-preview" })).toBe(
+      true,
+    );
+  });
 });
 
 describe("selectHighSignalLiveItems", () => {
@@ -463,7 +485,7 @@ describe("selectHighSignalLiveItems", () => {
     const items = [
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "openai", id: "gpt-5.2" },
       { provider: "opencode", id: "big-pickle" },
     ];
@@ -478,8 +500,32 @@ describe("selectHighSignalLiveItems", () => {
     ).toEqual([
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "openai", id: "gpt-5.2" },
     ]);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("defaults modern live sweeps to the curated high-signal cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+      }),
+    ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("leaves explicit model lists uncapped unless a cap is provided", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: true,
+      }),
+    ).toBe(0);
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3",
+        useExplicitModels: true,
+      }),
+    ).toBe(3);
   });
 });

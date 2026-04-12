@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";
@@ -94,7 +94,7 @@ export async function handleQaInbound(params: {
     deliver: async (payload) => {
       const text =
         payload && typeof payload === "object" && "text" in payload
-          ? String((payload as { text?: string }).text ?? "")
+          ? ((payload as { text?: string }).text ?? "")
           : "";
       if (!text.trim()) {
         return;

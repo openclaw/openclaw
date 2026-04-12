@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
@@ -18,6 +17,10 @@ import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
+import {
+  buildMissingXSearchApiKeyPayload,
+  createXSearchToolDefinition,
+} from "./x-search-tool-shared.js";
 
 const PROVIDER_ID = "xai";
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
@@ -26,8 +29,7 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
-    resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
-    readProviderEnvValue(["XAI_API_KEY"]),
+    resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 
@@ -117,53 +119,17 @@ function createLazyXSearchTool(ctx: {
     return null;
   }
 
-  return {
-    label: "X Search",
-    name: "x_search",
-    description:
-      "Search X (formerly Twitter) using xAI, including targeted post or thread lookups. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
-    parameters: Type.Object({
-      query: Type.String({ description: "X search query string." }),
-      allowed_x_handles: Type.Optional(
-        Type.Array(Type.String({ minLength: 1 }), {
-          description: "Only include posts from these X handles.",
-        }),
-      ),
-      excluded_x_handles: Type.Optional(
-        Type.Array(Type.String({ minLength: 1 }), {
-          description: "Exclude posts from these X handles.",
-        }),
-      ),
-      from_date: Type.Optional(
-        Type.String({ description: "Only include posts on or after this date (YYYY-MM-DD)." }),
-      ),
-      to_date: Type.Optional(
-        Type.String({ description: "Only include posts on or before this date (YYYY-MM-DD)." }),
-      ),
-      enable_image_understanding: Type.Optional(
-        Type.Boolean({ description: "Allow xAI to inspect images attached to matching posts." }),
-      ),
-      enable_video_understanding: Type.Optional(
-        Type.Boolean({ description: "Allow xAI to inspect videos attached to matching posts." }),
-      ),
-    }),
-    execute: async (toolCallId: string, args: Record<string, unknown>) => {
-      const { createXSearchTool } = await import("./x-search.js");
-      const tool = createXSearchTool({
-        config: ctx.config as never,
-        runtimeConfig: (ctx.runtimeConfig as never) ?? null,
-      });
-      if (!tool) {
-        return jsonResult({
-          error: "missing_xai_api_key",
-          message:
-            "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        });
-      }
-      return await tool.execute(toolCallId, args);
-    },
-  };
+  return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
+    const { createXSearchTool } = await import("./x-search.js");
+    const tool = createXSearchTool({
+      config: ctx.config as never,
+      runtimeConfig: (ctx.runtimeConfig as never) ?? null,
+    });
+    if (!tool) {
+      return jsonResult(buildMissingXSearchApiKeyPayload());
+    }
+    return await tool.execute(toolCallId, args);
+  });
 }
 
 export default defineSingleProviderPluginEntry({
@@ -200,7 +166,7 @@ export default defineSingleProviderPluginEntry({
         return extraParams;
       }
       return {
-        ...(extraParams ?? {}),
+        ...extraParams,
         tool_stream: true,
       };
     },
@@ -210,7 +176,7 @@ export default defineSingleProviderPluginEntry({
     // private config layout. Callers may receive a real key from the active
     // runtime snapshot or a non-secret SecretRef marker from source config.
     resolveSyntheticAuth: ({ config }) => {
-      const fallbackAuth = resolveFallbackXaiAuth(config as OpenClawConfig | undefined);
+      const fallbackAuth = resolveFallbackXaiAuth(config);
       if (!fallbackAuth) {
         return undefined;
       }

@@ -6,6 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -41,7 +42,9 @@ type BytePlusTaskResponse = {
 };
 
 function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
-  return req.cfg?.models?.providers?.byteplus?.baseUrl?.trim() || BYTEPLUS_BASE_URL;
+  return (
+    normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ?? BYTEPLUS_BASE_URL
+  );
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -53,13 +56,14 @@ function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefine
   if (!input) {
     return undefined;
   }
-  if (input.url?.trim()) {
-    return input.url.trim();
+  const inputUrl = normalizeOptionalString(input.url);
+  if (inputUrl) {
+    return inputUrl;
   }
   if (!input.buffer) {
     throw new Error("BytePlus reference image is missing image data.");
   }
-  return toDataUrl(input.buffer, input.mimeType?.trim() || "image/png");
+  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
 }
 
 async function pollBytePlusTask(params: {
@@ -81,12 +85,14 @@ async function pollBytePlusTask(params: {
     );
     await assertOkOrThrowHttpError(response, "BytePlus video status request failed");
     const payload = (await response.json()) as BytePlusTaskResponse;
-    switch (payload.status?.trim()) {
+    switch (normalizeOptionalString(payload.status)) {
       case "succeeded":
         return payload;
       case "failed":
       case "cancelled":
-        throw new Error(payload.error?.message?.trim() || "BytePlus video generation failed");
+        throw new Error(
+          normalizeOptionalString(payload.error?.message) || "BytePlus video generation failed",
+        );
       case "queued":
       case "running":
       default:
@@ -109,7 +115,7 @@ async function downloadBytePlusVideo(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "BytePlus generated video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -135,14 +141,32 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      maxDurationSeconds: 12,
-      supportsAspectRatio: true,
-      supportsResolution: true,
-      supportsAudio: true,
-      supportsWatermark: true,
+      providerOptions: {
+        seed: "number",
+        draft: "boolean",
+        camera_fixed: "boolean",
+      },
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 12,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsAudio: true,
+        supportsWatermark: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 12,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsAudio: true,
+        supportsWatermark: true,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {
@@ -172,6 +196,17 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           capability: "video",
           transport: "http",
         });
+      // Seedance 1.0 has separate T2V and I2V model IDs (e.g. seedance-1-0-lite-t2v-250428 vs
+      // seedance-1-0-lite-i2v-250428). When input images are provided with a T2V model, auto-
+      // switch to the corresponding I2V variant so the API does not reject with task_type mismatch.
+      // 1.5 Pro uses a single model ID for both modes and is unaffected by this substitution.
+      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
+      const requestedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
+      const resolvedModel =
+        hasInputImages && requestedModel.includes("-t2v-")
+          ? requestedModel.replace("-t2v-", "-i2v-")
+          : requestedModel;
+
       const content: Array<Record<string, unknown>> = [{ type: "text", text: req.prompt }];
       const imageUrl = resolveBytePlusImageUrl(req);
       if (imageUrl) {
@@ -182,14 +217,18 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         });
       }
       const body: Record<string, unknown> = {
-        model: req.model?.trim() || DEFAULT_BYTEPLUS_VIDEO_MODEL,
+        model: resolvedModel,
         content,
       };
-      if (req.aspectRatio?.trim()) {
-        body.ratio = req.aspectRatio.trim();
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
+      if (aspectRatio) {
+        body.ratio = aspectRatio;
       }
-      if (req.resolution) {
-        body.resolution = req.resolution;
+      // Seedance API requires lowercase resolution values (e.g. "480p", "720p"); uppercase
+      // variants like "480P" are rejected with InvalidParameter.
+      const resolution = normalizeOptionalString(req.resolution)?.toLowerCase();
+      if (resolution) {
+        body.resolution = resolution;
       }
       if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
         body.duration = Math.max(1, Math.round(req.durationSeconds));
@@ -199,6 +238,23 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       }
       if (typeof req.watermark === "boolean") {
         body.watermark = req.watermark;
+      }
+
+      // Forward declared providerOptions: seed, draft, camerafixed.
+      // draft=true forces 480p resolution for faster generation.
+      const opts = req.providerOptions ?? {};
+      const seed = typeof opts.seed === "number" ? opts.seed : undefined;
+      const draft = opts.draft === true;
+      // Official JSON body field is camera_fixed (with underscore).
+      const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
+      if (seed != null) {
+        body.seed = seed;
+      }
+      if (draft && !body.resolution) {
+        body.resolution = "480p";
+      }
+      if (cameraFixed != null) {
+        body.camera_fixed = cameraFixed;
       }
 
       const { response, release } = await postJsonRequest({
@@ -213,7 +269,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       try {
         await assertOkOrThrowHttpError(response, "BytePlus video generation failed");
         const submitted = (await response.json()) as BytePlusTaskCreateResponse;
-        const taskId = submitted.id?.trim();
+        const taskId = normalizeOptionalString(submitted.id);
         if (!taskId) {
           throw new Error("BytePlus video generation response missing task id");
         }
@@ -224,7 +280,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           baseUrl,
           fetchFn,
         });
-        const videoUrl = completed.content?.video_url?.trim();
+        const videoUrl = normalizeOptionalString(completed.content?.video_url);
         if (!videoUrl) {
           throw new Error("BytePlus video generation completed without a video URL");
         }
@@ -235,7 +291,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         });
         return {
           videos: [video],
-          model: completed.model ?? req.model ?? DEFAULT_BYTEPLUS_VIDEO_MODEL,
+          model: completed.model ?? resolvedModel,
           metadata: {
             taskId,
             status: completed.status,

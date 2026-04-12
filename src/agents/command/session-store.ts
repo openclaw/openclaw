@@ -1,13 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
   setSessionRuntimeModel,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
@@ -71,6 +73,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
     provider: providerUsed,
     model: modelUsed,
   });
+  if (isCliProvider(providerUsed, cfg)) {
+    const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
+    if (cliSessionBinding?.sessionId?.trim()) {
+      setCliSessionBinding(next, providerUsed, cliSessionBinding);
+    } else {
+      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
+      if (cliSessionId) {
+        setCliSessionId(next, providerUsed, cliSessionId);
+      }
+    }
+  }
   next.abortedLastRun = result.meta.aborted ?? false;
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;

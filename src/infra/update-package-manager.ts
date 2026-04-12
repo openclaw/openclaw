@@ -236,3 +236,13 @@ export function managerInstallArgs(manager: BuildManager, opts?: { compatFallbac
   }
   return ["npm", "install"];
 }
+
+export function managerInstallIgnoreScriptsArgs(manager: BuildManager): string[] | null {
+  if (manager === "pnpm") {
+    return ["pnpm", "install", "--ignore-scripts"];
+  }
+  if (manager === "bun") {
+    return ["bun", "install", "--ignore-scripts"];
+  }
+  return ["npm", "install", "--ignore-scripts"];
+}

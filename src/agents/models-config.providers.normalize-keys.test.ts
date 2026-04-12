@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secrets.js";
@@ -100,8 +99,14 @@ describe("normalizeProviders", () => {
   });
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
+    const env = {
+      ...process.env,
+      OPENAI_API_KEY: "sk-test-secret-value-12345", // pragma: allowlist secret
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+    };
     const secretRefManagedProviders = new Set<string>();
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
@@ -122,15 +127,15 @@ describe("normalizeProviders", () => {
           ],
         },
       };
-      const normalized = normalizeProviders({ providers, agentDir, secretRefManagedProviders });
+      const normalized = normalizeProviders({
+        providers,
+        agentDir,
+        env,
+        secretRefManagedProviders,
+      });
       expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
       expect(secretRefManagedProviders.has("openai")).toBe(true);
     } finally {
-      if (original === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = original;
-      }
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
@@ -183,13 +188,18 @@ describe("normalizeProviders", () => {
         "utf8",
       );
 
-      const store = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
-
       const resolved = resolveApiKeyFromProfiles({
         provider: "minimax",
-        store,
+        store: {
+          version: 1,
+          profiles: {
+            "minimax:default": {
+              type: "api_key",
+              provider: "minimax",
+              keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+            },
+          },
+        },
         env: process.env,
       });
 

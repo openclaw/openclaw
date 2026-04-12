@@ -25,6 +25,7 @@ export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";
 
 export {
+  CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   dedupeProfileIds,
   listProfilesForProvider,

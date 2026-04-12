@@ -2,17 +2,27 @@ import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeTarget } from "../gateway/probe-auth.js";
-import { probeGateway } from "../gateway/probe.js";
+import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
+import type { probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
+let probeGatewayModulePromise: Promise<typeof import("../gateway/probe.js")> | undefined;
 
 function loadGatewayProbeModule() {
   gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
   return gatewayProbeModulePromise;
+}
+
+function loadProbeGatewayModule() {
+  probeGatewayModulePromise ??= import("../gateway/probe.js");
+  return probeGatewayModulePromise;
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
@@ -34,7 +44,7 @@ export type GatewayProbeSnapshot = {
     password?: string;
   };
   gatewayProbeAuthWarning?: string;
-  gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
+  gatewayProbe: Awaited<ReturnType<typeof probeGatewayFn>> | null;
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   gatewayCallOverrides?: {
@@ -62,8 +72,8 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
-  if (raw && raw.toLowerCase() === "none") {
+  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
+  if (normalizeOptionalLowercaseString(raw) === "none") {
     return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
   }
   return { enabled: true, slot: raw || "memory-core" };
@@ -96,12 +106,16 @@ export async function resolveGatewayProbeSnapshot(params: {
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = shouldProbe
-    ? await probeGateway({
-        url: gatewayConnection.url,
-        auth: gatewayProbeAuthResolution.auth,
-        timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
-        detailLevel: params.opts.detailLevel ?? "presence",
-      }).catch(() => null)
+    ? await loadProbeGatewayModule()
+        .then(({ probeGateway }) =>
+          probeGateway({
+            url: gatewayConnection.url,
+            auth: gatewayProbeAuthResolution.auth,
+            timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+            detailLevel: params.opts.detailLevel ?? "presence",
+          }),
+        )
+        .catch(() => null)
     : null;
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&

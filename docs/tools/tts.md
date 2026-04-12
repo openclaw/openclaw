@@ -59,7 +59,7 @@ so that provider must also be authenticated if you enable summaries.
 ## Is it enabled by default?
 
 No. Auto‑TTS is **off** by default. Enable it in config with
-`messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
+`messages.tts.auto` or locally with `/tts on`.
 
 When `messages.tts.provider` is unset, OpenClaw picks the first configured
 speech provider in registry auto-select order.
@@ -411,9 +411,7 @@ Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 
 ```
 /tts off
-/tts always
-/tts inbound
-/tts tagged
+/tts on
 /tts status
 /tts provider openai
 /tts limit 2000
@@ -425,7 +423,9 @@ Notes:
 
 - Commands require an authorized sender (allowlist/owner rules still apply).
 - `commands.text` or native command registration must be enabled.
-- `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
+- Config `messages.tts.auto` accepts `off|always|inbound|tagged`.
+- `/tts on` writes the local TTS preference to `always`; `/tts off` writes it to `off`.
+- Use config when you want `inbound` or `tagged` defaults.
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
 - `/tts status` includes fallback visibility for the latest attempt:

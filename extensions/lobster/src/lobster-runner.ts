@@ -4,6 +4,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export type LobsterEnvelope =
   | {
@@ -154,9 +159,20 @@ type ApprovalRequestItem = {
   resumeToken?: string;
 };
 
+type PipelineRuntimeContext = {
+  registry: unknown;
+  stdin: NodeJS.ReadableStream;
+  stdout: NodeJS.WritableStream;
+  stderr: NodeJS.WritableStream;
+  env: Record<string, string | undefined>;
+  cwd: string;
+  llmAdapters?: Record<string, unknown>;
+  signal?: AbortSignal;
+};
+
 function normalizeForCwdSandbox(p: string): string {
   const normalized = path.normalize(p);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 export function resolveLobsterCwd(cwdRaw: unknown): string {
@@ -242,6 +258,50 @@ function asApprovalRequestItem(item: unknown): ApprovalRequestItem | null {
   return candidate as ApprovalRequestItem;
 }
 
+function normalizeWorkflowOutput(
+  okEnvelope: (
+    status: "ok" | "needs_approval" | "cancelled",
+    output: unknown[],
+    requiresApproval: EmbeddedToolEnvelope["requiresApproval"],
+  ) => EmbeddedToolEnvelope,
+  output: {
+    status: "ok" | "needs_approval" | "cancelled";
+    output: unknown[];
+    requiresApproval?: EmbeddedToolEnvelope["requiresApproval"];
+  },
+): EmbeddedToolEnvelope {
+  if (output.status === "needs_approval") {
+    return okEnvelope("needs_approval", [], output.requiresApproval ?? null);
+  }
+  if (output.status === "cancelled") {
+    return okEnvelope("cancelled", [], null);
+  }
+  return okEnvelope("ok", output.output, null);
+}
+
+async function runPipelineWithRuntime(
+  deps: ToolRuntimeDeps,
+  params: {
+    pipeline: Array<{ name: string; args: Record<string, unknown>; raw: string }>;
+    input: AsyncIterable<unknown> | unknown[];
+    runtime: PipelineRuntimeContext;
+  },
+) {
+  return await deps.runPipeline({
+    pipeline: params.pipeline,
+    registry: params.runtime.registry,
+    input: params.input,
+    stdin: params.runtime.stdin,
+    stdout: params.runtime.stdout,
+    stderr: params.runtime.stderr,
+    env: params.runtime.env,
+    mode: "tool",
+    cwd: params.runtime.cwd,
+    llmAdapters: params.runtime.llmAdapters,
+    signal: params.runtime.signal,
+  });
+}
+
 async function resolveWorkflowFile(candidate: string, cwd: string) {
   const { stat } = await import("node:fs/promises");
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
@@ -249,7 +309,7 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
   if (!fileStat.isFile()) {
     throw new Error("Workflow path is not a file");
   }
-  const ext = path.extname(resolved).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolved));
   if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
@@ -399,23 +459,13 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       if (hasFile) {
         try {
           const output = await deps.runWorkflowFile({
-            filePath: filePath!,
+            filePath: filePath,
             args,
             ctx: runtime,
           });
-
-          if (output.status === "needs_approval") {
-            return okEnvelope("needs_approval", [], output.requiresApproval ?? null);
-          }
-          if (output.status === "cancelled") {
-            return okEnvelope("cancelled", [], null);
-          }
-          return okEnvelope("ok", output.output, null);
+          return normalizeWorkflowOutput(okEnvelope, output);
         } catch (error) {
-          return errorEnvelope(
-            "runtime_error",
-            error instanceof Error ? error.message : String(error),
-          );
+          return errorEnvelope("runtime_error", formatErrorMessage(error));
         }
       }
 
@@ -423,22 +473,14 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       try {
         parsed = deps.parsePipeline(String(pipeline));
       } catch (error) {
-        return errorEnvelope("parse_error", error instanceof Error ? error.message : String(error));
+        return errorEnvelope("parse_error", formatErrorMessage(error));
       }
 
       try {
-        const output = await deps.runPipeline({
+        const output = await runPipelineWithRuntime(deps, {
           pipeline: parsed,
-          registry: runtime.registry,
           input: [],
-          stdin: runtime.stdin!,
-          stdout: runtime.stdout!,
-          stderr: runtime.stderr!,
-          env: runtime.env,
-          mode: "tool",
-          cwd: runtime.cwd,
-          llmAdapters: runtime.llmAdapters,
-          signal: runtime.signal,
+          runtime,
         });
 
         const approval =
@@ -472,10 +514,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
 
         return okEnvelope("ok", output.items, null);
       } catch (error) {
-        return errorEnvelope(
-          "runtime_error",
-          error instanceof Error ? error.message : String(error),
-        );
+        return errorEnvelope("runtime_error", formatErrorMessage(error));
       }
     },
 
@@ -486,7 +525,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       try {
         payload = deps.decodeResumeToken(token);
       } catch (error) {
-        return errorEnvelope("parse_error", error instanceof Error ? error.message : String(error));
+        return errorEnvelope("parse_error", formatErrorMessage(error));
       }
 
       if (!approved) {
@@ -507,19 +546,9 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
             resume: payload as Record<string, unknown>,
             approved: true,
           });
-
-          if (output.status === "needs_approval") {
-            return okEnvelope("needs_approval", [], output.requiresApproval ?? null);
-          }
-          if (output.status === "cancelled") {
-            return okEnvelope("cancelled", [], null);
-          }
-          return okEnvelope("ok", output.output, null);
+          return normalizeWorkflowOutput(okEnvelope, output);
         } catch (error) {
-          return errorEnvelope(
-            "runtime_error",
-            error instanceof Error ? error.message : String(error),
-          );
+          return errorEnvelope("runtime_error", formatErrorMessage(error));
         }
       }
 
@@ -527,18 +556,10 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
         const resumeState = await loadPipelineResumeState(runtime.env, payload.stateKey ?? "");
         const remaining = resumeState.pipeline.slice(resumeState.resumeAtIndex);
 
-        const output = await deps.runPipeline({
+        const output = await runPipelineWithRuntime(deps, {
           pipeline: remaining,
-          registry: runtime.registry,
           input: streamFromItems(resumeState.items),
-          stdin: runtime.stdin!,
-          stdout: runtime.stdout!,
-          stderr: runtime.stderr!,
-          env: runtime.env,
-          mode: "tool",
-          cwd: runtime.cwd,
-          llmAdapters: runtime.llmAdapters,
-          signal: runtime.signal,
+          runtime,
         });
 
         const approval =
@@ -578,10 +599,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
         }
         return okEnvelope("ok", output.items, null);
       } catch (error) {
-        return errorEnvelope(
-          "runtime_error",
-          error instanceof Error ? error.message : String(error),
-        );
+        return errorEnvelope("runtime_error", formatErrorMessage(error));
       }
     },
   };

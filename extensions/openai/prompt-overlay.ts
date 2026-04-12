@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
 const OPENAI_GPT5_MODEL_PREFIX = "gpt-5";
 
@@ -18,6 +20,19 @@ If the latest user message is a short approval like "ok do it" or "go ahead", sk
 Commentary-only turns are incomplete when the next action is clear.
 Prefer the first real tool step over more narration.
 If work will take more than a moment, send a brief progress update while acting.
+
+### Heartbeats
+
+Occasionally, the current user message will be a heartbeat poll. It is not actually sent by the user, but by OpenClaw on an interval of time.
+The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.
+When you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.
+Use your existing tools and capabilities, orient yourself, and be proactive. Think big picture.
+Have some variety in what you do. Variety helps keep you from getting pigeonholed into narrow patterns.
+If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.
+Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet by replying HEARTBEAT_OK.
+Use your judgment and be creative and tasteful with this process.
+Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.
+
 Explain decisions without ego.
 When the user is wrong or a plan is risky, say so kindly and directly.
 Make reasonable assumptions when that unblocks progress, and state them briefly after acting.
@@ -54,7 +69,8 @@ export type OpenAIPromptOverlayMode = "friendly" | "off";
 export function resolveOpenAIPromptOverlayMode(
   pluginConfig?: Record<string, unknown>,
 ): OpenAIPromptOverlayMode {
-  return pluginConfig?.personality === "off" ? "off" : "friendly";
+  const normalized = normalizeLowercaseStringOrEmpty(pluginConfig?.personality);
+  return normalized === "off" ? "off" : "friendly";
 }
 
 export function shouldApplyOpenAIPromptOverlay(params: {
@@ -64,7 +80,7 @@ export function shouldApplyOpenAIPromptOverlay(params: {
   if (!OPENAI_PROVIDER_IDS.has(params.modelProviderId ?? "")) {
     return false;
   }
-  const normalizedModelId = params.modelId?.trim().toLowerCase() ?? "";
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
   return normalizedModelId.startsWith(OPENAI_GPT5_MODEL_PREFIX);
 }
 

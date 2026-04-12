@@ -1,6 +1,6 @@
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded-runner/runs.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -11,7 +11,6 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -19,10 +18,16 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { FinalizedMsgContext } from "../templating.js";
 import {
   applyAbortCutoffToSessionEntry,
   resolveAbortCutoffFromContext,
@@ -116,20 +121,11 @@ export function resolveSessionEntryForKey(
   return {};
 }
 
-function resolveAbortTargetKey(ctx: MsgContext): string | undefined {
-  const target = ctx.CommandTargetSessionKey?.trim();
-  if (target) {
-    return target;
-  }
-  const sessionKey = ctx.SessionKey?.trim();
-  return sessionKey || undefined;
-}
-
 function normalizeRequesterSessionKey(
   cfg: OpenClawConfig,
   key: string | undefined,
 ): string | undefined {
-  const cleaned = key?.trim();
+  const cleaned = normalizeOptionalString(key);
   if (!cleaned) {
     return undefined;
   }
@@ -147,7 +143,7 @@ export function stopSubagentsForRequester(params: {
   }
   const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
   for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
-    const childKey = run.childSessionKey?.trim();
+    const childKey = normalizeOptionalString(run.childSessionKey);
     if (!childKey) {
       continue;
     }
@@ -160,7 +156,8 @@ export function stopSubagentsForRequester(params: {
       continue;
     }
     const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+      normalizeOptionalString(latest?.controllerSessionKey) ??
+      normalizeOptionalString(latest?.requesterSessionKey);
     if (latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
       continue;
     }
@@ -179,7 +176,7 @@ export function stopSubagentsForRequester(params: {
   let stopped = 0;
 
   for (const run of runs) {
-    const childKey = run.childSessionKey?.trim();
+    const childKey = normalizeOptionalString(run.childSessionKey);
     if (!childKey || seenChildKeys.has(childKey)) {
       continue;
     }
@@ -230,10 +227,11 @@ export async function tryFastAbortFromMessage(params: {
   cfg: OpenClawConfig;
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
-  const targetKey = resolveAbortTargetKey(ctx);
+  const targetKey =
+    normalizeOptionalString(ctx.CommandTargetSessionKey) ?? normalizeOptionalString(ctx.SessionKey);
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
   const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
-  const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
+  const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup
     ? stripMentions(
         raw,
@@ -286,7 +284,7 @@ export async function tryFastAbortFromMessage(params: {
         });
       } catch (error) {
         logVerbose(
-          `abort: ACP cancel failed for ${resolvedTargetKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `abort: ACP cancel failed for ${resolvedTargetKey}: ${formatErrorMessage(error)}`,
         );
       }
     }

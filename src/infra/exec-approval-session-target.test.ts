@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
@@ -10,11 +14,42 @@ import {
   resolveApprovalRequestChannelAccountId,
 } from "./approval-request-account-binding.js";
 import {
+  resolveApprovalRequestSessionConversation,
   resolveApprovalRequestOriginTarget,
   resolveExecApprovalSessionTarget,
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+
+vi.mock("../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversationRef(sessionKey: string | undefined | null) {
+    const raw = parseRawSessionConversationRef(sessionKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = parseThreadSessionSuffix(raw.rawId);
+    const id = (parsed.baseSessionKey ?? raw.rawId).trim();
+    if (!id) {
+      return null;
+    }
+    return {
+      channel: raw.channel,
+      kind: raw.kind,
+      rawId: raw.rawId,
+      id,
+      threadId: parsed.threadId,
+      baseSessionKey: `${raw.prefix}:${id}`,
+      baseConversationId: id,
+      parentConversationCandidates: parsed.threadId ? [id] : [],
+    };
+  },
+}));
+
+vi.mock("./outbound/targets.js", async () => {
+  return await vi.importActual<typeof import("./outbound/targets-session.js")>(
+    "./outbound/targets-session.js",
+  );
+});
 
 const baseRequest: ExecApprovalRequest = {
   id: "req-1",
@@ -129,7 +164,7 @@ describe("exec approval session target", () => {
         channel: "whatsapp",
         to: "+15555550123",
         accountId: "work",
-        threadId: 1739201675,
+        threadId: "1739201675.123",
       });
     });
   });
@@ -153,7 +188,7 @@ describe("exec approval session target", () => {
         channel: "discord",
         to: "channel:123",
         accountId: "work",
-        threadId: 55,
+        threadId: "55",
       },
     },
     {
@@ -189,6 +224,64 @@ describe("exec approval session target", () => {
       });
     },
   );
+
+  it("preserves string thread ids from the session store", () => {
+    withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
+        "agent:main:main": {
+          sessionId: "main",
+          updatedAt: 1,
+          lastChannel: "discord",
+          lastTo: "channel:123",
+          lastAccountId: " Work ",
+          lastThreadId: "777888999111222333",
+        },
+      });
+
+      expect(expectResolvedSessionTarget(cfg, baseRequest)).toEqual({
+        channel: "discord",
+        to: "channel:123",
+        accountId: "work",
+        threadId: "777888999111222333",
+      });
+    });
+  });
+
+  it("parses channel-scoped session conversation fallbacks for approval requests", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!Ops:Example.org:thread:$root",
+    });
+
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
+        channel: "matrix",
+      }),
+    ).toEqual({
+      channel: "matrix",
+      kind: "channel",
+      id: "!Ops:Example.org",
+      rawId: "!Ops:Example.org:thread:$root",
+      threadId: "$root",
+      baseSessionKey: "agent:main:matrix:channel:!Ops:Example.org",
+      baseConversationId: "!Ops:Example.org",
+      parentConversationCandidates: ["!Ops:Example.org"],
+    });
+  });
+
+  it("ignores session conversation fallbacks for other channels", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!ops:example.org",
+    });
+
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
+        channel: "slack",
+      }),
+    ).toBeNull();
+  });
 
   it("prefers explicit turn-source account bindings when session store is missing", () => {
     const cfg = {} as OpenClawConfig;

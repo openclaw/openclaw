@@ -1,13 +1,15 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
   LiveSessionModelSwitchError,
+  getCliSessionId,
+  isCliProvider,
   logWarn,
   normalizeVerboseLevel,
   registerAgentRunContext,
@@ -15,6 +17,7 @@ import {
   resolveFastModeState,
   resolveNestedAgentLane,
   resolveSessionTranscriptPath,
+  runCliAgent,
   runEmbeddedPiAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -28,7 +31,7 @@ import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-type CronPromptRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
@@ -64,10 +67,13 @@ export function createCronPromptExecutor(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
 }) {
-  const sessionFile = resolveSessionTranscriptPath(
-    params.cronSession.sessionEntry.sessionId,
-    params.agentId,
-  );
+  const sessionFile =
+    params.cronSession.sessionEntry.sessionFile?.trim() ||
+    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
+  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
+    params.cronSession.sessionEntry.sessionFile = sessionFile;
+  }
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
@@ -95,13 +101,41 @@ export function createCronPromptExecutor(params: {
         }
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+          const cliSessionId = params.cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+          const result = await runCliAgent({
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.agentSessionKey,
+            agentId: params.agentId,
+            sessionFile,
+            workspaceDir: params.workspaceDir,
+            config: params.cfgWithAgentDefaults,
+            prompt: promptText,
+            provider: providerOverride,
+            model: modelOverride,
+            thinkLevel: params.thinkLevel,
+            timeoutMs: params.timeoutMs,
+            runId: params.cronSession.sessionEntry.sessionId,
+            cliSessionId,
+            skillsSnapshot: params.skillsSnapshot,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+            senderIsOwner: true,
+          });
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+            result.meta?.systemPromptReport,
+          );
+          return result;
+        }
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.agentSessionKey,
           agentId: params.agentId,
           trigger: "cron",
           allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           sessionFile,
@@ -278,6 +312,8 @@ export async function executeCronRun(params: {
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
+      preferFinalAssistantVisibleText: params.resolvedDelivery.channel === "telegram",
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =

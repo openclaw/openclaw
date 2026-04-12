@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+import type { InlineDirectives } from "./directive-handling.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
@@ -35,30 +38,68 @@ function buildContext(params?: {
   requesterKey?: string;
   restTokens?: string[];
   commandTo?: string | undefined;
-  context?: Record<string, unknown>;
-  sessionEntry?: Record<string, unknown> | undefined;
+  context?: Partial<HandleCommandsParams["ctx"]>;
+  sessionEntry?: SessionEntry | undefined;
 }) {
+  const directives: InlineDirectives = {
+    cleaned: "",
+    hasThinkDirective: false,
+    hasVerboseDirective: false,
+    hasFastDirective: false,
+    hasReasoningDirective: false,
+    hasElevatedDirective: false,
+    hasExecDirective: false,
+    hasExecOptions: false,
+    invalidExecHost: false,
+    invalidExecSecurity: false,
+    invalidExecAsk: false,
+    invalidExecNode: false,
+    hasStatusDirective: false,
+    hasModelDirective: false,
+    hasQueueDirective: false,
+    queueReset: false,
+    hasQueueOptions: false,
+  };
+  const ctx = {
+    OriginatingChannel: "whatsapp",
+    OriginatingTo: "channel:origin",
+    AccountId: "default",
+    MessageThreadId: "thread-1",
+    ...params?.context,
+  };
   return {
     params: {
       cfg: params?.cfg ?? baseCfg,
+      ctx,
       command: {
+        surface: "whatsapp",
         channel: "whatsapp",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        rawBodyNormalized: "",
+        commandBodyNormalized: "",
         to: params?.commandTo ?? "channel:command",
       },
-      ctx: {
-        OriginatingChannel: "whatsapp",
-        OriginatingTo: "channel:origin",
-        AccountId: "default",
-        MessageThreadId: "thread-1",
-        ...params?.context,
-      },
+      directives,
+      elevated: { enabled: false, allowed: false, failures: [] },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/openclaw-subagents-spawn",
+      defaultGroupActivation: () => "mention",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      provider: "whatsapp",
+      model: "test-model",
+      contextTokens: 0,
+      isGroup: true,
       ...(params?.sessionEntry ? { sessionEntry: params.sessionEntry } : {}),
     },
     handledPrefix: "/subagents",
     requesterKey: params?.requesterKey ?? "agent:main:main",
     runs: [],
     restTokens: params?.restTokens ?? ["beta", "do", "the", "thing"],
-  } as Parameters<typeof handleSubagentsSpawnAction>[0];
+  } satisfies Parameters<typeof handleSubagentsSpawnAction>[0];
 }
 
 describe("subagents spawn action", () => {
@@ -152,6 +193,8 @@ describe("subagents spawn action", () => {
     await handleSubagentsSpawnAction(
       buildContext({
         sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
           groupId: "group-1",
           groupChannel: "#group-channel",
           space: "workspace-1",
@@ -187,6 +230,76 @@ describe("subagents spawn action", () => {
         agentSessionKey: "agent:main:target",
         agentChannel: "discord",
         agentTo: "channel:12345",
+      }),
+    );
+  });
+
+  it("prefers the requester-key session entry for group metadata", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    await handleSubagentsSpawnAction(
+      buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+    );
+    const call = spawnSubagentDirectMock.mock.calls.at(-1);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "wrapper-group",
+        agentGroupChannel: "#wrapper",
+        agentGroupSpace: "wrapper-space",
+      }),
+    );
+
+    spawnSubagentDirectMock.mockClear();
+    await handleSubagentsSpawnAction({
+      ...buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+      params: {
+        ...buildContext({
+          requesterKey: "agent:main:target",
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            groupId: "wrapper-group",
+            groupChannel: "#wrapper",
+            space: "wrapper-space",
+          },
+        }).params,
+        sessionStore: {
+          "agent:main:target": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
+          },
+        },
+      },
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "target-group",
+        agentGroupChannel: "#target",
+        agentGroupSpace: "target-space",
       }),
     );
   });

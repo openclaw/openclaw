@@ -17,8 +17,10 @@ let setActiveWebListener: typeof import("./active-listener.js").setActiveWebList
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("./outbound-media.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./outbound-media.runtime.js")>(
+    "./outbound-media.runtime.js",
+  );
   return {
     ...actual,
     loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
@@ -216,6 +218,26 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/pic.jpg",
     });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
+  });
+
+  it("falls back to the first mediaUrls entry when mediaUrl is omitted", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrls: ["   ", " /tmp/pic.jpg "],
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({
+        hostReadCapability: false,
+      }),
+    );
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 

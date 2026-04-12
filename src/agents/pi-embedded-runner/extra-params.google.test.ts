@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
+import { __testing as extraParamsTesting } from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("@mariozechner/pi-ai", async () =>
@@ -8,6 +9,33 @@ vi.mock("@mariozechner/pi-ai", async () =>
     vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
   ),
 );
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: (params) => params.context.extraParams,
+    wrapProviderStreamFn: () => undefined,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
+
+function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
+  return runExtraParamsCase({
+    ...(params?.cfg ? { cfg: params.cfg as never } : {}),
+    applyProvider: "google",
+    applyModelId: "gemini-2.5-pro",
+    model: {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemini-2.5-pro",
+    } as unknown as Model<"openai-completions">,
+    payload: {
+      contents: [],
+    },
+  });
+}
 
 describe("extra-params: Google thinking payload compatibility", () => {
   it("strips negative thinking budgets and fills Gemini 3.1 thinkingLevel", () => {
@@ -39,7 +67,7 @@ describe("extra-params: Google thinking payload compatibility", () => {
   });
 
   it("passes cachedContent through Google extra params", () => {
-    const { options } = runExtraParamsCase({
+    const { options } = runGoogleExtraParamsCase({
       cfg: {
         agents: {
           defaults: {
@@ -52,16 +80,6 @@ describe("extra-params: Google thinking payload compatibility", () => {
             },
           },
         },
-      } as never,
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
-      model: {
-        api: "google-generative-ai",
-        provider: "google",
-        id: "gemini-2.5-pro",
-      } as unknown as Model<"openai-completions">,
-      payload: {
-        contents: [],
       },
     });
 
@@ -71,7 +89,7 @@ describe("extra-params: Google thinking payload compatibility", () => {
   });
 
   it("lets higher-precedence cachedContent override lower-precedence cached_content", () => {
-    const { options } = runExtraParamsCase({
+    const { options } = runGoogleExtraParamsCase({
       cfg: {
         agents: {
           defaults: {
@@ -87,16 +105,6 @@ describe("extra-params: Google thinking payload compatibility", () => {
             },
           },
         },
-      } as never,
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
-      model: {
-        api: "google-generative-ai",
-        provider: "google",
-        id: "gemini-2.5-pro",
-      } as unknown as Model<"openai-completions">,
-      payload: {
-        contents: [],
       },
     });
 

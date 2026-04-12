@@ -18,6 +18,7 @@ import {
   loadConfig,
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
+  type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
@@ -26,6 +27,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -34,6 +36,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import {
@@ -103,7 +106,8 @@ type OverrideFieldClearedByDelete =
   | "authProfileOverrideCompactionCount"
   | "fallbackNoticeSelectedModel"
   | "fallbackNoticeActiveModel"
-  | "fallbackNoticeReason";
+  | "fallbackNoticeReason"
+  | "claudeCliSessionId";
 
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
@@ -114,6 +118,7 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeSelectedModel",
   "fallbackNoticeActiveModel",
   "fallbackNoticeReason",
+  "claudeCliSessionId",
 ];
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
@@ -123,6 +128,38 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
+}
+
+async function resolveAgentRuntimeConfig(
+  runtime: RuntimeEnv,
+  params?: { runtimeTargetsChannelSecrets?: boolean },
+): Promise<{
+  loadedRaw: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  cfg: OpenClawConfig;
+}> {
+  const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
+  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: loadedRaw,
+    commandName: "agent",
+    targetIds: getAgentRuntimeCommandSecretTargetIds({
+      includeChannelTargets: params?.runtimeTargetsChannelSecrets === true,
+    }),
+    runtime,
+  });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
+  return { loadedRaw, sourceConfig, cfg };
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -166,25 +203,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const loadedRaw = loadConfig();
-  const sourceConfig = await (async () => {
-    try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
-      if (snapshot.valid) {
-        return snapshot.resolved;
-      }
-    } catch {
-      // Fall back to runtime-loaded config when source snapshot is unavailable.
-    }
-    return loadedRaw;
-  })();
-  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
-    config: loadedRaw,
-    commandName: "agent",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
-    runtime,
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
   });
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
@@ -232,14 +253,11 @@ async function prepareAgentCommandExecution(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
-  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
-  const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
+  const laneRaw = normalizeOptionalString(opts.lane) ?? "";
+  const subagentLane: string = AGENT_LANE_SUBAGENT;
+  const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : isSubagentLane
-        ? 0
-        : undefined;
+    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -461,7 +479,7 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
 
@@ -1001,3 +1019,8 @@ export async function agentCommandFromIngress(
     deps,
   );
 }
+
+export const __testing = {
+  resolveAgentRuntimeConfig,
+  prepareAgentCommandExecution,
+};

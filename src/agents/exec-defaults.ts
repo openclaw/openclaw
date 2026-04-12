@@ -1,6 +1,12 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  loadExecApprovals,
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  type ExecTarget,
+} from "../infra/exec-approvals.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -47,16 +53,38 @@ function resolveExecConfigState(params: {
   };
 }
 
+function resolveExecSandboxAvailability(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  sandboxAvailable?: boolean;
+}) {
+  return (
+    params.sandboxAvailable ??
+    (params.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+        }).sandboxed
+      : false)
+  );
+}
+
 export function canExecRequestNode(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: SessionEntry;
   agentId?: string;
   sessionKey?: string;
+  sandboxAvailable?: boolean;
 }): boolean {
-  const { host } = resolveExecConfigState(params);
+  const { cfg, host } = resolveExecConfigState(params);
   return isRequestedExecTargetAllowed({
     configuredTarget: host,
     requestedTarget: "node",
+    sandboxAvailable: resolveExecSandboxAvailability({
+      cfg,
+      sessionKey: params.sessionKey,
+      sandboxAvailable: params.sandboxAvailable,
+    }),
   });
 }
 
@@ -75,19 +103,18 @@ export function resolveExecDefaults(params: {
   canRequestNode: boolean;
 } {
   const { cfg, host, agentExec, globalExec } = resolveExecConfigState(params);
-  const sandboxAvailable =
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false);
+  const sandboxAvailable = resolveExecSandboxAvailability({
+    cfg,
+    sessionKey: params.sessionKey,
+    sandboxAvailable: params.sandboxAvailable,
+  });
   const resolved = resolveExecTarget({
     configuredTarget: host,
     elevatedRequested: false,
     sandboxAvailable,
   });
+  const approvalDefaults = loadExecApprovals().defaults;
+  const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
   return {
     host,
     effectiveHost: resolved.effectiveHost,
@@ -95,16 +122,19 @@ export function resolveExecDefaults(params: {
       (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
       agentExec?.security ??
       globalExec?.security ??
-      "deny",
+      approvalDefaults?.security ??
+      defaultSecurity,
     ask:
       (params.sessionEntry?.execAsk as ExecAsk | undefined) ??
       agentExec?.ask ??
       globalExec?.ask ??
-      "on-miss",
+      approvalDefaults?.ask ??
+      "off",
     node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
     canRequestNode: isRequestedExecTargetAllowed({
       configuredTarget: host,
       requestedTarget: "node",
+      sandboxAvailable,
     }),
   };
 }

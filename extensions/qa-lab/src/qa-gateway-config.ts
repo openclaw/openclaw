@@ -1,27 +1,55 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  defaultQaModelForMode,
+  isQaFastModeModelRef,
+  normalizeQaProviderMode,
+  splitQaModelRef,
+  type QaProviderMode,
+} from "./model-selection.js";
 
-const DISABLED_BUNDLED_CHANNELS = Object.freeze({
-  bluebubbles: { enabled: false },
-  discord: { enabled: false },
-  feishu: { enabled: false },
-  googlechat: { enabled: false },
-  imessage: { enabled: false },
-  irc: { enabled: false },
-  line: { enabled: false },
-  mattermost: { enabled: false },
-  matrix: { enabled: false },
-  msteams: { enabled: false },
-  qqbot: { enabled: false },
-  signal: { enabled: false },
-  slack: { enabled: false },
-  "synology-chat": { enabled: false },
-  telegram: { enabled: false },
-  tlon: { enabled: false },
-  whatsapp: { enabled: false },
-  zalo: { enabled: false },
-  zalouser: { enabled: false },
-} satisfies Record<string, { enabled: false }>);
+export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+  "http://127.0.0.1:18789",
+  "http://localhost:18789",
+  "http://127.0.0.1:43124",
+  "http://localhost:43124",
+]);
+
+export type QaThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+
+export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | undefined {
+  const value = typeof input === "string" ? input.trim().toLowerCase() : "";
+  const collapsed = value.replace(/[\s_-]+/g, "");
+  if (collapsed === "off") {
+    return "off";
+  }
+  if (collapsed === "minimal" || collapsed === "min") {
+    return "minimal";
+  }
+  if (collapsed === "low") {
+    return "low";
+  }
+  if (collapsed === "medium" || collapsed === "med") {
+    return "medium";
+  }
+  if (collapsed === "high") {
+    return "high";
+  }
+  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+    return "xhigh";
+  }
+  if (collapsed === "adaptive" || collapsed === "auto") {
+    return "adaptive";
+  }
+  return undefined;
+}
+
+export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
+  const normalizedExtra = (extraOrigins ?? [])
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+  return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+}
 
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
@@ -29,15 +57,22 @@ export function buildQaGatewayConfig(params: {
   gatewayToken: string;
   providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  includeQaChannel?: boolean;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderMode | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
+  imageGenerationModel?: string | null;
+  enabledProviderIds?: string[];
+  enabledPluginIds?: string[];
+  liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
+  const includeQaChannel = params.includeQaChannel !== false;
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
@@ -91,39 +126,67 @@ export function buildQaGatewayConfig(params: {
       },
     ],
   };
-  const providerMode = params.providerMode ?? "mock-openai";
-  const allowedPlugins =
-    providerMode === "live-openai"
-      ? ["memory-core", "openai", "qa-channel"]
-      : ["memory-core", "qa-channel"];
-  const primaryModel =
-    params.primaryModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const providerMode = normalizeQaProviderMode(params.providerMode ?? "mock-openai");
+  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
-    params.alternateModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const modelProviderIds = [primaryModel, alternateModel]
+    .map((ref) => splitQaModelRef(ref)?.provider)
+    .filter((provider): provider is string => Boolean(provider));
   const imageGenerationModelRef =
-    providerMode === "live-openai" ? "openai/gpt-image-1" : "mock-openai/gpt-image-1";
+    params.imageGenerationModel !== undefined
+      ? params.imageGenerationModel
+      : providerMode === "mock-openai"
+        ? "mock-openai/gpt-image-1"
+        : modelProviderIds.includes("openai")
+          ? "openai/gpt-image-1"
+          : null;
+  const selectedProviderIds =
+    providerMode === "live-frontier"
+      ? [
+          ...new Set(
+            [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
+              .map((value) =>
+                typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
+              )
+              .filter((provider): provider is string => Boolean(provider)),
+          ),
+        ]
+      : [];
+  const selectedPluginIds =
+    providerMode === "live-frontier"
+      ? [
+          ...new Set(
+            (params.enabledPluginIds?.length ?? 0) > 0
+              ? params.enabledPluginIds
+              : selectedProviderIds,
+          ),
+        ]
+      : [];
+  const pluginEntries =
+    providerMode === "live-frontier"
+      ? Object.fromEntries(selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]))
+      : {};
+  const allowedPlugins =
+    providerMode === "live-frontier"
+      ? ["memory-core", ...selectedPluginIds, ...(includeQaChannel ? ["qa-channel"] : [])]
+      : ["memory-core", ...(includeQaChannel ? ["qa-channel"] : [])];
   const liveModelParams =
-    providerMode === "live-openai"
-      ? {
+    providerMode === "live-frontier"
+      ? (modelRef: string) => ({
           transport: "sse",
           openaiWsWarmup: false,
-          ...(params.fastMode ? { fastMode: true } : {}),
-        }
-      : {
+          ...(params.fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+          ...(params.thinkingDefault ? { thinking: params.thinkingDefault } : {}),
+        })
+      : (_modelRef: string) => ({
           transport: "sse",
           openaiWsWarmup: false,
-        };
-  const allowedOrigins =
-    params.controlUiAllowedOrigins && params.controlUiAllowedOrigins.length > 0
-      ? params.controlUiAllowedOrigins
-      : [
-          "http://127.0.0.1:18789",
-          "http://localhost:18789",
-          "http://127.0.0.1:43124",
-          "http://localhost:43124",
-        ];
+        });
+  const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const liveProviderConfigs =
+    providerMode === "live-frontier" ? (params.liveProviderConfigs ?? {}) : {};
+  const hasLiveProviderConfigs = Object.keys(liveProviderConfigs).length > 0;
 
   return {
     plugins: {
@@ -135,13 +198,8 @@ export function buildQaGatewayConfig(params: {
         "memory-core": {
           enabled: true,
         },
-        ...(providerMode === "live-openai"
-          ? {
-              openai: {
-                enabled: true,
-              },
-            }
-          : {}),
+        ...pluginEntries,
+        ...(includeQaChannel ? { "qa-channel": { enabled: true } } : {}),
       },
     },
     agents: {
@@ -150,9 +208,14 @@ export function buildQaGatewayConfig(params: {
         model: {
           primary: primaryModel,
         },
-        imageGenerationModel: {
-          primary: imageGenerationModelRef,
-        },
+        ...(imageGenerationModelRef
+          ? {
+              imageGenerationModel: {
+                primary: imageGenerationModelRef,
+              },
+            }
+          : {}),
+        ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
         memorySearch: {
           sync: {
             watch: true,
@@ -163,10 +226,10 @@ export function buildQaGatewayConfig(params: {
         },
         models: {
           [primaryModel]: {
-            params: liveModelParams,
+            params: liveModelParams(primaryModel),
           },
           [alternateModel]: {
-            params: liveModelParams,
+            params: liveModelParams(alternateModel),
           },
         },
         subagents: {
@@ -205,7 +268,14 @@ export function buildQaGatewayConfig(params: {
             },
           },
         }
-      : {}),
+      : hasLiveProviderConfigs
+        ? {
+            models: {
+              mode: "merge",
+              providers: liveProviderConfigs,
+            },
+          }
+        : {}),
     gateway: {
       mode: "local",
       bind: params.bind,
@@ -213,6 +283,11 @@ export function buildQaGatewayConfig(params: {
       auth: {
         mode: "token",
         token: params.gatewayToken,
+      },
+      reload: {
+        // QA restart scenarios need deterministic reload timing instead of the
+        // much longer production deferral window.
+        deferralTimeoutMs: 1_000,
       },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
@@ -232,17 +307,20 @@ export function buildQaGatewayConfig(params: {
         mode: "off",
       },
     },
-    channels: {
-      ...DISABLED_BUNDLED_CHANNELS,
-      "qa-channel": {
-        enabled: true,
-        baseUrl: params.qaBusBaseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-        pollTimeoutMs: 250,
-      },
-    },
+    ...(includeQaChannel
+      ? {
+          channels: {
+            "qa-channel": {
+              enabled: true,
+              baseUrl: params.qaBusBaseUrl,
+              botUserId: "openclaw",
+              botDisplayName: "OpenClaw QA",
+              allowFrom: ["*"],
+              pollTimeoutMs: 250,
+            },
+          },
+        }
+      : {}),
     messages: {
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],

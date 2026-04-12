@@ -7,9 +7,11 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import { loadChannelPlugin } from "../load.js";
 import { loadChannelOutboundAdapter } from "../outbound/load.js";
+import { createChannelRegistryLoader } from "../registry-loader.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.js";
+
+const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
 
 const emptyRegistry = createTestRegistry([]);
 

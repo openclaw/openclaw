@@ -3,10 +3,15 @@ import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
@@ -22,8 +27,8 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -56,12 +61,12 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
     return null;
   }
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = match?.[1]?.trim().toLowerCase() ?? "";
+  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
-  const normalizedArgs = args?.trim() || "";
+  const normalizedArgs = normalizeOptionalString(args) || "";
   const rendered = template.includes("$ARGUMENTS")
     ? template.replaceAll("$ARGUMENTS", normalizedArgs)
     : template;
@@ -69,6 +74,17 @@ function expandBundleCommandPromptTemplate(template: string, args?: string): str
     return rendered.trim();
   }
   return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+}
+
+function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
+  if (wasMentioned !== true) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
 export type InlineActionResult =
@@ -79,8 +95,7 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-function extractTextFromToolResult(result: any): string | null {
+function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
     return null;
   }
@@ -235,6 +250,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
         allowGatewaySubagentBinding: true,
+        senderIsOwner: command.senderIsOwner,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -246,17 +262,17 @@ export async function handleInlineActions(params: {
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
       try {
-        const result = await tool.execute(toolCallId, {
+        const toolArgs: Parameters<NonNullable<typeof tool.execute>>[1] = {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        };
+        const result = await tool.execute(toolCallId, toolArgs);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ ${message}` } };
       }
@@ -292,8 +308,9 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && sessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
     const shouldSkip = cutoff
       ? shouldSkipMessageByAbortCutoff({
@@ -311,7 +328,7 @@ export async function handleInlineActions(params: {
       await (
         await import("./abort-cutoff.runtime.js")
       ).clearAbortCutoffInSessionRuntime({
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
         storePath,
@@ -345,10 +362,11 @@ export async function handleInlineActions(params: {
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
+      storePath,
       provider,
       model,
       contextTokens,
@@ -383,7 +401,7 @@ export async function handleInlineActions(params: {
         allowed: elevatedAllowed,
         failures: elevatedFailures,
       },
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,
@@ -467,7 +485,11 @@ export async function handleInlineActions(params: {
     }
     return stripMentions(stripped, ctx, cfg, agentId).trim();
   })();
-  if (didSendInlineStatus && remainingBodyAfterInlineStatus.length === 0) {
+  if (
+    didSendInlineStatus &&
+    (remainingBodyAfterInlineStatus.length === 0 ||
+      isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
+  ) {
     typing.cleanup();
     return { kind: "reply", reply: undefined };
   }

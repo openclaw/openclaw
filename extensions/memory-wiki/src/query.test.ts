@@ -1,25 +1,64 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { compileMemoryWikiVault } from "./compile.js";
+import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { getActiveMemorySearchManagerMock } = vi.hoisted(() => ({
-  getActiveMemorySearchManagerMock: vi.fn(),
-}));
+const { getActiveMemorySearchManagerMock, resolveDefaultAgentIdMock, resolveSessionAgentIdMock } =
+  vi.hoisted(() => ({
+    getActiveMemorySearchManagerMock: vi.fn(),
+    resolveDefaultAgentIdMock: vi.fn(() => "main"),
+    resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) =>
+      sessionKey === "agent:secondary:thread" ? "secondary" : "main",
+    ),
+  }));
 
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   getActiveMemorySearchManager: getActiveMemorySearchManagerMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  resolveSessionAgentId: resolveSessionAgentIdMock,
+}));
+
 const { createVault } = createMemoryWikiTestHarness();
+let suiteRoot = "";
+let caseIndex = 0;
 
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
+  resolveDefaultAgentIdMock.mockClear();
+  resolveSessionAgentIdMock.mockClear();
 });
+
+beforeAll(async () => {
+  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-query-suite-"));
+});
+
+afterAll(async () => {
+  if (suiteRoot) {
+    await fs.rm(suiteRoot, { recursive: true, force: true });
+  }
+});
+
+async function createQueryVault(options?: {
+  config?: MemoryWikiPluginConfig;
+  initialize?: boolean;
+}) {
+  return createVault({
+    prefix: "memory-wiki-query-",
+    rootDir: path.join(suiteRoot, `case-${caseIndex++}`),
+    initialize: options?.initialize,
+    config: options?.config,
+  });
+}
 
 function createAppConfig(): OpenClawConfig {
   return {
@@ -58,8 +97,7 @@ function createMemoryManager(overrides?: {
 
 describe("searchMemoryWiki", () => {
   it("finds wiki pages by title and body", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -79,9 +117,112 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          claims: [
+            {
+              id: "claim.alpha.postgres",
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "supported",
+              confidence: 0.91,
+              evidence: [{ sourceId: "source.alpha", lines: "12-18" }],
+            },
+          ],
+        },
+        body: "# Alpha\n\nsummary without the query phrase\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "postgresql" });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      corpus: "wiki",
+      path: "entities/alpha.md",
+      snippet: "Alpha uses PostgreSQL for production writes.",
+    });
+  });
+
+  it("ranks fresh supported claims ahead of stale contested claims", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha-fresh.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha.fresh",
+          title: "Alpha Fresh",
+          updatedAt: "2026-04-01T00:00:00.000Z",
+          claims: [
+            {
+              id: "claim.alpha.db.fresh",
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "supported",
+              confidence: 0.91,
+              evidence: [
+                {
+                  sourceId: "source.alpha",
+                  lines: "4-7",
+                  updatedAt: "2026-04-01T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Alpha Fresh\n\nsummary without the keyword\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha-stale.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha.stale",
+          title: "Alpha Stale",
+          updatedAt: "2025-10-01T00:00:00.000Z",
+          claims: [
+            {
+              id: "claim.alpha.db.stale",
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "contested",
+              confidence: 0.92,
+              evidence: [
+                {
+                  sourceId: "source.alpha.old",
+                  lines: "1-2",
+                  updatedAt: "2025-10-01T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Alpha Stale\n\nsummary without the keyword\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "postgresql" });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.path).toBe("entities/alpha-fresh.md");
+    expect(results[1]?.path).toBe("entities/alpha-stale.md");
+  });
+
   it("surfaces bridge provenance for imported source pages", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -115,8 +256,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("includes active memory results when shared search and all corpora are enabled", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "all" },
@@ -156,11 +296,52 @@ describe("searchMemoryWiki", () => {
     expect(results.some((result) => result.corpus === "wiki")).toBe(true);
     expect(results.some((result) => result.corpus === "memory")).toBe(true);
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
+    expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg: createAppConfig(),
+      agentId: "main",
+    });
+  });
+
+  it("uses the active session agent for shared memory search", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "memory/2026-04-07.md",
+          startLine: 1,
+          endLine: 2,
+          score: 1,
+          snippet: "secondary agent memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentSessionKey: "agent:secondary:thread",
+      query: "secondary",
+    });
+
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:secondary:thread",
+      config: createAppConfig(),
+    });
+    expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg: createAppConfig(),
+      agentId: "secondary",
+    });
   });
 
   it("allows per-call corpus overrides without changing config defaults", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "wiki" },
@@ -201,8 +382,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("keeps memory search disabled when the backend is local", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "local", corpus: "all" },
@@ -244,8 +424,7 @@ describe("searchMemoryWiki", () => {
 
 describe("getMemoryWikiPage", () => {
   it("reads wiki pages by relative path and slices line ranges", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -269,11 +448,52 @@ describe("getMemoryWikiPage", () => {
     expect(result?.content).toContain("line one");
     expect(result?.content).toContain("line two");
     expect(result?.content).not.toContain("line three");
+    expect(result?.totalLines).toBe(7);
+    expect(result?.truncated).toBe(true);
+  });
+
+  it("resolves compiled claim ids back to the owning page", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          claims: [
+            {
+              id: "claim.alpha.db",
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "supported",
+              evidence: [{ sourceId: "source.alpha", lines: "1-2" }],
+            },
+          ],
+        },
+        body: "# Alpha\n\nline one\nline two\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const result = await getMemoryWikiPage({
+      config,
+      lookup: "claim.alpha.db",
+    });
+
+    expect(result).toMatchObject({
+      corpus: "wiki",
+      path: "entities/alpha.md",
+      title: "Alpha",
+      id: "entity.alpha",
+    });
+    expect(result?.content).toContain("line one");
   });
 
   it("returns provenance for imported wiki source pages", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -312,8 +532,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("falls back to active memory reads when memory corpus is selected", async () => {
-    const { config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "memory" },
@@ -351,9 +570,41 @@ describe("getMemoryWikiPage", () => {
     });
   });
 
+  it("uses the active session agent for shared memory reads", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const manager = createMemoryManager({
+      readResult: {
+        path: "MEMORY.md",
+        text: "secondary memory line",
+      },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentSessionKey: "agent:secondary:thread",
+      lookup: "MEMORY.md",
+    });
+
+    expect(result?.corpus).toBe("memory");
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:secondary:thread",
+      config: createAppConfig(),
+    });
+    expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg: createAppConfig(),
+      agentId: "secondary",
+    });
+  });
+
   it("allows per-call get overrides to bypass wiki and force memory fallback", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "wiki" },

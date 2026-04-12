@@ -21,6 +21,7 @@ import {
   repairMatrixDirectRooms,
   type MatrixDirectRoomCandidate,
 } from "./matrix/direct-management.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
@@ -49,7 +50,7 @@ function markCliFailure(): void {
 }
 
 function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return formatMatrixErrorMessage(err);
 }
 
 function printJson(payload: unknown): void {

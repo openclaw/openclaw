@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
@@ -19,11 +21,11 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveRequestedAgentIdOrRespondError(params: {
   rawAgentId: unknown;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   respond: RespondFn;
 }) {
   const knownAgents = listAgentIds(params.cfg);
-  const requestedAgentId = typeof params.rawAgentId === "string" ? params.rawAgentId.trim() : "";
+  const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
   if (!requestedAgentId) {
     return undefined;
   }

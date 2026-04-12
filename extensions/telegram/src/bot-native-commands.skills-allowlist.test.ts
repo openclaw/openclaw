@@ -10,7 +10,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
+import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
 import { writeSkill } from "./test-support/write-skill.js";
 
 const tempDirs: string[] = [];

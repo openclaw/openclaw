@@ -2,6 +2,38 @@ import { describe, expect, it } from "vitest";
 import { slackDoctor } from "./doctor.js";
 
 describe("slack doctor", () => {
+  it("warns when mutable allowlist entries rely on disabled name matching", () => {
+    expect(
+      slackDoctor.collectMutableAllowlistWarnings?.({
+        cfg: {
+          channels: {
+            slack: {
+              allowFrom: ["alice"],
+              accounts: {
+                work: {
+                  dm: {
+                    allowFrom: ["U12345678"],
+                  },
+                  channels: {
+                    general: {
+                      users: ["bob"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as never,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("mutable allowlist entries across slack"),
+        expect.stringContaining("channels.slack.allowFrom: alice"),
+        expect.stringContaining("channels.slack.accounts.work.channels.general.users: bob"),
+      ]),
+    );
+  });
+
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {
     const normalize = slackDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();

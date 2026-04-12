@@ -1,16 +1,104 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
+  vi.fn((params: { artifactBasename: string }) => {
+    if (params.artifactBasename === "browser-control-auth.js") {
+      return {
+        ensureBrowserControlAuth: async () => ({ auth: {} }),
+        resolveBrowserControlAuth: () => ({ token: undefined, password: undefined }),
+        shouldAutoGenerateBrowserAuth: () => false,
+      };
+    }
+    if (params.artifactBasename === "browser-host-inspection.js") {
+      return {
+        parseBrowserMajorVersion: (raw: string | null | undefined) => {
+          const match = raw?.match(/\b(\d+)\./u);
+          return match?.[1] ? Number(match[1]) : null;
+        },
+        readBrowserVersion: () => null,
+        resolveGoogleChromeExecutableForPlatform: () => null,
+      };
+    }
+    if (params.artifactBasename === "browser-profiles.js") {
+      return {
+        resolveBrowserConfig: () => ({
+          attachOnly: false,
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cdpPortRangeEnd: 9420,
+          cdpPortRangeStart: 9222,
+          cdpProtocol: "http",
+          color: "#FF4500",
+          controlPort: 9223,
+          defaultProfile: "openclaw",
+          enabled: true,
+          evaluateEnabled: true,
+          extraArgs: [],
+          headless: true,
+          noSandbox: false,
+          profiles: {
+            openclaw: {
+              color: "#FF4500",
+              driver: "openclaw",
+              name: "openclaw",
+            },
+          },
+          remoteCdpHandshakeTimeoutMs: 3000,
+          remoteCdpTimeoutMs: 1500,
+        }),
+        resolveProfile: () => ({
+          attachOnly: false,
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cdpPort: 9222,
+          cdpUrl: "http://127.0.0.1:9222",
+          color: "#FF4500",
+          driver: "openclaw",
+          name: "openclaw",
+        }),
+      };
+    }
+    throw new Error(`unexpected public surface load: ${params.artifactBasename}`);
+  }),
+);
 
-vi.mock("./plugin-sdk/facade-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./plugin-sdk/facade-runtime.js")>(
-    "./plugin-sdk/facade-runtime.js",
-  );
-  return {
-    ...actual,
-    loadBundledPluginPublicSurfaceModuleSync,
-  };
+const facadeMockHelpers = vi.hoisted(() => {
+  const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
+    new Proxy(
+      {},
+      {
+        get(_target, property, receiver) {
+          return Reflect.get(load(), property, receiver);
+        },
+      },
+    ) as T;
+  const createLazyFacadeArrayValue = <T extends readonly unknown[]>(load: () => T): T =>
+    new Proxy([], {
+      get(_target, property, receiver) {
+        return Reflect.get(load(), property, receiver);
+      },
+    }) as unknown as T;
+  return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
+
+vi.mock("./plugin-sdk/facade-loader.js", () => ({
+  ...facadeMockHelpers,
+  listImportedBundledPluginFacadeIds: () => [],
+  loadBundledPluginPublicSurfaceModuleSync,
+  loadFacadeModuleAtLocationSync: vi.fn(),
+  resetFacadeLoaderStateForTest: vi.fn(),
+}));
+
+vi.mock("./plugin-sdk/facade-runtime.js", () => ({
+  ...facadeMockHelpers,
+  __testing: {},
+  canLoadActivatedBundledPluginPublicSurface: () => true,
+  listImportedBundledPluginFacadeIds: () => [],
+  loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
+  resetFacadeRuntimeStateForTest: vi.fn(),
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
+}));
 
 describe("plugin activation boundary", () => {
   beforeEach(() => {
@@ -20,13 +108,13 @@ describe("plugin activation boundary", () => {
   let ambientImportsPromise: Promise<void> | undefined;
   let configHelpersPromise:
     | Promise<{
-        isChannelConfigured: typeof import("./config/channel-configured.js").isChannelConfigured;
+        isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
         resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
       }>
     | undefined;
   let modelSelectionPromise:
     | Promise<{
-        normalizeModelRef: typeof import("./agents/model-selection.js").normalizeModelRef;
+        normalizeModelRef: typeof import("./agents/model-selection-normalize.js").normalizeModelRef;
       }>
     | undefined;
   let browserHelpersPromise:
@@ -50,25 +138,25 @@ describe("plugin activation boundary", () => {
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
       import("./commands/onboard-custom.js"),
-      import("./commands/opencode-go-model-default.js"),
-      import("./commands/opencode-zen-model-default.js"),
+      import("./plugins/provider-model-defaults.js"),
+      import("./plugins/provider-model-primary.js"),
     ]).then(() => undefined);
     return ambientImportsPromise;
   }
 
   function importConfigHelpers() {
     configHelpersPromise ??= Promise.all([
-      import("./config/channel-configured.js"),
+      import("./config/channel-configured-shared.js"),
       import("./agents/model-auth-env.js"),
     ]).then(([channelConfigured, modelAuthEnv]) => ({
-      isChannelConfigured: channelConfigured.isChannelConfigured,
+      isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
       resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
     }));
     return configHelpersPromise;
   }
 
   function importModelSelection() {
-    modelSelectionPromise ??= import("./agents/model-selection.js").then((module) => ({
+    modelSelectionPromise ??= import("./agents/model-selection-normalize.js").then((module) => ({
       normalizeModelRef: module.normalizeModelRef,
     }));
     return modelSelectionPromise;
@@ -116,15 +204,20 @@ describe("plugin activation boundary", () => {
   });
 
   it("does not load bundled plugins for config and env detection helpers", async () => {
-    const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
+    const { isStaticallyChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
-    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
-    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+    expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
+      true,
+    );
+    expect(isStaticallyChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
+    expect(isStaticallyChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
     expect(
-      isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }),
+      isStaticallyChannelConfigured({}, "irc", {
+        IRC_HOST: "irc.example.com",
+        IRC_NICK: "openclaw",
+      }),
     ).toBe(true);
-    expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
+    expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     expect(
       resolveEnvApiKey("anthropic-vertex", {
         ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
@@ -176,7 +269,18 @@ describe("plugin activation boundary", () => {
     ).not.toContain("secret");
     expect(browser.readBrowserVersion("/path/that/does/not/exist")).toBeNull();
     expect(browser.resolveGoogleChromeExecutableForPlatform("aix")).toBeNull();
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(
+      loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
+        ([params]) => params.artifactBasename,
+      ),
+    ).toEqual([
+      "browser-host-inspection.js",
+      "browser-control-auth.js",
+      "browser-profiles.js",
+      "browser-profiles.js",
+      "browser-host-inspection.js",
+      "browser-host-inspection.js",
+    ]);
   });
 
   it("keeps browser cleanup helpers cold when browser is disabled", async () => {

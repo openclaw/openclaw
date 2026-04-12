@@ -1,5 +1,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -17,7 +18,11 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -32,7 +37,19 @@ export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
   init?: RequestInit;
+  capture?:
+    | false
+    | {
+        flowId?: string;
+        meta?: Record<string, unknown>;
+      };
   maxRedirects?: number;
+  /**
+   * Allow replaying unsafe request methods and bodies across cross-origin redirects.
+   * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
+   * Defaults to false.
+   */
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   policy?: SsrFPolicy;
@@ -104,14 +121,15 @@ function createPolicyDispatcherWithoutPinnedDns(
   if (!dispatcherPolicy) {
     return null;
   }
-  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
 
   if (dispatcherPolicy.mode === "direct") {
-    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
+    return createHttp1Agent(
+      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+    );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
-    return new EnvHttpProxyAgent({
+    return createHttp1EnvHttpProxyAgent({
       ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
       ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
     });
@@ -119,11 +137,11 @@ function createPolicyDispatcherWithoutPinnedDns(
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
   return dispatcherPolicy.proxyTls
-    ? new ProxyAgent({
+    ? createHttp1ProxyAgent({
         uri: proxyUrl,
         requestTls: { ...dispatcherPolicy.proxyTls },
       })
-    : new ProxyAgent(proxyUrl);
+    : createHttp1ProxyAgent({ uri: proxyUrl });
 }
 
 async function assertExplicitProxyAllowed(
@@ -148,8 +166,14 @@ async function assertExplicitProxyAllowed(
     policy:
       dispatcherPolicy.allowPrivateProxy === true
         ? {
+            // The proxy hostname is operator-configured, not user input.
+            // Clear the target-scoped hostnameAllowlist so configured proxies
+            // like localhost or internal hosts aren't rejected by an allowlist
+            // that was built for the target URL (e.g. api.telegram.org).
+            // Private-network IP checks still apply via allowPrivateNetwork.
             ...policy,
             allowPrivateNetwork: true,
+            hostnameAllowlist: undefined,
           }
         : policy,
   });
@@ -224,6 +248,27 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
+function rewriteRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  allowUnsafeReplay: boolean;
+}): RequestInit | undefined {
+  const { init, allowUnsafeReplay } = params;
+  if (!init || allowUnsafeReplay) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  if (currentMethod === "GET" || currentMethod === "HEAD") {
+    return init;
+  }
+
+  return {
+    ...init,
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -275,18 +320,21 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
-        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-        dispatcher = new EnvHttpProxyAgent();
+        dispatcher = createHttp1EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else {
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
@@ -313,6 +361,24 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
 
+      if (params.capture !== false) {
+        captureHttpExchange({
+          url: parsedUrl.toString(),
+          method: currentInit?.method ?? "GET",
+          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+          requestBody:
+            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+          response,
+          transport: "http",
+          flowId: params.capture?.flowId,
+          meta: {
+            captureOrigin: "guarded-fetch",
+            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+            ...params.capture?.meta,
+          },
+        });
+      }
+
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
         if (!location) {
@@ -332,6 +398,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         }
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = rewriteRedirectInitForCrossOrigin({
+            init: currentInit,
+            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+          });
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);

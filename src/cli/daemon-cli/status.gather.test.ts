@@ -241,6 +241,24 @@ describe("gatherDaemonStatus", () => {
     expect(loadConfigCalls).not.toHaveBeenCalled();
   });
 
+  it("defaults unset daemon bind mode to loopback for host-side status reporting", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
+    expect(status.gateway?.bindMode).toBe("loopback");
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },
@@ -474,7 +492,9 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(status.rpc?.ok).toBe(false);
-    expect(status.rpc?.authWarning).toContain("gateway.auth.token SecretRef is unavailable");
+    expect(status.rpc?.authWarning).toContain(
+      "gateway.auth.token SecretRef is unresolved in this command path",
+    );
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 

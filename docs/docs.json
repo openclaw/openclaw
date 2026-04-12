@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/mcp",
+      "destination": "/cli/mcp"
+    },
+    {
       "source": "/providers/modelstudio",
       "destination": "/providers/qwen"
     },
@@ -75,6 +79,10 @@
     {
       "source": "/plugins/agent-tools",
       "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/cli/capability",
+      "destination": "/cli/infer"
     },
     {
       "source": "/tools/capability-cookbook",
@@ -123,14 +131,6 @@
     {
       "source": "/context",
       "destination": "/concepts/context"
-    },
-    {
-      "source": "/zh-CN",
-      "destination": "/zh-CN/index"
-    },
-    {
-      "source": "/zh-CN/",
-      "destination": "/zh-CN/index"
     },
     {
       "source": "/compaction",
@@ -1078,6 +1078,7 @@
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
+                      "concepts/active-memory",
                       "concepts/dreaming"
                     ]
                   },
@@ -1116,7 +1117,11 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/codex-harness",
+                  "plugins/webhooks",
                   "plugins/voice-call",
+                  "plugins/memory-wiki",
+                  "plugins/zalouser",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1132,6 +1137,7 @@
                       "plugins/sdk-overview",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",
@@ -1165,6 +1171,7 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/media-overview",
                   "tools/apply-patch",
                   {
                     "group": "Web Browser",
@@ -1187,6 +1194,7 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/minimax-search",
                       "tools/ollama-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
@@ -1236,21 +1244,24 @@
                 "group": "Providers",
                 "pages": [
                   "providers/alibaba",
-                  "providers/anthropic",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
+                  "providers/anthropic",
+                  "providers/arcee",
                   "providers/chutes",
-                  "providers/comfy",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
+                  "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
                   "providers/fal",
+                  "providers/fireworks",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
+                  "providers/inferrs",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/minimax",
@@ -1272,9 +1283,9 @@
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
-                  "providers/vydra",
                   "providers/vllm",
                   "providers/volcengine",
+                  "providers/vydra",
                   "providers/xai",
                   "providers/xiaomi",
                   "providers/zai"
@@ -1366,6 +1377,7 @@
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
+                      "gateway/cli-backends",
                       "gateway/local-models"
                     ]
                   },
@@ -1452,6 +1464,7 @@
                       "cli/agent",
                       "cli/agents",
                       "cli/hooks",
+                      "cli/infer",
                       "cli/memory",
                       "cli/message",
                       "cli/models",
@@ -1502,7 +1515,8 @@
                       "cli/completion",
                       "cli/dns",
                       "cli/docs",
-                      "cli/mcp"
+                      "cli/mcp",
+                      "cli/wiki"
                     ]
                   }
                 ]
@@ -1536,6 +1550,7 @@
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "reference/memory-config",
+                  "reference/rich-output-protocol",
                   "date-time"
                 ]
               },
