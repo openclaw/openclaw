@@ -484,6 +484,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildEmbeddedRunPayloads: vi.fn(() => []),
   }));
 
+  vi.doMock("./compaction-hooks.js", () => ({
+    runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
+  }));
+
   vi.doMock("./compact.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
