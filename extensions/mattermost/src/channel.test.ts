@@ -453,6 +453,60 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("forwards mediaLocalRoots and mediaReadFile on handleAction send", async () => {
+      const cfg = createMattermostTestConfig();
+      const mockReadFile = vi.fn().mockResolvedValue(Buffer.from("test"));
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            media: "/tmp/workspace/image.png",
+          },
+          cfg,
+          accountId: "default",
+          mediaLocalRoots: ["/tmp/workspace"],
+          mediaReadFile: mockReadFile,
+        }),
+      );
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          mediaUrl: "/tmp/workspace/image.png",
+          mediaLocalRoots: ["/tmp/workspace"],
+          mediaReadFile: mockReadFile,
+        }),
+      );
+    });
+
+    it("forwards cfg on handleAction send", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          cfg,
+        }),
+      );
+    });
   });
 
   describe("outbound", () => {

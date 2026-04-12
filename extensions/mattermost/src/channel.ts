@@ -142,7 +142,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, mediaReadFile }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
@@ -220,11 +220,14 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
+      cfg,
       accountId: resolvedAccountId,
       replyToId,
       buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
     });
 
     return {
