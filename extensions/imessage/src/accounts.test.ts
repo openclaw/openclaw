@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveIMessageAccount } from "./accounts.js";
+import { listEnabledIMessageAccounts, resolveIMessageAccount } from "./accounts.js";
 
 describe("resolveIMessageAccount", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -25,5 +25,55 @@ describe("resolveIMessageAccount", () => {
     expect(resolved.config.cliPath).toBe("/usr/local/bin/imsg-work");
     expect(resolved.config.dmPolicy).toBe("open");
     expect(resolved.configured).toBe(true);
+  });
+});
+
+describe("listEnabledIMessageAccounts", () => {
+  it("skips default when it is only fallback config and a named account exists", () => {
+    const accounts = listEnabledIMessageAccounts({
+      channels: {
+        imessage: {
+          enabled: true,
+          accounts: {
+            "swang430-gmail-com": {
+              enabled: true,
+              cliPath: "imsg",
+              dmPolicy: "pairing",
+              groupPolicy: "allowlist",
+            },
+            default: {
+              dmPolicy: "pairing",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(accounts.map((account) => account.accountId)).toEqual(["swang430-gmail-com"]);
+  });
+
+  it("keeps default when it has distinct runtime config", () => {
+    const accounts = listEnabledIMessageAccounts({
+      channels: {
+        imessage: {
+          enabled: true,
+          accounts: {
+            work: {
+              enabled: true,
+              cliPath: "imsg-work",
+              dmPolicy: "pairing",
+            },
+            default: {
+              enabled: true,
+              cliPath: "imsg-personal",
+              dmPolicy: "pairing",
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(accounts.map((account) => account.accountId).toSorted()).toEqual(["default", "work"]);
   });
 });
