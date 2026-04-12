@@ -256,9 +256,7 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 
 function registerCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
-  if (!cleanupState.registered) {
-    cleanupState.registered = true;
-  }
+  cleanupState.registered = true;
   if (!cleanupState.exitHandler) {
     // Cleanup on normal exit and process.exit() calls
     cleanupState.exitHandler = () => {
