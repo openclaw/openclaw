@@ -6,7 +6,7 @@ import {
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
+
 
 export type GatewayModelChoice = ModelCatalogEntry;
 
@@ -34,8 +34,7 @@ export async function loadGatewayModelCatalog(params?: {
   // Augment with custom-configured provider models from models.providers.*.models[].
   // These are absent from the built-in Pi SDK registry but their capability
   // declarations (e.g. input: ["text", "image"]) should be honoured for routing.
-  const providerConfigs = (cfg as { models?: { providers?: Record<string, ModelProviderConfig | undefined> } } | undefined)
-    ?.models?.providers;
+  const providerConfigs = cfg.models?.providers;
 
   if (!providerConfigs) {
     return catalog;
@@ -52,8 +51,10 @@ export async function loadGatewayModelCatalog(params?: {
       if (!id) {
         continue;
       }
-      // Skip if already present (case-insensitive) to avoid duplicates.
-      if (findModelInCatalog(catalog, providerId, id)) {
+      // Skip if already present in the base catalog or in the extra slice being
+      // built (case-insensitive) to avoid duplicates when the same model ID
+      // appears more than once in providerConfig.models[].
+      if (findModelInCatalog(catalog, providerId, id) || findModelInCatalog(extra, providerId, id)) {
         continue;
       }
       const rawInput: unknown[] = Array.isArray(m.input) ? m.input : [];
