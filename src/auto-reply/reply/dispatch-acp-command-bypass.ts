@@ -41,12 +41,12 @@ export function shouldBypassAcpDispatchForCommand(
     surface: ctx.Surface ?? ctx.Provider ?? "",
     commandSource: ctx.CommandSource,
   });
-  if (!normalized.startsWith("/") && maybeResolveTextAlias(candidate, cfg) != null) {
-    return allowTextCommands;
-  }
-
   if (isResetCommandCandidate(normalized)) {
     return true;
+  }
+
+  if (maybeResolveTextAlias(candidate, cfg) != null) {
+    return allowTextCommands;
   }
 
   if (!normalized.startsWith("!")) {
