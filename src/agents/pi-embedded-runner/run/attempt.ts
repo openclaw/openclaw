@@ -1946,9 +1946,6 @@ export async function runEmbeddedAttempt(
             }
           }
         } catch (err) {
-          // Yield-triggered abort is intentional — treat as clean stop, not error.
-          // Check the abort reason to distinguish from external aborts (timeout, user cancel)
-          // that may race after yieldDetected is set.
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&
@@ -1956,8 +1953,6 @@ export async function runEmbeddedAttempt(
             err.cause === "sessions_yield";
           if (yieldAborted) {
             aborted = false;
-            // Ensure the session abort has mostly settled before proceeding, but
-            // don't deadlock the whole run if the underlying session abort hangs.
             await waitForSessionsYieldAbortSettle({
               settlePromise: yieldAbortSettled,
               runId: params.runId,
@@ -2174,7 +2169,6 @@ export async function runEmbeddedAttempt(
             shouldRecordCompletedBootstrapTurn,
             promptError,
             aborted,
-            yieldAborted,
             timedOutDuringCompaction,
             compactionOccurredThisAttempt,
           })
