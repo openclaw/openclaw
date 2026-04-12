@@ -138,6 +138,15 @@ export type MsgContext = {
   SenderId?: string;
   SenderUsername?: string;
   SenderTag?: string;
+  /**
+   * Discord client status of the sender (desktop/mobile/web).
+   * Populated from the Discord presence cache when the GuildPresences intent is enabled.
+   */
+  SenderClientStatus?: {
+    desktop?: string;
+    mobile?: string;
+    web?: string;
+  };
   SenderE164?: string;
   Timestamp?: number;
   /** Provider label (e.g. whatsapp, telegram). */

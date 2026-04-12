@@ -70,6 +70,7 @@ import {
   resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
+import { getPresence } from "./presence-cache.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
@@ -282,6 +283,17 @@ export async function processDiscordMessage(
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
+  // Resolve sender's Discord client status from the presence cache.
+  // Requires GuildPresences intent to be enabled (channels.discord.intents.presence: true).
+  const senderPresence = getPresence(accountId, sender.id);
+  const senderClientStatus = senderPresence?.client_status
+    ? {
+        desktop: senderPresence.client_status.desktop ?? undefined,
+        mobile: senderPresence.client_status.mobile ?? undefined,
+        web: senderPresence.client_status.web ?? undefined,
+      }
+    : undefined;
+
   const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
@@ -479,6 +491,7 @@ export async function processDiscordMessage(
     SenderId: sender.id,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
+    SenderClientStatus: senderClientStatus,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     UntrustedContext: untrustedContext,

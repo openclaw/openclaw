@@ -137,6 +137,7 @@ export function buildInboundUserContextPrefix(
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length
         : undefined,
+    sender_client_status: ctx.SenderClientStatus ?? undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
