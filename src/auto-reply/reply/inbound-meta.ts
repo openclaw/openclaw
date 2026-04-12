@@ -29,12 +29,31 @@ function sanitizePromptBody(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
+function neutralizeMarkdownFences(value: string): string {
+  return value.replaceAll("```", "`\u200b``");
+}
+
+function sanitizeUntrustedJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return neutralizeMarkdownFences(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeUntrustedJsonValue(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, sanitizeUntrustedJsonValue(entry)]),
+  );
+}
+
 function formatUntrustedJsonBlock(label: string, payload: unknown): string {
   return [
     label,
-    "BEGIN_UNTRUSTED_JSON",
-    JSON.stringify(payload, null, 2),
-    "END_UNTRUSTED_JSON",
+    "```json",
+    JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
+    "```",
   ].join("\n");
 }
 
