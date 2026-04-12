@@ -210,7 +210,7 @@ export function computeTaskKey(
   target: WecomWebhookTarget,
   msg: WebhookInboundMessage,
 ): string | undefined {
-  const msgid = msg.msgid ? String(msg.msgid) : "";
+  const msgid = msg.msgid ? msg.msgid : "";
   if (!msgid) {
     return undefined;
   }
@@ -593,11 +593,7 @@ function hasLikelyExtension(name?: string): boolean {
 
 /** Normalize Content-Type */
 function normalizeContentType(raw?: string | null): string | undefined {
-  const normalized = toStr(raw)
-    .trim()
-    .split(";")[0]
-    ?.trim()
-    .toLowerCase();
+  const normalized = toStr(raw).trim().split(";")[0]?.trim().toLowerCase();
   return normalized || undefined;
 }
 

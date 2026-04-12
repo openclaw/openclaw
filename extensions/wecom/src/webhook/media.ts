@@ -80,7 +80,7 @@ export async function decryptWecomMediaWithMeta(
 
 /** Normalize MIME type */
 function normalizeMime(contentType?: string | null): string | undefined {
-  const raw = String(contentType ?? "").trim();
+  const raw = (contentType ?? "").trim();
   if (!raw) {
     return undefined;
   }
@@ -89,7 +89,7 @@ function normalizeMime(contentType?: string | null): string | undefined {
 
 /** Extract filename from Content-Disposition */
 function extractFilenameFromContentDisposition(disposition?: string | null): string | undefined {
-  const raw = String(disposition ?? "").trim();
+  const raw = (disposition ?? "").trim();
   if (!raw) {
     return undefined;
   }

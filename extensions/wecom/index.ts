@@ -41,7 +41,9 @@ export default defineBundledChannelEntry({
       specifier: "./mcp-api.js",
       exportName: "createWeComMcpTool",
     });
-    api.registerTool(createWeComMcpTool() as unknown as Parameters<typeof api.registerTool>[0], { name: "wecom_mcp" });
+    api.registerTool(createWeComMcpTool() as unknown as Parameters<typeof api.registerTool>[0], {
+      name: "wecom_mcp",
+    });
 
     const createWecomAgentWebhookHandler = loadBundledEntryExportSync<
       typeof import("./agent-webhook-api.js").createWecomAgentWebhookHandler
@@ -85,7 +87,7 @@ export default defineBundledChannelEntry({
     // Inject media-send instructions (WeCom channel only)
     api.on("before_prompt_build", (_event, ctx) => {
       if (ctx?.channelId !== CHANNEL_ID) {
-        return;
+        return undefined;
       }
       return {
         appendSystemContext: [

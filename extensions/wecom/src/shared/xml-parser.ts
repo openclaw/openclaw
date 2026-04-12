@@ -5,7 +5,6 @@
 
 import { XMLParser } from "fast-xml-parser";
 import type { WecomAgentInboundMessage } from "../types/index.js";
-
 import { toStr } from "./to-str.js";
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -92,7 +91,7 @@ export function extractToUser(msg: WecomAgentInboundMessage): string {
  * Extracts the group chat ID from XML
  */
 export function extractChatId(msg: WecomAgentInboundMessage): string | undefined {
-  return msg.ChatId ? String(msg.ChatId) : undefined;
+  return msg.ChatId ? msg.ChatId : undefined;
 }
 
 /**

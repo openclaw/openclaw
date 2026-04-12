@@ -69,7 +69,7 @@ export class StreamStore {
     const streamId = crypto.randomBytes(16).toString("hex");
 
     if (params.msgid) {
-      this.msgidToStreamId.set(String(params.msgid), streamId);
+      this.msgidToStreamId.set(params.msgid, streamId);
     }
 
     this.streams.set(streamId, {
@@ -108,13 +108,13 @@ export class StreamStore {
    * @param msgid WeCom message ID
    */
   getStreamByMsgId(msgid: string): string | undefined {
-    return this.msgidToStreamId.get(String(msgid));
+    return this.msgidToStreamId.get(msgid);
   }
 
   /** Manually set msgid → streamId mapping */
   setStreamIdForMsgId(msgid: string, streamId: string): void {
-    const key = String(msgid).trim();
-    const value = String(streamId).trim();
+    const key = msgid.trim();
+    const value = streamId.trim();
     if (!key || !value) {
       return;
     }

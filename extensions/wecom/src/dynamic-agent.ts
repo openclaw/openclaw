@@ -32,7 +32,7 @@ export function getDynamicAgentConfig(config: OpenClawConfig): DynamicAgentConfi
 }
 
 function sanitizeDynamicIdPart(value: string): string {
-  return String(value)
+  return value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "_");
@@ -74,7 +74,7 @@ export function shouldUseDynamicAgent(params: {
   }
 
   // Admins bypass dynamic routing
-  const sender = String(senderId).trim().toLowerCase();
+  const sender = senderId.trim().toLowerCase();
   const isAdmin = dynamicConfig.adminUsers.some((admin) => admin.trim().toLowerCase() === sender);
   if (isAdmin) {
     return false;

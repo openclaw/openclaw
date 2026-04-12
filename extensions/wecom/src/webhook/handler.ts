@@ -12,6 +12,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WecomCrypto } from "@wecom/aibot-node-sdk";
+import { toStr } from "../shared/to-str.js";
 import { resolveWecomEgressProxyUrl } from "../utils.js";
 import { resolveWecomSenderUserId } from "./helpers.js";
 import {
@@ -23,8 +24,6 @@ import {
 import { getRegisteredTargets, getWebhookTargetsMap, parseWebhookPath } from "./target.js";
 import { hasActiveTargets } from "./target.js";
 import type { WecomWebhookTarget, WebhookInboundMessage } from "./types.js";
-
-import { toStr } from "../shared/to-str.js";
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -77,9 +76,7 @@ function shouldProcessBotInboundMessage(msg: WebhookInboundMessage): {
   }
 
   // In WeCom Bot callbacks, chattype is a flat field (not nested inside chat_info)
-  const chatType = toStr(msg.chattype)
-    .trim()
-    .toLowerCase();
+  const chatType = toStr(msg.chattype).trim().toLowerCase();
   if (chatType === "group") {
     const chatId = msg.chatid?.trim();
     if (!chatId) {
@@ -333,8 +330,8 @@ export async function handleWecomWebhookRequest(
   const url = req.url ?? "/";
   const method = (req.method ?? "GET").toUpperCase();
   const remote = req.socket?.remoteAddress ?? "unknown";
-  const ua = String(req.headers["user-agent"] ?? "");
-  const cl = String(req.headers["content-length"] ?? "");
+  const ua = req.headers["user-agent"] ?? "";
+  const cl = req.headers["content-length"] ?? "";
   const query = parseQuery(url);
   const hasTimestamp = Boolean(query.timestamp);
   const hasNonce = Boolean(query.nonce);

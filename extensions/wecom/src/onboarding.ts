@@ -22,10 +22,10 @@ export const wecomSetupAdapter: ChannelSetupAdapter = {
     const patch: Partial<WeComConfig> = {};
 
     if (input.token !== undefined) {
-      patch.botId = String(input.token).trim();
+      patch.botId = input.token.trim();
     }
     if (input.privateKey !== undefined) {
-      patch.secret = String(input.privateKey).trim();
+      patch.secret = input.privateKey.trim();
     }
 
     // Enable by default on first-time configuration
@@ -84,7 +84,7 @@ const dmPolicy: ChannelSetupDmPolicy = {
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
     });
 
-    const allowFrom = String(entry ?? "")
+    const allowFrom = (entry ?? "")
       .split(/[\n,;]+/g)
       .map((s) => s.trim())
       .filter(Boolean);

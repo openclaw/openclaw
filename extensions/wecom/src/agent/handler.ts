@@ -289,7 +289,7 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
         return true;
       }
     }
-    const content = String(extractContent(msg) ?? "");
+    const content = extractContent(msg) ?? "";
 
     const preview = content.length > 100 ? `${content.slice(0, 100)}…` : content;
     log?.(

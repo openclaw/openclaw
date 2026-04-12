@@ -519,7 +519,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     },
     collectStatusIssues: (accounts): ChannelStatusIssue[] =>
       accounts.flatMap((entry) => {
-        const accountId = String(entry.accountId ?? DEFAULT_ACCOUNT_ID);
+        const accountId = entry.accountId ?? DEFAULT_ACCOUNT_ID;
         const enabled = entry.enabled !== false;
         const configured = entry.configured === true;
         if (!enabled) {

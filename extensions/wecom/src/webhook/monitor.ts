@@ -160,7 +160,7 @@ export async function handleInboundMessage(
   // active_merged / queued_merged: merged into a batch
   // Create an "ack stream" for this msgid, initially showing "merged queued", auto-updated to "merged done" when batch finishes
   const ackStreamId = streamStore.createStream({
-    msgid: message.msgid ? String(message.msgid) : undefined,
+    msgid: message.msgid ? message.msgid : undefined,
   });
   streamStore.updateStream(ackStreamId, (s) => {
     s.finished = false;
@@ -168,7 +168,7 @@ export async function handleInboundMessage(
     s.content = mergedQueuedPlaceholder;
   });
   if (message.msgid) {
-    streamStore.setStreamIdForMsgId(String(message.msgid), ackStreamId);
+    streamStore.setStreamIdForMsgId(message.msgid, ackStreamId);
   }
   streamStore.addAckStreamForBatch({ batchStreamId: streamId, ackStreamId });
   target.runtime.log?.(
@@ -271,7 +271,7 @@ export async function handleTemplateCardEvent(
   const state = getMonitorState();
   const { streamStore, activeReplyStore } = state;
 
-  const msgid = message.msgid ? String(message.msgid) : undefined;
+  const msgid = message.msgid ? message.msgid : undefined;
 
   // 1. msgid dedup: skip already processed card events
   if (msgid && streamStore.getStreamByMsgId(msgid)) {
@@ -306,7 +306,7 @@ export async function handleTemplateCardEvent(
   }
 
   target.runtime.log?.(
-    `[webhook] template_card_event (event_key=${String(toStr(cardEvent?.event_key, "N/A"))}, msgid=${msgid ?? "N/A"})`,
+    `[webhook] template_card_event (event_key=${toStr(cardEvent?.event_key, "N/A")}, msgid=${msgid ?? "N/A"})`,
   );
 
   // 3. Create stream and mark as started
