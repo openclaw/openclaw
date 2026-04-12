@@ -233,6 +233,11 @@ export type AgentDefaultsConfig = {
   llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** LLM slug generator tuning. */
+  slugGenerator?: {
+    /** Timeout in seconds. Local models may need a higher value (e.g. 120). Default: 15. */
+    timeoutSeconds?: number;
+  };
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**

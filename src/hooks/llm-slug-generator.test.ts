@@ -57,4 +57,45 @@ describe("generateSlugViaLLM", () => {
       }),
     );
   });
+
+  it("prefers slugGenerator.timeoutSeconds over general timeoutSeconds", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            timeoutSeconds: 500,
+            slugGenerator: { timeoutSeconds: 120 },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        timeoutMs: 120_000,
+      }),
+    );
+  });
+
+  it("falls back to default when slugGenerator is present but timeoutSeconds is not", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            slugGenerator: {},
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        timeoutMs: 15_000,
+      }),
+    );
+  });
 });

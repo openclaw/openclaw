@@ -23,6 +23,12 @@ const log = createSubsystemLogger("llm-slug-generator");
 const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
+  // Prefer slug-generator-specific timeout if configured
+  const slugTimeoutSeconds = cfg.agents?.defaults?.slugGenerator?.timeoutSeconds;
+  if (typeof slugTimeoutSeconds === "number" && Number.isFinite(slugTimeoutSeconds) && slugTimeoutSeconds > 0) {
+    return slugTimeoutSeconds * 1_000;
+  }
+  // Fall back to general agent timeout
   const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
   if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
     return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;

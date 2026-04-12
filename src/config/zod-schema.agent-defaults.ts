@@ -180,6 +180,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    slugGenerator: z
+      .object({
+        timeoutSeconds: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Timeout in seconds for the LLM slug generator. Local models may need a higher value (e.g. 120) to process the prompt. Default: 15 seconds.",
+          ),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
