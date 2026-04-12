@@ -272,6 +272,47 @@ export async function runEmbeddedPiAgent(
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
 
+      // --- Hybrid personality model swap ---
+      // Resolve personality mode BEFORE resolveModelAsync so personality
+      // turns get the personality model resolved instead of the execution
+      // model. The model swap happens at the provider/modelId level so the
+      // full model resolution pipeline (auth, registry, transport) runs
+      // against the correct model.
+      const { sessionAgentId: earlySessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId ?? undefined,
+      });
+      const personalityMode =
+        resolveAgentPersonalityMode(params.config, earlySessionAgentId) ?? "off";
+      const personalityModelRef =
+        personalityMode === "hybrid"
+          ? resolveAgentPersonalityModel(params.config, earlySessionAgentId)
+          : undefined;
+      const turnIntent =
+        personalityMode === "hybrid"
+          ? classifyTurnIntent({
+              prompt: params.prompt,
+              trigger: params.trigger,
+              disableTools: params.disableTools,
+            })
+          : ("execution" as const);
+      // Store the original execution model for agentMeta display
+      const executionModelId = modelId;
+      const executionProvider = provider;
+      // Swap to personality model for personality turns
+      if (personalityMode === "hybrid" && turnIntent === "personality" && personalityModelRef) {
+        const parts = personalityModelRef.split("/");
+        if (parts.length === 2) {
+          provider = parts[0];
+          modelId = parts[1];
+        } else {
+          // Bare model name — keep the same provider
+          modelId = personalityModelRef;
+        }
+      }
+      // --- End personality model swap ---
+
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
         provider,
         modelId,
@@ -414,30 +455,9 @@ export async function runEmbeddedPiAgent(
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
 
-      // Hybrid personality mode: route turns to execution model or personality
-      // model based on intent classification. The user sees a synthetic model
-      // name like `gpt-5.4-psn` so the switching is invisible.
-      const personalityMode = resolveAgentPersonalityMode(params.config, sessionAgentId) ?? "off";
-      // The personality model ref and turn intent are resolved upfront for
-      // the full turn-routing integration (routing different turns to
-      // different models). Currently only the agentMeta.model display name
-      // is overridden; the actual model-switch dispatch for personality
-      // turns will be wired in a follow-up once the live-model-switch
-      // infrastructure supports intent-based routing.
-      const _personalityModelRef =
-        personalityMode === "hybrid"
-          ? resolveAgentPersonalityModel(params.config, sessionAgentId)
-          : undefined;
-      const _turnIntent =
-        personalityMode === "hybrid"
-          ? classifyTurnIntent({
-              prompt: params.prompt,
-              trigger: params.trigger,
-              disableTools: params.disableTools,
-            })
-          : ("execution" as const);
-      void _personalityModelRef;
-      void _turnIntent;
+      // personalityMode, personalityModelRef, and turnIntent are resolved
+      // earlier (before resolveModelAsync) so the personality model is
+      // actually resolved for personality turns.
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
@@ -1517,9 +1537,11 @@ export async function runEmbeddedPiAgent(
             provider: sessionLastAssistant?.provider ?? provider,
             // In hybrid personality mode, show the synthetic `-psn` model name
             // so the execution↔personality switching is invisible to the user.
+            // Use the stored executionModelId (not model.id which may be the
+            // personality model for personality turns).
             model:
               personalityMode === "hybrid"
-                ? buildPersonalityHybridModelName(model.id)
+                ? buildPersonalityHybridModelName(executionModelId)
                 : (sessionLastAssistant?.model ?? model.id),
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
@@ -1731,6 +1753,29 @@ export async function runEmbeddedPiAgent(
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
+
+          // --- Personality closeout logging ---
+          // When hybrid personality mode is active and this was an execution
+          // turn (routed to 5.4), log that the closeout would fire. The full
+          // emotional closeout (running 5.2 on the execution output) requires
+          // a second model call through the attempt pipeline and will be
+          // wired in a follow-up. For now, the turn-routing (personality
+          // turns → 5.2, execution turns → 5.4) is fully wired above.
+          if (
+            personalityMode === "hybrid" &&
+            turnIntent === "execution" &&
+            !aborted &&
+            payloads.length > 0 &&
+            !attempt.didSendViaMessagingTool
+          ) {
+            log.info(
+              `personality-closeout candidate: runId=${params.runId} ` +
+                `executionModel=${executionProvider}/${executionModelId} ` +
+                `personalityModel=${personalityModelRef ?? "none"} ` +
+                `payloads=${payloads.length}`,
+            );
+          }
+          // --- End personality closeout ---
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
