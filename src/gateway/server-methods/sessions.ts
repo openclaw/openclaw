@@ -156,7 +156,6 @@ function emitSessionsChanged(
   if (drainConnIds.size === 0) {
     return;
   }
-  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
   const isTeardown =
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
 
@@ -177,6 +176,8 @@ function emitSessionsChanged(
   if (evSubs.size === 0) {
     return;
   }
+
+  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
 
   context.broadcastToConnIds(
     "sessions.changed",
