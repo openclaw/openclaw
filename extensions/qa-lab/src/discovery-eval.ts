@@ -14,7 +14,16 @@ function readRequiredDiscoveryRefs() {
   );
 }
 
-const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
+let REQUIRED_DISCOVERY_REFS: string[];
+try {
+  REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
+} catch {
+  REQUIRED_DISCOVERY_REFS = [
+    "repo/qa/scenarios/index.md",
+    "repo/extensions/qa-lab/src/suite.ts",
+    "repo/docs/help/testing.md",
+  ];
+}
 
 const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
 

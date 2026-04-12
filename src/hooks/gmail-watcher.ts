@@ -98,6 +98,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
       return;
     }
     if (addressInUse) {
+      stopped = true;
       log.warn(
         "gog serve failed to bind (address already in use); stopping restarts. " +
           "Another watcher is likely running. Set OPENCLAW_SKIP_GMAIL_WATCHER=1 or stop the other process.",
