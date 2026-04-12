@@ -54,6 +54,7 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
@@ -531,7 +532,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             runtime.error?.(`imessage: handler failed: ${String(err)}`);
           });
         } else if (msg.method === "error") {
-          runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
+          runtime.error?.(
+            `imessage: watch error ${JSON.stringify(sanitizeIMessageWatchErrorPayload(msg.params))}`,
+          );
         }
       },
     });
