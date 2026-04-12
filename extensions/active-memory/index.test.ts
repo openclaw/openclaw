@@ -456,9 +456,15 @@ describe("active-memory plugin", () => {
       model: "gpt-5.4-mini",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
       config: {
-        memory: {
-          qmd: {
-            searchMode: "search",
+        plugins: {
+          entries: {
+            "active-memory": {
+              config: {
+                qmd: {
+                  searchMode: "search",
+                },
+              },
+            },
           },
         },
       },
@@ -501,6 +507,17 @@ describe("active-memory plugin", () => {
           backend: "qmd",
           qmd: {
             searchMode: "query",
+          },
+        },
+        plugins: {
+          entries: {
+            "active-memory": {
+              config: {
+                qmd: {
+                  searchMode: "inherit",
+                },
+              },
+            },
           },
         },
       },

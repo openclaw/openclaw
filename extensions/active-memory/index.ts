@@ -568,20 +568,28 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   };
 }
 
-function applyActiveMemoryConfigOverrides(
+function applyActiveMemoryRuntimeConfigSnapshot(
   cfg: OpenClawConfig,
   pluginConfig: ResolvedActiveRecallPluginConfig,
 ): OpenClawConfig {
-  if (pluginConfig.qmd.searchMode === "inherit") {
-    return cfg;
-  }
+  const existingEntry = asRecord(cfg.plugins?.entries?.["active-memory"]);
+  const existingPluginConfig = asRecord(existingEntry?.config);
   return {
     ...cfg,
-    memory: {
-      ...cfg.memory,
-      qmd: {
-        ...cfg.memory?.qmd,
-        searchMode: pluginConfig.qmd.searchMode,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        "active-memory": {
+          ...existingEntry,
+          config: {
+            ...existingPluginConfig,
+            qmd: {
+              ...asRecord(existingPluginConfig?.qmd),
+              searchMode: pluginConfig.qmd.searchMode,
+            },
+          },
+        },
       },
     },
   };
@@ -1421,7 +1429,7 @@ async function runRecallSubagent(params: {
   });
 
   try {
-    const embeddedConfig = applyActiveMemoryConfigOverrides(params.api.config, params.config);
+    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,

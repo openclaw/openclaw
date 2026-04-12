@@ -3,7 +3,6 @@ import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
-  setMemoryStatusCustom,
 } from "./memory-tool-manager-mock.js";
 import {
   createMemorySearchToolOrThrow,
@@ -45,33 +44,49 @@ describe("memory_search unavailable payloads", () => {
 
   it("returns structured search debug metadata for qmd results", async () => {
     setMemoryBackend("qmd");
-    setMemoryStatusCustom({
-      searchMode: "query",
-      searchFallbackReason: "unsupported-search-flags",
+    setMemorySearchImpl(async (opts) => {
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: opts.qmdSearchModeOverride ?? "query",
+        effectiveMode: "query",
+        fallback: "unsupported-search-flags",
+      });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "ramen",
+          source: "memory",
+        },
+      ];
     });
-    setMemorySearchImpl(async () => [
-      {
-        path: "MEMORY.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.9,
-        snippet: "ramen",
-        source: "memory",
-      },
-    ]);
 
     const tool = createMemorySearchToolOrThrow({
       config: {
+        plugins: {
+          entries: {
+            "active-memory": {
+              config: {
+                qmd: {
+                  searchMode: "search",
+                },
+              },
+            },
+          },
+        },
         memory: {
           backend: "qmd",
           qmd: {
-            searchMode: "search",
+            searchMode: "query",
             limits: {
               maxInjectedChars: 1000,
             },
           },
         },
       },
+      agentSessionKey: "agent:main:main:active-memory:debug",
     });
     const result = await tool.execute("debug", { query: "favorite food" });
     expect(result.details).toMatchObject({

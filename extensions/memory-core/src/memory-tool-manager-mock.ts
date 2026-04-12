@@ -1,6 +1,13 @@
 import { vi } from "vitest";
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 
-export type SearchImpl = () => Promise<unknown[]>;
+export type SearchImpl = (opts?: {
+  maxResults?: number;
+  minScore?: number;
+  sessionKey?: string;
+  qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+}) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
@@ -15,7 +22,7 @@ let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = asyn
 });
 
 const stubManager = {
-  search: vi.fn(async () => await searchImpl()),
+  search: vi.fn(async (_query: string, opts?: Parameters<SearchImpl>[0]) => await searchImpl(opts)),
   readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
   status: () => ({
     backend,

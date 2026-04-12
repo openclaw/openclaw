@@ -6,7 +6,10 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemorySearchResult,
+  MemorySearchRuntimeDebug,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
@@ -69,6 +72,36 @@ function queueShortTermRecallTracking(params: {
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
+}
+
+function normalizeActiveMemoryQmdSearchMode(value: unknown): "inherit" | "search" | "vsearch" | "query" {
+  return value === "inherit" || value === "search" || value === "vsearch" || value === "query"
+    ? value
+    : "search";
+}
+
+function isActiveMemorySessionKey(sessionKey?: string): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":active-memory:");
+}
+
+function resolveActiveMemoryQmdSearchModeOverride(
+  cfg: OpenClawConfig,
+  sessionKey?: string,
+): "search" | "vsearch" | "query" | undefined {
+  if (!isActiveMemorySessionKey(sessionKey)) {
+    return undefined;
+  }
+  const entry = cfg.plugins?.entries?.["active-memory"];
+  const entryRecord =
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? (entry as { config?: unknown })
+      : undefined;
+  const pluginConfig =
+    entryRecord?.config && typeof entryRecord.config === "object" && !Array.isArray(entryRecord.config)
+      ? (entryRecord.config as { qmd?: { searchMode?: unknown } })
+      : undefined;
+  const searchMode = normalizeActiveMemoryQmdSearchMode(pluginConfig?.qmd?.searchMode);
+  return searchMode === "inherit" ? undefined : searchMode;
 }
 
 async function getSupplementMemoryReadResult(params: {
@@ -194,10 +227,19 @@ export function createMemorySearchTool(options: {
               }
             | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
+            const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+            const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+              cfg,
+              options.agentSessionKey,
+            );
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
+              qmdSearchModeOverride,
+              onDebug: (debug) => {
+                runtimeDebug.push(debug);
+              },
             });
             const status = memory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
@@ -224,18 +266,13 @@ export function createMemorySearchTool(options: {
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
-            const custom = (status.custom as {
-              searchMode?: string;
-              searchFallbackReason?: string;
-            } | undefined) ?? { searchMode: undefined, searchFallbackReason: undefined };
-            searchMode = custom.searchMode;
-            const configuredMode =
-              typeof cfg.memory?.qmd?.searchMode === "string" ? cfg.memory.qmd.searchMode : undefined;
+            const latestDebug = runtimeDebug.at(-1);
+            searchMode = latestDebug?.effectiveMode;
             searchDebug = {
               backend: status.backend,
-              configuredMode,
-              effectiveMode: status.backend === "qmd" ? (custom.searchMode ?? configuredMode) : "n/a",
-              fallback: custom.searchFallbackReason,
+              configuredMode: latestDebug?.configuredMode,
+              effectiveMode: status.backend === "qmd" ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode) : "n/a",
+              fallback: latestDebug?.fallback,
               searchMs: Math.max(0, Date.now() - searchStartedAt),
               hits: rawResults.length,
             };
