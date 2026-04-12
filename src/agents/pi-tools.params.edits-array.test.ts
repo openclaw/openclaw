@@ -118,6 +118,22 @@ describe("normalizeToolParams — edits[] array hoisting", () => {
     expect(edits[0]).toEqual({ oldText: "valid-top", newText: "valid-top-new" });
   });
 
+  it("does not create a mixed pair from partial top-level + partial edits[0]", () => {
+    const params = {
+      file: "test.ts",
+      oldText: "TOP-ONLY",
+      edits: [{ newText: "NEST-ONLY" }],
+    };
+    const normalized = normalizeToolParams(params);
+    expect(normalized).toBeDefined();
+    // The partial edits[0] (missing oldText) should not produce a valid edit.
+    // The top-level oldText alone (missing newText before hoist) should not
+    // combine with the nested newText to form a synthetic replacement.
+    expect(() => {
+      assertRequiredParams(normalized, CLAUDE_PARAM_GROUPS.edit, "edit");
+    }).toThrow(/Missing required/);
+  });
+
   it("includes user-provided top-level pair alongside valid edits[]", () => {
     const params = {
       file: "test.ts",

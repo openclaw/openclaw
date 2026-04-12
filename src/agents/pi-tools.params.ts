@@ -221,10 +221,12 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   // Some models/schemas wrap edit params inside an edits[] array.
   // Hoist oldText/newText from edits[0] to the top level so downstream
   // validation and normalization find them.
-  // Track whether the top-level oldText was provided by the caller (true)
+  // Track whether the top-level edit pair was provided by the caller (true)
   // or hoisted from edits[0] (false) so normalizeEditReplacements can
   // decide whether to include it alongside the edits[] entries.
-  const hadTopLevelOldText = "oldText" in normalized;
+  // Both keys must exist for the pair to count as user-provided; a partial
+  // top-level (e.g. oldText without newText) is not a valid edit pair.
+  const hadTopLevelEditPair = "oldText" in normalized && "newText" in normalized;
   if (
     Array.isArray(normalized.edits) &&
     normalized.edits.length > 0 &&
@@ -232,25 +234,25 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.edits[0] !== null
   ) {
     const first = normalized.edits[0] as Record<string, unknown>;
-    for (const key of [
-      "oldText",
-      "old_string",
-      "old_text",
-      "oldString",
-      "newText",
-      "new_string",
-      "new_text",
-      "newString",
-    ]) {
-      if (key in first && !(key in normalized)) {
-        normalized[key] = first[key];
+    const oldKeys = ["oldText", "old_string", "old_text", "oldString"];
+    const newKeys = ["newText", "new_string", "new_text", "newString"];
+    const hasOld = oldKeys.some((k) => k in first);
+    const hasNew = newKeys.some((k) => k in first);
+    // Only hoist when edits[0] contains a complete edit pair (both an old
+    // and a new key). Partial entries must not be combined with top-level
+    // keys from a different source to form synthetic replacements.
+    if (hasOld && hasNew) {
+      for (const key of [...oldKeys, ...newKeys]) {
+        if (key in first && !(key in normalized)) {
+          normalized[key] = first[key];
+        }
       }
     }
     // Re-run alias normalization so hoisted alias keys (e.g. old_string
     // from edits[0]) are converted to canonical keys (oldText/newText).
     normalizeClaudeParamAliases(normalized);
   }
-  const editHoistedFromArray = !hadTopLevelOldText && "oldText" in normalized;
+  const editHoistedFromArray = !hadTopLevelEditPair && "oldText" in normalized && "newText" in normalized;
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
