@@ -1,5 +1,4 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
-import { coerceTransportToolCallArguments } from "./transport-stream-shared.js";
 
 type PendingToolCall = { id: string; name: string };
 type AssistantToolCallBlock = {
@@ -101,7 +100,6 @@ export function transformTransportMessages(
       }
       let normalizedToolCall: AssistantToolCallBlock = {
         ...block,
-        arguments: coerceTransportToolCallArguments(block.arguments),
       };
       if (!isSameModel && block.thoughtSignature) {
         normalizedToolCall = { ...normalizedToolCall };
