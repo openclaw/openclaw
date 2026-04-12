@@ -42,10 +42,10 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   const child: MockChild = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
-    closeWith: (code: number | null = 0) => {
+    closeWith(code: number | null = 0) {
       child.emit("close", code);
     },
-    kill: () => {
+    kill(_signal?: NodeJS.Signals) {
       // Let timeout rejection win in tests that simulate hung QMD commands.
     },
   });
@@ -424,9 +424,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as {
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
+    const watcher = watchMock.mock.results[0]?.value;
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
 
@@ -3034,7 +3032,7 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     expect(mcporterCall).toBeDefined();
-    const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    const spawnOpts = mcporterCall?.[2] as { env?: Record<string, string | undefined> } | undefined;
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
     expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
     expect(normalizePath(spawnOpts?.env?.QMD_CONFIG_DIR)).toContain(
