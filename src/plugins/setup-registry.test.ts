@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -379,6 +379,37 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
+  it("fails closed when duplicate plugin ids shadow the same setup provider id", () => {
+    const bundledRoot = makeTempDir();
+    const workspaceRoot = makeTempDir();
+    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          rootDir: bundledRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+          },
+        },
+        {
+          id: "openai",
+          origin: "workspace",
+          rootDir: workspaceRoot,
+          setup: {
+            providers: [{ id: "OpenAI" }],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
   it("fails closed when multiple plugins claim the same setup cli backend id", () => {
     const bundledRoot = makeTempDir();
     const workspaceRoot = makeTempDir();
@@ -396,6 +427,37 @@ describe("setup-registry getJiti", () => {
         },
         {
           id: "workspace-shadow",
+          origin: "workspace",
+          rootDir: workspaceRoot,
+          setup: {
+            cliBackends: ["CODEX-CLI"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when duplicate plugin ids shadow the same setup cli backend id", () => {
+    const bundledRoot = makeTempDir();
+    const workspaceRoot = makeTempDir();
+    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          rootDir: bundledRoot,
+          setup: {
+            cliBackends: ["codex-cli"],
+          },
+        },
+        {
+          id: "openai",
           origin: "workspace",
           rootDir: workspaceRoot,
           setup: {

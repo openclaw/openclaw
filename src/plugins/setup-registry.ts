@@ -308,7 +308,7 @@ function findUniqueSetupManifestOwner(params: {
   }
   // Setup lookup can execute plugin code. Refuse ambiguous ownership instead of
   // depending on manifest ordering across bundled/workspace/global sources.
-  return new Set(matches.map((entry) => entry.id)).size === 1 ? matches[0] : undefined;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function resolvePluginSetupRegistry(params?: {
