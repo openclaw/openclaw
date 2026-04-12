@@ -31,13 +31,16 @@ export type TranscriptPolicy = {
 
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
-  policy: Pick<TranscriptPolicy, "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks">;
+  policy: Pick<
+    TranscriptPolicy,
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+  >;
 }): boolean {
   return (
-    params.modelApi === "anthropic-messages" &&
-    params.policy.validateAnthropicTurns === true &&
-    params.policy.preserveSignatures === true &&
-    params.policy.dropThinkingBlocks !== true
+    isAnthropicApi(params.modelApi) &&
+    params.policy.validateAnthropicTurns &&
+    params.policy.preserveSignatures &&
+    !params.policy.dropThinkingBlocks
   );
 }
 
