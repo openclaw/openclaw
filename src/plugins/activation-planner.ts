@@ -59,7 +59,8 @@ function matchesManifestActivationTrigger(
     case "capability":
       return hasActivationCapability(plugin, trigger.capability);
   }
-  return false;
+  const unreachableTrigger: never = trigger;
+  return unreachableTrigger;
 }
 
 function listActivationCommandIds(plugin: PluginManifestRecord): string[] {
@@ -108,7 +109,8 @@ function hasActivationCapability(
     case "hook":
       return plugin.hooks.length > 0;
   }
-  return false;
+  const unreachableCapability: never = capability;
+  return unreachableCapability;
 }
 
 function normalizeCommandId(value: string | undefined): string {
