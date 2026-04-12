@@ -171,13 +171,9 @@ export async function handleSlackAction(
 
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
-    const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) {
-      return undefined;
-    }
     return {
       ...(accountId ? { accountId } : {}),
-      ...(tokenOverride ? { token: tokenOverride } : {}),
+      ...(token ? { token } : {}),
     };
   };
 
@@ -383,10 +379,8 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const readToken = getTokenForOperation("read");
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
-          ...(readToken && !readOpts?.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
           threadId: threadId ?? undefined,

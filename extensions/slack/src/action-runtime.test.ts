@@ -50,11 +50,16 @@ describe("handleSlackAction", () => {
   }
 
   function expectLastSlackSend(content: string, threadTs?: string) {
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", content, {
-      mediaUrl: undefined,
-      threadTs,
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenLastCalledWith(
+      "channel:C123",
+      content,
+      expect.objectContaining({
+        mediaUrl: undefined,
+        threadTs,
+        blocks: undefined,
+        token: "tok",
+      }),
+    );
   }
 
   async function sendSecondMessageAndExpectNoThread(params: {
@@ -119,7 +124,7 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { token: "tok" });
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -132,7 +137,7 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456");
+    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { token: "tok" });
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -146,7 +151,7 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅");
+    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅", { token: "tok" });
   });
 
   it("rejects removes without emoji", async () => {
@@ -188,11 +193,16 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
-      mediaUrl: undefined,
-      threadTs: "1234567890.123456",
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C123",
+      "Hello thread",
+      expect.objectContaining({
+        mediaUrl: undefined,
+        threadTs: "1234567890.123456",
+        blocks: undefined,
+        token: "tok",
+      }),
+    );
   });
 
   it("returns a friendly error when downloadFile cannot fetch the attachment", async () => {
@@ -266,6 +276,27 @@ describe("handleSlackAction", () => {
     expect(opts?.token).toBe("xoxp-user");
   });
 
+  it("forwards resolved token to all action sites in default single-account setup", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await handleSlackAction({ action: "readMessages", channelId: "C1" }, slackConfig());
+    const readMsgOpts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(readMsgOpts?.token).toBe("tok");
+
+    await handleSlackAction(
+      { action: "react", channelId: "C1", messageId: "1.2", emoji: "ok" },
+      slackConfig(),
+    );
+    const reactOpts = reactSlackMessage.mock.calls[0]?.[3] as { token?: string } | undefined;
+    expect(reactOpts?.token).toBe("tok");
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C1", content: "hi" },
+      slackConfig(),
+    );
+    const sendOpts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
+    expect(sendOpts?.token).toBe("tok");
+  });
+
   it.each([
     {
       name: "JSON blocks",
@@ -289,11 +320,16 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: expectedBlocks,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C123",
+      "",
+      expect.objectContaining({
+        mediaUrl: undefined,
+        threadTs: undefined,
+        blocks: expectedBlocks,
+        token: "tok",
+      }),
+    );
   });
 
   it.each([
@@ -344,12 +380,17 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
-      mediaUrl: "/tmp/report.png",
-      threadTs: "111.222",
-      uploadFileName: "report-final.png",
-      uploadTitle: "Report Final",
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "user:U123",
+      "fresh report",
+      expect.objectContaining({
+        mediaUrl: "/tmp/report.png",
+        threadTs: "111.222",
+        uploadFileName: "report-final.png",
+        uploadTitle: "Report Final",
+        token: "tok",
+      }),
+    );
   });
 
   it("rejects blocks combined with mediaUrl", async () => {
@@ -391,6 +432,7 @@ describe("handleSlackAction", () => {
     );
     expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
       blocks: expectedBlocks,
+      token: "tok",
     });
   });
 
@@ -493,11 +535,16 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Other channel", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C999",
+      "Other channel",
+      expect.objectContaining({
+        mediaUrl: undefined,
+        threadTs: undefined,
+        blocks: undefined,
+        token: "tok",
+      }),
+    );
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
@@ -528,11 +575,16 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("C123", "Bare target", {
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "C123",
+      "Bare target",
+      expect.objectContaining({
+        mediaUrl: undefined,
+        threadTs: "1111111111.111111",
+        blocks: undefined,
+        token: "tok",
+      }),
+    );
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
@@ -573,6 +625,7 @@ describe("handleSlackAction", () => {
       limit: undefined,
       before: undefined,
       after: undefined,
+      token: "tok",
     });
   });
 
@@ -620,7 +673,7 @@ describe("handleSlackAction", () => {
         },
       }),
     );
-    expect(token).toBeUndefined();
+    expect(token).toBe("xoxb-bot");
   });
 
   it("uses bot token for writes when userTokenReadOnly is true", async () => {
@@ -635,7 +688,7 @@ describe("handleSlackAction", () => {
         },
       }),
     );
-    expect(token).toBeUndefined();
+    expect(token).toBe("xoxb-bot");
   });
 
   it("allows user token writes when bot token is missing", async () => {
