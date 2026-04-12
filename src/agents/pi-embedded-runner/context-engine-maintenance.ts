@@ -264,6 +264,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   allowDeferredCompactionExecution?: boolean;
+  deferTranscriptRewriteToSessionLane?: boolean;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
@@ -275,12 +276,20 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           replacements: request.replacements,
         });
       }
-      return await rewriteTranscriptEntriesInSessionFile({
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        request,
-      });
+      const rewriteTranscriptEntriesInFile = async () =>
+        await rewriteTranscriptEntriesInSessionFile({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          request,
+        });
+      const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
+      if (params.deferTranscriptRewriteToSessionLane && rewriteSessionKey) {
+        return await enqueueCommandInLane(resolveSessionLane(rewriteSessionKey), async () =>
+          await rewriteTranscriptEntriesInFile(),
+        );
+      }
+      return await rewriteTranscriptEntriesInFile();
     },
   };
 }
@@ -309,6 +318,7 @@ async function executeContextEngineMaintenance(params: {
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
       allowDeferredCompactionExecution: params.executionMode === "background",
+      deferTranscriptRewriteToSessionLane: params.executionMode === "background",
     }),
   });
   if (result.changed) {
@@ -355,20 +365,26 @@ async function runDeferredTurnMaintenanceWorker(params: {
     const startedWaitingAt = Date.now();
     let lastWaitNoticeAt = 0;
 
-    while (getQueueSize(sessionLane) > 0) {
-      const now = Date.now();
-      if (lastWaitNoticeAt === 0 || now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
-        lastWaitNoticeAt = now;
-        if (now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
-          surfaceMaintenanceUpdate(
-            "Waiting for the session lane to go idle.",
-            surfacedUserNotice
-              ? "Still waiting for the session lane to go idle."
-              : "Deferred maintenance is waiting for the session lane to go idle.",
-          );
+    for (;;) {
+      while (getQueueSize(sessionLane) > 0) {
+        const now = Date.now();
+        if (lastWaitNoticeAt === 0 || now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
+          lastWaitNoticeAt = now;
+          if (now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS) {
+            surfaceMaintenanceUpdate(
+              "Waiting for the session lane to go idle.",
+              surfacedUserNotice
+                ? "Still waiting for the session lane to go idle."
+                : "Deferred maintenance is waiting for the session lane to go idle.",
+            );
+          }
         }
+        await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
       }
-      await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
+      await Promise.resolve();
+      if (getQueueSize(sessionLane) === 0) {
+        break;
+      }
     }
 
     const runningAt = Date.now();
