@@ -60,52 +60,47 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const hasHtmlAttachment = attachments.some(
-      (att) => typeof att.contentType === "string" && att.contentType.startsWith("text/html"),
-    );
+    // Gate the Graph/Bot Framework media fallback on the presence of real
+    // `<attachment id="...">` tags inside any `text/html` attachment. Teams
+    // delivers @mention cards and other chrome as `text/html` attachments
+    // too, so keying off contentType alone produces spurious 404 diagnostics
+    // for every mention-only message and masks real file attachments (#58617).
+    const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
+    const hasHtmlFileAttachment = attachmentIds.length > 0;
 
     // Personal DMs with the bot use Bot Framework conversation IDs (`a:...`
     // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
     // "Invalid ThreadId". Fetch media via the Bot Framework v3 attachments
     // endpoint instead, which speaks the same identifier space.
-    if (hasHtmlAttachment && isBotFrameworkPersonalChatId(conversationId)) {
+    if (hasHtmlFileAttachment && isBotFrameworkPersonalChatId(conversationId)) {
       if (!serviceUrl) {
         log.debug?.("bot framework attachment skipped (missing serviceUrl)", {
           conversationType,
           conversationId,
         });
       } else {
-        const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
-        if (attachmentIds.length === 0) {
-          log.debug?.("bot framework attachment ids unavailable", {
-            conversationType,
-            conversationId,
-          });
+        const bfMedia = await downloadMSTeamsBotFrameworkAttachments({
+          serviceUrl,
+          attachmentIds,
+          tokenProvider,
+          maxBytes,
+          allowHosts,
+          authAllowHosts: params.authAllowHosts,
+          preserveFilenames,
+        });
+        if (bfMedia.media.length > 0) {
+          mediaList = bfMedia.media;
         } else {
-          const bfMedia = await downloadMSTeamsBotFrameworkAttachments({
-            serviceUrl,
-            attachmentIds,
-            tokenProvider,
-            maxBytes,
-            allowHosts,
-            authAllowHosts: params.authAllowHosts,
-            preserveFilenames,
-            logger: log,
+          log.debug?.("bot framework attachments fetch empty", {
+            conversationType,
+            attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
           });
-          if (bfMedia.media.length > 0) {
-            mediaList = bfMedia.media;
-          } else {
-            log.debug?.("bot framework attachments fetch empty", {
-              conversationType,
-              attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
-            });
-          }
         }
       }
     }
 
     if (
-      hasHtmlAttachment &&
+      hasHtmlFileAttachment &&
       mediaList.length === 0 &&
       !isBotFrameworkPersonalChatId(conversationId)
     ) {
@@ -160,7 +155,10 @@ export async function resolveMSTeamsInboundMedia(params: {
           }
         }
         if (mediaList.length === 0) {
-          log.debug?.("graph media fetch empty", { attempts });
+          log.debug?.("graph media fetch empty", {
+            attempts,
+            attachmentIdCount: attachmentIds.length,
+          });
         }
       }
     }

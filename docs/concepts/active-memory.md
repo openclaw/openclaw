@@ -35,7 +35,7 @@ self-contained, safe-default setup:
           enabled: true,
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
@@ -51,7 +51,7 @@ self-contained, safe-default setup:
 
 This turns the plugin on for the `main` agent, keeps it limited to direct-message
 style sessions by default, lets it inherit the current session model first, and
-still allows the built-in remote fallback if no explicit or inherited model is
+uses the configured fallback model only if no explicit or inherited model is
 available.
 
 After that, restart the gateway:
@@ -85,7 +85,7 @@ Start with this in `openclaw.json`:
         config: {
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
