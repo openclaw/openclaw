@@ -66,6 +66,13 @@ function activeRegistrySatisfiesScope(
   throw new Error("Unsupported plugin registry scope");
 }
 
+function shouldForwardChannelScope(params: {
+  scope: PluginRegistryScope;
+  scopedLoad: boolean;
+}): boolean {
+  return !params.scopedLoad && params.scope !== "all";
+}
+
 export function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
@@ -133,6 +140,7 @@ export function ensurePluginRegistryLoaded(options?: {
       {
         throwOnLoadError: true,
         ...(hasExplicitPluginIdScope(requestedPluginIds) ||
+        shouldForwardChannelScope({ scope, scopedLoad }) ||
         hasNonEmptyPluginIdScope(expectedChannelPluginIds)
           ? { onlyPluginIds: expectedChannelPluginIds }
           : {}),

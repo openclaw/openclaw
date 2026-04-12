@@ -221,4 +221,19 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("preserves empty configured-channel scopes when no owners are activatable", () => {
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: { channels: { demo: { enabled: true } } } as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
 });

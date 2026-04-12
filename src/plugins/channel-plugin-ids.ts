@@ -164,7 +164,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
   const normalizedConfig = normalizePluginsConfig(effectiveConfig.plugins);
   const candidateIds = dedupeSortedPluginIds(
     channelIds.flatMap((channelId) => {
-      const planned = resolveManifestActivationPluginIds({
+      return resolveManifestActivationPluginIds({
         trigger: {
           kind: "channel",
           channel: channelId,
@@ -173,17 +173,6 @@ function resolveScopedChannelOwnerPluginIds(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
-      if (planned.length > 0) {
-        return planned;
-      }
-      return registry.plugins
-        .filter((plugin) =>
-          plugin.channels.some(
-            (candidateChannelId) =>
-              normalizeOptionalLowercaseString(candidateChannelId) === channelId,
-          ),
-        )
-        .map((plugin) => plugin.id);
     }),
   );
   if (candidateIds.length === 0) {
