@@ -1,0 +1,21 @@
+{
+  "language": "vi-VN",
+  "tabs": [
+    {
+      "tab": "Bắt đầu",
+      "groups": [
+        {
+          "group": "Tổng quan",
+          "pages": ["vi-VN/index"]
+        },
+        {
+          "group": "Thiết lập lần đầu",
+          "pages": [
+            "vi-VN/start/getting-started",
+            "vi-VN/start/wizard"
+          ]
+        }
+      ]
+    }
+  ]
+}
