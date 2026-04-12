@@ -183,7 +183,10 @@ export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): bo
 }
 
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
-const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/special-use IP address";
+const BLOCKED_RESOLVED_IP_MESSAGE =
+  "Blocked: resolves to private/internal/special-use IP address. " +
+  "If this is a trusted service (e.g. api.telegram.org), set " +
+  "channels.<plugin>.network.dangerouslyAllowPrivateNetwork: true in openclaw.json.";
 
 function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
   if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
