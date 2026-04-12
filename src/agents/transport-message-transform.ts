@@ -1,6 +1,25 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { coerceTransportToolCallArguments } from "./transport-stream-shared.js";
 
 type PendingToolCall = { id: string; name: string };
+type AssistantToolCallBlock = {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: unknown;
+  thoughtSignature?: string;
+};
+type TransformableAssistantContentBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
+  | AssistantToolCallBlock
+  | { type: "compaction"; content: string | null };
+type TransformableAssistantMessage = Omit<
+  Extract<Context["messages"][number], { role: "assistant" }>,
+  "content"
+> & {
+  content: TransformableAssistantContentBlock[] | string;
+};
 
 function appendMissingToolResults(
   result: Context["messages"],
@@ -44,17 +63,16 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
+    const assistantMessage = msg as TransformableAssistantMessage;
     const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
-    const content: typeof msg.content = [];
-    const assistantContent = (
-      typeof msg.content === "string" ? [{ type: "text" as const, text: msg.content }] : msg.content
-    ) as Array<
-      | { type: "text"; text: string }
-      | { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
-      | { type: "toolCall"; id: string; name: string; arguments: unknown; thoughtSignature?: string }
-      | { type: "compaction"; content: string | null }
-    >;
+      assistantMessage.provider === model.provider &&
+      assistantMessage.api === model.api &&
+      assistantMessage.model === model.id;
+    const content: TransformableAssistantContentBlock[] = [];
+    const assistantContent =
+      typeof assistantMessage.content === "string"
+        ? [{ type: "text" as const, text: assistantMessage.content }]
+        : assistantMessage.content;
     for (const block of assistantContent) {
       if (block.type === "thinking") {
         if (block.redacted) {
@@ -81,13 +99,16 @@ export function transformTransportMessages(
         content.push(block);
         continue;
       }
-      let normalizedToolCall = block;
+      let normalizedToolCall: AssistantToolCallBlock = {
+        ...block,
+        arguments: coerceTransportToolCallArguments(block.arguments),
+      };
       if (!isSameModel && block.thoughtSignature) {
         normalizedToolCall = { ...normalizedToolCall };
         delete normalizedToolCall.thoughtSignature;
       }
       if (!isSameModel && normalizeToolCallId) {
-        const normalizedId = normalizeToolCallId(block.id, model, msg);
+        const normalizedId = normalizeToolCallId(block.id, model, assistantMessage);
         if (normalizedId !== block.id) {
           toolCallIdMap.set(block.id, normalizedId);
           normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
@@ -95,7 +116,7 @@ export function transformTransportMessages(
       }
       content.push(normalizedToolCall);
     }
-    return { ...msg, content };
+    return { ...assistantMessage, content } as unknown as Context["messages"][number];
   });
 
   const result: Context["messages"] = [];

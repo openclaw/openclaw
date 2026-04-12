@@ -41,6 +41,10 @@ type RunLivenessAttempt = Pick<
   "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
 >;
 
+function isCompactionStopReason(stopReason: unknown): stopReason is "compaction" {
+  return stopReason === "compaction";
+}
+
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
@@ -168,7 +172,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (stopReason === "compaction") {
+  if (isCompactionStopReason(stopReason)) {
     return "⚠️ Agent compacted the conversation before finishing the reply. Please try again if the response does not continue automatically.";
   }
 
@@ -198,7 +202,7 @@ export function resolveRunLivenessState(params: {
 }): EmbeddedRunLivenessState {
   if (
     params.incompleteTurnText &&
-    params.attempt.lastAssistant?.stopReason === "compaction"
+    isCompactionStopReason(params.attempt.lastAssistant?.stopReason)
   ) {
     return "paused";
   }

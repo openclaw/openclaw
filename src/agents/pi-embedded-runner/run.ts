@@ -123,6 +123,10 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
+function isCompactionStopReason(stopReason: unknown): stopReason is "compaction" {
+  return stopReason === "compaction";
+}
+
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
  * The return value is normalized: whitespace-only inputs collapse to undefined, and
@@ -1626,7 +1630,7 @@ export async function runEmbeddedPiAgent(
             continue;
           }
           const compactionOnlyStop =
-            attempt.lastAssistant?.stopReason === "compaction" &&
+            isCompactionStopReason(attempt.lastAssistant?.stopReason) &&
             !aborted &&
             !timedOut &&
             !attempt.clientToolCall &&
