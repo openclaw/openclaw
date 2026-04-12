@@ -2,6 +2,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
+import type { ModelApi } from "openclaw/plugin-sdk/provider-onboard";
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
@@ -56,13 +57,7 @@ export function expectProviderOnboardPreservesPrimary(params: {
 export function expectProviderOnboardMergedLegacyConfig(params: {
   applyProviderConfig: (config: OpenClawConfig) => OpenClawConfig;
   providerId: string;
-  providerApi: OpenClawConfig["models"] extends { providers?: infer P }
-    ? P extends Record<string, infer Provider>
-      ? Provider extends { api?: infer Api }
-        ? Api
-        : never
-      : never
-    : never;
+  providerApi: ModelApi;
   baseUrl: string;
   legacyApi: Parameters<typeof createLegacyProviderConfig>[0]["api"];
   legacyModelId?: string;
