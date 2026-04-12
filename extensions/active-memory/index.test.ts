@@ -454,7 +454,6 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "github-copilot",
       model: "gpt-5.4-mini",
-      messageChannel: "webchat",
       messageProvider: "webchat",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
     });
@@ -970,7 +969,7 @@ describe("active-memory plugin", () => {
     );
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       messageChannel: "telegram",
-      messageProvider: "webchat",
+      messageProvider: "telegram",
     });
     expect(hoisted.sessionStore["agent:main:telegram:direct:12345"]?.pluginDebugEntries).toEqual([
       {

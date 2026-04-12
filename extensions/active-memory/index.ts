@@ -331,6 +331,10 @@ function resolveRecallRunChannelContext(params: {
 } {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  const resolveReturnValue = (resolvedChannel?: string) => ({
+    messageChannel: explicitChannel ?? resolvedChannel,
+    messageProvider: explicitChannel ?? resolvedChannel ?? explicitProvider,
+  });
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -339,10 +343,7 @@ function resolveRecallRunChannelContext(params: {
       sessionId: params.sessionId,
     });
   if (!resolvedSessionKey) {
-    return {
-      messageChannel: explicitChannel ?? explicitProvider,
-      messageProvider: explicitProvider ?? explicitChannel,
-    };
+    return resolveReturnValue();
   }
 
   try {
@@ -361,15 +362,9 @@ function resolveRecallRunChannelContext(params: {
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel) ??
       normalizeOptionalString(sessionEntry?.origin?.provider);
-    return {
-      messageChannel: explicitChannel ?? entryChannel ?? explicitProvider,
-      messageProvider: explicitProvider ?? explicitChannel ?? entryChannel,
-    };
+    return resolveReturnValue(entryChannel);
   } catch {
-    return {
-      messageChannel: explicitChannel ?? explicitProvider,
-      messageProvider: explicitProvider ?? explicitChannel,
-    };
+    return resolveReturnValue();
   }
 }
 
