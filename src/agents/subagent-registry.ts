@@ -1,4 +1,6 @@
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
 import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
@@ -7,9 +9,9 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as subagentAnnounceModule from "./subagent-announce.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -50,6 +52,7 @@ import {
   persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
@@ -64,6 +67,7 @@ const log = createSubsystemLogger("agents/subagent-registry");
 type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
   captureSubagentCompletionReply: typeof subagentAnnounceModule.captureSubagentCompletionReply;
+  cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   loadConfig: typeof loadConfig;
   onAgentEvent: typeof onAgentEvent;
@@ -80,6 +84,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentAnnounceModule.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd,
   getSubagentRunsSnapshotForRead,
   loadConfig,
   onAgentEvent,
@@ -95,6 +100,7 @@ let subagentRegistryRuntimePromise: Promise<
 > | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
+let sweepInProgress = false;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
@@ -108,6 +114,10 @@ const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+/** Absolute TTL for session-mode runs after cleanup completes (no archiveAtMs). */
+const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
+/** Absolute TTL for orphaned pendingLifecycleError entries. */
+const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
 
 function loadSubagentRegistryRuntime() {
   subagentRegistryRuntimePromise ??= import("./subagent-registry.runtime.js");
@@ -115,7 +125,7 @@ function loadSubagentRegistryRuntime() {
 }
 
 async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }) {
@@ -128,7 +138,7 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
   runtime.ensureRuntimePluginsLoaded(params);
 }
 
-async function resolveSubagentRegistryContextEngine(cfg: ReturnType<typeof loadConfig>) {
+async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
   const runtime = await loadSubagentRegistryRuntime();
   const ensureContextEnginesInitialized =
     subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
@@ -309,6 +319,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resumeSubagentRun,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentRegistryDeps.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd: (args) =>
+    subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -432,9 +444,8 @@ function restoreSubagentRunsOnce() {
     }
     // Resume pending work.
     ensureListener();
-    if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
-      startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    startSweeper();
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
@@ -447,10 +458,7 @@ function restoreSubagentRunsOnce() {
   }
 }
 
-function resolveSubagentWaitTimeoutMs(
-  cfg: ReturnType<typeof loadConfig>,
-  runTimeoutSeconds?: number,
-) {
+function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number) {
   return subagentRegistryDeps.resolveAgentTimeoutMs({
     cfg,
     overrideSeconds: runTimeoutSeconds ?? 0,
@@ -462,6 +470,9 @@ function startSweeper() {
     return;
   }
   sweeper = setInterval(() => {
+    if (sweepInProgress) {
+      return;
+    }
     void sweepSubagentRuns();
   }, 60_000);
   sweeper.unref?.();
@@ -476,41 +487,82 @@ function stopSweeper() {
 }
 
 async function sweepSubagentRuns() {
-  const now = Date.now();
-  let mutated = false;
-  for (const [runId, entry] of subagentRuns.entries()) {
-    if (!entry.archiveAtMs || entry.archiveAtMs > now) {
-      continue;
-    }
-    clearPendingLifecycleError(runId);
-    void notifyContextEngineSubagentEnded({
-      childSessionKey: entry.childSessionKey,
-      reason: "swept",
-      workspaceDir: entry.workspaceDir,
-    });
-    subagentRuns.delete(runId);
-    mutated = true;
-    // Archive/purge is terminal for the run record; remove any retained attachments too.
-    await safeRemoveAttachmentsDir(entry);
-    try {
-      await subagentRegistryDeps.callGateway({
-        method: "sessions.delete",
-        params: {
-          key: entry.childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        },
-        timeoutMs: 10_000,
+  if (sweepInProgress) {
+    return;
+  }
+  sweepInProgress = true;
+  try {
+    const now = Date.now();
+    let mutated = false;
+    for (const [runId, entry] of subagentRuns.entries()) {
+      // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
+      // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
+      if (!entry.archiveAtMs) {
+        if (
+          typeof entry.cleanupCompletedAt === "number" &&
+          now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
+        ) {
+          clearPendingLifecycleError(runId);
+          void notifyContextEngineSubagentEnded({
+            childSessionKey: entry.childSessionKey,
+            reason: "swept",
+            workspaceDir: entry.workspaceDir,
+          });
+          subagentRuns.delete(runId);
+          mutated = true;
+          if (!entry.retainAttachmentsOnKeep) {
+            await safeRemoveAttachmentsDir(entry);
+          }
+        }
+        continue;
+      }
+      if (entry.archiveAtMs > now) {
+        continue;
+      }
+      clearPendingLifecycleError(runId);
+      try {
+        await subagentRegistryDeps.callGateway({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch (err) {
+        log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
+          runId,
+          childSessionKey: entry.childSessionKey,
+          err,
+        });
+        continue;
+      }
+      subagentRuns.delete(runId);
+      mutated = true;
+      // Archive/purge is terminal for the run record; remove any retained attachments too.
+      await safeRemoveAttachmentsDir(entry);
+      void notifyContextEngineSubagentEnded({
+        childSessionKey: entry.childSessionKey,
+        reason: "swept",
+        workspaceDir: entry.workspaceDir,
       });
-    } catch {
-      // ignore
     }
-  }
-  if (mutated) {
-    persistSubagentRuns();
-  }
-  if (subagentRuns.size === 0) {
-    stopSweeper();
+    // Sweep orphaned pendingLifecycleError entries (absolute TTL).
+    for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {
+      if (now - pending.endedAt > PENDING_ERROR_TTL_MS) {
+        clearPendingLifecycleError(runId);
+      }
+    }
+
+    if (mutated) {
+      persistSubagentRuns();
+    }
+    if (subagentRuns.size === 0) {
+      stopSweeper();
+    }
+  } finally {
+    sweepInProgress = false;
   }
 }
 
@@ -582,7 +634,7 @@ const subagentRunManager = createSubagentRunManager({
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
   loadConfig: () => subagentRegistryDeps.loadConfig(),
   ensureRuntimePluginsLoaded: (args: {
-    config: ReturnType<typeof loadConfig>;
+    config: OpenClawConfig;
     workspaceDir?: string;
     allowGatewaySubagentBinding?: boolean;
   }) => ensureSubagentRegistryPluginRuntimeLoaded(args),
@@ -595,6 +647,10 @@ const subagentRunManager = createSubagentRunManager({
   notifyContextEngineSubagentEnded,
   completeCleanupBookkeeping,
   completeSubagentRun,
+});
+
+configureSubagentRegistrySteerRuntime({
+  replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
 });
 
 export function markSubagentRunForSteerRestart(runId: string) {
@@ -645,6 +701,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRegistryRuntimePromise = null;
   resetAnnounceQueuesForTests();
   stopSweeper();
+  sweepInProgress = false;
   restoreAttempted = false;
   if (listenerStop) {
     listenerStop();

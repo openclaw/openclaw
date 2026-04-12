@@ -1,10 +1,9 @@
-import fs from "node:fs";
 import { resetPressureTracking } from "../../agents/context-pressure.js";
-import { lookupContextTokens, resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,

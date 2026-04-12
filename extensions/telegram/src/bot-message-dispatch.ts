@@ -36,7 +36,7 @@ import {
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";

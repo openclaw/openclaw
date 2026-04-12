@@ -1,8 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
+  mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 
@@ -55,13 +57,34 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
 }
 
 function resolveModelRequestPolicy(model: Model<Api>) {
+  const debugProxy = resolveDebugProxySettings();
+  const allowExplicitDebugProxy =
+    debugProxy.enabled &&
+    debugProxy.proxyUrl &&
+    (() => {
+      try {
+        return new URL(model.baseUrl).protocol === "https:";
+      } catch {
+        return false;
+      }
+    })();
+  const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
+    proxy:
+      allowExplicitDebugProxy && debugProxy.proxyUrl
+        ? {
+            mode: "explicit-proxy",
+            url: debugProxy.proxyUrl,
+          }
+        : undefined,
+  });
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
     capability: "llm",
     transport: "stream",
-    request: getModelProviderRequestTransport(model),
+    request,
+    allowPrivateNetwork: request?.allowPrivateNetwork === true,
   });
 }
 
@@ -92,6 +115,13 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
     const result = await fetchWithSsrFGuard({
       url,
       init: requestInit ?? init,
+      capture: {
+        meta: {
+          provider: model.provider,
+          api: model.api,
+          model: model.id,
+        },
+      },
       dispatcherPolicy,
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.

@@ -4,7 +4,6 @@ import { t } from "../i18n/index.ts";
 import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { OpenClawApp } from "./app.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
@@ -30,6 +29,29 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
 };
 
+type SessionSwitchHost = AppViewState & {
+  chatStreamStartedAt: number | null;
+  chatSideResultTerminalRuns: Set<string>;
+  resetToolStream(): void;
+  resetChatScroll(): void;
+};
+
+type ChatRefreshHost = AppViewState & {
+  chatManualRefreshInFlight: boolean;
+  chatNewMessagesBelow: boolean;
+  resetToolStream(): void;
+  scrollToBottom(opts?: { smooth?: boolean }): void;
+  updateComplete?: Promise<unknown>;
+};
+
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "settings" | "password">,
+) {
+  return (
+    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+  );
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -46,6 +68,7 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  const host = state as unknown as SessionSwitchHost;
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatAttachments = [];
@@ -54,15 +77,17 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatSideResult = null;
   state.lastError = null;
   state.compactionStatus = null;
   state.fallbackStatus = null;
   state.chatAvatarUrl = null;
   state.chatQueue = [];
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  host.chatStreamStartedAt = null;
   state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
+  host.chatSideResultTerminalRuns.clear();
+  host.resetToolStream();
+  host.resetChatScroll();
   state.applySettings({
     ...state.settings,
     sessionKey,
@@ -252,7 +277,7 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
         @click=${async () => {
-          const app = state as unknown as OpenClawApp;
+          const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
           app.chatNewMessagesBelow = false;
           await app.updateComplete;

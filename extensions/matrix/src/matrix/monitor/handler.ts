@@ -412,6 +412,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let claimedInboundEvent = false;
     let draftStreamRef: ReturnType<typeof createMatrixDraftStream> | undefined;
+    let draftConsumed = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -455,18 +456,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
         if (senderId === selfUserId) {
-          return;
+          return undefined;
         }
         if (dropPreStartupMessages) {
           if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
-            return;
+            return undefined;
           }
           if (
             typeof eventTs !== "number" &&
             typeof eventAge === "number" &&
             eventAge > startupGraceMs
           ) {
-            return;
+            return undefined;
           }
         }
 
@@ -480,7 +481,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })
         ) {
           logVerboseMessage(`matrix: skip verification/system room message room=${roomId}`);
-          return;
+          return undefined;
         }
 
         const locationPayload: MatrixLocationPayload | null = resolveMatrixLocation({
@@ -490,13 +491,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         const relates = content["m.relates_to"];
         if (relates && "rel_type" in relates && relates.rel_type === RelationType.Replace) {
-          return;
+          return undefined;
         }
         if (eventId && inboundDeduper) {
           claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
           if (!claimedInboundEvent) {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
-            return;
+            return undefined;
           }
         }
 
@@ -519,7 +520,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const { locationPayload, selfUserId } = params;
         if (isRoom && groupPolicy === "disabled") {
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
 
         const roomInfoForConfig =
@@ -552,24 +553,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
           );
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
 
         if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
           logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         if (isRoom && groupPolicy === "allowlist") {
           if (!roomConfigInfo?.allowlistConfigured) {
             logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
             await commitInboundEventIfClaimed();
-            return;
+            return undefined;
           }
           if (!roomConfig) {
             logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
             await commitInboundEventIfClaimed();
-            return;
+            return undefined;
           }
         }
 
@@ -601,7 +602,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (isDirectMessage) {
           if (!dmEnabled || dmPolicy === "disabled") {
             await commitInboundEventIfClaimed();
-            return;
+            return undefined;
           }
           if (dmPolicy !== "open") {
             const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
@@ -642,7 +643,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     logVerboseMessage(
                       `matrix pairing reply failed for ${senderId}: ${String(err)}`,
                     );
-                    return;
+                    return undefined;
                   }
                 } else {
                   logVerboseMessage(
@@ -657,7 +658,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 );
                 await commitInboundEventIfClaimed();
               }
-              return;
+              return undefined;
             }
           }
         }
@@ -669,7 +670,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             )})`,
           );
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         if (
           isRoom &&
@@ -685,7 +686,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             )})`,
           );
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         if (isRoom) {
           logVerboseMessage(`matrix: allow room ${roomId} (${roomMatchMeta})`);
@@ -707,7 +708,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             logVerboseMessage,
           });
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
 
         let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
@@ -747,7 +748,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             : "";
         if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
 
         const _messageId = event.event_id ?? "";
@@ -796,7 +797,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
           );
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
@@ -822,7 +823,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             target: senderId,
           });
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         const shouldRequireMention = isRoom
           ? roomConfig?.autoReply === true
@@ -855,13 +856,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
           logger.info("skipping room message", { roomId, reason: "no-mention" });
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
 
         if (isPollEvent) {
           const pollSnapshot = await getPollSnapshot();
           if (!pollSnapshot) {
-            return;
+            return undefined;
           }
           content = {
             msgtype: "m.text",
@@ -934,7 +935,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         });
         if (!bodyText) {
           await commitInboundEventIfClaimed();
-          return;
+          return undefined;
         }
         const senderName = await getSenderName();
         if (_configuredBinding) {
@@ -949,7 +950,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               reason: "configured ACP binding unavailable",
               target: _configuredBinding.spec.conversationId,
             });
-            return;
+            return undefined;
           }
         }
         if (_runtimeBindingId) {
@@ -996,7 +997,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ? await runRoomIngress(roomId, async () => {
               const prefix = await readIngressPrefix();
               if (!prefix) {
-                return;
+                return undefined;
               }
               if (prefix.isDirectMessage) {
                 return { deferredPrefix: prefix } as const;
@@ -1012,7 +1013,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           : await (async () => {
               const prefix = await readIngressPrefix();
               if (!prefix) {
-                return;
+                return undefined;
               }
               return await continueIngress(prefix);
             })();
@@ -1244,7 +1245,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isDirect: isDirectMessage,
             isGroup: isRoom,
             isMentionableGroup: isRoom,
-            requireMention: Boolean(shouldRequireMention),
+            requireMention: shouldRequireMention,
             canDetectMention,
             effectiveWasMentioned: wasMentioned || shouldBypassMention,
             shouldBypassMention,
@@ -1330,9 +1331,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
-      // Set after the first final payload consumes the draft event so
-      // subsequent finals go through normal delivery.
-      let draftConsumed = false;
+      // Set after the first final payload consumes or discards the draft event
+      // so subsequent finals go through normal delivery.
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1448,6 +1448,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                         ? buildMatrixFinalizedPreviewContent()
                         : undefined,
                     });
+                  } else if (!(await draftStream.finalizeLive())) {
+                    throw new Error("Matrix draft live finalize failed");
                   }
                 } catch {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
@@ -1469,10 +1471,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
                 const payloadText = payload.text;
+                const payloadTextMatchesDraft =
+                  typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
+                const reusesDraftTextUnchanged =
+                  typeof payloadText === "string" &&
+                  Boolean(payloadText.trim()) &&
+                  payloadTextMatchesDraft;
                 const requiresFinalTextEdit =
                   quietDraftStreaming ||
-                  (typeof payloadText === "string" &&
-                    !draftStream.matchesPreparedText(payloadText));
+                  (typeof payloadText === "string" && !payloadTextMatchesDraft);
                 if (textEditOk && payloadText && requiresFinalTextEdit) {
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
                     client,
@@ -1486,6 +1493,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     () => true,
                     () => false,
                   );
+                } else if (textEditOk && reusesDraftTextUnchanged) {
+                  textEditOk = await draftStream.finalizeLive();
                 }
                 const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
                 if (!reusesDraftAsFinalText) {
@@ -1508,10 +1517,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
                 draftConsumed = true;
               } else {
-                if (draftEventId && (payloadReplyMismatch || mustDeliverFinalNormally)) {
+                const draftRedacted =
+                  Boolean(draftEventId) && (payloadReplyMismatch || mustDeliverFinalNormally);
+                if (draftRedacted && draftEventId) {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                 }
-                await deliverMatrixReplies({
+                const deliveredFallback = await deliverMatrixReplies({
                   cfg,
                   replies: [payload],
                   roomId,
@@ -1524,6 +1535,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   mediaLocalRoots,
                   tableMode,
                 });
+                if (draftRedacted || deliveredFallback) {
+                  draftConsumed = true;
+                }
               }
 
               if (info.kind === "block") {
@@ -1652,7 +1666,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.
       if (draftStreamRef) {
-        await draftStreamRef.stop().catch(() => {});
+        const draftEventId = await draftStreamRef.stop().catch(() => undefined);
+        if (draftEventId && !draftConsumed) {
+          await redactMatrixDraftEvent(client, roomId, draftEventId);
+        }
       }
       if (claimedInboundEvent && inboundDeduper && eventId) {
         inboundDeduper.releaseEvent({ roomId, eventId });

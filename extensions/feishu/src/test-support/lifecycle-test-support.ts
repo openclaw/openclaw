@@ -20,7 +20,7 @@ type FeishuDispatchReplyContext = Record<string, unknown> & {
   SessionKey?: string;
 };
 type FeishuDispatchReplyDispatcher = {
-  sendFinalReply: (payload: { text: string }) => unknown | Promise<unknown>;
+  sendFinalReply: (payload: { text: string }) => unknown;
 };
 type FeishuDispatchReplyMock = Mock<
   (args: {

@@ -70,17 +70,14 @@ describe("heartbeat event prompts", () => {
 
 describe("heartbeat event classification", () => {
   it.each([
-    // FORK: actual format from bash-tools.exec-runtime.ts maybeNotifyOnExit:
-    // "Exec completed (<id>, <exit>) :: <output>" or "Exec failed (<id>, <exit>)"
-    { value: "Exec completed (mild-nexus, code 0) :: some output", expected: true },
-    { value: "exec completed (abc12345, code 0)", expected: true },
-    { value: "Exec failed (kind-otter, code 1)", expected: true },
-    { value: "exec failed (abc12345, signal SIGTERM)", expected: true },
-    // Old "exec finished" format — no longer generated but keep as negative to
-    // document the mismatch that caused the original bug.
-    { value: "exec finished: ok", expected: false },
-    { value: "Exec Finished: failed", expected: false },
-    // Unrelated events
+    { value: "exec finished: ok", expected: true },
+    { value: "Exec finished (node=abc, code 0)", expected: true },
+    { value: "Exec Finished (node=abc, code 1)", expected: true },
+    { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
+    { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: true },
+    { value: "Exec completed (rotate api keys)", expected: false },
+    { value: "Exec failed: notify me if this happens", expected: false },
+    { value: "Reminder: if exec failed, notify me", expected: false },
     { value: "cron finished", expected: false },
     { value: "Cron: rotate logs", expected: false },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
@@ -96,9 +93,12 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },
     { value: "heartbeat wake: noop", expected: false },
-    // Exec completion events are not cron events
-    { value: "Exec completed (mild-nexus, code 0) :: output", expected: false },
-    { value: "Exec failed (kind-otter, code 1)", expected: false },
+    { value: "exec finished: ok", expected: false },
+    { value: "Exec finished (node=abc, code 0)", expected: false },
+    { value: "Exec completed (abc12345, code 0) :: some output", expected: false },
+    { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: false },
+    { value: "Exec completed (rotate api keys)", expected: true },
+    { value: "Reminder: if exec failed, notify me", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
     expect(isCronSystemEvent(value)).toBe(expected);
   });

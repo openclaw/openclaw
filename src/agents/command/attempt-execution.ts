@@ -10,9 +10,9 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
-import { loadConfig } from "../../config/config.js";
 import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -326,7 +326,7 @@ export async function persistAcpTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
   sessionKey: string | undefined;
@@ -391,9 +391,11 @@ export function runAgentAttempt(params: {
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
         imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        skillsSnapshot: params.skillsSnapshot,
         streamParams: params.opts.streamParams,
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
+        senderIsOwner: params.opts.senderIsOwner,
       });
     return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
       if (

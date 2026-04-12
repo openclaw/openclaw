@@ -20,6 +20,13 @@ API key auth, and dynamic model resolution.
   structure and manifest setup.
 </Info>
 
+<Tip>
+  Provider plugins add models to OpenClaw's normal inference loop. If the model
+  must run through a native agent daemon that owns threads, compaction, or tool
+  events, pair the provider with an [agent harness](/plugins/sdk-agent-harness)
+  instead of putting daemon protocol details in core.
+</Tip>
+
 ## Walkthrough
 
 <Steps>
@@ -167,6 +174,28 @@ API key auth, and dynamic model resolution.
     That is a working provider. Users can now
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
+
+    If the upstream provider uses different control tokens than OpenClaw, add a
+    small bidirectional text transform instead of replacing the stream path:
+
+    ```typescript
+    api.registerTextTransforms({
+      input: [
+        { from: /red basket/g, to: "blue basket" },
+        { from: /paper ticket/g, to: "digital ticket" },
+        { from: /left shelf/g, to: "right shelf" },
+      ],
+      output: [
+        { from: /blue basket/g, to: "red basket" },
+        { from: /digital ticket/g, to: "paper ticket" },
+        { from: /right shelf/g, to: "left shelf" },
+      ],
+    });
+    ```
+
+    `input` rewrites the final system prompt and text message content before
+    transport. `output` rewrites assistant text deltas and final text before
+    OpenClaw parses its own control markers or channel delivery.
 
     For bundled providers that only register one text provider with API-key
     auth plus a single catalog-backed runtime, prefer the narrower

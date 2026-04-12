@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_PROVIDER,
@@ -15,6 +14,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -495,7 +495,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   return {
     enabled: raw.enabled !== false,
     agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => String(agentId).trim()).filter(Boolean)
+      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
       : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallbackPolicy:
@@ -1210,7 +1210,7 @@ async function runRecallSubagent(params: {
     : `agent:${params.agentId}:${subagentSuffix}`;
   const tempDir = params.config.persistTranscripts
     ? undefined
-    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-"));
+    : await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-active-memory-"));
   const persistedDir = params.config.persistTranscripts
     ? resolveSafeTranscriptDir(
         resolvePersistentTranscriptBaseDir(params.api, params.agentId),
@@ -1496,7 +1496,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (!isEnabledForAgent(config, effectiveAgentId)) {
         await persistPluginStatusLines({
@@ -1504,7 +1504,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (!isEligibleInteractiveSession(ctx)) {
         await persistPluginStatusLines({
@@ -1512,7 +1512,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (
         !isAllowedChatType(config, {
@@ -1526,7 +1526,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       const query = buildQuery({
         latestUserMessage: event.prompt,
@@ -1544,11 +1544,11 @@ export default definePluginEntry({
         currentModelId: ctx.modelId,
       });
       if (!result.summary) {
-        return;
+        return undefined;
       }
       const metadata = buildMetadata(result.summary);
       if (!metadata) {
-        return;
+        return undefined;
       }
       return {
         prependSystemContext: ACTIVE_MEMORY_PLUGIN_GUIDANCE,

@@ -102,6 +102,11 @@ For coordinated change sets that genuinely need more than 10 PRs, join the **#cl
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
   - These commands also cover the shared seam/smoke files that the default unit lane skips
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
+- If you touched bundled-plugin boundaries in shared code, run the matching inventories:
+  - `node scripts/check-src-extension-import-boundary.mjs --json` for `src/**`
+  - `node scripts/check-sdk-package-extension-import-boundary.mjs --json` for `src/plugin-sdk/**` and `packages/**`
+  - `node scripts/check-test-helper-extension-import-boundary.mjs --json` for `test/helpers/**`
+- Shared test helpers must use `src/test-utils/bundled-plugin-public-surface.ts` instead of repo-relative `extensions/**` imports. Keep plugin-local deep mocks inside the owning bundled plugin package.
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
