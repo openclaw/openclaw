@@ -291,4 +291,95 @@ describe("buildSandboxCreateArgs", () => {
     });
     expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
   });
+
+  // RI-026 Block 1.5 item #1 — proxy binding for allowlist mode enforcement.
+  describe("proxyBinding (outbound proxy sidecar)", () => {
+    const allowlistPolicy = {
+      agentId: "quinn",
+      mode: "allowlist" as const,
+      allowedHosts: ["api.anthropic.com"],
+    };
+    const binding = {
+      internalNetwork: "openclaw-allowlist-quinn",
+      proxyContainer: "openclaw-proxy-quinn",
+      image: "dannydirect/tinyproxy:latest",
+      proxyUrl: "http://openclaw-proxy-quinn:8888",
+      env: {
+        HTTP_PROXY: "http://openclaw-proxy-quinn:8888",
+        HTTPS_PROXY: "http://openclaw-proxy-quinn:8888",
+        http_proxy: "http://openclaw-proxy-quinn:8888",
+        https_proxy: "http://openclaw-proxy-quinn:8888",
+        NO_PROXY: "localhost,127.0.0.1,::1",
+        no_proxy: "localhost,127.0.0.1,::1",
+      },
+      note: "test binding",
+    };
+
+    it("forces the sandbox onto the proxy internal network (overriding policy)", () => {
+      const cfg = createSandboxConfig({ network: "bridge" });
+      const args = buildSandboxCreateArgs({
+        name: "openclaw-sbx-proxy",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        networkPolicy: allowlistPolicy,
+        proxyBinding: binding,
+      });
+      expect(args).toEqual(
+        expect.arrayContaining(["--network", "openclaw-allowlist-quinn"]),
+      );
+      // Must NOT carry the original cfg.network anymore
+      const networkFlags = args
+        .map((a, i) => (a === "--network" ? args[i + 1] : null))
+        .filter(Boolean);
+      expect(networkFlags).toEqual(["openclaw-allowlist-quinn"]);
+    });
+
+    it("injects HTTP_PROXY and HTTPS_PROXY env vars from the binding", () => {
+      const cfg = createSandboxConfig();
+      const args = buildSandboxCreateArgs({
+        name: "openclaw-sbx-proxy-env",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        networkPolicy: allowlistPolicy,
+        proxyBinding: binding,
+      });
+      expect(args).toEqual(
+        expect.arrayContaining([
+          "--env",
+          "HTTP_PROXY=http://openclaw-proxy-quinn:8888",
+        ]),
+      );
+      expect(args).toEqual(
+        expect.arrayContaining([
+          "--env",
+          "HTTPS_PROXY=http://openclaw-proxy-quinn:8888",
+        ]),
+      );
+      expect(args).toEqual(
+        expect.arrayContaining(["--env", "NO_PROXY=localhost,127.0.0.1,::1"]),
+      );
+    });
+
+    it("falls back to policy default when proxyBinding is omitted for allowlist policies", () => {
+      const cfg = createSandboxConfig({ network: "bridge" });
+      const args = buildSandboxCreateArgs({
+        name: "openclaw-sbx-no-proxy",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        networkPolicy: allowlistPolicy,
+      });
+      // No --network override from the policy resolver for allowlist (it
+      // returns dockerNetwork=null), so cfg.network wins.
+      const networkFlags = args
+        .map((a, i) => (a === "--network" ? args[i + 1] : null))
+        .filter(Boolean);
+      expect(networkFlags).toEqual(["bridge"]);
+      expect(args).not.toEqual(
+        expect.arrayContaining(["--env", expect.stringMatching(/^HTTP_PROXY=/)]),
+      );
+    });
+  });
 });

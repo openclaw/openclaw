@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "updated": "2026-04-12",
+  "source": "RI-011 — Anti-Rationalization Rules Engine. Seed catalog of common excuses agents produce to skip verification steps. Each rule has a regex pattern that matches assistant text, a rebuttal shown in logs and (future) MC panel, and an action: block | warn | require_override.",
+  "rules": [
+    {
+      "id": "skip-tests-later",
+      "category": "testing",
+      "severity": "high",
+      "pattern": "(?:add|write|put in|include)[^.]{0,40}tests[^.]{0,40}(?:next iteration|later|follow[- ]up|future PR|another pass)",
+      "rebuttal": "Tests written after implementation tend to codify bugs. Write the test now, confirm it fails, then implement.",
+      "action": "warn"
+    },
+    {
+      "id": "skip-tests-too-simple",
+      "category": "testing",
+      "severity": "medium",
+      "pattern": "(?:too simple|too trivial|obviously correct|doesn't really need)[^.]{0,40}test",
+      "rebuttal": "Skipping tests because code 'looks simple' is how silent regressions ship. Three-line functions break too.",
+      "action": "warn"
+    },
+    {
+      "id": "premature-optimization-later",
+      "category": "quality",
+      "severity": "medium",
+      "pattern": "(?:performance|optimization|optimize)[^.]{0,30}(?:can come later|later|follow[- ]up|future|next iteration)",
+      "rebuttal": "If you're writing it now, pick a reasonable approach now. 'Later' in an agent loop usually means 'never'.",
+      "action": "warn"
+    },
+    {
+      "id": "low-risk-skip-review",
+      "category": "review",
+      "severity": "high",
+      "pattern": "(?:low[- ]risk|small change|minor|tiny|trivial)[^.]{0,40}(?:skip|no need|don't need|without)[^.]{0,20}review",
+      "rebuttal": "The blast radius of 'small' changes is often wider than it looks. Don't skip review because YOU judge it low-risk — the reviewer decides that.",
+      "action": "require_override"
+    },
+    {
+      "id": "skip-error-handling-happy-path",
+      "category": "reliability",
+      "severity": "high",
+      "pattern": "(?:happy path|for now|MVP|prototype)[^.]{0,30}(?:skip|ignore|won't)[^.]{0,20}(?:error|failure|edge case)",
+      "rebuttal": "Error paths are the only part of the code your users hit when things go wrong. Handle at least the ones you can reasonably foresee.",
+      "action": "warn"
+    },
+    {
+      "id": "skip-validation-trusted-caller",
+      "category": "security",
+      "severity": "high",
+      "pattern": "(?:trust|assume)[^.]{0,40}(?:caller|input|user)[^.]{0,30}(?:no need|don't need|skip)[^.]{0,20}valid",
+      "rebuttal": "Input validation at the system boundary is NOT optional. 'Trusted callers' become untrusted during incidents.",
+      "action": "require_override"
+    },
+    {
+      "id": "skip-migration-backup",
+      "category": "data-safety",
+      "severity": "critical",
+      "pattern": "(?:skip|without|no need for)[^.]{0,30}(?:backup|snapshot|dump)[^.]{0,40}(?:migration|migrate|drop|alter table)",
+      "rebuttal": "Database migrations without a backup are how companies lose data. Take the snapshot. The minute cost beats the unbounded recovery cost.",
+      "action": "require_override"
+    },
+    {
+      "id": "cant-reproduce-so-skip",
+      "category": "debugging",
+      "severity": "high",
+      "pattern": "(?:can't|cannot|couldn't) reproduce[^.]{0,50}(?:moving on|skipping|ignoring|not worth)",
+      "rebuttal": "Non-reproducible bugs are the ones that cost customers. At minimum add instrumentation that will catch it next time before you close the issue.",
+      "action": "warn"
+    },
+    {
+      "id": "this-is-temporary",
+      "category": "quality",
+      "severity": "medium",
+      "pattern": "(?:this is|it's|just a)[^.]{0,15}(?:temporary|temp|quick fix|hack)[^.]{0,40}(?:we'll|will)[^.]{0,20}(?:fix|clean up|revisit)",
+      "rebuttal": "Temporary code becomes permanent roughly 80% of the time. If you need a hack, add a deletion-date comment and create a tracking issue.",
+      "action": "warn"
+    },
+    {
+      "id": "skip-types-refactor-later",
+      "category": "quality",
+      "severity": "low",
+      "pattern": "(?:skip|ignore|avoid)[^.]{0,20}(?:type|typing|tsc|typescript)[^.]{0,30}(?:later|next|follow[- ]up)",
+      "rebuttal": "Skipping type checks makes every future change in this area more dangerous. Either fix the types or document the `any` with a reason.",
+      "action": "warn"
+    },
+    {
+      "id": "force-push-main-safe",
+      "category": "version-control",
+      "severity": "critical",
+      "pattern": "(?:force[- ]push|push[^.\\n]{0,40}--force)[^.\\n]{0,40}(?:\\bmain\\b|\\bmaster\\b|\\btrunk\\b)",
+      "rebuttal": "Force-pushing to main/master destroys other people's work silently. If you think you need to, the answer is almost certainly 'add a new commit that reverts'.",
+      "action": "block"
+    },
+    {
+      "id": "disable-hook-to-commit",
+      "category": "process",
+      "severity": "high",
+      "pattern": "(?:commit|push)[^.\\n]{0,60}(?:--no-verify|skip[- ]hooks|disable[- ]hook)|(?:--no-verify|skip[- ]hooks|disable[- ]hook)[^.\\n]{0,60}(?:commit|push)",
+      "rebuttal": "Pre-commit hooks exist for reasons you didn't write. Fix the failing hook, don't bypass it. If the hook is wrong, fix the hook.",
+      "action": "require_override"
+    },
+    {
+      "id": "skip-auth-check-internal",
+      "category": "security",
+      "severity": "critical",
+      "pattern": "(?:internal|admin[- ]only|trusted network)[^.]{0,40}(?:skip|no need|don't need)[^.]{0,20}(?:auth|authentication|authz|authorization)",
+      "rebuttal": "'Internal' endpoints leak. 'Trusted' networks get shared. 'Admin-only' paths get bookmarked by the wrong person. Check auth at the endpoint.",
+      "action": "require_override"
+    },
+    {
+      "id": "skip-docs-self-evident",
+      "category": "documentation",
+      "severity": "low",
+      "pattern": "(?:self[- ]evident|self[- ]explanatory|obvious)[^.]{0,30}(?:no|not)[^.]{0,20}(?:doc|documentation|comment)",
+      "rebuttal": "Nothing is self-evident to a reader encountering it cold six months from now. A one-line comment on WHY is usually enough.",
+      "action": "warn"
+    },
+    {
+      "id": "rm-rf-cleanup",
+      "category": "data-safety",
+      "severity": "critical",
+      "pattern": "rm[^.]{0,40}-rf?[^.]{0,20}(?:/|\\*|\\.\\.)",
+      "rebuttal": "An unconstrained `rm -rf` is one tab-complete away from catastrophe. Narrow the target, or use `git clean` / `rm -i`, or confirm before running.",
+      "action": "block"
+    }
+  ]
+}

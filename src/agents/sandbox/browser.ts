@@ -12,6 +12,7 @@ import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
 import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "./constants.js";
+import type { CredentialBag } from "./credential-bag.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
@@ -20,6 +21,7 @@ import {
   readDockerContainerLabel,
   readDockerPort,
 } from "./docker.js";
+import type { NetworkPolicy } from "./network-policy.js";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
@@ -133,6 +135,8 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  credentialBag?: CredentialBag | null;
+  networkPolicy?: NetworkPolicy | null;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -233,6 +237,8 @@ export async function ensureSandboxBrowser(params: {
       configHash: expectedHash,
       includeBinds: false,
       bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
+      credentialBag: params.credentialBag,
+      networkPolicy: params.networkPolicy,
     });
     appendWorkspaceMountArgs({
       args,

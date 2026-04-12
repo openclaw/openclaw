@@ -5,6 +5,12 @@ import {
   resolveWindowsSpawnProgram,
 } from "../../plugin-sdk/windows-spawn.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { buildBagEnvArgs, type CredentialBag } from "./credential-bag.js";
+import {
+  resolveNetworkModeForPolicy,
+  type NetworkPolicy,
+} from "./network-policy.js";
+import type { OutboundProxyBinding } from "./outbound-proxy.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -324,6 +330,9 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
+  credentialBag?: CredentialBag | null;
+  networkPolicy?: NetworkPolicy | null;
+  proxyBinding?: OutboundProxyBinding | null;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
@@ -359,8 +368,30 @@ export function buildSandboxCreateArgs(params: {
   for (const entry of params.cfg.tmpfs) {
     args.push("--tmpfs", entry);
   }
-  if (params.cfg.network) {
+  const resolvedPolicy = resolveNetworkModeForPolicy(params.networkPolicy);
+  // Proxy binding (Block 1.5 item #1) wins over resolvedPolicy for allowlist
+  // mode: the sandbox joins the per-agent internal bridge, and the proxy
+  // container is the only egress path. When no binding is present we fall
+  // back to the policy resolver's decision (none/open/cfg default).
+  if (params.proxyBinding) {
+    args.push("--network", params.proxyBinding.internalNetwork);
+  } else if (resolvedPolicy.dockerNetwork !== null) {
+    args.push("--network", resolvedPolicy.dockerNetwork);
+  } else if (params.cfg.network) {
     args.push("--network", params.cfg.network);
+  }
+  if (params.networkPolicy) {
+    log.info(`Network policy resolved: ${resolvedPolicy.note}`);
+    if (resolvedPolicy.needsProxyEnforcement && !params.proxyBinding) {
+      log.warn(
+        `Allowlist enforcement unavailable — no proxy binding resolved for policy "${params.networkPolicy.agentId}". Sandbox will run with default network until the proxy is materialized.`,
+      );
+    }
+    if (params.proxyBinding) {
+      log.info(
+        `Allowlist proxy enforcement ACTIVE for "${params.networkPolicy.agentId}" via ${params.proxyBinding.proxyContainer}`,
+      );
+    }
   }
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
@@ -374,6 +405,24 @@ export function buildSandboxCreateArgs(params: {
   }
   for (const [key, value] of Object.entries(envSanitization.allowed)) {
     args.push("--env", `${key}=${value}`);
+  }
+  if (params.credentialBag) {
+    const bagResult = buildBagEnvArgs(params.credentialBag);
+    args.push(...bagResult.args);
+    if (bagResult.applied.length > 0) {
+      log.info(
+        `Applied credential bag for agent "${params.credentialBag.agentId}": ${bagResult.applied.join(", ")}`,
+      );
+    }
+    if (bagResult.skipped.length > 0) {
+      const rejects = bagResult.skipped.map((s) => `${s.key} (${s.reason})`).join(", ");
+      log.warn(`Rejected credential bag entries for "${params.credentialBag.agentId}": ${rejects}`);
+    }
+  }
+  if (params.proxyBinding) {
+    for (const [key, value] of Object.entries(params.proxyBinding.env)) {
+      args.push("--env", `${key}=${value}`);
+    }
   }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
@@ -440,6 +489,9 @@ async function createSandboxContainer(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   configHash?: string;
+  credentialBag?: CredentialBag | null;
+  networkPolicy?: NetworkPolicy | null;
+  proxyBinding?: OutboundProxyBinding | null;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
@@ -451,6 +503,9 @@ async function createSandboxContainer(params: {
     configHash: params.configHash,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    credentialBag: params.credentialBag,
+    networkPolicy: params.networkPolicy,
+    proxyBinding: params.proxyBinding,
   });
   args.push("--workdir", cfg.workdir);
   appendWorkspaceMountArgs({
@@ -491,6 +546,9 @@ export async function ensureSandboxContainer(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  credentialBag?: CredentialBag | null;
+  networkPolicy?: NetworkPolicy | null;
+  proxyBinding?: OutboundProxyBinding | null;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
@@ -548,6 +606,9 @@ export async function ensureSandboxContainer(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
+      credentialBag: params.credentialBag,
+      networkPolicy: params.networkPolicy,
+      proxyBinding: params.proxyBinding,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);

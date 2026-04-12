@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wiredwisdom.ai/schemas/task-decomposer/v1.json",
+  "title": "Task Decomposer Output",
+  "description": "Structured output from the task-decomposer skill. Every goal decomposition must conform to this shape.",
+  "type": "object",
+  "required": ["goal", "depth", "risk_level", "slices"],
+  "additionalProperties": false,
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The original goal, unchanged"
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 5,
+      "description": "Target number of vertical slices"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "too_big": {
+      "type": "boolean",
+      "description": "Set to true when the goal is too large for a single decomposition. In that case, slices[] may be empty and assumptions[] should suggest a coarser partitioning."
+    },
+    "slices": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/definitions/slice"
+      }
+    },
+    "global_risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "slice": {
+      "type": "object",
+      "required": [
+        "slice_id",
+        "title",
+        "end_to_end_scope",
+        "acceptance_criteria",
+        "test_hooks",
+        "est_agent_hours"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "slice_id": {
+          "type": "string",
+          "pattern": "^S\\d+$",
+          "description": "S1, S2, S3, ..."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "end_to_end_scope": {
+          "type": "string",
+          "minLength": 10
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 5 }
+        },
+        "test_hooks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 5 }
+        },
+        "security_considerations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rollback_plan": {
+          "type": "string"
+        },
+        "est_agent_hours": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 8
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^S\\d+$"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

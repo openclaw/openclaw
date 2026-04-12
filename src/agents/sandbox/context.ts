@@ -9,8 +9,12 @@ import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { loadCredentialBagForAgent } from "./credential-bag.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { loadNetworkPolicyForAgent } from "./network-policy.js";
+import { ensureOutboundProxy, type OutboundProxyBinding } from "./outbound-proxy.js";
+import { outboundProxyDocker } from "./outbound-proxy-docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
@@ -114,7 +118,7 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, cfg, runtime } = resolved;
 
   await maybePruneSandboxes(cfg);
 
@@ -131,11 +135,42 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  // RI-025/RI-026 activation (Block 1.5): load the per-agent credential bag and
+  // network policy from disk ONCE at the spawn site. Missing files resolve to
+  // null (safe default — no extra secrets injected, default bridge network).
+  // Malformed files throw with the file path — fail loud so admins see broken
+  // config the first time a sandbox spawns instead of silently losing policy.
+  const credentialBag = loadCredentialBagForAgent(runtime.agentId);
+  const networkPolicy = loadNetworkPolicyForAgent(runtime.agentId);
+
+  // Block 1.5 item #1: when policy mode is "allowlist", materialize the
+  // per-agent tinyproxy sidecar BEFORE spawning the sandbox so the sandbox
+  // can join the internal network. The proxy container is idempotent —
+  // subsequent spawns reuse the existing container/network.
+  let proxyBinding: OutboundProxyBinding | null = null;
+  if (networkPolicy && networkPolicy.mode === "allowlist") {
+    try {
+      const ensured = await ensureOutboundProxy({
+        policy: networkPolicy,
+        docker: outboundProxyDocker,
+      });
+      proxyBinding = ensured.binding;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Outbound proxy sidecar failed for agent "${runtime.agentId}": ${message}. Sandbox will fall back to the policy's default network until the proxy is healthy.`,
+      );
+    }
+  }
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    credentialBag,
+    networkPolicy,
+    proxyBinding,
   });
 
   const evaluateEnabled =
@@ -164,6 +199,8 @@ export async function resolveSandboxContext(params: {
     cfg: resolvedCfg,
     evaluateEnabled,
     bridgeAuth,
+    credentialBag,
+    networkPolicy,
   });
 
   const sandboxContext: SandboxContext = {

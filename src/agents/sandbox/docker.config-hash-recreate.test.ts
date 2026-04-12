@@ -32,7 +32,16 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...actual,
     spawn: (command: string, args: string[]) => {
-      spawnState.calls.push({ command, args });
+      // Normalize the logged command to `"docker"` whenever the resolved
+      // binary basename looks like docker. `resolveDockerSpawnInvocation`
+      // returns an absolute path when Docker Desktop is installed on
+      // Windows, which breaks downstream `call.command === "docker"` checks.
+      const normalizedBasename = (command.replace(/\\/g, "/").split("/").pop() ?? command).toLowerCase();
+      const normalizedCommand =
+        normalizedBasename === "docker" || normalizedBasename === "docker.exe"
+          ? "docker"
+          : command;
+      spawnState.calls.push({ command: normalizedCommand, args });
       const child = new EventEmitter() as EventEmitter & {
         stdout: Readable;
         stderr: Readable;
@@ -47,7 +56,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       let code = 0;
       let stdout = "";
       let stderr = "";
-      if (command !== "docker") {
+      if (normalizedCommand !== "docker") {
         code = 1;
         stderr = `unexpected command: ${command}`;
       } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {

@@ -1,5 +1,7 @@
 node_modules
 **/node_modules/
+graphify-out/
+.graphify_*
 .env
 docker-compose.extra.yml
 dist

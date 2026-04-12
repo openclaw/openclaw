@@ -3,6 +3,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { evaluateToolCall } from "./governance/rationalization-engine.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -145,6 +146,41 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+
+    // RI-011 — Anti-rationalization engine. Runs AFTER loop detection so
+    // loop-blocks always fire first (they're purely mechanical), and BEFORE
+    // the plugin hook so external plugins can still observe and veto normally.
+    // Evaluates the current tool call against assistant prose (from
+    // SessionState.assistantTextWindow, populated by the run loop if wired)
+    // and the stringified tool params. See rationalization-engine.ts for the
+    // full rule catalog.
+    const ratEval = evaluateToolCall({
+      toolName,
+      params,
+      recentAssistantText: sessionState.assistantTextWindow ?? "",
+    });
+    if (ratEval.matched && ratEval.rule) {
+      const counts = (sessionState.rationalizationCounts ??= new Map());
+      counts.set(ratEval.rule.id, (counts.get(ratEval.rule.id) ?? 0) + 1);
+
+      if (ratEval.action === "block" || ratEval.action === "require_override") {
+        log.error(
+          `Blocking ${toolName} due to rationalization rule ${ratEval.rule.id}: ${ratEval.rebuttal}`,
+        );
+        return {
+          blocked: true,
+          reason:
+            ratEval.reason ??
+            `Rationalization rule "${ratEval.rule.id}" matched: ${ratEval.rebuttal}`,
+        };
+      }
+      // warn action — log once per (rule × session) to avoid spam.
+      if ((counts.get(ratEval.rule.id) ?? 0) === 1) {
+        log.warn(
+          `Rationalization warning for ${toolName}: rule=${ratEval.rule.id} severity=${ratEval.rule.severity} — ${ratEval.rebuttal}`,
+        );
+      }
+    }
   }
 
   const hookRunner = getGlobalHookRunner();

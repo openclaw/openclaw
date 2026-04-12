@@ -1,4 +1,5 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { SkillCertTier } from "../sandbox/mandatory-sandbox.js";
 
 export type SkillInstallSpec = {
   id?: string;
@@ -42,6 +43,35 @@ export type OpenClawSkillMetadata = {
    * alongside SKILL.md when `preload` is true. Example: ["services-pricing.md", "brand-voice.md"].
    */
   preloadFiles?: string[];
+  /**
+   * ClawHub certification tier for this skill. Used at session bootstrap to
+   * decide whether an unsandboxed agent is allowed to load the skill. A value
+   * of "unverified" forces mandatory sandbox per RI-030. Skills predating
+   * cert_tier (the entire bundled-framework skill set) have this field unset
+   * and are treated as trusted for backwards compatibility.
+   */
+  certTier?: SkillCertTier;
+  /**
+   * RI-014. Skill version as a semver string. Populated from a
+   * `version:` key in frontmatter, OR inferred from a directory name suffix
+   * `{name}@{semver}/` at load time when the frontmatter is silent. Missing
+   * version is treated as "1.0.0" for sort purposes by the resolver.
+   */
+  version?: string;
+  /**
+   * RI-014. Variant label assigned to this physical skill definition (e.g.
+   * "control", "v2-aggressive"). Frontmatter-driven; optional. When an
+   * experiment is active, the runtime selects a variant and loads the skill
+   * directory whose (name, variantId) tuple matches.
+   */
+  variantId?: string;
+  /**
+   * RI-014. Experiment this variant belongs to, for telemetry attribution
+   * and so the version resolver can cross-reference with the Quinn-Co
+   * experiment store. Set per variant; left unset on "control" skills that
+   * exist outside any A/B test.
+   */
+  experimentId?: string;
 };
 
 export type SkillInvocationPolicy = {

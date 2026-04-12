@@ -9,6 +9,20 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  /**
+   * RI-011. Rolling window of recent assistant prose fed to the
+   * rationalization engine. Populated by the run loop via
+   * `appendAssistantTextToSession`. Capped to ~4k chars — oldest text
+   * trimmed first. Empty string (or missing) when the run loop hasn't
+   * wired the feed yet, in which case the rationalization engine still
+   * evaluates against tool-call params alone.
+   */
+  assistantTextWindow?: string;
+  /**
+   * RI-011. Per-session count of rationalization detections, bucketed
+   * by rule ID. Used for warn-spam suppression and future telemetry.
+   */
+  rationalizationCounts?: Map<string, number>;
 };
 
 export type ToolCallRecord = {

@@ -777,6 +777,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      sandboxed: Boolean(sandbox?.enabled),
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({

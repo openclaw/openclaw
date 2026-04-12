@@ -12,6 +12,7 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../../shared/frontmatter.js";
+import type { SkillCertTier } from "../sandbox/mandatory-sandbox.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -19,6 +20,49 @@ import type {
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "./types.js";
+
+function resolveCertTierFromManifest(metadataObj: Record<string, unknown>): SkillCertTier | undefined {
+  // Support both camelCase (`certTier`) and snake_case (`cert_tier`) for
+  // compatibility with ClawHub manifest conventions. Unknown string values
+  // collapse to undefined so downstream defaults decide the stance.
+  const raw =
+    (metadataObj as { certTier?: unknown }).certTier ??
+    (metadataObj as { cert_tier?: unknown }).cert_tier;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "certified" || normalized === "verified" || normalized === "unverified") {
+    return normalized;
+  }
+  return undefined;
+}
+
+// RI-014. Accept both camelCase and snake_case for version/variant/experiment
+// fields. Returns undefined when the raw value isn't a non-empty string.
+function resolveStringField(
+  metadataObj: Record<string, unknown>,
+  camel: string,
+  snake: string,
+): string | undefined {
+  const raw =
+    (metadataObj as Record<string, unknown>)[camel] ??
+    (metadataObj as Record<string, unknown>)[snake];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/;
+
+// RI-014. Accept only semver-shaped version strings. Non-semver values
+// collapse to undefined so the version resolver falls back to its defaults
+// rather than crashing on malformed frontmatter.
+function resolveVersionFromManifest(metadataObj: Record<string, unknown>): string | undefined {
+  const raw = resolveStringField(metadataObj, "version", "version");
+  if (!raw) return undefined;
+  return SEMVER_RE.test(raw) ? raw : undefined;
+}
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
   return parseFrontmatterBlock(content);
@@ -211,6 +255,14 @@ export function resolveOpenClawMetadata(
         ? ((metadataObj as { preload?: boolean }).preload as boolean)
         : undefined,
     preloadFiles: preloadFilesRaw.length > 0 ? preloadFilesRaw : undefined,
+    certTier: resolveCertTierFromManifest(metadataObj as Record<string, unknown>),
+    version: resolveVersionFromManifest(metadataObj as Record<string, unknown>),
+    variantId: resolveStringField(metadataObj as Record<string, unknown>, "variantId", "variant_id"),
+    experimentId: resolveStringField(
+      metadataObj as Record<string, unknown>,
+      "experimentId",
+      "experiment_id",
+    ),
   };
 }
 
