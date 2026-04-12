@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Dreaming/cron: wake managed dreaming jobs immediately instead of waiting for the next heartbeat, so scheduled dreaming runs start when the cron fires. (#65053) Thanks @l0cka and @vincentkoc.
 - QA/packaging: stop packaged QA helpers from crashing when optional scenario execution config is unavailable, so npm distributions can skip the repo-only scenario pack without breaking completion-cache and startup paths. (#65118) Thanks @EdderTalmor and @vincentkoc.
 - Media/audio transcription: surface the real provider failure when every audio transcription attempt fails, so status output and the CLI stop collapsing those errors into generic skips. (#65096) Thanks @l0cka and @vincentkoc.
+- Gateway/agents: suppress the late `Agent listener invoked outside active run` teardown race in the global unhandled-rejection handler, so stale post-run tool updates stop crashing the gateway into restart loops. (#65285) Thanks @openperf and @vincentkoc.
 
 ## 2026.4.11
 
