@@ -19,7 +19,10 @@ function fail(message) {
 }
 
 function tmpFile(purpose) {
-  return path.join(os.tmpdir(), `secretscan-${purpose}-${crypto.randomUUID()}`);
+  const filePath = path.join(os.tmpdir(), `secretscan-${purpose}-${crypto.randomUUID()}`);
+  // 预创建文件，限制权限为 owner-only
+  fs.writeFileSync(filePath, "", { mode: 0o600 });
+  return filePath;
 }
 
 function gh(args, { json = true, allowFailure = false } = {}) {
@@ -50,7 +53,9 @@ function cmdFetchAlert(alertNumber) {
 
   const alert = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}?hide_secret=true`]);
 
-  const locations = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}/locations`]);
+  const locations = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}/locations`, "--paginate", "--slurp"]);
+  // --paginate + --slurp 确保多页结果合并为一个 JSON 数组
+  const flatLocations = Array.isArray(locations?.[0]) ? locations.flat() : Array.isArray(locations) ? locations : [];
 
   const result = {
     number: alert.number,
@@ -59,7 +64,7 @@ function cmdFetchAlert(alertNumber) {
     secret_type_display_name: alert.secret_type_display_name,
     validity: alert.validity,
     html_url: alert.html_url,
-    locations: locations.map((loc) => ({
+    locations: flatLocations.map((loc) => ({
       type: loc.type,
       details: loc.details,
     })),
@@ -214,7 +219,7 @@ function cmdFetchContent(locationJson) {
           path: details.path,
           start_line: details.start_line,
           end_line: details.end_line,
-          html_url: details.html_url,
+          html_url: details.html_url || details.commit_url || details.blob_url || null,
           // commit 没有 body 文件
           body_file: null,
         },
@@ -405,9 +410,11 @@ function cmdListOpen() {
     "api",
     `repos/${REPO}/secret-scanning/alerts?hide_secret=true&state=open`,
     "--paginate",
+    "--slurp",
   ]);
 
-  const flat = Array.isArray(alerts) ? alerts : [alerts];
+  // --slurp 将分页结果合并为 [[page1], [page2], ...] 需要 flat
+  const flat = Array.isArray(alerts?.[0]) ? alerts.flat() : Array.isArray(alerts) ? alerts : [];
   const rows = flat.map((a) => ({
     number: a.number,
     secret_type_display_name: a.secret_type_display_name,
