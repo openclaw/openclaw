@@ -132,6 +132,77 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   </Accordion>
 
+  <Accordion title="x_search configuration">
+    The bundled xAI plugin exposes `x_search` as an OpenClaw tool for searching
+    X (formerly Twitter) content via Grok.
+
+    Config path: `plugins.entries.xai.config.xSearch`
+
+    | Key                | Type    | Default            | Description                          |
+    | ------------------ | ------- | ------------------ | ------------------------------------ |
+    | `enabled`          | boolean | —                  | Enable or disable x_search           |
+    | `model`            | string  | `grok-4-1-fast`    | Model used for x_search requests     |
+    | `inlineCitations`  | boolean | —                  | Include inline citations in results  |
+    | `maxTurns`         | number  | —                  | Maximum conversation turns           |
+    | `timeoutSeconds`   | number  | —                  | Request timeout in seconds           |
+    | `cacheTtlMinutes`  | number  | —                  | Cache time-to-live in minutes        |
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              xSearch: {
+                enabled: true,
+                model: "grok-4-1-fast",
+                inlineCitations: true,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
+  <Accordion title="Code execution configuration">
+    The bundled xAI plugin exposes `code_execution` as an OpenClaw tool for
+    remote code execution in xAI's sandbox environment.
+
+    Config path: `plugins.entries.xai.config.codeExecution`
+
+    | Key               | Type    | Default            | Description                              |
+    | ----------------- | ------- | ------------------ | ---------------------------------------- |
+    | `enabled`         | boolean | `true` (if key available) | Enable or disable code execution  |
+    | `model`           | string  | `grok-4-1-fast`    | Model used for code execution requests   |
+    | `maxTurns`        | number  | —                  | Maximum conversation turns               |
+    | `timeoutSeconds`  | number  | —                  | Request timeout in seconds               |
+
+    <Note>
+    This is remote xAI sandbox execution, not local [`exec`](/tools/exec).
+    </Note>
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              codeExecution: {
+                enabled: true,
+                model: "grok-4-1-fast",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
   <Accordion title="Known limits">
     - Auth is API-key only today. There is no xAI OAuth or device-code flow in
       OpenClaw yet.
