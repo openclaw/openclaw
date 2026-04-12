@@ -68,8 +68,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "988"  # Docker group ID - check yours with: getent group docker | cut -d: -f3
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     init: true
     restart: unless-stopped
     command:
