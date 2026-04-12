@@ -122,6 +122,36 @@ describe("formatNarrativeDate", () => {
     expect(date).toContain("2026");
     expect(date).toContain("3:00");
   });
+
+  it("applies an explicit timezone", () => {
+    // 2026-04-11T21:46:55Z in America/Los_Angeles (PDT, UTC-7) → 2:46 PM
+    const date = formatNarrativeDate(
+      Date.parse("2026-04-11T21:46:55Z"),
+      "America/Los_Angeles",
+    );
+    expect(date).toContain("2:46");
+    expect(date).toContain("PM");
+  });
+
+  it("uses host local timezone when timezone is undefined (#65027)", () => {
+    // Force a non-UTC host timezone so this test is meaningful on UTC CI
+    // runners where the old `?? "UTC"` fallback would silently pass.
+    const originalTZ = process.env.TZ;
+    try {
+      process.env.TZ = "America/Los_Angeles"; // PDT = UTC-7
+      const epochMs = Date.parse("2026-04-11T21:46:55Z");
+      const result = formatNarrativeDate(epochMs);
+      // 21:46 UTC → 14:46 PDT → "2:46 PM"
+      expect(result).toContain("2:46");
+      expect(result).toContain("PM");
+    } finally {
+      if (originalTZ === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = originalTZ;
+      }
+    }
+  });
 });
 
 describe("buildDiaryEntry", () => {

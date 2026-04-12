@@ -231,7 +231,7 @@ export function extractNarrativeText(messages: unknown[]): string | null {
 
 export function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone ?? "UTC",
+    timeZone: timezone,
     year: "numeric",
     month: "long",
     day: "numeric",
