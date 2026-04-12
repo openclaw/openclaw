@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Windows/onboarding: open provider OAuth and sign-in URLs with `explorer.exe` instead of routing them through `cmd /c start`, so quoted provider URLs cannot break out into host command execution. (#64161) Thanks @coygeek and @vincentkoc.
 - OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with `invalid_scope` before returning an authorization code. (#64713) Thanks @fuller-stack-dev.
 - Audio transcription: disable pinned DNS only for OpenAI-compatible multipart requests, while still validating hostnames, so OpenAI, Groq, and Mistral transcription works again without weakening other request paths. (#64766) Thanks @GodsBoy.
 - macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.
