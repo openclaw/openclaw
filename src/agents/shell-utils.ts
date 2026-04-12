@@ -141,9 +141,15 @@ function normalizeShellName(value: string): string {
 export function detectRuntimeShell(): string | undefined {
   const overrideShell = process.env.OPENCLAW_SHELL?.trim();
   if (overrideShell) {
-    const name = normalizeShellName(overrideShell);
-    if (name) {
-      return name;
+    // On Windows, skip POSIX-style paths (e.g., /usr/bin/bash from Git Bash)
+    // These are not valid Windows paths and should fall back to PowerShell
+    if (process.platform === "win32" && overrideShell.startsWith("/") && !overrideShell.startsWith("//")) {
+      // POSIX path detected; fall through to default detection
+    } else {
+      const name = normalizeShellName(overrideShell);
+      if (name) {
+        return name;
+      }
     }
   }
 
@@ -151,9 +157,13 @@ export function detectRuntimeShell(): string | undefined {
     // Check for custom shell via SHELL env var on Windows
     const envShell = process.env.SHELL?.trim();
     if (envShell) {
-      const name = normalizeShellName(envShell);
-      if (name) {
-        return name;
+      // Skip POSIX-style paths (e.g., /usr/bin/bash from Git Bash)
+      // These are not valid Windows paths and would cause mismatch with getShellConfig()
+      if (!envShell.startsWith("/") || envShell.startsWith("//")) {
+        const name = normalizeShellName(envShell);
+        if (name) {
+          return name;
+        }
       }
     }
     if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
@@ -214,3 +224,4 @@ export function sanitizeBinaryOutput(text: string): string {
   }
   return chunks.join("");
 }
+
