@@ -205,13 +205,16 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   if (configValue !== undefined && configValue !== null) {
     // Plugin config has webSearch set — this triggers auto-enable via
     // plugin-web-search-configured, so the plugin will be activated at runtime.
-    if (typeof configValue === "string") {
-      return configValue.trim().length > 0;
+    if (typeof configValue === "string" && configValue.trim().length > 0) {
+      return true;
     }
     // Valid SecretRef object -- treat as configured
     if (isSecretRef(configValue)) {
       return true;
     }
+    // Empty/blank apiKey string or unrecognized shape — fall through to env var
+    // check, since resolveYouApiKey normalizes empty strings to undefined and
+    // falls back to YDC_API_KEY.
   }
   // YDC_API_KEY env var alone is not enough — the You plugin is bundled without
   // enabledByDefault and without autoEnableWhenConfiguredProviders, so it stays
