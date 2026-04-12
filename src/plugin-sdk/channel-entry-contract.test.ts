@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
-import { loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
 
@@ -70,7 +69,9 @@ describe("loadBundledEntryExportSync", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     try {
-      const { loadBundledEntryExportSync } = await import("./channel-entry-contract.js");
+      const { loadBundledEntryExportSync } = await importFreshModule<
+        typeof import("./channel-entry-contract.js")
+      >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-import-path");
       loadBundledEntryExportSync(importerUrl, {
         specifier: "./api.js",
         exportName: "signalSetupPlugin",
@@ -152,7 +153,7 @@ describe("loadBundledEntryExportSync", () => {
     }
   });
 
-  it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
+  it("loads packaged telegram setup sidecars from dist-facing api modules", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 
@@ -180,6 +181,8 @@ describe("loadBundledEntryExportSync", () => {
       "utf8",
     );
 
+    const { loadBundledEntryExportSync } = await import("./channel-entry-contract.js");
+
     expect(
       loadBundledEntryExportSync<{ id: string }>(pathToFileURL(importerPath).href, {
         specifier: "./setup-plugin-api.js",
@@ -199,7 +202,7 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("can disable source-tree fallback for dist bundled entry checks", () => {
+  it("can disable source-tree fallback for dist bundled entry checks", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 
@@ -216,6 +219,8 @@ describe("loadBundledEntryExportSync", () => {
       "export const sentinel = 42;\n",
       "utf8",
     );
+
+    const { loadBundledEntryExportSync } = await import("./channel-entry-contract.js");
 
     expect(
       loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
