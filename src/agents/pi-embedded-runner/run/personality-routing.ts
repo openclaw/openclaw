@@ -82,8 +82,16 @@ export function buildPersonalityHybridModelName(executionModelId: string): strin
  * the personality model for emotional closeout. The personality model
  * rewrites the visible text while keeping all factual content intact.
  */
+/**
+ * The closeout instruction for the pre-send personality sanitizer. The
+ * personality model already has SOUL.md in its system prompt (loaded from
+ * workspace bootstrap files during attempt setup), so it naturally adopts
+ * the configured personality. This instruction just tells it to rewrite
+ * the execution output rather than generating new content.
+ */
 export const PERSONALITY_CLOSEOUT_INSTRUCTION =
-  "Rewrite the following in your natural voice and personality set in your SOUL.md file. " +
+  "Rewrite the following in your natural voice and personality. " +
+  "Your SOUL.md defines your personality — use it. " +
   "Keep all factual content, tool results, code blocks, and file references exactly as-is. " +
   "Add warmth and natural language framing around the technical parts. " +
   "Keep it concise — do not expand or add new information.";
