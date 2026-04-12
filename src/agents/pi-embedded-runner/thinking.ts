@@ -205,16 +205,8 @@ export function sanitizeThinkingForRecovery(messages: AgentMessage[]): {
   if (assessment === "valid") {
     return { messages, prefill: false };
   }
-  if (assessment === "incomplete-text") {
-    return {
-      messages: [
-        ...messages.slice(0, lastAssistantIndex),
-        ...messages.slice(lastAssistantIndex + 1),
-      ],
-      prefill: false,
-    };
-  }
 
+  // assessment is "incomplete-text" or "incomplete-thinking" — drop it either way.
   return {
     messages: [...messages.slice(0, lastAssistantIndex), ...messages.slice(lastAssistantIndex + 1)],
     prefill: false,
