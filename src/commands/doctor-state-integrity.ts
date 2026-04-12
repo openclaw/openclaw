@@ -118,9 +118,6 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         agentId: normalizeAgentId(entry.name),
       }))
       .filter(({ dirName, agentId }) => {
-        if (!agentId) {
-          return false;
-        }
         const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
         if (!hasNestedAgentDir) {
           return false;
@@ -806,7 +803,7 @@ export async function noteStateIntegrity(
   if (orphanAgentDirs.length > 0) {
     warnings.push(
       [
-        `- Found ${countLabel(orphanAgentDirs.length, "agent directory")} on disk without a matching agents.list entry.`,
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
         `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
         `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
