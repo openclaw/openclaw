@@ -18,6 +18,9 @@ env:
   PNPM_VERSION: "10.32.1"
 
 jobs:
+  # THIS WORKFLOW EXISTS SO RELEASE-TIME LIVE CHECKS CAN RUN WITHOUT BLOCKING npm PUBLISH.
+  # PUT THE SLOWER, EXTERNAL, OR SOMETIMES-FLAKY RELEASE CHECKS HERE INSTEAD OF
+  # RECOUPLING THEM TO openclaw-npm-release.yml.
   validate_release_live_cache:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -73,6 +76,8 @@ jobs:
             exit 1
           fi
 
+      # KEEP RELEASE-TIME LIVE COVERAGE HERE SO OPERATORS CAN RUN IT ON DEMAND
+      # WITHOUT MAKING THE PUBLISH PATH WAIT FOR A SLOW OR FLAKY EXTERNAL CHECK.
       - name: Verify live prompt cache floors
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

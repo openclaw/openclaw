@@ -43,6 +43,9 @@ OpenClaw has three public release lanes:
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
+- This split is intentional: keep the real npm release path short,
+  deterministic, and artifact-focused, while slower live checks stay in their
+  own lane so they do not stall or block publish
 - That workflow accepts either an existing release tag or a commit SHA on
   `main` and runs
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
@@ -121,6 +124,8 @@ When cutting a stable npm release:
    when you intentionally want a direct stable publish
 3. Run `OpenClaw Release Checks` separately with the same tag or the
    release commit SHA when you want live prompt cache coverage
+   - This is separate on purpose so live coverage stays available without
+     recoupling long-running or flaky checks to the publish workflow
 4. Save the successful `preflight_run_id`
 5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
