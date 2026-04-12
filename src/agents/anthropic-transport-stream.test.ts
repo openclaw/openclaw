@@ -486,7 +486,15 @@ describe("anthropic transport stream", () => {
         } as Parameters<typeof streamFn>[2],
       ),
     );
+    const eventsPromise = (async () => {
+      const events: Array<{ type?: string }> = [];
+      for await (const event of stream) {
+        events.push(event as { type?: string });
+      }
+      return events;
+    })();
     const result = await stream.result();
+    const events = await eventsPromise;
 
     expect(anthropicCtorMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -513,6 +521,9 @@ describe("anthropic transport stream", () => {
       ]),
     );
     expect(result.stopReason).toBe("stop");
+    expect(events.some((event) => event.type === "text_start" || event.type === "text_delta")).toBe(
+      false,
+    );
     expect(result.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -521,5 +532,66 @@ describe("anthropic transport stream", () => {
         }),
       ]),
     );
+  });
+
+  it("drops compaction history blocks before sending GitHub Copilot Anthropic requests", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/anthropic",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              content: [{ type: "compaction", content: "Earlier compacted summary." }],
+            },
+            { role: "user", content: "Continue." },
+          ],
+        } as never,
+        {
+          apiKey: "gho_test",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(firstCallParams.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Continue.", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+    expect(
+      anthropicCtorMock.mock.calls[0]?.[0]?.defaultHeaders?.["anthropic-beta"] ?? "",
+    ).not.toContain("compact-2026-01-12");
   });
 });

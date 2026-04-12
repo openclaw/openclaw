@@ -4,6 +4,7 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicRequiredBetaFeatures,
+  shouldEnableAnthropicServerCompaction,
 } from "./anthropic-payload-policy.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
@@ -197,6 +198,18 @@ describe("anthropic payload policy", () => {
         cache_control: { type: "ephemeral" },
       },
     ]);
+  });
+
+  it("requires explicit opt-in before enabling Anthropic server compaction", () => {
+    expect(
+      shouldEnableAnthropicServerCompaction("anthropic", "https://api.anthropic.com/v1", undefined),
+    ).toBe(false);
+    expect(
+      shouldEnableAnthropicServerCompaction("anthropic", "https://api.anthropic.com/v1", false),
+    ).toBe(false);
+    expect(
+      shouldEnableAnthropicServerCompaction("anthropic", "https://api.anthropic.com/v1", true),
+    ).toBe(true);
   });
 
   it("strips the boundary even when cache retention is disabled", () => {

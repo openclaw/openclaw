@@ -424,10 +424,29 @@ function hasCompactionBlocks(messages: Context["messages"]): boolean {
   );
 }
 
+function stripCompactionBlocksForTransport(messages: Context["messages"]): Context["messages"] {
+  const filteredMessages: Context["messages"] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      filteredMessages.push(message);
+      continue;
+    }
+    const filteredContent = message.content.filter((block) => block.type !== "compaction");
+    if (filteredContent.length === 0) {
+      continue;
+    }
+    filteredMessages.push({
+      ...message,
+      content: filteredContent,
+    });
+  }
+  return filteredMessages;
+}
+
 function resolveAnthropicCompactionThreshold(
   model: Pick<AnthropicTransportModel, "contextWindow">,
   requested: number | undefined,
-): number | undefined {
+): number {
   if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
     return Math.floor(requested);
   }
@@ -493,6 +512,10 @@ function createAnthropicTransportClient(params: {
   options: AnthropicTransportOptions | undefined;
 }) {
   const { model, context, apiKey, options } = params;
+  const transportMessages =
+    model.provider === "github-copilot"
+      ? stripCompactionBlocksForTransport(context.messages)
+      : context.messages;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
   const anthropicCompactionEnabled = shouldEnableAnthropicServerCompaction(
@@ -504,7 +527,7 @@ function createAnthropicTransportClient(params: {
     "fine-grained-tool-streaming-2025-05-14",
     ...resolveAnthropicRequiredBetaFeatures({
       enableServerCompaction: anthropicCompactionEnabled,
-      hasCompactionBlocks: hasCompactionBlocks(context.messages),
+      hasCompactionBlocks: hasCompactionBlocks(transportMessages),
     }),
   ];
   if (needsInterleavedBeta) {
@@ -527,8 +550,8 @@ function createAnthropicTransportClient(params: {
           },
           model.headers,
           buildCopilotDynamicHeaders({
-            messages: context.messages,
-            hasImages: hasCopilotVisionInput(context.messages),
+            messages: transportMessages,
+            hasImages: hasCopilotVisionInput(transportMessages),
           }),
           options?.headers,
         ),
@@ -595,9 +618,13 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const defaultMaxTokens = Math.min(model.maxTokens, 32_000);
+  const transportMessages =
+    model.provider === "github-copilot"
+      ? stripCompactionBlocksForTransport(context.messages)
+      : context.messages;
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+    messages: convertAnthropicMessages(transportMessages, model, isOAuthToken),
     max_tokens: options?.maxTokens || defaultMaxTokens,
     stream: true,
   };
@@ -806,11 +833,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
-              stream.push({
-                type: "text_start",
-                contentIndex: output.content.length - 1,
-                partial: output as never,
-              });
               continue;
             }
             if (contentBlock?.type === "tool_use") {
@@ -901,12 +923,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               }
               if (typeof delta.content === "string") {
                 block.content = `${block.content ?? ""}${delta.content}`;
-                stream.push({
-                  type: "text_delta",
-                  contentIndex: index,
-                  delta: delta.content,
-                  partial: output as never,
-                });
               }
             }
             continue;
@@ -950,12 +966,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "compaction") {
-              stream.push({
-                type: "text_end",
-                contentIndex: index,
-                content: block.content ?? "",
-                partial: output as never,
-              });
+              continue;
             }
             continue;
           }

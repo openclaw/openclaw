@@ -303,13 +303,10 @@ export function shouldEnableAnthropicServerCompaction(
   baseUrl: string | undefined,
   explicit: boolean | undefined,
 ): boolean {
-  if (explicit !== undefined) {
-    return explicit;
-  }
-  if (provider !== "anthropic") {
+  if (explicit !== true) {
     return false;
   }
-  return isLongTtlEligibleEndpoint(baseUrl);
+  return provider === "anthropic" && isLongTtlEligibleEndpoint(baseUrl);
 }
 
 export function resolveAnthropicRequiredBetaFeatures(params: {
