@@ -331,6 +331,7 @@ function resolveReplayToolCallName(
 function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
+  preserveImmutableThinkingTurns?: boolean,
 ): ReplayToolCallSanitizeReport {
   let changed = false;
   let droppedAssistantMessages = 0;
@@ -345,7 +346,11 @@ function sanitizeReplayToolCallInputs(
       out.push(message);
       continue;
     }
-    if (message.content.some((block) => isThinkingLikeReplayBlock(block))) {
+    if (
+      preserveImmutableThinkingTurns &&
+      message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
+      message.content.some((block) => isReplayToolCallBlock(block))
+    ) {
       if (isReplaySafeThinkingTurn(message.content, allowedToolNames)) {
         out.push(message);
       } else {
@@ -633,7 +638,11 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
-    const sanitized = sanitizeReplayToolCallInputs(messages as AgentMessage[], allowedToolNames);
+    const sanitized = sanitizeReplayToolCallInputs(
+      messages as AgentMessage[],
+      allowedToolNames,
+      transcriptPolicy?.validateAnthropicTurns === true,
+    );
     if (sanitized.messages === messages) {
       return baseFn(model, context, options);
     }
