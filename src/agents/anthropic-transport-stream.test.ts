@@ -595,6 +595,70 @@ describe("anthropic transport stream", () => {
     ).not.toContain("compact-2026-01-12");
   });
 
+  it("drops compaction history blocks and replay betas for non-Anthropic transports", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "minimax-m1",
+        name: "MiniMax M1",
+        api: "anthropic-messages",
+        provider: "minimax",
+        baseUrl: "https://api.minimax.chat/compatible-mode/anthropic",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              content: [{ type: "compaction", content: "Earlier compacted summary." }],
+            },
+            { role: "user", content: "Continue." },
+          ],
+        } as never,
+        {
+          apiKey: "sk-minimax-test",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(firstCallParams.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Continue.", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+    expect(
+      anthropicCtorMock.mock.calls[0]?.[0]?.defaultHeaders?.["anthropic-beta"] ?? "",
+    ).not.toContain("compact-2026-01-12");
+    expect(
+      anthropicCtorMock.mock.calls[0]?.[0]?.defaultHeaders?.["anthropic-beta"] ?? "",
+    ).not.toContain("context-management-2025-06-27");
+  });
+
   it("preserves string assistant content when stripping compaction blocks for Copilot transport", async () => {
     const model = attachModelProviderRequestTransport(
       {

@@ -17,6 +17,7 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicRequiredBetaFeatures,
+  supportsAnthropicContextManagementTransport,
   shouldEnableAnthropicServerCompaction,
   type AnthropicServerCompactionConfig,
 } from "./anthropic-payload-policy.js";
@@ -534,10 +535,14 @@ function createAnthropicTransportClient(params: {
   options: AnthropicTransportOptions | undefined;
 }) {
   const { model, context, apiKey, options } = params;
+  const supportsCompactionTransport = supportsAnthropicContextManagementTransport(
+    model.provider,
+    model.baseUrl,
+  );
   const transportMessages =
-    model.provider === "github-copilot"
-      ? stripCompactionBlocksForTransport(context.messages)
-      : context.messages;
+    supportsCompactionTransport
+      ? context.messages
+      : stripCompactionBlocksForTransport(context.messages);
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
   const anthropicCompactionEnabled = shouldEnableAnthropicServerCompaction(
@@ -549,7 +554,7 @@ function createAnthropicTransportClient(params: {
     "fine-grained-tool-streaming-2025-05-14",
     ...resolveAnthropicRequiredBetaFeatures({
       enableServerCompaction: anthropicCompactionEnabled,
-      hasCompactionBlocks: hasCompactionBlocks(transportMessages),
+      hasCompactionBlocks: supportsCompactionTransport && hasCompactionBlocks(transportMessages),
     }),
   ];
   if (needsInterleavedBeta) {
@@ -640,10 +645,14 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const defaultMaxTokens = Math.min(model.maxTokens, 32_000);
+  const supportsCompactionTransport = supportsAnthropicContextManagementTransport(
+    model.provider,
+    model.baseUrl,
+  );
   const transportMessages =
-    model.provider === "github-copilot"
-      ? stripCompactionBlocksForTransport(context.messages)
-      : context.messages;
+    supportsCompactionTransport
+      ? context.messages
+      : stripCompactionBlocksForTransport(context.messages);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: convertAnthropicMessages(transportMessages, model, isOAuthToken),

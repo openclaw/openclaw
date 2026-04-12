@@ -308,6 +308,13 @@ export function shouldEnableAnthropicServerCompaction(
   if (explicit !== true) {
     return false;
   }
+  return supportsAnthropicContextManagementTransport(provider, baseUrl);
+}
+
+export function supportsAnthropicContextManagementTransport(
+  provider: string | undefined,
+  baseUrl: string | undefined,
+): boolean {
   return provider === "anthropic" && isLongTtlEligibleEndpoint(baseUrl);
 }
 
