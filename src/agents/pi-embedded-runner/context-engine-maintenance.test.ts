@@ -28,6 +28,7 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
   rewrittenEntries: 2,
 }));
 let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
+let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
@@ -67,7 +68,11 @@ vi.mock("./transcript-rewrite.js", () => ({
 }));
 
 async function loadFreshContextEngineMaintenanceModuleForTest() {
-  ({ buildContextEngineMaintenanceRuntimeContext, runContextEngineMaintenance } =
+  ({
+    buildContextEngineMaintenanceRuntimeContext,
+    createDeferredTurnMaintenanceAbortSignal,
+    runContextEngineMaintenance,
+  } =
     await import("./context-engine-maintenance.js"));
 }
 
@@ -143,6 +148,44 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       ],
     });
     expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("createDeferredTurnMaintenanceAbortSignal", () => {
+  beforeEach(async () => {
+    await loadFreshContextEngineMaintenanceModuleForTest();
+  });
+
+  it("aborts on termination signals and unregisters listeners", () => {
+    const listeners = new Map<string, Set<() => void>>();
+    const processLike = {
+      on(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        const bucket = listeners.get(event) ?? new Set<() => void>();
+        bucket.add(listener);
+        listeners.set(event, bucket);
+        return this;
+      },
+      off(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        listeners.get(event)?.delete(listener);
+        return this;
+      },
+    } as unknown as Pick<NodeJS.Process, "on" | "off">;
+
+    const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    expect(listeners.get("SIGINT")?.size ?? 0).toBe(1);
+    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(1);
+
+    const sigtermListeners = Array.from(listeners.get("SIGTERM") ?? []);
+    expect(sigtermListeners).toHaveLength(1);
+    sigtermListeners[0]?.();
+
+    expect(abortSignal?.aborted).toBe(true);
+    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
+    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
+
+    dispose();
+    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
+    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
   });
 });
 

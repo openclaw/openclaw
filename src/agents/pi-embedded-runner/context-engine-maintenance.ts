@@ -45,6 +45,46 @@ function resolveDeferredTurnMaintenanceLane(sessionKey: string): string {
   return `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
 }
 
+export function createDeferredTurnMaintenanceAbortSignal(params?: {
+  processLike?: Pick<NodeJS.Process, "on" | "off">;
+}): {
+  abortSignal?: AbortSignal;
+  dispose: () => void;
+} {
+  if (typeof AbortController === "undefined") {
+    return { abortSignal: undefined, dispose: () => {} };
+  }
+
+  const processLike = params?.processLike ?? process;
+  const controller = new AbortController();
+  let disposed = false;
+
+  const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    processLike.off("SIGINT", onSigint);
+    processLike.off("SIGTERM", onSigterm);
+  };
+  const abortWith = (signalName: "SIGINT" | "SIGTERM") => {
+    if (!controller.signal.aborted) {
+      controller.abort(new Error(`received ${signalName} while waiting for deferred maintenance`));
+    }
+    cleanup();
+  };
+  const onSigint = () => abortWith("SIGINT");
+  const onSigterm = () => abortWith("SIGTERM");
+
+  processLike.on("SIGINT", onSigint);
+  processLike.on("SIGTERM", onSigterm);
+
+  return {
+    abortSignal: controller.signal,
+    dispose: cleanup,
+  };
+}
+
 function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
   const runId = `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(
     0,
@@ -182,6 +222,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
+  const shutdownAbort = createDeferredTurnMaintenanceAbortSignal();
   const surfaceMaintenanceUpdate = (summary: string, eventSummary: string) => {
     promoteTurnMaintenanceTaskVisibility({
       sessionKey: params.sessionKey,
@@ -217,7 +258,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
           );
         }
       }
-      await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS);
+      await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
     }
 
     const runningAt = Date.now();
@@ -271,6 +312,22 @@ async function runDeferredTurnMaintenanceWorker(params: {
         : "No transcript changes were needed.",
     });
   } catch (err) {
+    if (shutdownAbort.abortSignal?.aborted) {
+      if (longRunningTimer) {
+        clearTimeout(longRunningTimer);
+        longRunningTimer = null;
+      }
+      const task = findTaskByRunId(params.runId);
+      if (task) {
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status: "cancelled",
+          endedAt: Date.now(),
+          terminalSummary: "Deferred maintenance cancelled during shutdown.",
+        });
+      }
+      return;
+    }
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
       longRunningTimer = null;
@@ -295,6 +352,8 @@ async function runDeferredTurnMaintenanceWorker(params: {
       terminalSummary: reason,
     });
     log.warn(`deferred context engine maintenance failed: ${reason}`);
+  } finally {
+    shutdownAbort.dispose();
   }
 }
 
