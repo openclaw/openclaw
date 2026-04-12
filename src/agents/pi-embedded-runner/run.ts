@@ -131,6 +131,7 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const BLOCKED_LIVENESS_STATE: EmbeddedRunLivenessState = "blocked";
 
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
@@ -669,7 +670,7 @@ export async function runEmbeddedPiAgent(
                 lastTurnTotal,
               }),
               replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-              livenessState: "blocked",
+              livenessState: BLOCKED_LIVENESS_STATE,
             });
           }
           runLoopIterations += 1;
@@ -1210,12 +1211,13 @@ export async function runEmbeddedPiAgent(
                   `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
               );
             }
-            const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const kind: NonNullable<EmbeddedPiRunResult["meta"]["error"]>["kind"] =
+              isCompactionFailure ? "compaction_failure" : "context_overflow";
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid: resolveReplayInvalidForAttempt(),
-              livenessState: "blocked",
+              livenessState: BLOCKED_LIVENESS_STATE,
             });
-            return {
+            const overflowResult: EmbeddedPiRunResult = {
               payloads: [
                 {
                   text:
@@ -1239,10 +1241,11 @@ export async function runEmbeddedPiAgent(
                 phaseTimings,
                 systemPromptReport: attempt.systemPromptReport,
                 replayInvalid: resolveReplayInvalidForAttempt(),
-                livenessState: "blocked",
+                livenessState: BLOCKED_LIVENESS_STATE,
                 error: { kind, message: errorText },
               },
             };
+            return overflowResult;
           }
 
           if (promptError && !aborted && promptErrorSource !== "compaction") {
@@ -1269,9 +1272,9 @@ export async function runEmbeddedPiAgent(
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               attempt.setTerminalLifecycleMeta?.({
                 replayInvalid: resolveReplayInvalidForAttempt(),
-                livenessState: "blocked",
+                livenessState: BLOCKED_LIVENESS_STATE,
               });
-              return {
+              const roleOrderingResult: EmbeddedPiRunResult = {
                 payloads: [
                   {
                     text:
@@ -1295,10 +1298,11 @@ export async function runEmbeddedPiAgent(
                   phaseTimings,
                   systemPromptReport: attempt.systemPromptReport,
                   replayInvalid: resolveReplayInvalidForAttempt(),
-                  livenessState: "blocked",
+                  livenessState: BLOCKED_LIVENESS_STATE,
                   error: { kind: "role_ordering", message: errorText },
                 },
               };
+              return roleOrderingResult;
             }
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
@@ -1309,9 +1313,9 @@ export async function runEmbeddedPiAgent(
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
               attempt.setTerminalLifecycleMeta?.({
                 replayInvalid: resolveReplayInvalidForAttempt(),
-                livenessState: "blocked",
+                livenessState: BLOCKED_LIVENESS_STATE,
               });
-              return {
+              const imageSizeResult: EmbeddedPiRunResult = {
                 payloads: [
                   {
                     text:
@@ -1335,10 +1339,11 @@ export async function runEmbeddedPiAgent(
                   phaseTimings,
                   systemPromptReport: attempt.systemPromptReport,
                   replayInvalid: resolveReplayInvalidForAttempt(),
-                  livenessState: "blocked",
+                  livenessState: BLOCKED_LIVENESS_STATE,
                   error: { kind: "image_size", message: errorText },
                 },
               };
+              return imageSizeResult;
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
