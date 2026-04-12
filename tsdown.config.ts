@@ -154,7 +154,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
     "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
-    "status.runtime": "src/auto-reply/status.runtime.ts",
+    "status.runtime": "src/auto-reply/reply/status.runtime.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",

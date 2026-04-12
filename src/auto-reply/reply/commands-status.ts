@@ -63,7 +63,9 @@ type CommandsStatusSubagentsModule = {
   ) => Array<{ childSessionKey: string; endedAt?: number | null }>;
 };
 
-const STATUS_RUNTIME_SPEC = ["../status.runtime", ".js"] as const;
+// Keep the lazy status formatter on a local runtime seam so the source tree
+// and flattened dist output both resolve the same stable sibling path.
+const STATUS_RUNTIME_SPEC = ["./status.runtime", ".js"] as const;
 const COMMANDS_STATUS_DEPS_RUNTIME_SPEC = ["./commands-status-deps.runtime", ".js"] as const;
 
 let statusRuntimePromise: Promise<StatusRuntimeModule> | null = null;
