@@ -687,8 +687,13 @@ describe("sessions tools", () => {
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
+      const params = call.params as { extraSystemPrompt?: string; lane?: string };
+      const isAnnounceStep =
+        typeof params.extraSystemPrompt === "string" &&
+        params.extraSystemPrompt.includes("Agent-to-agent announce step");
+      const expectedLane = isAnnounceStep ? "announce" : "nested";
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expectedLane,
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -721,7 +726,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(historyOnlyCalls).toHaveLength(9);
     expect(sendCallCount).toBe(0);
   });
 
@@ -867,8 +872,13 @@ describe("sessions tools", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
+      const params = call.params as { extraSystemPrompt?: string; lane?: string };
+      const isAnnounceStep =
+        typeof params.extraSystemPrompt === "string" &&
+        params.extraSystemPrompt.includes("Agent-to-agent announce step");
+      const expectedLane = isAnnounceStep ? "announce" : "nested";
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expectedLane,
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -888,6 +898,108 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("sessions_send uses deterministic fallback when announce reply is empty", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              message?: string;
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+
+        let reply = "A".repeat(300);
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = "REPLY_SKIP";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 3000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | { to?: string; channel?: string; message?: string }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          message: params?.message,
+        };
+        return { messageId: "m1" };
+      }
+      return {};
+    });
+
+    const requesterKey = "discord:group:req";
+    const targetKey = "discord:group:target";
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call8", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect((result.details as { status?: string })?.status).toBe("ok");
+
+    await waitForCalls(() => calls.filter((call) => call.method === "send").length, 1);
+
+    const fallbackMessage = sendParams.message ?? "";
+    expect(sendParams.to).toBe("group:target");
+    expect(sendParams.channel).toBe("discord");
+    expect(fallbackMessage).toMatch(/^\[Task completed\]/);
+    expect(fallbackMessage).toContain("Agent: discord:group:target");
+    expect(fallbackMessage).toContain("Channel: discord");
+    expect(fallbackMessage).toContain(`Summary: ${"A".repeat(200)}`);
+
+    const announceCall = calls.find(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent announce step",
+        ),
+    );
+    expect(announceCall).toBeDefined();
+    expect(announceCall?.params).toMatchObject({ lane: "announce" });
   });
 
   it("subagents lists active and recent runs", async () => {
