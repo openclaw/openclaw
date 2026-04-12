@@ -15,7 +15,7 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { formatSkillsForPrompt, formatSkillsMixedTier, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -530,13 +530,18 @@ export function formatSkillsCompact(skills: Skill[]): string {
   return lines.join("\n");
 }
 
-// Budget reserved for the compact-mode warning line prepended by the caller.
+// Budget reserved for the compact-mode or mixed-tier warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  entries?: SkillEntry[];
+}): {
   skillsForPrompt: Skill[];
   truncated: boolean;
   compact: boolean;
+  mixed: boolean;
 } {
   const limits = resolveSkillsLimits(params.config);
   const total = params.skills.length;
@@ -545,40 +550,72 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
   let skillsForPrompt = byCount;
   let truncated = total > byCount.length;
   let compact = false;
+  let mixed = false;
 
   const fitsFull = (skills: Skill[]): boolean =>
     formatSkillsForPrompt(skills).length <= limits.maxSkillsPromptChars;
 
-  // Reserve space for the warning line the caller prepends in compact mode.
+  // Reserve space for the warning line the caller prepends in compact/mixed mode.
   const compactBudget = limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD;
   const fitsCompact = (skills: Skill[]): boolean =>
     formatSkillsCompact(skills).length <= compactBudget;
 
   if (!fitsFull(skillsForPrompt)) {
-    // Full format exceeds budget. Try compact (name + location, no description)
-    // to preserve awareness of all skills before dropping any.
-    if (fitsCompact(skillsForPrompt)) {
-      compact = true;
-      // No skills dropped — only format downgraded. Preserve existing truncated state.
-    } else {
-      // Compact still too large — binary search the largest prefix that fits.
-      compact = true;
-      let lo = 0;
-      let hi = skillsForPrompt.length;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt.slice(0, mid))) {
-          lo = mid;
+    // Full format exceeds budget. Try mixed-tier first if we have entries
+    // with metadata.always split, then fall through to compact.
+    let mixedFits = false;
+    if (params.entries && params.entries.length > 0) {
+      const entryNames = new Set(skillsForPrompt.map((s) => s.name));
+      const alwaysSkills: Skill[] = [];
+      const discoverableSkills: Skill[] = [];
+      for (const entry of params.entries) {
+        if (!entryNames.has(entry.skill.name)) continue;
+        const matched = skillsForPrompt.find((s) => s.name === entry.skill.name);
+        if (!matched) continue;
+        if (entry.metadata?.always === true) {
+          alwaysSkills.push(matched);
         } else {
-          hi = mid - 1;
+          discoverableSkills.push(matched);
         }
       }
-      skillsForPrompt = skillsForPrompt.slice(0, lo);
-      truncated = true;
+      if (alwaysSkills.length > 0 && discoverableSkills.length > 0) {
+        const mixedOutput = formatSkillsMixedTier({
+          always: alwaysSkills,
+          discoverable: discoverableSkills,
+        });
+        if (mixedOutput.length <= compactBudget) {
+          mixed = true;
+          mixedFits = true;
+        }
+      }
+    }
+
+    if (!mixedFits) {
+      // Mixed didn't apply or didn't fit. Try compact (name + location, no
+      // description) to preserve awareness of all skills before dropping any.
+      if (fitsCompact(skillsForPrompt)) {
+        compact = true;
+        // No skills dropped — only format downgraded. Preserve existing truncated state.
+      } else {
+        // Compact still too large — binary search the largest prefix that fits.
+        compact = true;
+        let lo = 0;
+        let hi = skillsForPrompt.length;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          if (fitsCompact(skillsForPrompt.slice(0, mid))) {
+            lo = mid;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        skillsForPrompt = skillsForPrompt.slice(0, lo);
+        truncated = true;
+      }
     }
   }
 
-  return { skillsForPrompt, truncated, compact };
+  return { skillsForPrompt, truncated, compact, mixed };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -654,22 +691,42 @@ function resolveWorkspaceSkillPromptState(
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
   const promptSkills = compactSkillPaths(resolvedSkills);
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+  const { skillsForPrompt, truncated, compact, mixed } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
+    entries: promptEntries,
   });
+
+  let formattedBlock: string;
+  if (mixed) {
+    // Split prompt skills back into always / discoverable based on entry metadata.
+    const alwaysNames = new Set(
+      promptEntries.filter((e) => e.metadata?.always === true).map((e) => e.skill.name),
+    );
+    const always: Skill[] = [];
+    const discoverable: Skill[] = [];
+    for (const s of skillsForPrompt) {
+      if (alwaysNames.has(s.name)) {
+        always.push(s);
+      } else {
+        discoverable.push(s);
+      }
+    }
+    formattedBlock = formatSkillsMixedTier({ always, discoverable });
+  } else if (compact) {
+    formattedBlock = formatSkillsCompact(skillsForPrompt);
+  } else {
+    formattedBlock = formatSkillsForPrompt(skillsForPrompt);
+  }
+
   const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : mixed ? " (mixed-tier format)" : ""}. Run \`openclaw skills check\` to audit.`
     : compact
       ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
-      : "";
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
-  ]
-    .filter(Boolean)
-    .join("\n");
+      : mixed
+        ? `⚠️ Skills catalog using mixed-tier format (some descriptions omitted). Run \`openclaw skills check\` to audit.`
+        : "";
+  const prompt = [remoteNote, truncationNote, formattedBlock].filter(Boolean).join("\n");
   return { eligible, prompt, resolvedSkills };
 }
 
