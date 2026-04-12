@@ -179,12 +179,12 @@ async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle
 }
 
 function buildSnippet(raw: string, query: string): string {
-  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  const signals = buildQuerySignals(query);
   const matchingLine = raw
     .split(/\r?\n/)
     .find(
       (line) =>
-        normalizeLowercaseStringOrEmpty(line).includes(queryLower) && line.trim().length > 0,
+        line.trim().length > 0 && matchesQuery(normalizeLowercaseStringOrEmpty(line), signals),
     );
   return (
     matchingLine?.trim() ||
@@ -194,6 +194,54 @@ function buildSnippet(raw: string, query: string): string {
       ?.trim() ||
     ""
   );
+}
+
+type QuerySignals = {
+  queryLower: string;
+  queryTerms: string[];
+};
+
+function buildQuerySignals(query: string): QuerySignals {
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  const queryTerms = Array.from(
+    new Set((queryLower.match(/[\p{L}\p{N}]+/gu) ?? []).filter((term) => term.length >= 2)),
+  );
+  return { queryLower, queryTerms };
+}
+
+function countMatchingTerms(textLower: string, queryTerms: string[]): number {
+  if (!textLower || queryTerms.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  for (const term of queryTerms) {
+    if (textLower.includes(term)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function matchesQuery(textLower: string, signals: QuerySignals): boolean {
+  if (!textLower) {
+    return false;
+  }
+  if (signals.queryLower && textLower.includes(signals.queryLower)) {
+    return true;
+  }
+  return countMatchingTerms(textLower, signals.queryTerms) > 0;
+}
+
+function scoreTokenCoverage(
+  textLower: string,
+  signals: QuerySignals,
+  pointsPerTerm: number,
+  maxScore: number,
+): number {
+  if (signals.queryTerms.length === 0) {
+    return 0;
+  }
+  return Math.min(maxScore, countMatchingTerms(textLower, signals.queryTerms) * pointsPerTerm);
 }
 
 function buildPageSearchText(page: QueryableWikiPage): string {
@@ -226,14 +274,18 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
     .join("\n");
 }
 
-function scoreDigestClaimMatch(claim: QueryDigestClaim, queryLower: string): number {
+function scoreDigestClaimMatch(claim: QueryDigestClaim, signals: QuerySignals): number {
   let score = 0;
-  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
+  const claimTextLower = normalizeLowercaseStringOrEmpty(claim.text);
+  const claimIdLower = normalizeLowercaseStringOrEmpty(claim.id);
+  if (signals.queryLower && claimTextLower.includes(signals.queryLower)) {
     score += 25;
   }
-  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
+  score += scoreTokenCoverage(claimTextLower, signals, 4, 16);
+  if (signals.queryLower && claimIdLower.includes(signals.queryLower)) {
     score += 10;
   }
+  score += scoreTokenCoverage(claimIdLower, signals, 2, 6);
   if (typeof claim.confidence === "number") {
     score += Math.round(claim.confidence * 10);
   }
@@ -260,7 +312,7 @@ function buildDigestCandidatePaths(params: {
   query: string;
   maxResults: number;
 }): string[] {
-  const queryLower = normalizeLowercaseStringOrEmpty(params.query);
+  const signals = buildQuerySignals(params.query);
   const claimsByPage = new Map<string, QueryDigestClaim[]>();
   for (const claim of params.digest.claims) {
     const current = claimsByPage.get(claim.pagePath) ?? [];
@@ -274,44 +326,47 @@ function buildDigestCandidatePaths(params: {
       const metadataLower = normalizeLowercaseStringOrEmpty(
         buildDigestPageSearchText(page, claims),
       );
-      if (!metadataLower.includes(queryLower)) {
+      if (!matchesQuery(metadataLower, signals)) {
         return { path: page.path, score: 0 };
       }
       let score = 1;
       const titleLower = normalizeLowercaseStringOrEmpty(page.title);
       const pathLower = normalizeLowercaseStringOrEmpty(page.path);
       const idLower = normalizeLowercaseStringOrEmpty(page.id);
-      if (titleLower === queryLower) {
+      if (titleLower === signals.queryLower) {
         score += 50;
-      } else if (titleLower.includes(queryLower)) {
+      } else if (signals.queryLower && titleLower.includes(signals.queryLower)) {
         score += 20;
       }
-      if (pathLower.includes(queryLower)) {
+      score += scoreTokenCoverage(titleLower, signals, 3, 9);
+      if (signals.queryLower && pathLower.includes(signals.queryLower)) {
         score += 10;
       }
-      if (idLower.includes(queryLower)) {
+      score += scoreTokenCoverage(pathLower, signals, 2, 6);
+      if (signals.queryLower && idLower.includes(signals.queryLower)) {
         score += 20;
       }
+      score += scoreTokenCoverage(idLower, signals, 3, 9);
       if (
         page.sourceIds.some((sourceId) =>
-          normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
+          matchesQuery(normalizeLowercaseStringOrEmpty(sourceId), signals),
         )
       ) {
         score += 12;
       }
       const matchingClaims = claims
         .filter((claim) => {
-          if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
+          if (matchesQuery(normalizeLowercaseStringOrEmpty(claim.text), signals)) {
             return true;
           }
-          return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
+          return matchesQuery(normalizeLowercaseStringOrEmpty(claim.id), signals);
         })
         .toSorted(
           (left, right) =>
-            scoreDigestClaimMatch(right, queryLower) - scoreDigestClaimMatch(left, queryLower),
+            scoreDigestClaimMatch(right, signals) - scoreDigestClaimMatch(left, signals),
         );
       if (matchingClaims.length > 0) {
-        score += scoreDigestClaimMatch(matchingClaims[0], queryLower);
+        score += scoreDigestClaimMatch(matchingClaims[0], signals);
         score += Math.min(10, (matchingClaims.length - 1) * 2);
       }
       return { path: page.path, score };
@@ -327,21 +382,25 @@ function buildDigestCandidatePaths(params: {
     .map((candidate) => candidate.path);
 }
 
-function isClaimMatch(claim: WikiClaim, queryLower: string): boolean {
-  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
+function isClaimMatch(claim: WikiClaim, signals: QuerySignals): boolean {
+  if (matchesQuery(normalizeLowercaseStringOrEmpty(claim.text), signals)) {
     return true;
   }
-  return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
+  return matchesQuery(normalizeLowercaseStringOrEmpty(claim.id), signals);
 }
 
-function rankClaimMatch(page: QueryableWikiPage, claim: WikiClaim, queryLower: string): number {
+function rankClaimMatch(page: QueryableWikiPage, claim: WikiClaim, signals: QuerySignals): number {
   let score = 0;
-  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
+  const claimTextLower = normalizeLowercaseStringOrEmpty(claim.text);
+  const claimIdLower = normalizeLowercaseStringOrEmpty(claim.id);
+  if (signals.queryLower && claimTextLower.includes(signals.queryLower)) {
     score += 25;
   }
-  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
+  score += scoreTokenCoverage(claimTextLower, signals, 4, 16);
+  if (signals.queryLower && claimIdLower.includes(signals.queryLower)) {
     score += 10;
   }
+  score += scoreTokenCoverage(claimIdLower, signals, 2, 6);
   if (typeof claim.confidence === "number") {
     score += Math.round(claim.confidence * 10);
   }
@@ -364,18 +423,17 @@ function rankClaimMatch(page: QueryableWikiPage, claim: WikiClaim, queryLower: s
   return score;
 }
 
-function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiClaim[] {
+function getMatchingClaims(page: QueryableWikiPage, signals: QuerySignals): WikiClaim[] {
   return page.claims
-    .filter((claim) => isClaimMatch(claim, queryLower))
+    .filter((claim) => isClaimMatch(claim, signals))
     .toSorted(
-      (left, right) =>
-        rankClaimMatch(page, right, queryLower) - rankClaimMatch(page, left, queryLower),
+      (left, right) => rankClaimMatch(page, right, signals) - rankClaimMatch(page, left, signals),
     );
 }
 
 function buildPageSnippet(page: QueryableWikiPage, query: string): string {
-  const queryLower = normalizeLowercaseStringOrEmpty(query);
-  const matchingClaim = getMatchingClaims(page, queryLower)[0];
+  const signals = buildQuerySignals(query);
+  const matchingClaim = getMatchingClaims(page, signals)[0];
   if (matchingClaim) {
     return matchingClaim.text;
   }
@@ -383,7 +441,7 @@ function buildPageSnippet(page: QueryableWikiPage, query: string): string {
 }
 
 function scorePage(page: QueryableWikiPage, query: string): number {
-  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  const signals = buildQuerySignals(query);
   const titleLower = normalizeLowercaseStringOrEmpty(page.title);
   const pathLower = normalizeLowercaseStringOrEmpty(page.relativePath);
   const idLower = normalizeLowercaseStringOrEmpty(page.id);
@@ -391,42 +449,46 @@ function scorePage(page: QueryableWikiPage, query: string): number {
   const rawLower = normalizeLowercaseStringOrEmpty(page.raw);
   if (
     !(
-      titleLower.includes(queryLower) ||
-      pathLower.includes(queryLower) ||
-      idLower.includes(queryLower) ||
-      metadataLower.includes(queryLower) ||
-      rawLower.includes(queryLower)
+      matchesQuery(titleLower, signals) ||
+      matchesQuery(pathLower, signals) ||
+      matchesQuery(idLower, signals) ||
+      matchesQuery(metadataLower, signals) ||
+      matchesQuery(rawLower, signals)
     )
   ) {
     return 0;
   }
 
   let score = 1;
-  if (titleLower === queryLower) {
+  if (titleLower === signals.queryLower) {
     score += 50;
-  } else if (titleLower.includes(queryLower)) {
+  } else if (signals.queryLower && titleLower.includes(signals.queryLower)) {
     score += 20;
   }
-  if (pathLower.includes(queryLower)) {
+  score += scoreTokenCoverage(titleLower, signals, 3, 9);
+  if (signals.queryLower && pathLower.includes(signals.queryLower)) {
     score += 10;
   }
-  if (idLower.includes(queryLower)) {
+  score += scoreTokenCoverage(pathLower, signals, 2, 6);
+  if (signals.queryLower && idLower.includes(signals.queryLower)) {
     score += 20;
   }
+  score += scoreTokenCoverage(idLower, signals, 3, 9);
   if (
     page.sourceIds.some((sourceId) =>
-      normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
+      matchesQuery(normalizeLowercaseStringOrEmpty(sourceId), signals),
     )
   ) {
     score += 12;
   }
-  const matchingClaims = getMatchingClaims(page, queryLower);
+  const matchingClaims = getMatchingClaims(page, signals);
   if (matchingClaims.length > 0) {
-    score += rankClaimMatch(page, matchingClaims[0], queryLower);
+    score += rankClaimMatch(page, matchingClaims[0], signals);
     score += Math.min(10, (matchingClaims.length - 1) * 2);
   }
-  const bodyOccurrences = rawLower.split(queryLower).length - 1;
+  const bodyOccurrences = signals.queryLower ? rawLower.split(signals.queryLower).length - 1 : 0;
   score += Math.min(10, bodyOccurrences);
+  score += scoreTokenCoverage(metadataLower, signals, 1, 6);
   return score;
 }
 
