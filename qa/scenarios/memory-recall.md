@@ -2,7 +2,7 @@
 
 <!--
   This scenario deliberately stays prose-only and does NOT gate on a
-  `/debug/requests` tool-call assertion, even though it is one of the ten
+  `/debug/requests` tool-call assertion, even though it is one of the
   scenarios in the parity pack. The adversarial review in the umbrella
   #64227 thread called this out as a coverage gap, but the underlying
   behavior the scenario tests is legitimately prose-shaped: the agent is
@@ -22,12 +22,13 @@
   exception explicitly rather than silently.
 
   Criterion 2 of the parity completion gate (no fake progress or fake
-  tool completion) is still enforced here through the parity report's
-  fake-success detector: a scenario that's marked `pass` but whose
-  details text matches a positive-tone or failure-tone fake-success
-  pattern gets flagged via `SUSPICIOUS_PASS_PATTERNS` in
-  `extensions/qa-lab/src/agentic-parity-report.ts`. See PR E #64662 for
-  the detector extension that catches positive-tone evasions.
+  tool completion) is enforced for this scenario through the parity
+  report's failure-tone fake-success detector: a scenario marked `pass`
+  whose details text matches patterns like "timed out", "failed to",
+  "could not" gets flagged via `SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS`
+  in `extensions/qa-lab/src/agentic-parity-report.ts`. Positive-tone
+  detection was removed because it false-positives on legitimate passes
+  where the details field is the model's outbound prose.
 -->
 
 ```yaml qa-scenario
