@@ -100,6 +100,13 @@ if [[ "\${1:-}" == "compose" ]]; then
     echo "compose-fail $*" >>"$log"
     exit 1
   fi
+  if [[ "$*" == *"openclaw-playwright-chromium --version"* ]]; then
+    echo "compose $*" >>"$log"
+    if [[ "\${DOCKER_STUB_BROWSER_AVAILABLE:-1}" != "1" ]]; then
+      exit 1
+    fi
+    exit 0
+  fi
   if [[ "$*" == *"dist/index.js config get "* ]]; then
     args=("$@")
     path_index=$((\${#args[@]} - 1))
@@ -458,6 +465,28 @@ describe("scripts/docker/setup.sh", () => {
     );
     expect(log).toContain("config set browser.defaultProfile openclaw");
     expect(log).toContain("config set browser.noSandbox true");
+  });
+
+  it("skips Docker browser defaults when the selected image lacks Chromium", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_IMAGE: "ghcr.io/openclaw/openclaw:latest",
+      OPENCLAW_INSTALL_BROWSER: "1",
+      DOCKER_STUB_BROWSER_AVAILABLE: "0",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("openclaw-playwright-chromium --version");
+    expect(log).not.toContain("config set browser.enabled true");
+    expect(log).not.toContain("config set browser.defaultProfile openclaw");
+    expect(log).not.toContain("config set browser.headless true");
+    expect(log).not.toContain("config set browser.noSandbox true");
+    expect(log).not.toContain(
+      "config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
   });
 
   it("applies Docker exec policy defaults and preserves existing allowlist entries", async () => {

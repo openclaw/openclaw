@@ -143,6 +143,14 @@ configure_docker_browser_defaults() {
     return 0
   fi
 
+  # Only seed browser defaults when the selected image can actually launch the
+  # bundled Chromium wrapper. Pulled images may not have the browser payload.
+  if ! run_prestart_gateway --user node --entrypoint sh openclaw-gateway \
+    -lc 'openclaw-playwright-chromium --version >/dev/null 2>&1'; then
+    echo "Skipping Docker browser defaults because Playwright Chromium is not installed in $IMAGE_NAME."
+    return 0
+  fi
+
   echo "Applying Docker browser defaults for Playwright Chromium."
   set_config_if_missing browser.enabled true
   set_config_if_missing browser.defaultProfile openclaw
