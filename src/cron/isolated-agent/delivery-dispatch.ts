@@ -628,6 +628,29 @@ export async function dispatchCronDelivery(
     // an actual channel send instead of internal announce routing.
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+    const suppressSilentDirectTextOnly =
+      useDirectDelivery &&
+      params.resolvedDelivery.threadId != null &&
+      !params.deliveryPayloadHasStructuredContent &&
+      isDirectSilentReplyOnly(deliveryPayloads);
+    if (suppressSilentDirectTextOnly) {
+      return {
+        result: params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: false,
+          deliveryAttempted: true,
+          ...params.telemetry,
+        }),
+        delivered: false,
+        deliveryAttempted: true,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      };
+    }
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {

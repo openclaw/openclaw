@@ -364,6 +364,43 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it('suppresses exact "NO_REPLY" for threaded announce targets', async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "main-session",
+              updatedAt: Date.now(),
+              lastChannel: "telegram",
+              lastTo: "123",
+              lastThreadId: 42,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "NO_REPLY" }]);
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "last" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("skips announce when messaging tool already sent to target", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       mockAgentPayloads([{ text: "sent" }], {

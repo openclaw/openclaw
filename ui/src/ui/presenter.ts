@@ -1,6 +1,33 @@
 import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
+const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T/;
+
+function parseDisplayTimestampMs(raw: string): number | null {
+  const value = raw.trim();
+  if (!value) {
+    return null;
+  }
+  if (/^\d+$/.test(value)) {
+    const ms = Number(value);
+    return Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : null;
+  }
+  // Avoid Date.parse() on arbitrary strings: cron-like text such as `0 */6 * * *`
+  // is surprisingly accepted and gets rendered as a bogus local time.
+  if (!ISO_DATE_RE.test(value) && !ISO_DATE_TIME_RE.test(value)) {
+    return null;
+  }
+  const normalized = ISO_TZ_RE.test(value)
+    ? value
+    : ISO_DATE_RE.test(value)
+      ? `${value}T00:00:00Z`
+      : `${value}Z`;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function formatPresenceSummary(entry: PresenceEntry): string {
   const host = entry.host ?? "unknown";
   const ip = entry.ip ? `(${entry.ip})` : "";
@@ -54,7 +81,7 @@ export function formatCronState(job: CronJob) {
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
-    const atMs = Date.parse(s.at);
+    const atMs = parseDisplayTimestampMs(s.at);
     return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
