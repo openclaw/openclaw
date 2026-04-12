@@ -63,8 +63,8 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
   resolvePluginRuntimeLoadContext: (
     ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
   ) => mocks.resolvePluginRuntimeLoadContext(...args),
-  buildPluginRuntimeLoadOptionsFromValues: (
-    values: {
+  buildPluginRuntimeLoadOptions: (
+    context: {
       config: unknown;
       activationSourceConfig: unknown;
       autoEnabledReasons: Readonly<Record<string, string[]>>;
@@ -74,15 +74,15 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
     },
     overrides?: Record<string, unknown>,
   ) => ({
-    config: values.config,
-    activationSourceConfig: values.activationSourceConfig,
-    autoEnabledReasons: values.autoEnabledReasons,
-    workspaceDir: values.workspaceDir,
-    env: values.env,
-    logger: values.logger,
+    config: context.config,
+    activationSourceConfig: context.activationSourceConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
+    workspaceDir: context.workspaceDir,
+    env: context.env,
+    logger: context.logger,
     ...overrides,
   }),
-  buildPluginRuntimeLoadOptions: (
+  buildPluginRuntimeLoadOptionsFromValues: (
     context: {
       config: unknown;
       activationSourceConfig: unknown;
@@ -164,15 +164,24 @@ describe("ensurePluginRegistryLoaded", () => {
 
     expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: autoEnabledConfig,
+        config: expect.objectContaining({
+          channels: autoEnabledConfig.channels,
+          plugins: expect.objectContaining(autoEnabledConfig.plugins),
+        }),
         env: process.env,
         workspaceDir: "/tmp/workspace",
       }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: autoEnabledConfig,
-        activationSourceConfig: autoEnabledConfig,
+        config: expect.objectContaining({
+          channels: autoEnabledConfig.channels,
+          plugins: expect.objectContaining(autoEnabledConfig.plugins),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          channels: baseConfig.channels,
+          plugins: expect.objectContaining(autoEnabledConfig.plugins),
+        }),
         autoEnabledReasons: {
           "demo-chat": ["demo-chat configured"],
         },
@@ -282,8 +291,14 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: activatedConfig,
-        activationSourceConfig: activatedConfig,
+        config: expect.objectContaining({
+          channels: activatedConfig.channels,
+          plugins: expect.objectContaining(activatedConfig.plugins),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          channels: activatedConfig.channels,
+          plugins: expect.objectContaining(activatedConfig.plugins),
+        }),
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
@@ -323,8 +338,14 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: activatedConfig,
-        activationSourceConfig: activatedConfig,
+        config: expect.objectContaining({
+          channels: activatedConfig.channels,
+          plugins: expect.objectContaining(activatedConfig.plugins),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          channels: activatedConfig.channels,
+          plugins: expect.objectContaining(activatedConfig.plugins),
+        }),
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",

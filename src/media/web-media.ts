@@ -708,6 +708,7 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  let lastError: unknown;
 
   for (const side of sides) {
     for (const quality of qualities) {
@@ -730,7 +731,11 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        lastError = err;
+        if (err instanceof Error && /pixel input limit/i.test(err.message)) {
+          throw err;
+        }
         // Continue trying other size/quality combinations
       }
     }
@@ -745,6 +750,9 @@ export async function optimizeImageToJpeg(
     };
   }
 
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
   throw new Error("Failed to optimize image");
 }
 

@@ -118,6 +118,73 @@ function targetsMatchForSuppression(params: {
       targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
     });
   }
+  if (params.provider === "telegram") {
+    const parseFallbackTelegramTarget = (
+      raw: string,
+    ): { to: string; threadId?: string } | undefined => {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      let normalized = trimmed;
+      let hasProviderPrefix = false;
+      while (true) {
+        const withProviderRemoved = normalized
+          .replace(/^(telegram|tg):/i, "")
+          .trim()
+          .replace(/^(telegram|tg):/i, "")
+          .trim();
+        if (withProviderRemoved !== normalized) {
+          hasProviderPrefix = true;
+          normalized = withProviderRemoved;
+          continue;
+        }
+        if (hasProviderPrefix && /^group:/i.test(normalized)) {
+          normalized = normalized.replace(/^group:/i, "").trim();
+          continue;
+        }
+        break;
+      }
+
+      const topicMatch = /^(.+?):topic:(\d+)$/i.exec(normalized);
+      if (topicMatch) {
+        return {
+          to: topicMatch[1].trim(),
+          threadId: topicMatch[2],
+        };
+      }
+      const colonMatch = /^(.+):(\d+)$/i.exec(normalized);
+      if (colonMatch) {
+        return {
+          to: colonMatch[1].trim(),
+          threadId: colonMatch[2],
+        };
+      }
+      return { to: normalized.trim() };
+    };
+
+    const parsedOrigin = parseFallbackTelegramTarget(params.originTarget);
+    const parsedTarget = parseFallbackTelegramTarget(params.targetKey);
+    if (!parsedOrigin || !parsedTarget) {
+      return params.targetKey === params.originTarget;
+    }
+    const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+    const targetThreadId = explicitTargetThreadId ?? parsedTarget.threadId;
+    const originThreadId = parsedOrigin.threadId;
+    if (parsedOrigin.to.trim().toLowerCase() !== parsedTarget.to.trim().toLowerCase()) {
+      return false;
+    }
+    if (originThreadId && targetThreadId != null) {
+      return originThreadId === targetThreadId;
+    }
+    if (originThreadId && targetThreadId == null) {
+      return false;
+    }
+    if (!originThreadId && targetThreadId != null) {
+      return false;
+    }
+    return true;
+  }
   return params.targetKey === params.originTarget;
 }
 

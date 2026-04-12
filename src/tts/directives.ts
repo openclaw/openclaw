@@ -62,12 +62,12 @@ export function parseTtsDirectives(
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
-  if (!/\[\[tts:/iu.test(text)) {
+  if (!/\[\[tts(?::|\]\])/iu.test(text)) {
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
-  let providers: SpeechProviderPlugin[] | undefined;
-  const getProviders = () => {
+  let providers: SpeechProviderPlugin[] | null = null;
+  const getProviders = (): SpeechProviderPlugin[] => {
     providers ??= resolveDirectiveProviders(options);
     return providers;
   };

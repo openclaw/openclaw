@@ -372,7 +372,13 @@ describe("handleToolExecutionEnd media emission", () => {
         "openai: default=sora-2 | models=sora-2",
         "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
       ].join("\n"),
-      expect.any(Object),
+      false,
+      expect.objectContaining({
+        content: expect.any(Array),
+        details: expect.objectContaining({
+          providers: expect.any(Array),
+        }),
+      }),
     );
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
