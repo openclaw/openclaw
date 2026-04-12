@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Existing release tag or full 40-character commit SHA on main to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
+        description: Existing release tag or current full 40-character main commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
 
@@ -22,18 +22,28 @@ jobs:
   # PUT THE SLOWER, EXTERNAL, OR SOMETIMES-FLAKY RELEASE CHECKS HERE INSTEAD OF
   # RECOUPLING THEM TO openclaw-npm-release.yml.
   validate_release_live_cache:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
     steps:
+      - name: Require main workflow ref for release checks
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Release checks must be dispatched from main so the workflow logic and secrets stay canonical." >&2
+            exit 1
+          fi
+
       - name: Validate ref input
         env:
           RELEASE_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Expected an existing release tag or full 40-character commit SHA on main, got: ${RELEASE_REF}" >&2
+            echo "Expected an existing release tag or current full 40-character main commit SHA, got: ${RELEASE_REF}" >&2
             exit 1
           fi
 
@@ -48,10 +58,20 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate selected ref is on main
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            MAIN_SHA="$(git rev-parse origin/main)"
+            if [[ "$(git rev-parse HEAD)" != "${MAIN_SHA}" ]]; then
+              echo "Commit SHA mode only supports the current origin/main HEAD. Use a release tag for older commits." >&2
+              exit 1
+            fi
+          else
+            git merge-base --is-ancestor HEAD origin/main
+          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
