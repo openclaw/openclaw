@@ -1,8 +1,8 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
+import { getRegisteredWhatsAppConnectionController } from "./connection-controller.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -38,21 +38,15 @@ const WHATSAPP_ACTIVE_LISTENER_STATE_KEY = Symbol.for("openclaw.whatsapp.activeL
 
 type ActiveListenerState = {
   listeners: Map<string, ActiveWebListener>;
-  current: ActiveWebListener | null;
 };
 
 const g = globalThis as unknown as Record<symbol, ActiveListenerState | undefined>;
 if (!g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY]) {
   g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY] = {
     listeners: new Map<string, ActiveWebListener>(),
-    current: null,
   };
 }
 const state = g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY];
-
-function setCurrentListener(listener: ActiveWebListener | null): void {
-  state.current = listener;
-}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || resolveDefaultWhatsAppAccountId(loadConfig());
@@ -63,7 +57,10 @@ export function requireActiveWebListener(accountId?: string | null): {
   listener: ActiveWebListener;
 } {
   const id = resolveWebAccountId(accountId);
-  const listener = state.listeners.get(id) ?? null;
+  const listener =
+    getRegisteredWhatsAppConnectionController(id)?.getActiveListener() ??
+    state.listeners.get(id) ??
+    null;
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -98,12 +95,13 @@ export function setActiveWebListener(
   } else {
     state.listeners.set(id, listener);
   }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    setCurrentListener(listener);
-  }
 }
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return state.listeners.get(id) ?? null;
+  return (
+    getRegisteredWhatsAppConnectionController(id)?.getActiveListener() ??
+    state.listeners.get(id) ??
+    null
+  );
 }

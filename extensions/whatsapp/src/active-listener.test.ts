@@ -122,4 +122,30 @@ describe("active WhatsApp listener singleton", () => {
     mod.setActiveWebListener("work", null);
     expect(mod.getActiveWebListener("work")).toBeNull();
   });
+
+  it("prefers controller-backed listener state over the manual compatibility registry", async () => {
+    const controllerListener = makeListener();
+    vi.doMock("./connection-controller.js", () => ({
+      getRegisteredWhatsAppConnectionController: (accountId: string) =>
+        accountId === "work"
+          ? {
+              getActiveListener: () => controllerListener,
+            }
+          : null,
+    }));
+
+    try {
+      const mod = await importActiveListenerModule(`controller-backed-${Date.now()}`);
+      const manualListener = makeListener();
+      mod.setActiveWebListener("work", manualListener);
+
+      expect(mod.getActiveWebListener("work")).toBe(controllerListener);
+      expect(mod.requireActiveWebListener("work")).toEqual({
+        accountId: "work",
+        listener: controllerListener,
+      });
+    } finally {
+      vi.doUnmock("./connection-controller.js");
+    }
+  });
 });
