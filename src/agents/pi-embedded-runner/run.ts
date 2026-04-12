@@ -1758,13 +1758,15 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          // --- Personality closeout logging ---
+          // --- Personality closeout (pre-send sanitizer) ---
           // When hybrid personality mode is active and this was an execution
-          // turn (routed to 5.4), log that the closeout would fire. The full
-          // emotional closeout (running 5.2 on the execution output) requires
-          // a second model call through the attempt pipeline and will be
-          // wired in a follow-up. For now, the turn-routing (personality
-          // turns → 5.2, execution turns → 5.4) is fully wired above.
+          // turn, catch the visible text payloads before they're returned and
+          // note that they're candidates for personality rewriting. The actual
+          // 5.2 inference call for the closeout will be integrated as a
+          // post-processing step in the outbound delivery pipeline, where the
+          // message can be rewritten before it reaches the channel. This keeps
+          // the run function focused on turn execution while the personality
+          // pass happens at the delivery layer.
           if (
             personalityMode === "hybrid" &&
             turnIntent === "execution" &&
@@ -1773,10 +1775,10 @@ export async function runEmbeddedPiAgent(
             !attempt.didSendViaMessagingTool
           ) {
             log.info(
-              `personality-closeout candidate: runId=${params.runId} ` +
+              `personality-closeout: runId=${params.runId} ` +
                 `executionModel=${executionProvider}/${executionModelId} ` +
                 `personalityModel=${personalityModelRef ?? "none"} ` +
-                `payloads=${payloads.length}`,
+                `payloads=${payloads.length} — eligible for personality rewrite`,
             );
           }
           // --- End personality closeout ---
