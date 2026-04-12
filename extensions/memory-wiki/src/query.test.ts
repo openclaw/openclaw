@@ -239,6 +239,45 @@ describe("searchMemoryWiki", () => {
     expect(rankedCustomPaths).toEqual(["entities/exact-match.md", "entities/token-match.md"]);
   });
 
+  it("does not admit substring-only common-word matches as token overlap", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "status.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.status.real",
+          title: "Current status",
+        },
+        body: "# Current status\n\nThe system status is healthy today.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "substring-noise.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.substring.noise",
+          title: "This other phone",
+        },
+        body: "# This other phone\n\nInside those notes we avoid the target concept.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "what is the status" });
+    const customPaths = results
+      .map((result) => result.path)
+      .filter((resultPath) =>
+        ["entities/status.md", "entities/substring-noise.md"].includes(resultPath),
+      );
+
+    expect(customPaths).toEqual(["entities/status.md"]);
+  });
+
   it("ranks fresh supported claims ahead of stale contested claims", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
