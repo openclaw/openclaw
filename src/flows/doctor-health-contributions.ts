@@ -166,6 +166,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const auth = resolveGatewayAuth({
     authConfig: ctx.cfg.gateway?.auth,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+    env: process.env,
   });
   const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
   if (!needsToken) {
