@@ -1878,10 +1878,11 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
-  it("persists real surface channel instead of webchat in task requesterOrigin for thread-bound spawn", async () => {
+  it("preserves real surface channel in persisted requesterOrigin for thread-bound spawn", async () => {
     createRunningTaskRunSpy.mockClear();
-    // Spawn with agentChannel=discord but the thread binding happens on discord.
-    // The binding's channel should replace webchat in the task requesterOrigin.
+    // Thread-bound spawns require agentChannel to be the real surface (e.g.
+    // discord) because prepareAcpThreadBinding resolves policy from it.
+    // The effectiveRequesterOrigin should pass through the real channel as-is.
     const result = await spawnAcpDirect(
       createSpawnRequest({ thread: true }),
       createRequesterContext({
@@ -1897,7 +1898,6 @@ describe("spawnAcpDirect", () => {
     const taskRunCall = createRunningTaskRunSpy.mock.calls[0]?.[0] as
       | { requesterOrigin?: { channel?: string } }
       | undefined;
-    // When agentChannel is a real surface, the origin should be preserved as-is.
     expect(taskRunCall?.requesterOrigin?.channel).toBe("discord");
   });
 
@@ -1947,7 +1947,10 @@ describe("spawnAcpDirect", () => {
     expect(taskRunCall?.requesterOrigin?.channel).toBe("discord");
   });
 
-  it("sets parentConversationId for child thread creation from a channel context without threadId", async () => {
+  it("succeeds child thread creation from a channel context without existing threadId", async () => {
+    // When spawning with thread=true from a channel (no agentThreadId), the
+    // conversation ref should carry the channel as conversationId and child
+    // placement should succeed without the old fragile API-resolution fallback.
     const result = await spawnAcpDirect(
       createSpawnRequest({ thread: true }),
       createRequesterContext({
@@ -1960,9 +1963,16 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const bindCall = hoisted.sessionBindingBindMock.mock.calls[0]?.[0] as
-      | { conversation?: { conversationId?: string; parentConversationId?: string } }
-      | undefined;
-    expect(bindCall?.conversation?.conversationId).toBeTruthy();
+    // The adapter's bind was called with child placement and succeeded.
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetKind: "session",
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          conversationId: expect.any(String),
+        }),
+      }),
+    );
   });
 });
