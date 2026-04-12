@@ -42,8 +42,25 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
 });
-const MINIMAX_PROVIDER_HOOKS = {
+// MiniMax's Anthropic-compatible API generates its own tool call IDs and
+// rejects tool results if the echoed ID doesn't match exactly (error 2013).
+// Disable tool call ID sanitization so IDs roundtrip verbatim for that API;
+// OpenAI-compatible paths keep default sanitization.
+const MINIMAX_REPLAY_HOOKS: typeof HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+  buildReplayPolicy: (ctx) => {
+    const base = HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS.buildReplayPolicy?.(ctx);
+    if (!base) {
+      return base;
+    }
+    if (ctx.modelApi === "anthropic-messages") {
+      return { ...base, sanitizeToolCallIds: false };
+    }
+    return base;
+  },
+};
+const MINIMAX_PROVIDER_HOOKS = {
+  ...MINIMAX_REPLAY_HOOKS,
   ...MINIMAX_FAST_MODE_STREAM_HOOKS,
   resolveReasoningOutputMode: () => "native" as const,
 };
