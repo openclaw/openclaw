@@ -15,9 +15,7 @@ const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const buildProgramMock = vi.hoisted(() => vi.fn());
-const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() =>
-  vi.fn(async () => undefined),
-);
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
