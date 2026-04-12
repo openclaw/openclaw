@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -117,17 +118,7 @@ async function moveToArchive(params: {
   }
   await fs.mkdir(params.archiveDir, { recursive: true });
   const baseName = path.basename(params.targetPath);
-  let destination = path.join(params.archiveDir, baseName);
-  let suffix = 1;
-  while (
-    await fs
-      .access(destination)
-      .then(() => true)
-      .catch(() => false)
-  ) {
-    destination = path.join(params.archiveDir, `${baseName}.${suffix}`);
-    suffix += 1;
-  }
+  const destination = path.join(params.archiveDir, `${baseName}.${randomUUID()}`);
   await fs.rename(params.targetPath, destination);
   return destination;
 }
