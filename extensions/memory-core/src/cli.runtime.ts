@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";

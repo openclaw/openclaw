@@ -302,13 +302,6 @@ describe("runCliAgent spawn path", () => {
                 filePath: path.join(skillDir, "SKILL.md"),
                 baseDir: skillDir,
                 source: "test",
-                sourceInfo: {
-                  path: skillDir,
-                  source: "test",
-                  scope: "project",
-                  origin: "top-level",
-                  baseDir: skillDir,
-                },
                 disableModelInvocation: false,
               },
             ],

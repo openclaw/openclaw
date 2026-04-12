@@ -67,7 +67,7 @@ import {
 import {
   resolveSingleAccountKeysToMove,
   resolveSingleAccountPromotionTarget,
-} from "./setup-helpers.js";
+} from "./setup-promotion-helpers.js";
 
 const matrixSingleAccountKeysToMove = [
   "allowBots",

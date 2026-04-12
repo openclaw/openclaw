@@ -14,6 +14,7 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
