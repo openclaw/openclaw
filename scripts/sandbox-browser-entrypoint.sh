@@ -113,6 +113,8 @@ CHROME_ARGS=(
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--no-zygote"
+  "--no-sandbox"
+  "--disable-setuid-sandbox"
   "--metrics-recording-only"
   "--password-store=basic"
   "--use-mock-keychain"
