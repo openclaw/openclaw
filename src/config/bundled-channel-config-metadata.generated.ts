@@ -7833,6 +7833,22 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         tenantId: {
           type: "string",
         },
+        authType: {
+          type: "string",
+          enum: ["secret", "federated"],
+        },
+        certificatePath: {
+          type: "string",
+        },
+        certificateThumbprint: {
+          type: "string",
+        },
+        useManagedIdentity: {
+          type: "boolean",
+        },
+        managedIdentityClientId: {
+          type: "string",
+        },
         webhook: {
           type: "object",
           properties: {
@@ -8160,6 +8176,33 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
+        },
+        delegatedAuth: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            scopes: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        sso: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            connectionName: {
+              type: "string",
+            },
+          },
+          additionalProperties: false,
         },
       },
       required: ["dmPolicy", "groupPolicy"],
@@ -9312,16 +9355,23 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           enum: ["doc", "hot-reload"],
         },
         streaming: {
-          type: "object",
-          properties: {
-            mode: {
-              default: "partial",
-              type: "string",
-              enum: ["off", "partial"],
+          anyOf: [
+            {
+              type: "boolean",
             },
-          },
-          required: ["mode"],
-          additionalProperties: false,
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  default: "partial",
+                  type: "string",
+                  enum: ["off", "partial"],
+                },
+              },
+              required: ["mode"],
+              additionalProperties: {},
+            },
+          ],
         },
         tts: {
           type: "object",
@@ -9525,26 +9575,33 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["doc", "hot-reload"],
               },
               streaming: {
-                type: "object",
-                properties: {
-                  mode: {
-                    default: "partial",
-                    type: "string",
-                    enum: ["off", "partial"],
+                anyOf: [
+                  {
+                    type: "boolean",
                   },
-                },
-                required: ["mode"],
-                additionalProperties: false,
+                  {
+                    type: "object",
+                    properties: {
+                      mode: {
+                        default: "partial",
+                        type: "string",
+                        enum: ["off", "partial"],
+                      },
+                    },
+                    required: ["mode"],
+                    additionalProperties: {},
+                  },
+                ],
               },
             },
-            additionalProperties: false,
+            additionalProperties: {},
           },
         },
         defaultAccount: {
           type: "string",
         },
       },
-      additionalProperties: false,
+      additionalProperties: {},
     },
   },
   {

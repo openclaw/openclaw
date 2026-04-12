@@ -36,14 +36,14 @@ import type {
   DiscordComponentButtonStyle,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentModalEntry,
-  DiscordComponentModalFieldDefinition,
-  DiscordComponentModalFieldSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
   DiscordComponentSelectSpec,
   DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
   DiscordModalSpec,
 } from "./components.types.js";
 export type {
@@ -53,19 +53,19 @@ export type {
   DiscordComponentButtonStyle,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentModalEntry,
-  DiscordComponentModalFieldDefinition,
-  DiscordComponentModalFieldSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
   DiscordComponentSelectSpec,
   DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
   DiscordModalSpec,
 } from "./components.types.js";
 // Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
 // Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = Modal ?? class {};
+const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 

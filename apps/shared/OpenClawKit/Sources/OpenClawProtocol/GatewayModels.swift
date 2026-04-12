@@ -401,6 +401,60 @@ public struct AgentEvent: Codable, Sendable {
     }
 }
 
+public struct MessageActionParams: Codable, Sendable {
+    public let channel: String
+    public let action: String
+    public let params: [String: AnyCodable]
+    public let accountid: String?
+    public let requestersenderid: String?
+    public let senderisowner: Bool?
+    public let sessionkey: String?
+    public let sessionid: String?
+    public let agentid: String?
+    public let toolcontext: [String: AnyCodable]?
+    public let idempotencykey: String
+
+    public init(
+        channel: String,
+        action: String,
+        params: [String: AnyCodable],
+        accountid: String?,
+        requestersenderid: String?,
+        senderisowner: Bool?,
+        sessionkey: String?,
+        sessionid: String?,
+        agentid: String?,
+        toolcontext: [String: AnyCodable]?,
+        idempotencykey: String)
+    {
+        self.channel = channel
+        self.action = action
+        self.params = params
+        self.accountid = accountid
+        self.requestersenderid = requestersenderid
+        self.senderisowner = senderisowner
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.toolcontext = toolcontext
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case action
+        case params
+        case accountid = "accountId"
+        case requestersenderid = "requesterSenderId"
+        case senderisowner = "senderIsOwner"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case toolcontext = "toolContext"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct SendParams: Codable, Sendable {
     public let to: String
     public let message: String?
@@ -1893,6 +1947,7 @@ public struct ConfigApplyParams: Codable, Sendable {
     public let raw: String
     public let basehash: String?
     public let sessionkey: String?
+    public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
 
@@ -1900,12 +1955,14 @@ public struct ConfigApplyParams: Codable, Sendable {
         raw: String,
         basehash: String?,
         sessionkey: String?,
+        deliverycontext: [String: AnyCodable]?,
         note: String?,
         restartdelayms: Int?)
     {
         self.raw = raw
         self.basehash = basehash
         self.sessionkey = sessionkey
+        self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
     }
@@ -1914,6 +1971,7 @@ public struct ConfigApplyParams: Codable, Sendable {
         case raw
         case basehash = "baseHash"
         case sessionkey = "sessionKey"
+        case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
     }
@@ -1923,6 +1981,7 @@ public struct ConfigPatchParams: Codable, Sendable {
     public let raw: String
     public let basehash: String?
     public let sessionkey: String?
+    public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
 
@@ -1930,12 +1989,14 @@ public struct ConfigPatchParams: Codable, Sendable {
         raw: String,
         basehash: String?,
         sessionkey: String?,
+        deliverycontext: [String: AnyCodable]?,
         note: String?,
         restartdelayms: Int?)
     {
         self.raw = raw
         self.basehash = basehash
         self.sessionkey = sessionkey
+        self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
     }
@@ -1944,6 +2005,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         case raw
         case basehash = "baseHash"
         case sessionkey = "sessionKey"
+        case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
     }
@@ -2510,17 +2572,20 @@ public struct AgentSummary: Codable, Sendable {
 public struct AgentsCreateParams: Codable, Sendable {
     public let name: String
     public let workspace: String
+    public let model: String?
     public let emoji: String?
     public let avatar: String?
 
     public init(
         name: String,
         workspace: String,
+        model: String?,
         emoji: String?,
         avatar: String?)
     {
         self.name = name
         self.workspace = workspace
+        self.model = model
         self.emoji = emoji
         self.avatar = avatar
     }
@@ -2528,6 +2593,7 @@ public struct AgentsCreateParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case workspace
+        case model
         case emoji
         case avatar
     }
@@ -2538,17 +2604,20 @@ public struct AgentsCreateResult: Codable, Sendable {
     public let agentid: String
     public let name: String
     public let workspace: String
+    public let model: String?
 
     public init(
         ok: Bool,
         agentid: String,
         name: String,
-        workspace: String)
+        workspace: String,
+        model: String?)
     {
         self.ok = ok
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
+        self.model = model
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2556,6 +2625,7 @@ public struct AgentsCreateResult: Codable, Sendable {
         case agentid = "agentId"
         case name
         case workspace
+        case model
     }
 }
 
@@ -2564,6 +2634,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let name: String?
     public let workspace: String?
     public let model: String?
+    public let emoji: String?
     public let avatar: String?
 
     public init(
@@ -2571,12 +2642,14 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String?,
         workspace: String?,
         model: String?,
+        emoji: String?,
         avatar: String?)
     {
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
         self.model = model
+        self.emoji = emoji
         self.avatar = avatar
     }
 
@@ -2585,6 +2658,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case name
         case workspace
         case model
+        case emoji
         case avatar
     }
 }
@@ -4260,6 +4334,7 @@ public struct ChatEvent: Codable, Sendable {
     public let state: AnyCodable
     public let message: AnyCodable?
     public let errormessage: String?
+    public let errorkind: AnyCodable?
     public let usage: AnyCodable?
     public let stopreason: String?
 
@@ -4270,6 +4345,7 @@ public struct ChatEvent: Codable, Sendable {
         state: AnyCodable,
         message: AnyCodable?,
         errormessage: String?,
+        errorkind: AnyCodable?,
         usage: AnyCodable?,
         stopreason: String?)
     {
@@ -4279,6 +4355,7 @@ public struct ChatEvent: Codable, Sendable {
         self.state = state
         self.message = message
         self.errormessage = errormessage
+        self.errorkind = errorkind
         self.usage = usage
         self.stopreason = stopreason
     }
@@ -4290,6 +4367,7 @@ public struct ChatEvent: Codable, Sendable {
         case state
         case message
         case errormessage = "errorMessage"
+        case errorkind = "errorKind"
         case usage
         case stopreason = "stopReason"
     }
@@ -4297,17 +4375,20 @@ public struct ChatEvent: Codable, Sendable {
 
 public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
+    public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
 
     public init(
         sessionkey: String?,
+        deliverycontext: [String: AnyCodable]?,
         note: String?,
         restartdelayms: Int?,
         timeoutms: Int?)
     {
         self.sessionkey = sessionkey
+        self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
@@ -4315,6 +4396,7 @@ public struct UpdateRunParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"

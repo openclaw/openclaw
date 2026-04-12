@@ -1,4 +1,4 @@
-import type { SecretInput } from "./runtime-api.js";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ZaloAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */

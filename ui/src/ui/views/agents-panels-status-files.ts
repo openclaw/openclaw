@@ -20,7 +20,7 @@ import type {
   CronStatus,
 } from "../types.ts";
 import { type AgentContext } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.ts";
+import type { AgentsPanel } from "./agents.types.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
 
 function renderAgentContextCard(

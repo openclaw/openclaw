@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
+  AgentEmbeddedHarnessSchema,
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -18,6 +20,7 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
+    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
@@ -53,6 +56,22 @@ export const AgentDefaultsSchema = z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
     userTimezone: z.string().optional(),
+    startupContext: z
+      .object({
+        enabled: z.boolean().optional(),
+        applyOn: z.array(z.union([z.literal("new"), z.literal("reset")])).optional(),
+        dailyMemoryDays: z.number().int().min(1).max(14).optional(),
+        maxFileBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(64 * 1024)
+          .optional(),
+        maxFileChars: z.number().int().min(1).max(10_000).optional(),
+        maxTotalChars: z.number().int().min(1).max(50_000).optional(),
+      })
+      .strict()
+      .optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
@@ -101,7 +120,7 @@ export const AgentDefaultsSchema = z
           .nonnegative()
           .optional()
           .describe(
-            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
           ),
       })
       .strict()
@@ -157,6 +176,7 @@ export const AgentDefaultsSchema = z
         projectSettingsPolicy: z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
+        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
       })
       .strict()
       .optional(),

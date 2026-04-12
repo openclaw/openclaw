@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
@@ -53,13 +53,13 @@ async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
   requestId: string,
 ): Promise<OperatorScope[]> {
-  const pairing = await callGatewayTool<{
+  const pairing: {
     pending?: Array<{
       requestId?: string;
       commands?: unknown;
       requiredApproveScopes?: unknown;
     }>;
-  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
+  } = await callGatewayTool("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
   if (Array.isArray(match?.requiredApproveScopes)) {

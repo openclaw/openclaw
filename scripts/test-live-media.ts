@@ -30,7 +30,7 @@ export type MediaSuiteConfig = {
 export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
   image: {
     id: "image",
-    testFile: "src/image-generation/runtime.live.test.ts",
+    testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
     providers: ["fal", "google", "minimax", "openai", "vydra"],
   },
