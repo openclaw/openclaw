@@ -1076,7 +1076,7 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
   });
 
-  it("falls back to sendPayload for sticker-only payloads when supportsStickerPayload is not declared", async () => {
+  it("warns and skips sticker-only payloads when supportsStickerPayload is not declared", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-sticker" });
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
@@ -1101,22 +1101,24 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ sticker: { raw: "446:1988" } }],
     });
 
-    expect(sendPayload).toHaveBeenCalledTimes(1);
-    expect(sendPayload).toHaveBeenCalledWith(
+    expect(sendPayload).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "Sticker payload is not supported by channel outbound adapter; skipping delivery",
       expect.objectContaining({
-        payload: expect.objectContaining({ sticker: { raw: "446:1988" } }),
+        channel: "matrix",
+        to: "!room:1",
       }),
     );
-    expect(sendText).not.toHaveBeenCalled();
-    expect(logMocks.warn).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "!room:1",
-        success: true,
+        success: false,
+        error: "Sticker payload is not supported by channel outbound adapter",
       }),
       expect.objectContaining({ channelId: "matrix" }),
     );
-    expect(results).toEqual([{ channel: "matrix", messageId: "mx-sticker" }]);
+    expect(results).toEqual([]);
   });
 
   it("warns and skips sticker-only payloads when sendPayload is missing", async () => {

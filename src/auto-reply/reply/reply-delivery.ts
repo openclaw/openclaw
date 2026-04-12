@@ -146,7 +146,7 @@ export function createBlockReplyDeliveryHandler(params: {
     ) {
       return;
     }
-    if (normalized.isSilent && !blockHasMedia && !blockPayload.sticker) {
+    if (normalized.isSilent && !blockHasMedia) {
       return;
     }
 
