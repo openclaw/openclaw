@@ -122,7 +122,7 @@ type SpawnAcpResultFields = {
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
-  status: "accepted" | "forbidden" | "error";
+  status: "accepted";
   childSessionKey: string;
   runId: string;
   mode: SpawnAcpMode;

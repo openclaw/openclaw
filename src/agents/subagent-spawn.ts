@@ -265,7 +265,7 @@ async function callSubagentSpawnGateway<T = Record<string, unknown>>(params: {
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
   agentId: string;
   label?: string;
