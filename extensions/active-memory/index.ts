@@ -238,6 +238,11 @@ function normalizePromptConfigText(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
+function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
+  const raw = asRecord(pluginConfig);
+  return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
+}
+
 function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
   const normalized = transcriptDir.trim();
   if (!normalized || normalized.includes(":") || path.isAbsolute(normalized)) {
@@ -1217,35 +1222,22 @@ function getModelRef(
     modelProviderId?: string;
     modelId?: string;
   },
-): {
-  modelRef?: {
-    provider: string;
-    model: string;
-  };
-  source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback" | "none";
-} {
+): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const agentPrimaryModel = resolveAgentEffectiveModelPrimary(api.config, agentId);
-  const candidates: Array<{
-    source: "plugin-model" | "session-model" | "agent-primary" | "config-fallback";
-    value?: string;
-  }> = [
-    { source: "plugin-model", value: config.model },
-    { source: "session-model", value: currentRunModel },
-    { source: "agent-primary", value: agentPrimaryModel },
-    { source: "config-fallback", value: config.modelFallback },
+  const candidates = [
+    config.model,
+    currentRunModel,
+    resolveAgentEffectiveModelPrimary(api.config, agentId),
+    config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate.value);
+    const parsed = parseModelCandidate(candidate);
     if (parsed) {
-      return {
-        modelRef: parsed,
-        source: candidate.source,
-      };
+      return parsed;
     }
   }
-  return { source: "none" };
+  return undefined;
 }
 
 async function runRecallSubagent(params: {
@@ -1263,7 +1255,7 @@ async function runRecallSubagent(params: {
 }): Promise<{ rawReply: string; transcriptPath?: string }> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
-  const { modelRef } = getModelRef(params.api, params.agentId, params.config, {
+  const modelRef = getModelRef(params.api, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
@@ -1507,11 +1499,20 @@ export default definePluginEntry({
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
     let config = normalizePluginConfig(api.pluginConfig);
+    const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
+      if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
+        api.logger.warn?.(
+          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly if you want a fallback model",
+        );
+      }
+    };
+    warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      config = normalizePluginConfig(
+      const livePluginConfig =
         resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
-          api.pluginConfig,
-      );
+        api.pluginConfig;
+      config = normalizePluginConfig(livePluginConfig);
+      warnDeprecatedModelFallbackPolicy(livePluginConfig);
     };
     api.registerCommand({
       name: "active-memory",
