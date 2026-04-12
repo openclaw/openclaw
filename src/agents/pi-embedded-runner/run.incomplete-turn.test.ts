@@ -304,6 +304,68 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
   });
 });
 
+describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
+  const openaiParams = { provider: "openai", modelId: "gpt-5.4" };
+
+  function makeAttemptWithTools(
+    toolNames: string[],
+    assistantText: string,
+  ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
+    return {
+      toolMetas: toolNames.map((name) => ({ toolName: name })),
+      assistantTexts: [assistantText],
+      lastAssistant: { stopReason: "stop" },
+      itemLifecycle: { startedCount: toolNames.length },
+      replayMetadata: { hadPotentialSideEffects: false },
+      clientToolCall: null,
+      yieldDetected: false,
+      didSendDeterministicApprovalPrompt: false,
+      didSendViaMessagingTool: false,
+      lastToolError: null,
+    } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"];
+  }
+
+  it("retries when exactly 1 non-plan tool call + planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it("does NOT retry when 2+ non-plan tool calls are present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read", "write"], "I'll verify the output."),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does NOT retry when 1 tool call + completion language", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Done — the file looks correct."),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does NOT retry 1 tool call + 'let me know' (handoff, not continuation)", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
+    });
+    expect(result).toBeNull();
+  });
+});
+
 describe("hasContinuationIntent", () => {
   it("detects promise patterns like I'll, going to, let me + verb", () => {
     expect(hasContinuationIntent(["I'll read the next file."])).toBe(true);

@@ -56,13 +56,7 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
-  // Pick only the fields that are valid on per-agent entries. The defaults
-  // type also includes `projectSettingsPolicy` which is defaults-only; using
-  // the full defaults type here would leak that field to per-agent resolvers.
-  embeddedPi?: Pick<
-    NonNullable<AgentDefaultsConfig["embeddedPi"]>,
-    "executionContract" | "continuationMode" | "continuationBudget"
-  >;
+  embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };

@@ -350,6 +350,11 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   attempt: PlanningOnlyAttempt;
 }): string | null {
   const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+  // Compute once — used by both the toolMetas guard and the startedCount guard.
+  const singleActionNarrative = isSingleActionThenNarrativePattern({
+    toolMetas: params.attempt.toolMetas,
+    assistantTexts: params.attempt.assistantTexts,
+  });
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
@@ -365,20 +370,10 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     // Exempt turns with 2+ non-plan tool calls — that's real multi-step
     // progress. But allow retry when exactly 1 non-plan tool call + planning
     // prose is detected (the "one step then ask permission" loophole).
-    // Both the toolMetas check AND the startedCount check need the
-    // single-action exception, because startedCount is incremented on
-    // every tool start (including the single non-plan call), so without
-    // the exception the startedCount guard neutralizes the fix.
-    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
-      !isSingleActionThenNarrativePattern({
-        toolMetas: params.attempt.toolMetas,
-        assistantTexts: params.attempt.assistantTexts,
-      })) ||
-    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
-      !isSingleActionThenNarrativePattern({
-        toolMetas: params.attempt.toolMetas,
-        assistantTexts: params.attempt.assistantTexts,
-      })) ||
+    // Both guards need the exception because startedCount is incremented on
+    // every tool start (including the single non-plan call).
+    (hasNonPlanToolActivity(params.attempt.toolMetas) && !singleActionNarrative) ||
+    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount && !singleActionNarrative) ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;

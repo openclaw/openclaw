@@ -102,6 +102,10 @@ export type AgentConfig = {
   embeddedPi?: {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedPiExecutionContract;
+    /** Optional per-agent auto-continuation mode override. */
+    continuationMode?: "auto" | "prompt" | "off";
+    /** Optional per-agent auto-continuation budget override. */
+    continuationBudget?: number;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
