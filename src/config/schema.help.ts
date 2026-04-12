@@ -1249,6 +1249,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets local-hour boundary (0-23) for daily reset mode so sessions roll over at predictable times. Use with mode=daily and align to operator timezone expectations for human-readable behavior.",
   "session.reset.idleMinutes":
     "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+  "session.reset.maxAgeHours":
+    "Sets a hard wall-clock lifetime cap (hours) for a session regardless of activity. Use this to enforce a maximum session age and keep context from accumulating indefinitely; set 0 to disable.",
+  "session.reset.maxContextTokens":
+    "Sets a context token cap that triggers a session reset when totalTokens exceeds this value at turn start. Use this to control runaway context growth and keep per-turn costs predictable; set 0 to disable.",
   "session.resetByType":
     "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
   "session.resetByType.direct":

@@ -122,6 +122,16 @@ export type SessionResetConfig = {
   atHour?: number;
   /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
   idleMinutes?: number;
+  /**
+   * Hard max age (hours) for a session. Resets once this wall-clock age is
+   * reached regardless of activity. 0 = disabled.
+   */
+  maxAgeHours?: number;
+  /**
+   * Context token cap. Resets the session when totalTokens exceeds this value
+   * at turn start. 0 = disabled.
+   */
+  maxContextTokens?: number;
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;

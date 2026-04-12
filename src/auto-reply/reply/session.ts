@@ -108,10 +108,13 @@ function resolveStaleSessionEndReason(params: {
     params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
   const staleIdle =
     params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
+  const staleMaxAge =
+    params.freshness.maxAgeExpiresAt != null && params.now > params.freshness.maxAgeExpiresAt;
   if (staleIdle) {
     return "idle";
   }
-  if (staleDaily) {
+  // Max-age is a hard wall-clock boundary, semantically closest to a daily reset.
+  if (staleMaxAge || staleDaily) {
     return "daily";
   }
   return undefined;
@@ -412,7 +415,13 @@ export async function initSessionState(params: {
   const entryFreshness = entry
     ? isSystemEvent
       ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          now,
+          policy: resetPolicy,
+          createdAt: entry.createdAt,
+          totalTokens: entry.totalTokens,
+        })
     : undefined;
   const freshEntry = entryFreshness?.fresh ?? false;
   // Capture the current session entry before any reset so its transcript can be
@@ -523,6 +532,7 @@ export async function initSessionState(params: {
     ...baseEntry,
     sessionId,
     updatedAt: Date.now(),
+    createdAt: baseEntry?.createdAt ?? now,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.

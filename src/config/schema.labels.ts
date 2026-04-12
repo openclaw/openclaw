@@ -608,6 +608,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.reset.mode": "Session Reset Mode",
   "session.reset.atHour": "Session Daily Reset Hour",
   "session.reset.idleMinutes": "Session Reset Idle Minutes",
+  "session.reset.maxAgeHours": "Session Max Age (Hours)",
+  "session.reset.maxContextTokens": "Session Context Token Cap",
   "session.resetByType": "Session Reset by Chat Type",
   "session.resetByType.direct": "Session Reset (Direct)",
   "session.resetByType.dm": "Session Reset (DM Deprecated Alias)",

@@ -126,6 +126,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
+  /** Timestamp (ms) when this session was first created. Preserved across resets for max-age enforcement. */
+  createdAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
