@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { buildDefaultToolPolicyPipelineSteps } from "../agents/tool-policy-pipeline.js";
 import { resolveEffectiveToolPolicy } from "../agents/pi-tools.policy.js";
 import { resolveStoredSubagentCapabilities } from "../agents/subagent-capabilities.js";
 import { resolveEffectiveToolInventory } from "../agents/tools-effective-inventory.js";
@@ -141,6 +142,22 @@ export async function sessionsCommand(
       modelId: resolved.model,
     });
     const subagentCapabilities = resolveStoredSubagentCapabilities(target.canonicalKey, { cfg });
+    const toolPolicySteps = buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: effectiveToolPolicy.profile ? { allow: effectiveToolPolicy.profileAlsoAllow } : undefined,
+      profile: effectiveToolPolicy.profile,
+      providerProfilePolicy: effectiveToolPolicy.providerProfile
+        ? { allow: effectiveToolPolicy.providerProfileAlsoAllow }
+        : undefined,
+      providerProfile: effectiveToolPolicy.providerProfile,
+      globalPolicy: effectiveToolPolicy.globalPolicy,
+      globalProviderPolicy: effectiveToolPolicy.globalProviderPolicy,
+      agentPolicy: effectiveToolPolicy.agentPolicy,
+      agentProviderPolicy: effectiveToolPolicy.agentProviderPolicy,
+      agentId: target.agentId,
+    }).map((step) => ({
+      label: step.label,
+      active: Boolean(step.policy),
+    }));
     const effectiveTools = resolveEffectiveToolInventory({
       cfg,
       agentId: target.agentId,
@@ -221,6 +238,7 @@ export async function sessionsCommand(
           agent: Boolean(effectiveToolPolicy.agentPolicy),
           agentProvider: Boolean(effectiveToolPolicy.agentProviderPolicy),
         },
+        policyPipeline: toolPolicySteps,
         profileAlsoAllow: effectiveToolPolicy.profileAlsoAllow ?? [],
         providerProfileAlsoAllow: effectiveToolPolicy.providerProfileAlsoAllow ?? [],
         groups: effectiveTools.groups.map((group) => ({
@@ -305,6 +323,14 @@ export async function sessionsCommand(
           .filter(([, enabled]) => enabled)
           .map(([name]) => name)
           .join(", ") || "-",
+      )}`,
+    );
+    runtime.log(
+      `${label("Policy pipeline")}${muted(": ")}${infoLabel(
+        payload.tools.policyPipeline
+          .filter((step) => step.active)
+          .map((step) => step.label)
+          .join(" -> ") || "-",
       )}`,
     );
     runtime.log(

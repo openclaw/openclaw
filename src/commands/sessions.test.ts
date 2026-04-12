@@ -204,6 +204,7 @@ describe("sessionsCommand", () => {
           agent: boolean;
           agentProvider: boolean;
         };
+        policyPipeline: Array<{ label: string; active: boolean }>;
         profileAlsoAllow: string[];
         providerProfileAlsoAllow: string[];
         groups: Array<{ id: string; count: number; tools: string[] }>;
@@ -230,6 +231,7 @@ describe("sessionsCommand", () => {
       agent: false,
       agentProvider: false,
     });
+    expect(payload.tools.policyPipeline.some((step) => step.label.includes("tools.profile"))).toBe(true);
     expect(payload.capabilities.subagent.role).toBe("main");
     expect(payload.capabilities.subagent.controlScope).toBe("children");
     expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
@@ -263,6 +265,7 @@ describe("sessionsCommand", () => {
     expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Policy profile"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Policy sources"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy pipeline"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Subagent role"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
   });
