@@ -126,6 +126,24 @@ function resolveUserRoute(params: { cfg: OpenClawConfig; accountId?: string; tar
   });
 }
 
+function resolveUserRouteForCurrentSession(params: {
+  storedSession: Record<string, unknown>;
+  accountId?: string;
+  target?: string;
+  matrix?: MatrixChannelConfig;
+}) {
+  return resolveUserRoute({
+    cfg: createMatrixRouteConfig(
+      {
+        [currentDmSessionKey]: params.storedSession,
+      },
+      params.matrix ?? perRoomDmMatrixConfig,
+    ),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.target ? { target: params.target } : {}),
+  });
+}
+
 function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
   expect(route).toMatchObject({
     sessionKey: currentDmSessionKey,
@@ -163,12 +181,8 @@ afterEach(() => {
 
 describe("resolveMatrixOutboundSessionRoute", () => {
   it("reuses the current DM room session for same-user sends when Matrix DMs are per-room", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredDirectDmSession(),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession(),
       accountId: "ops",
     });
 
@@ -176,12 +190,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("falls back to user-scoped routing when the current session is for another DM peer", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredDirectDmSession({ from: "matrix:@bob:example.org" }),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession({ from: "matrix:@bob:example.org" }),
       accountId: "ops",
     });
 
@@ -189,12 +199,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("falls back to user-scoped routing when the current session belongs to another Matrix account", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredDirectDmSession(),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession(),
       accountId: "support",
     });
 
@@ -202,8 +208,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("reuses the canonical DM room after user-target outbound metadata overwrites latest to fields", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredDirectDmSession({
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession({
         from: "matrix:@bob:example.org",
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
@@ -211,10 +217,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         lastTo: "room:@bob:example.org",
         lastAccountId: "ops",
       }),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
       accountId: "ops",
     });
 
@@ -222,8 +224,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("does not reuse the canonical DM room for a different Matrix user after latest metadata drift", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredDirectDmSession({
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession({
         from: "matrix:@bob:example.org",
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
@@ -231,10 +233,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         lastTo: "room:@bob:example.org",
         lastAccountId: "ops",
       }),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
       accountId: "ops",
       target: "@bob:example.org",
     });
@@ -243,12 +241,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("does not reuse a room after the session metadata was overwritten by a non-DM Matrix send", () => {
-    const cfg = createMatrixRouteConfig({
-      [currentDmSessionKey]: createStoredChannelSession(),
-    });
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredChannelSession(),
       accountId: "ops",
     });
 
@@ -256,30 +250,18 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("uses the effective default Matrix account when accountId is omitted", () => {
-    const cfg = createMatrixRouteConfig(
-      {
-        [currentDmSessionKey]: createStoredDirectDmSession(),
-      },
-      defaultAccountPerRoomDmMatrixConfig,
-    );
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession(),
+      matrix: defaultAccountPerRoomDmMatrixConfig,
     });
 
     expectCurrentDmRoomRoute(route);
   });
 
   it("reuses the current DM room when stored account metadata is missing", () => {
-    const cfg = createMatrixRouteConfig(
-      {
-        [currentDmSessionKey]: createStoredDirectDmSession({ accountId: null }),
-      },
-      defaultAccountPerRoomDmMatrixConfig,
-    );
-
-    const route = resolveUserRoute({
-      cfg,
+    const route = resolveUserRouteForCurrentSession({
+      storedSession: createStoredDirectDmSession({ accountId: null }),
+      matrix: defaultAccountPerRoomDmMatrixConfig,
     });
 
     expectCurrentDmRoomRoute(route);
