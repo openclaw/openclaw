@@ -411,6 +411,30 @@ describe("sanitizeToolCallInputs", () => {
     expect(out).toEqual([]);
   });
 
+  it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me reuse the tool id.",
+            thinkingSignature: "sig_duplicate",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+  });
+
   it("drops signed-thinking assistant turns that would require attachment redaction", () => {
     const secret = "SIGNED_THINKING_ATTACHMENT_SECRET"; // pragma: allowlist secret
     const input = castAgentMessages([

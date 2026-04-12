@@ -322,6 +322,52 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });
 
+    it("rewrites earlier mutable ids away from later preserved signed ids", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "first" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolCall", id: "call1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call1",
+          toolName: "read",
+          content: [{ type: "text", text: "second" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveReplaySafeThinkingToolCallIds: true,
+        allowedToolNames: ["read"],
+      });
+
+      expect(out).not.toBe(input);
+      const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
+      const firstToolCall = firstAssistant.content?.[0] as { id?: string };
+      const secondToolCall = secondAssistant.content?.[1] as { id?: string };
+      expect(firstToolCall.id).not.toBe("call1");
+      expect(secondToolCall.id).toBe("call1");
+      expect(firstToolCall.id).not.toBe(secondToolCall.id);
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        firstToolCall.id,
+      );
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+    });
+
     it("avoids collisions with alphanumeric-only suffixes", () => {
       const input = buildDuplicateIdCollisionInput();
 
