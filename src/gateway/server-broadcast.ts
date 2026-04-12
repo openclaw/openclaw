@@ -100,10 +100,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
-      if (slow && opts?.dropIfSlow) {
-        continue;
-      }
-      if (slow) {
+      if (slow && opts?.dropIfSlow !== false) {
         try {
           c.socket.close(1008, "slow consumer");
         } catch {
