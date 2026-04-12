@@ -238,6 +238,8 @@ export class OpenClawApp extends LitElement {
   @state() dreamingModeSaving = false;
   @state() dreamDiaryLoading = false;
   @state() dreamDiaryActionLoading = false;
+  @state() dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() dreamDiaryActionArchivePath: string | null = null;
   @state() dreamDiaryError: string | null = null;
   @state() dreamDiaryPath: string | null = null;
   @state() dreamDiaryContent: string | null = null;

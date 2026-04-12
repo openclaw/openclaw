@@ -6,8 +6,6 @@ import {
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -76,19 +74,7 @@ export {
   parseModelRef,
 };
 export type { ModelRef };
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const cliBackends = resolveRuntimeCliBackends();
-  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
-    return true;
-  }
-  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
-    return true;
-  }
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
-}
+export { isCliProvider } from "./model-selection-cli.js";
 
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;

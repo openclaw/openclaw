@@ -76,6 +76,17 @@ function expandBundleCommandPromptTemplate(template: string, args?: string): str
   return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
 }
 
+function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
+  if (wasMentioned !== true) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
+}
+
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -474,7 +485,11 @@ export async function handleInlineActions(params: {
     }
     return stripMentions(stripped, ctx, cfg, agentId).trim();
   })();
-  if (didSendInlineStatus && remainingBodyAfterInlineStatus.length === 0) {
+  if (
+    didSendInlineStatus &&
+    (remainingBodyAfterInlineStatus.length === 0 ||
+      isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
+  ) {
     typing.cleanup();
     return { kind: "reply", reply: undefined };
   }

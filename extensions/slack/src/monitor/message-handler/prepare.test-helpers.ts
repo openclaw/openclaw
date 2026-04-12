@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
@@ -68,5 +71,31 @@ export function createSlackTestAccount(
     replyToMode: config.replyToMode,
     replyToModeByChatType: config.replyToModeByChatType,
     dm: config.dm,
+  };
+}
+
+export function createSlackSessionStoreFixture(prefix: string) {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  return {
+    setup() {
+      fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
+    },
+    cleanup() {
+      if (!fixtureRoot) {
+        return;
+      }
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fixtureRoot = "";
+    },
+    makeTmpStorePath() {
+      if (!fixtureRoot) {
+        throw new Error("fixtureRoot missing");
+      }
+      const dir = path.join(fixtureRoot, `case-${caseId++}`);
+      fs.mkdirSync(dir);
+      return { dir, storePath: path.join(dir, "sessions.json") };
+    },
   };
 }
