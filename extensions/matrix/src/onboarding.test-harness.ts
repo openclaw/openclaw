@@ -254,3 +254,23 @@ export function createMatrixUpdateKeepCredentialsPrompter(params?: {
     ...(params?.onText ? { onText: params.onText } : {}),
   });
 }
+
+export function createMatrixNamedAccountsConfig(params: {
+  defaultAccount?: string;
+  accounts: Record<
+    string,
+    {
+      homeserver: string;
+      accessToken?: string;
+    }
+  >;
+}): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        ...(params.defaultAccount ? { defaultAccount: params.defaultAccount } : {}),
+        accounts: params.accounts,
+      },
+    },
+  } as CoreConfig;
+}

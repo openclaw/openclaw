@@ -3,6 +3,7 @@ import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
   createConfiguredMatrixDefaultAccountConfig,
   createConfiguredMatrixTopLevelConfig,
+  createMatrixNamedAccountsConfig,
   createLegacyMatrixTopLevelConfig,
   createMatrixTokenAddAccountPrompter,
   createMatrixUpdateKeepCredentialsPrompter,
@@ -322,22 +323,18 @@ describe("matrix onboarding", () => {
 
   it("resolves status using the overridden Matrix account", async () => {
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            defaultAccount: "default",
-            accounts: {
-              default: {
-                homeserver: "https://matrix.default.example.org",
-              },
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        defaultAccount: "default",
+        accounts: {
+          default: {
+            homeserver: "https://matrix.default.example.org",
+          },
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       options: undefined,
       accountOverrides: {
         matrix: "ops",
@@ -476,20 +473,16 @@ describe("matrix onboarding", () => {
 
     expect(
       resolveConfigKeys(
-        {
-          channels: {
-            matrix: {
-              accounts: {
-                default: {
-                  homeserver: "https://matrix.main.example.org",
-                },
-                ops: {
-                  homeserver: "https://matrix.ops.example.org",
-                },
-              },
+        createMatrixNamedAccountsConfig({
+          accounts: {
+            default: {
+              homeserver: "https://matrix.main.example.org",
+            },
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
             },
           },
-        } as CoreConfig,
+        }),
         "ops",
       ),
     ).toEqual({
@@ -502,19 +495,15 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            defaultAccount: "ops",
-            accounts: {
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        defaultAccount: "ops",
+        accounts: {
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {},
     });
 
@@ -527,22 +516,18 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              assistant: {
-                homeserver: "https://matrix.assistant.example.org",
-                accessToken: "assistant-token",
-              },
-              ops: {
-                homeserver: "https://matrix.ops.example.org",
-                accessToken: "ops-token",
-              },
-            },
+      cfg: createMatrixNamedAccountsConfig({
+        accounts: {
+          assistant: {
+            homeserver: "https://matrix.assistant.example.org",
+            accessToken: "assistant-token",
+          },
+          ops: {
+            homeserver: "https://matrix.ops.example.org",
+            accessToken: "ops-token",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {},
     });
 
