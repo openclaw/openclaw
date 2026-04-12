@@ -6,6 +6,7 @@ import {
   isRedactedSessionsSpawnAttachment,
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
+import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -284,7 +285,7 @@ function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<str
     }
     seenToolCallIds.add(toolCallId);
     const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
-    const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
+    const resolvedName = resolveReplayToolCallName(rawName, toolCallId, allowedToolNames);
     if (!resolvedName || replayBlock.name !== resolvedName) {
       return false;
     }
@@ -337,6 +338,7 @@ function sanitizeReplayToolCallInputs(
   let changed = false;
   let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
+  const claimedReplaySafeToolCallIds = new Set<string>();
 
   for (const message of messages) {
     if (!message || typeof message !== "object" || message.role !== "assistant") {
@@ -352,7 +354,16 @@ function sanitizeReplayToolCallInputs(
       message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
-      if (isReplaySafeThinkingTurn(message.content, allowedToolNames)) {
+      const replaySafeToolCalls = extractToolCallsFromAssistant(
+        message as Extract<AgentMessage, { role: "assistant" }>,
+      );
+      if (
+        isReplaySafeThinkingTurn(message.content, allowedToolNames) &&
+        replaySafeToolCalls.every((toolCall) => !claimedReplaySafeToolCallIds.has(toolCall.id))
+      ) {
+        for (const toolCall of replaySafeToolCalls) {
+          claimedReplaySafeToolCallIds.add(toolCall.id);
+        }
         out.push(message);
       } else {
         changed = true;

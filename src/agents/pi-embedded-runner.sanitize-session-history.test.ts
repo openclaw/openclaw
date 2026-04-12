@@ -17,6 +17,7 @@ import {
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./pi-embedded-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
@@ -1180,6 +1181,93 @@ describe("sanitizeSessionHistory", () => {
       },
       { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
     ]);
+  });
+
+  it("drops later preserved signed turns that reuse an earlier raw tool id across the transcript", async () => {
+    setNonGoogleModelApi();
+
+    const sessionManager = makeMockSessionManager();
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage(
+        [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call1", name: "read", arguments: {} },
+        ] as unknown as AssistantMessage["content"],
+        { stopReason: "toolUse" },
+      ),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call1",
+        toolName: "read",
+        content: [{ type: "text", text: "first result" }],
+        isError: false,
+      }),
+      makeUserMessage("second"),
+      makeAssistantMessage(
+        [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_2" },
+          { type: "toolCall", id: "call1", name: "read", arguments: {} },
+        ] as unknown as AssistantMessage["content"],
+        { stopReason: "toolUse" },
+      ),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call1",
+        toolName: "read",
+        content: [{ type: "text", text: "second result" }],
+        isError: false,
+      }),
+      makeUserMessage("retry"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(
+      sanitized.filter(
+        (message) =>
+          message &&
+          typeof message === "object" &&
+          message.role === "assistant" &&
+          extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
+            .length > 0,
+      ),
+    ).toHaveLength(1);
+    expect(
+      sanitized.filter(
+        (message) => message && typeof message === "object" && message.role === "toolResult",
+      ),
+    ).toHaveLength(1);
+    expect(
+      validated.filter(
+        (message) =>
+          message &&
+          typeof message === "object" &&
+          message.role === "assistant" &&
+          extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
+            .length > 0,
+      ),
+    ).toHaveLength(1);
+    expect(
+      validated.filter(
+        (message) => message && typeof message === "object" && message.role === "toolResult",
+      ),
+    ).toHaveLength(1);
+    expect(JSON.stringify(validated)).not.toContain("[tool calls omitted]");
   });
 
   it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
