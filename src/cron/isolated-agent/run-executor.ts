@@ -71,6 +71,10 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.sessionId,
     params.agentId,
   );
+  // Persist the transcript path back to the session entry so that
+  // finalizeCronRun → persistSessionEntry writes it to sessions.json.
+  // Without this, the .jsonl file is orphaned on disk.  See #65151.
+  params.cronSession.sessionEntry.sessionFile = sessionFile;
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
