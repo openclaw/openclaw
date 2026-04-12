@@ -100,7 +100,7 @@ describe("music generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      result: "Generated 1 track.",
       mediaUrls: ["/tmp/generated-night-drive.mp3"],
     });
 
@@ -129,7 +129,7 @@ describe("music generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      result: "Generated 1 track.",
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
@@ -166,7 +166,7 @@ describe("music generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      result: "Generated 1 track.",
       mediaUrls: ["/tmp/generated-night-drive.mp3"],
     });
 
@@ -183,7 +183,7 @@ describe("music generate background helpers", () => {
             source: "music_generation",
             announceType: "music generation task",
             status: "ok",
-            result: expect.stringContaining("MEDIA:/tmp/generated-night-drive.mp3"),
+            result: expect.stringContaining("Generated 1 track"),
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
             replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
           }),

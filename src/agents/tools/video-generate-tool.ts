@@ -586,7 +586,8 @@ async function executeVideoGenerationJob(params: {
     requestedDurationSeconds !== normalizedDurationSeconds
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
       : null,
-    ...savedVideos.map((video) => `MEDIA:${video.path}`),
+    // MEDIA: lines removed — delivery handled by details.media.mediaUrls.
+    // Inline MEDIA: caused duplicate uploads on Slack/Discord (#65103).
   ].filter((entry): entry is string => Boolean(entry));
 
   return {

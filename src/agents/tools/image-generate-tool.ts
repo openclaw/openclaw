@@ -668,9 +668,10 @@ export function createImageGenerateTool(options?: {
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
         ...(warning ? [`Warning: ${warning}`] : []),
-        // Show the actual saved paths so the model does not invent a bogus
-        // local path when it references the generated image in a follow-up reply.
-        ...savedImages.map((image) => `MEDIA:${image.path}`),
+        // Media delivery is handled by details.media.mediaUrls (the structured
+        // path). Inline MEDIA: lines in content text are redundant and cause a
+        // second dispatch through emitToolOutput → onToolResult, resulting in
+        // duplicate file uploads on Slack and other channels (#65103).
       ];
 
       return {

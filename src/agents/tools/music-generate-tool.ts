@@ -441,7 +441,8 @@ async function executeMusicGenerationJob(params: {
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
       : null,
     ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
-    ...savedTracks.map((track) => `MEDIA:${track.path}`),
+    // MEDIA: lines removed — delivery handled by details.media.mediaUrls.
+    // Inline MEDIA: caused duplicate uploads on Slack/Discord (#65103).
   ].filter((entry): entry is string => Boolean(entry));
   return {
     provider: result.provider,

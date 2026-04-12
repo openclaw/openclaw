@@ -408,8 +408,9 @@ describe("createImageGenerateTool", () => {
       },
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).toContain("MEDIA:/tmp/generated-1.png");
-    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+    // MEDIA: lines removed from tool content — delivery via details.media.mediaUrls (#65103)
+    expect(text).not.toContain("MEDIA:");
+    expect(text).toContain("Generated 2 images");
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
@@ -477,9 +478,9 @@ describe("createImageGenerateTool", () => {
     const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain(
-      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
-    );
+    // MEDIA: lines removed — delivery via details.media.mediaUrls (#65103)
+    expect(text).not.toContain("MEDIA:");
+    expect(text).toContain("Generated 1 image");
     expect(result.details).toMatchObject({
       media: {
         mediaUrls: [

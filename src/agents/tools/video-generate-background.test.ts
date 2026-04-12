@@ -100,7 +100,7 @@ describe("video generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+      result: "Generated 1 video.",
       mediaUrls: ["/tmp/generated-lobster.mp4"],
     });
 
@@ -129,7 +129,7 @@ describe("video generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+      result: "Generated 1 video.",
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
@@ -166,7 +166,7 @@ describe("video generate background helpers", () => {
       },
       status: "ok",
       statusLabel: "completed successfully",
-      result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+      result: "Generated 1 video.",
       mediaUrls: ["/tmp/generated-lobster.mp4"],
     });
 
@@ -183,7 +183,7 @@ describe("video generate background helpers", () => {
             source: "video_generation",
             announceType: "video generation task",
             status: "ok",
-            result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
+            result: expect.stringContaining("Generated 1 video"),
             mediaUrls: ["/tmp/generated-lobster.mp4"],
             replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
           }),
