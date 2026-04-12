@@ -1,9 +1,18 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
   | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
+
+export type MediaUnderstandingCapabilityRegistry = Map<
+  string,
+  {
+    capabilities?: MediaUnderstandingCapability[];
+  }
+>;
 
 export type MediaAttachment = {
   path?: string;
@@ -123,7 +132,7 @@ export type ImageDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   agentDir: string;
-  cfg: import("../config/config.js").OpenClawConfig;
+  cfg: OpenClawConfig;
   model: string;
   provider: string;
 };
@@ -144,7 +153,7 @@ export type ImagesDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   agentDir: string;
-  cfg: import("../config/config.js").OpenClawConfig;
+  cfg: OpenClawConfig;
 };
 
 export type ImageDescriptionResult = {
