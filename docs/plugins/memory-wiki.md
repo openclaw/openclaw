@@ -337,7 +337,6 @@ knowledge layer:
     backend: "qmd",
   },
   plugins: {
-    allow: ["memory-core", "memory-wiki"],
     entries: {
       "memory-wiki": {
         enabled: true,
