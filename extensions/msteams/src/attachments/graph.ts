@@ -27,6 +27,7 @@ import {
 import type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,
+  MSTeamsGraphMediaLogger,
   MSTeamsGraphMediaResult,
   MSTeamsInboundMedia,
 } from "./types.js";
@@ -281,12 +282,10 @@ export async function downloadMSTeamsGraphMedia(params: {
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
-  /**
-   * Optional logger used to surface Graph/SharePoint fetch errors. Without
-   * it, empty `catch` blocks hide failures like the Node 24+ undici
-   * incompatibility that silently broke SharePoint downloads (#63396).
-   */
+  /** Optional logger used to surface Graph/SharePoint fetch errors. */
   logger?: MSTeamsAttachmentDownloadLogger;
+  /** Back-compat diagnostic logger used by older tests/callers. */
+  log?: MSTeamsGraphMediaLogger;
 }): Promise<MSTeamsGraphMediaResult> {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
@@ -297,6 +296,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   });
   const ssrfPolicy = resolveMediaSsrfPolicy(policy.allowHosts);
   const messageUrl = params.messageUrl;
+  const debugLog =
+    params.log ?? (params.logger as MSTeamsGraphMediaLogger | undefined) ?? undefined;
   let accessToken: string;
   try {
     accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
@@ -307,10 +308,11 @@ export async function downloadMSTeamsGraphMedia(params: {
     return { media: [], messageUrl, tokenError: true };
   }
 
-  // Fetch the full message to get SharePoint file attachments (for group chats)
   const fetchFn = params.fetchFn ?? fetch;
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
+  let messageAttachments: GraphAttachment[] = [];
+  let messageStatus: number | undefined;
   try {
     const { response: msgRes, release } = await fetchWithSsrFGuard({
       url: messageUrl,
@@ -322,38 +324,44 @@ export async function downloadMSTeamsGraphMedia(params: {
       auditContext: "msteams.graph.message",
     });
     try {
-      if (!msgRes.ok) {
-        params.logger?.warn?.("msteams graph message fetch non-ok", {
-          status: msgRes.status,
-        });
-      }
+      messageStatus = msgRes.status;
       if (msgRes.ok) {
-        const msgData = (await msgRes.json()) as {
+        let msgData: {
           body?: { content?: string; contentType?: string };
-          attachments?: Array<{
-            id?: string;
-            contentUrl?: string;
-            contentType?: string;
-            name?: string;
-          }>;
+          attachments?: GraphAttachment[];
         };
+        try {
+          msgData = (await msgRes.json()) as typeof msgData;
+        } catch (err) {
+          debugLog?.debug?.("graph media message parse failed", {
+            messageUrl,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          params.logger?.warn?.("msteams graph message parse failed", {
+            error: err instanceof Error ? err.message : String(err),
+            messageUrl,
+          });
+          msgData = {};
+        }
+        messageAttachments = Array.isArray(msgData.attachments) ? msgData.attachments : [];
 
-        // Extract SharePoint file attachments (contentType: "reference")
-        // Download any file type, not just images
-        const spAttachments = (msgData.attachments ?? []).filter(
+        const spAttachments = messageAttachments.filter(
           (a) => a.contentType === "reference" && a.contentUrl && a.name,
         );
         for (const att of spAttachments) {
           const name = att.name ?? "file";
+          const shareUrl = att.contentUrl ?? "";
+          if (!shareUrl) {
+            continue;
+          }
 
           try {
-            // SharePoint URLs need to be accessed via Graph shares API. Validate the
-            // rewritten Graph URL, not the original SharePoint host, so the existing
-            // Graph allowlist path can fetch shared files without separately allowing
-            // arbitrary SharePoint hosts.
-            const shareUrl = att.contentUrl!;
             const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
             if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
+              debugLog?.debug?.("graph media sharepoint url not in allowHosts", {
+                messageUrl,
+                sharesUrl,
+              });
               continue;
             }
 
@@ -364,11 +372,6 @@ export async function downloadMSTeamsGraphMedia(params: {
               contentTypeHint: "application/octet-stream",
               preserveFilenames: params.preserveFilenames,
               ssrfPolicy,
-              // The `fetchImpl` below already validates each redirect hop via
-              // `safeFetchWithPolicy`, so bypass `fetchRemoteMedia`'s strict
-              // SSRF dispatcher. That dispatcher is incompatible with Node
-              // 24+'s built-in undici v7 and silently breaks SharePoint
-              // downloads (#63396).
               useDirectFetch: true,
               fetchImpl: async (input, init) => {
                 const requestUrl = resolveRequestUrl(input);
@@ -399,6 +402,11 @@ export async function downloadMSTeamsGraphMedia(params: {
             });
           }
         }
+      } else {
+        debugLog?.debug?.("graph media message fetch not ok", {
+          messageUrl,
+          status: messageStatus,
+        });
       }
     } finally {
       await release();
@@ -419,14 +427,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     logger: params.logger,
   });
 
-  const attachments = await fetchGraphCollection<GraphAttachment>({
-    url: `${messageUrl}/attachments`,
-    accessToken,
-    fetchFn: params.fetchFn,
-    ssrfPolicy,
-  });
-
-  const normalizedAttachments = attachments.items.map(normalizeGraphAttachment);
+  const normalizedAttachments = messageAttachments.map(normalizeGraphAttachment);
   const filteredAttachments =
     sharePointMedia.length > 0
       ? normalizedAttachments.filter((att) => {
@@ -441,23 +442,31 @@ export async function downloadMSTeamsGraphMedia(params: {
           return !downloadedReferenceUrls.has(url);
         })
       : normalizedAttachments;
-  const attachmentMedia = await downloadMSTeamsAttachments({
-    attachments: filteredAttachments,
-    maxBytes: params.maxBytes,
-    tokenProvider: params.tokenProvider,
-    allowHosts: policy.allowHosts,
-    authAllowHosts: policy.authAllowHosts,
-    fetchFn: params.fetchFn,
-    preserveFilenames: params.preserveFilenames,
-    logger: params.logger,
-  });
+  let attachmentMedia: MSTeamsInboundMedia[] = [];
+  try {
+    attachmentMedia = await downloadMSTeamsAttachments({
+      attachments: filteredAttachments,
+      maxBytes: params.maxBytes,
+      tokenProvider: params.tokenProvider,
+      allowHosts: policy.allowHosts,
+      authAllowHosts: policy.authAllowHosts,
+      fetchFn: params.fetchFn,
+      preserveFilenames: params.preserveFilenames,
+      logger: params.logger,
+    });
+  } catch (err) {
+    params.logger?.warn?.("msteams graph attachment download failed", {
+      error: err instanceof Error ? err.message : String(err),
+      messageUrl,
+    });
+  }
 
   return {
     media: [...sharePointMedia, ...hosted.media, ...attachmentMedia],
     hostedCount: hosted.count,
     attachmentCount: filteredAttachments.length + sharePointMedia.length,
     hostedStatus: hosted.status,
-    attachmentStatus: attachments.status,
+    attachmentStatus: messageStatus,
     messageUrl,
   };
 }
