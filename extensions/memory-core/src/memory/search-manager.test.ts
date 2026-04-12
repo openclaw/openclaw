@@ -167,6 +167,16 @@ function requireManager(result: SearchManagerResult): SearchManager {
   return result.manager;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function createFailedQmdSearchHarness(params: { agentId: string; errorMessage: string }) {
   const cfg = createQmdCfg(params.agentId);
   mockPrimary.search.mockRejectedValueOnce(new Error(params.errorMessage));
@@ -293,6 +303,27 @@ describe("getMemorySearchManager caching", () => {
     requireManager(first);
     requireManager(second);
     expect(first.manager).toBe(second.manager);
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes concurrent full qmd manager creation for the same agent", async () => {
+    const agentId = "pending-qmd";
+    const cfg = createQmdCfg(agentId);
+    const createGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);
+
+    const firstPromise = getMemorySearchManager({ cfg, agentId });
+    const secondPromise = getMemorySearchManager({ cfg, agentId });
+
+    createGate.resolve(
+      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
+    );
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    requireManager(first);
+    requireManager(second);
+    expect(first.manager).toBe(second.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
     expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
   });
 

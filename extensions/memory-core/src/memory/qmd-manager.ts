@@ -76,6 +76,7 @@ const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
 } as const;
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
+const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -120,6 +121,10 @@ type QmdEmbedQueueState = {
   tail: Promise<void>;
 };
 
+type QmdUpdateQueueState = {
+  tails: Map<string, Promise<void>>;
+};
+
 function getMcporterState(): McporterState {
   return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
     coldStartWarned: false,
@@ -130,6 +135,12 @@ function getMcporterState(): McporterState {
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
   return resolveGlobalSingleton<QmdEmbedQueueState>(QMD_EMBED_QUEUE_KEY, () => ({
     tail: Promise.resolve(),
+  }));
+}
+
+function getQmdUpdateQueueState(): QmdUpdateQueueState {
+  return resolveGlobalSingleton<QmdUpdateQueueState>(QMD_UPDATE_QUEUE_KEY, () => ({
+    tails: new Map<string, Promise<void>>(),
   }));
 }
 
@@ -1356,11 +1367,19 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const run = async () => {
-      if (this.sessionExporter) {
-        await this.exportSessions();
+      await this.withQmdUpdateQueue(async () => {
+        if (this.closed) {
+          return;
+        }
+        if (this.sessionExporter) {
+          await this.exportSessions();
+        }
+        await this.runQmdUpdateWithRetry(reason);
+        this.dirty = false;
+      });
+      if (this.closed) {
+        return;
       }
-      await this.runQmdUpdateWithRetry(reason);
-      this.dirty = false;
       if (this.shouldRunEmbed(force)) {
         try {
           await this.withQmdEmbedLock(async () => {
@@ -1375,6 +1394,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         } catch (err) {
           this.noteEmbedFailure(reason, err);
         }
+      }
+      if (this.closed) {
+        return;
       }
       this.lastUpdateAt = Date.now();
       this.docPathCache.clear();
@@ -1570,6 +1592,30 @@ export class QmdMemoryManager implements MemorySearchManager {
       );
     } finally {
       releaseCurrent();
+    }
+  }
+
+  private async withQmdUpdateQueue<T>(task: () => Promise<T>): Promise<T> {
+    const queue = getQmdUpdateQueueState();
+    const key = this.qmdDir;
+    const previous = queue.tails.get(key) ?? Promise.resolve();
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const next = previous.then(
+      () => current,
+      () => current,
+    );
+    queue.tails.set(key, next);
+    await previous.catch(() => undefined);
+    try {
+      return await task();
+    } finally {
+      releaseCurrent();
+      if (queue.tails.get(key) === next) {
+        queue.tails.delete(key);
+      }
     }
   }
 
