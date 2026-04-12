@@ -1,10 +1,10 @@
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { logVerbose } from "../../globals.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
+import { logVerbose } from "../../globals.js";
 import {
   loadSessionStore,
   resolveSessionPluginDebugLines,
@@ -496,13 +496,17 @@ export async function runReplyAgent(params: {
       // blocks indefinitely and the session appears permanently stuck.
       // See: https://github.com/openclaw/openclaw/issues/53889
       const PENDING_TOOL_DRAIN_TIMEOUT_MS = 30_000;
+      let drainHandle: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<"timeout">((resolve) => {
-        const handle = setTimeout(() => resolve("timeout"), PENDING_TOOL_DRAIN_TIMEOUT_MS);
-        if (typeof handle === "object" && "unref" in handle) {
-          handle.unref();
+        drainHandle = setTimeout(() => resolve("timeout"), PENDING_TOOL_DRAIN_TIMEOUT_MS);
+        if (typeof drainHandle === "object" && "unref" in drainHandle) {
+          drainHandle.unref();
         }
       });
-      const drain = Promise.allSettled(pendingToolTasks).then(() => "settled" as const);
+      const drain = Promise.allSettled(pendingToolTasks).then(() => {
+        clearTimeout(drainHandle);
+        return "settled" as const;
+      });
       const outcome = await Promise.race([drain, timeout]);
       if (outcome === "timeout") {
         logVerbose(
