@@ -247,6 +247,7 @@ type GroupMeta = {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  savingsPct: number | null;
   model: string | null;
   contextPercent: number | null;
 };
@@ -257,6 +258,7 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   let cacheRead = 0;
   let cacheWrite = 0;
   let cost = 0;
+  let savingsPct: number | null = null;
   let model: string | null = null;
   let hasUsage = false;
 
@@ -265,17 +267,23 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     if (m.role !== "assistant") {
       continue;
     }
-    const usage = m.usage as Record<string, number> | undefined;
+    const usage = m.usage as Record<string, unknown> | undefined;
     if (usage) {
       hasUsage = true;
-      input += usage.input ?? usage.inputTokens ?? 0;
-      output += usage.output ?? usage.outputTokens ?? 0;
-      cacheRead += usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
-      cacheWrite += usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      const u = usage as Record<string, number>;
+      input += u.input ?? u.inputTokens ?? 0;
+      output += u.output ?? u.outputTokens ?? 0;
+      cacheRead += u.cacheRead ?? u.cache_read_input_tokens ?? 0;
+      cacheWrite += u.cacheWrite ?? u.cache_creation_input_tokens ?? 0;
     }
-    const c = m.cost as Record<string, number> | undefined;
+    // Read cost from top-level m.cost (native providers) or nested m.usage.cost
+    // (provider plugins like ClawRouter that emit cost via the OpenAI usage field)
+    const c = (m.cost ?? usage?.cost) as Record<string, number> | undefined;
     if (c?.total) {
       cost += c.total;
+    }
+    if (typeof c?.savings_pct === "number" && Number.isFinite(c.savings_pct)) {
+      savingsPct = c.savings_pct;
     }
     if (typeof m.model === "string" && m.model !== "gateway-injected") {
       model = m.model;
@@ -289,7 +297,7 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   const contextPercent =
     contextWindow && input > 0 ? Math.min(Math.round((input / contextWindow) * 100), 100) : null;
 
-  return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
+  return { input, output, cacheRead, cacheWrite, cost, savingsPct, model, contextPercent };
 }
 
 /** Compact token count formatter (e.g. 128000 → "128k"). */
@@ -326,9 +334,13 @@ function renderMessageMeta(meta: GroupMeta | null) {
     parts.push(html`<span class="msg-meta__cache">W${fmtTokens(meta.cacheWrite)}</span>`);
   }
 
-  // Cost
+  // Cost + savings
   if (meta.cost > 0) {
-    parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}</span>`);
+    const savingsTag =
+      meta.savingsPct !== null && meta.savingsPct > 0
+        ? html` <span class="msg-meta__savings">saved ${meta.savingsPct}%</span>`
+        : nothing;
+    parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}${savingsTag}</span>`);
   }
 
   // Context %

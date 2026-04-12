@@ -737,14 +737,36 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
 /**
  * Sanitize cost metadata to ensure only finite numeric fields are included.
  * Prevents UI crashes from calling .toFixed() on non-numbers.
+ *
+ * Preserves standard fields (total/input/output) and provider-plugin routing
+ * metadata (baseline/savings_pct) so the chat UI can render per-message
+ * cost badges with savings info (e.g. "$0.0023 · saved 96%").
+ * String fields (model/tier) are also preserved for richer inline display.
  */
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
+function sanitizeCost(raw: unknown): { total?: number; [key: string]: unknown } | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const c = raw as Record<string, unknown>;
   const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
+  if (total === undefined) {
+    return undefined;
+  }
+  const out: Record<string, unknown> = { total };
+  // Numeric fields: standard cost breakdown + routing metadata
+  for (const k of ["input", "output", "baseline", "savings_pct"] as const) {
+    const n = toFiniteNumber(c[k]);
+    if (n !== undefined) {
+      out[k] = n;
+    }
+  }
+  // String fields: model + tier for inline per-message display
+  for (const k of ["model", "tier"] as const) {
+    if (typeof c[k] === "string") {
+      out[k] = c[k];
+    }
+  }
+  return out;
 }
 
 function sanitizeChatHistoryMessage(

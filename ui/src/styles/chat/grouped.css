@@ -383,6 +383,12 @@ img.chat-avatar {
   color: var(--ok);
 }
 
+.msg-meta__savings {
+  color: var(--ok);
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
 .msg-meta__ctx--warn {
   color: var(--warn);
 }
