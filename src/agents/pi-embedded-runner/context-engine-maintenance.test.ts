@@ -5,6 +5,7 @@ import {
   enqueueCommandInLane,
   resetCommandQueueStateForTest,
 } from "../../process/command-queue.js";
+import * as commandQueueModule from "../../process/command-queue.js";
 import { createQueuedTaskRun } from "../../tasks/task-executor.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
@@ -14,8 +15,8 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-registry.js";
-import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
 
 const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) => ({
@@ -30,6 +31,7 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
 }));
 let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
+let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
@@ -72,9 +74,10 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
   ({
     buildContextEngineMaintenanceRuntimeContext,
     createDeferredTurnMaintenanceAbortSignal,
+    resetDeferredTurnMaintenanceStateForTest,
     runContextEngineMaintenance,
-  } =
-    await import("./context-engine-maintenance.js"));
+  } = await import("./context-engine-maintenance.js"));
+  resetDeferredTurnMaintenanceStateForTest();
 }
 
 describe("buildContextEngineMaintenanceRuntimeContext", () => {
@@ -159,6 +162,7 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
 
   it("aborts on termination signals and unregisters listeners", () => {
     const listeners = new Map<string, Set<() => void>>();
+    const kill = vi.fn();
     const processLike = {
       on(event: "SIGINT" | "SIGTERM", listener: () => void) {
         const bucket = listeners.get(event) ?? new Set<() => void>();
@@ -170,9 +174,17 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
         listeners.get(event)?.delete(listener);
         return this;
       },
-    } as unknown as Pick<NodeJS.Process, "on" | "off">;
+      listenerCount(event: "SIGINT" | "SIGTERM") {
+        return listeners.get(event)?.size ?? 0;
+      },
+      kill,
+      pid: 4242,
+    } as unknown as NonNullable<
+      Parameters<typeof createDeferredTurnMaintenanceAbortSignal>[0]
+    >["processLike"];
 
     const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    const second = createDeferredTurnMaintenanceAbortSignal({ processLike });
     expect(listeners.get("SIGINT")?.size ?? 0).toBe(1);
     expect(listeners.get("SIGTERM")?.size ?? 0).toBe(1);
 
@@ -181,10 +193,13 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
     sigtermListeners[0]?.();
 
     expect(abortSignal?.aborted).toBe(true);
+    expect(second.abortSignal?.aborted).toBe(true);
+    expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
     expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
     expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
 
     dispose();
+    second.dispose();
     expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
     expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
   });
@@ -246,7 +261,9 @@ describe("runContextEngineMaintenance", () => {
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
     const maintain = vi.fn(async (params?: unknown) => {
-      await (params as { runtimeContext?: ContextEngineRuntimeContext } | undefined)?.runtimeContext?.rewriteTranscriptEntries?.({
+      await (
+        params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
+      )?.runtimeContext?.rewriteTranscriptEntries?.({
         replacements: [
           {
             entryId: "entry-1",
@@ -577,7 +594,10 @@ describe("runContextEngineMaintenance", () => {
             turnMaintenanceMode: "background" as const,
           },
           ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({ messages, estimatedTokens: 0 }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
           compact: async () => ({ ok: true, compacted: false }),
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
@@ -602,6 +622,64 @@ describe("runContextEngineMaintenance", () => {
         });
         expect(tasks.some((task) => task.runId?.startsWith("turn-maint:"))).toBe(true);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("cancels the queued task when deferred scheduling is rejected", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      const scheduleError = new Error("gateway draining");
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockRejectedValue(scheduleError);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const sessionKey = "agent:main:session-enqueue-reject";
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-enqueue-reject",
+          sessionKey,
+          sessionFile: "/tmp/session-enqueue-reject.jsonl",
+          reason: "turn",
+        });
+        await flushAsyncWork();
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0]).toMatchObject({
+          status: "cancelled",
+          terminalSummary: expect.stringContaining("gateway draining"),
+        });
+        expect(maintain).not.toHaveBeenCalled();
+      } finally {
+        enqueueSpy.mockRestore();
         vi.useRealTimers();
       }
     });
@@ -832,7 +910,10 @@ describe("runContextEngineMaintenance", () => {
             turnMaintenanceMode: "background" as const,
           },
           ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({ messages, estimatedTokens: 0 }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
           compact: async () => ({ ok: true, compacted: false }),
           maintain: vi.fn(async () => ({
             changed: false,
