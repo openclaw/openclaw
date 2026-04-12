@@ -380,6 +380,40 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
+  it("preserves assistant turns that include thinking blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me check the gateway config.",
+            thinkingSignature: "sig_gateway",
+          },
+          {
+            type: "toolCall",
+            id: "call_gateway",
+            name: "gateway",
+            arguments: {
+              action: "config.get",
+              path: "channels.telegram",
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    expect(out).toBe(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const types = Array.isArray(assistant.content)
+      ? assistant.content.map((block) => (block as { type?: unknown }).type)
+      : [];
+    expect(types).toEqual(["thinking", "toolCall"]);
+    expect((assistant.content?.[1] as { name?: unknown })?.name).toBe("gateway");
+  });
+
   it.each([
     {
       name: "trims leading whitespace from tool names",
