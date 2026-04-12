@@ -97,7 +97,15 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       logging: true,
     };
-    api.config = {};
+    api.config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-5.4-mini",
+          },
+        },
+      },
+    };
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
       updatedAt: 0,
@@ -381,7 +389,16 @@ describe("active-memory plugin", () => {
   });
 
   it("treats non-default main session keys as direct chats", async () => {
-    api.config = { session: { mainKey: "home" } };
+    api.config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-5.4-mini",
+          },
+        },
+      },
+      session: { mainKey: "home" },
+    };
 
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },
@@ -454,6 +471,8 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "github-copilot",
       model: "gpt-5.4-mini",
+      messageChannel: "webchat",
+      messageProvider: "webchat",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
       config: {
         plugins: {
@@ -473,6 +492,13 @@ describe("active-memory plugin", () => {
 
   it("lets active memory inherit the main QMD search mode when configured", async () => {
     api.config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-5.4-mini",
+          },
+        },
+      },
       memory: {
         backend: "qmd",
         qmd: {
@@ -796,7 +822,8 @@ describe("active-memory plugin", () => {
     });
   });
 
-  it("can disable default remote model fallback", async () => {
+  it("skips recall when no model or explicit fallback resolves", async () => {
+    api.config = {};
     api.pluginConfig = {
       agents: ["main"],
       modelFallbackPolicy: "resolved-only",
@@ -809,6 +836,56 @@ describe("active-memory plugin", () => {
         agentId: "main",
         trigger: "user",
         sessionKey: "agent:main:resolved-only",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("uses config.modelFallback when no session or agent model resolves", async () => {
+    api.config = {};
+    api.pluginConfig = {
+      agents: ["main"],
+      modelFallback: "google/gemini-3-flash",
+      modelFallbackPolicy: "default-remote",
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? custom fallback", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:custom-fallback",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+    });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("config.modelFallbackPolicy is deprecated"),
+    );
+  });
+
+  it("does not use a built-in fallback model even when default-remote is configured", async () => {
+    api.config = {};
+    api.pluginConfig = {
+      agents: ["main"],
+      modelFallbackPolicy: "default-remote",
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? built-in fallback", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:built-in-fallback",
         messageProvider: "webchat",
       },
     );
@@ -1024,10 +1101,43 @@ describe("active-memory plugin", () => {
     expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
   });
 
+  it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      logging: true,
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
+      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 25));
+      return {
+        payloads: [{ text: "late timeout payload that should never become memory context" }],
+        meta: { aborted: true },
+      };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? late payload timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:late-timeout-payload",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+  });
+
   it("uses a canonical agent session key when only sessionId is available", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
+      channel: "telegram",
     };
 
     await hooks.before_prompt_build(
@@ -1043,6 +1153,10 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionKey).toMatch(
       /^agent:main:telegram:direct:12345:active-memory:[a-f0-9]{12}$/,
     );
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "webchat",
+    });
     expect(hoisted.sessionStore["agent:main:telegram:direct:12345"]?.pluginDebugEntries).toEqual([
       {
         pluginId: "active-memory",
