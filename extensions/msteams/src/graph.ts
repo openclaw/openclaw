@@ -37,7 +37,7 @@ export function escapeOData(value: string): string {
 async function requestGraph(params: {
   token: string;
   path: string;
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   root?: string;
   headers?: Record<string, string>;
   body?: unknown;
@@ -268,6 +268,24 @@ export async function deleteGraphRequest(params: { token: string; path: string }
     method: "DELETE",
     errorPrefix: "Graph DELETE",
   });
+}
+
+export async function patchGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "PATCH",
+    body: params.body,
+    errorPrefix: "Graph PATCH",
+  });
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+  return (await res.json()) as T;
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
