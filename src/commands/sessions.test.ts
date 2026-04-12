@@ -188,7 +188,12 @@ describe("sessionsCommand", () => {
       defaults: { provider: string; model: string };
       input: { runtimeProvider: string | null; spawnedWorkspaceDir: string | null };
       resolved: { model: string; workspaceDir: string };
-      resolution: { usesPersistedWorkspace: boolean };
+      resolution: {
+        usesPersistedWorkspace: boolean;
+        modelReasonChain: string[];
+        workspaceReasonChain: string[];
+        toolsReasonChain: string[];
+      };
       tools: { profile: string; groups: Array<{ id: string; count: number; tools: string[] }> };
     }>(sessionsCommand, store, { explain: "agent:main:main" });
 
@@ -199,6 +204,9 @@ describe("sessionsCommand", () => {
     expect(payload.resolved.model).toBe("gpt-5.4");
     expect(payload.resolved.workspaceDir).toBe("/tmp/subagent-workspace");
     expect(payload.resolution.usesPersistedWorkspace).toBe(true);
+    expect(payload.resolution.modelReasonChain).toContain("explicit-model-override");
+    expect(payload.resolution.workspaceReasonChain).toEqual(["persisted-session-workspace"]);
+    expect(payload.resolution.toolsReasonChain).toContain("runtime-effective-tool-inventory");
     expect(payload.tools.profile).toBe("coding");
     expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
   });
@@ -223,6 +231,9 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     expect(logs.find((line) => line.includes("Session key"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Model reasons"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Workspace reasons"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Tools reasons"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Final model"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();

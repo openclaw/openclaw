@@ -194,6 +194,19 @@ export async function sessionsCommand(
         usesPersistedWorkspace: Boolean(entry.spawnedWorkspaceDir),
         usesRuntimeModelRef: Boolean(entry.modelProvider || entry.model),
         usesOverrides: Boolean(entry.providerOverride || entry.modelOverride),
+        modelReasonChain: [
+          "default-model-ref",
+          ...(entry.providerOverride ? ["explicit-provider-override"] : []),
+          ...(entry.modelOverride ? ["explicit-model-override"] : []),
+          ...(entry.modelProvider || entry.model ? ["persisted-runtime-model-ref"] : []),
+        ],
+        workspaceReasonChain: [
+          entry.spawnedWorkspaceDir ? "persisted-session-workspace" : "agent-default-workspace",
+        ],
+        toolsReasonChain: [
+          "runtime-effective-tool-inventory",
+          `tool-profile:${effectiveTools.profile}`,
+        ],
       },
       tools: {
         profile: effectiveTools.profile,
@@ -243,6 +256,15 @@ export async function sessionsCommand(
     );
     runtime.log(
       `${label("Uses persisted ws")}${muted(": ")}${payload.resolution.usesPersistedWorkspace ? success("yes") : muted("no")}`,
+    );
+    runtime.log(
+      `${label("Model reasons")}${muted(": ")}${infoLabel(payload.resolution.modelReasonChain.join(" -> "))}`,
+    );
+    runtime.log(
+      `${label("Workspace reasons")}${muted(": ")}${infoLabel(payload.resolution.workspaceReasonChain.join(" -> "))}`,
+    );
+    runtime.log(
+      `${label("Tools reasons")}${muted(": ")}${infoLabel(payload.resolution.toolsReasonChain.join(" -> "))}`,
     );
     runtime.log(
       `${label("Final model")}${muted(": ")}${success(`${payload.resolved.provider}/${payload.resolved.model}`)}`,
