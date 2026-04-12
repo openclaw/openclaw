@@ -354,9 +354,7 @@ function sanitizeReplayToolCallInputs(
       message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
-      const replaySafeToolCalls = extractToolCallsFromAssistant(
-        message as Extract<AgentMessage, { role: "assistant" }>,
-      );
+      const replaySafeToolCalls = extractToolCallsFromAssistant(message);
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames) &&
         replaySafeToolCalls.every((toolCall) => !claimedReplaySafeToolCallIds.has(toolCall.id))
@@ -720,8 +718,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       : sanitized.messages;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
-        disallowEmbeddedUserToolResultsForSignedThinkingReplay:
-          allowProviderOwnedThinkingReplay,
+        disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
       });
     }
     if (nextMessages === messages) {
