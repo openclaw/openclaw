@@ -291,6 +291,7 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
     channelIds: [params.channel],
     workspaceDir: params.workspaceDir,
     env: process.env,
+    cache: false,
   });
   return matches.length === 1 ? matches[0] : undefined;
 }

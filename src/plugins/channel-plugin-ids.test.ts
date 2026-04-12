@@ -381,6 +381,53 @@ describe("resolveConfiguredChannelPluginIds", () => {
     ).toEqual(["activation-only-channel-plugin"]);
   });
 
+  it("keeps bundled activation owners behind restrictive allowlists", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: createStartupConfig({
+          channelIds: ["activation-only-channel"],
+          allowPluginIds: ["browser"],
+        }),
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
+  });
+
+  it("blocks bundled activation owners when explicitly denied", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: {
+          channels: {
+            "activation-only-channel": { enabled: true },
+          },
+          plugins: {
+            deny: ["activation-only-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
+  });
+
+  it("blocks bundled activation owners when plugins are globally disabled", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: {
+          channels: {
+            "activation-only-channel": { enabled: true },
+          },
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
+  });
+
   it("filters untrusted workspace activation owners from configured-channel runtime planning", () => {
     expect(
       resolveConfiguredChannelPluginIds({
@@ -416,5 +463,26 @@ describe("resolveConfiguredChannelPluginIds", () => {
         env: process.env,
       }),
     ).toEqual(["global-activation-channel-plugin"]);
+  });
+
+  it("blocks bundled activation owners when explicitly disabled", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: {
+          channels: {
+            "activation-only-channel": { enabled: true },
+          },
+          plugins: {
+            entries: {
+              "activation-only-channel-plugin": {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual([]);
   });
 });

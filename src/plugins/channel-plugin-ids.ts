@@ -103,11 +103,11 @@ function isChannelPluginEligibleForSetupDiscovery(params: {
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   rootConfig: OpenClawConfig;
 }): boolean {
-  if (isBundledChannelOwner(params.plugin)) {
-    return true;
-  }
   if (!passesExplicitChannelOwnershipPolicy(params)) {
     return false;
+  }
+  if (isBundledChannelOwner(params.plugin)) {
+    return true;
   }
   if (params.plugin.origin === "global" || params.plugin.origin === "config") {
     return hasExplicitNonBundledChannelOwnerTrust(params);
@@ -126,11 +126,11 @@ function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   rootConfig: OpenClawConfig;
 }): boolean {
-  if (isBundledChannelOwner(params.plugin)) {
-    return true;
-  }
   if (!passesExplicitChannelOwnershipPolicy(params)) {
     return false;
+  }
+  if (isBundledChannelOwner(params.plugin)) {
+    return true;
   }
   if (params.plugin.origin === "global" || params.plugin.origin === "config") {
     return hasExplicitNonBundledChannelOwnerTrust(params);
@@ -150,6 +150,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   mode: "runtime" | "setup";
+  cache?: boolean;
 }): string[] {
   const channelIds = normalizeChannelIds(params.channelIds);
   if (channelIds.length === 0) {
@@ -160,6 +161,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
     config: effectiveConfig,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    cache: params.cache,
   });
   const normalizedConfig = normalizePluginsConfig(effectiveConfig.plugins);
   const candidateIds = dedupeSortedPluginIds(
@@ -172,6 +174,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
         config: effectiveConfig,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        cache: params.cache,
       });
     }),
   );
@@ -217,6 +220,7 @@ export function resolveDiscoverableScopedChannelPluginIds(params: {
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  cache?: boolean;
 }): string[] {
   return resolveScopedChannelOwnerPluginIds({
     ...params,
