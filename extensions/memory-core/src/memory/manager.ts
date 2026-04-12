@@ -381,7 +381,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return this.selectScoredResults(sorted, maxResults, minScore, 0);
     }
 
-    // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
+    // If FTS isn't available, provider-backed searches degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(cleaned, candidates).catch(() => [])
@@ -393,12 +393,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
-    if (!this.fts.enabled || !this.fts.available) {
-      const fallbackResults = await this.searchKeywordFallback(cleaned, candidates);
-      return this.selectScoredResults(fallbackResults, maxResults, minScore, 0);
-    }
-
-    if (!hybrid.enabled) {
+    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
