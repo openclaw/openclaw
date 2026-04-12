@@ -70,6 +70,8 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
+const builtinRuntimeSlashCommandAliases = new Map<string, string>([["commands", "/commands"]]);
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -131,6 +133,14 @@ export function resolveMissingPluginCommandMessage(
       "the bundled plugin CLI surface."
     );
   }
+
+  const builtinRuntimeSlashAlias = builtinRuntimeSlashCommandAliases.get(normalizedPluginId);
+  if (builtinRuntimeSlashAlias) {
+    return (
+      `"${normalizedPluginId}" is a built-in runtime slash command (${builtinRuntimeSlashAlias}), not a CLI command. ` +
+      `Use \`${builtinRuntimeSlashAlias}\` in a chat session.`
+    );
+  }
   return null;
 }
 
@@ -188,6 +198,7 @@ export async function runCli(argv: string[] = process.argv) {
   assertSupportedRuntime();
 
   try {
+    let missingBuiltinRuntimeSlashCommandMessage: string | null = null;
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
       if (!outputPrecomputedRootHelpText()) {
@@ -261,7 +272,11 @@ export async function runCli(argv: string[] = process.argv) {
         if (primary && !program.commands.some((command) => command.name() === primary)) {
           const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
           if (missingPluginCommandMessage) {
-            throw new Error(missingPluginCommandMessage);
+            if (missingPluginCommandMessage.includes("built-in runtime slash command")) {
+              missingBuiltinRuntimeSlashCommandMessage = missingPluginCommandMessage;
+            } else {
+              throw new Error(missingPluginCommandMessage);
+            }
           }
         }
       }
@@ -272,6 +287,12 @@ export async function runCli(argv: string[] = process.argv) {
     } catch (error) {
       if (!(error instanceof CommanderError)) {
         throw error;
+      }
+      if (
+        missingBuiltinRuntimeSlashCommandMessage &&
+        error.code === "commander.unknownCommand"
+      ) {
+        console.error(missingBuiltinRuntimeSlashCommandMessage);
       }
       process.exitCode = error.exitCode;
     }

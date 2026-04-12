@@ -148,4 +148,20 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain("plugins.entries.memory-core.enabled=false");
     expect(message).not.toContain("runtime slash command");
   });
+
+  it("explains that commands is a built-in runtime slash command", () => {
+    const message = resolveMissingPluginCommandMessage("commands", {});
+    expect(message).toContain("built-in runtime slash command");
+    expect(message).toContain("/commands");
+  });
+
+  it("preserves plugins.allow diagnostics before built-in runtime fallback", () => {
+    const message = resolveMissingPluginCommandMessage("commands", {
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+    expect(message).toContain('`plugins.allow` excludes "commands"');
+    expect(message).not.toContain("built-in runtime slash command");
+  });
 });
