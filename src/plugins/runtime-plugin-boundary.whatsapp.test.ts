@@ -48,8 +48,8 @@ function createBundledWhatsAppRuntimeFixture() {
     [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
       'export { getActiveWebListener } from "../../active-listener.js";\n',
     [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
-      'export { registerControllerForTest } from "../../connection-controller.js";\n',
-    "dist/connection-controller.js": [
+      'export { registerControllerForTest } from "../../connection-controller-registry.js";\n',
+    "dist/connection-controller-registry.js": [
       'const key = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");',
       "const g = globalThis;",
       "if (!g[key]) {",
@@ -74,7 +74,7 @@ function createBundledWhatsAppRuntimeFixture() {
       "",
     ].join("\n"),
     "dist/active-listener.js": [
-      'import { getRegisteredWhatsAppConnectionController } from "./connection-controller.js";',
+      'import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";',
       "export function getActiveWebListener(accountId) {",
       '  return getRegisteredWhatsAppConnectionController(accountId ?? "default")?.getActiveListener() ?? null;',
       "}",

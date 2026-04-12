@@ -24,13 +24,13 @@ function makeListener() {
 }
 
 afterEach(() => {
-  vi.doUnmock("./connection-controller.js");
+  vi.doUnmock("./connection-controller-registry.js");
 });
 
 describe("active WhatsApp listener view", () => {
   it("reads controller-backed state across duplicate module instances", async () => {
     const listener = makeListener();
-    vi.doMock("./connection-controller.js", () => ({
+    vi.doMock("./connection-controller-registry.js", () => ({
       getRegisteredWhatsAppConnectionController: (accountId: string) =>
         accountId === "work"
           ? {
@@ -48,7 +48,7 @@ describe("active WhatsApp listener view", () => {
 
   it("resolves the configured default account when accountId is omitted", async () => {
     const listener = makeListener();
-    vi.doMock("./connection-controller.js", () => ({
+    vi.doMock("./connection-controller-registry.js", () => ({
       getRegisteredWhatsAppConnectionController: (accountId: string) =>
         accountId === "work"
           ? {
@@ -64,7 +64,7 @@ describe("active WhatsApp listener view", () => {
   });
 
   it("returns null when the controller has no active listener for the account", async () => {
-    vi.doMock("./connection-controller.js", () => ({
+    vi.doMock("./connection-controller-registry.js", () => ({
       getRegisteredWhatsAppConnectionController: () => null,
     }));
 

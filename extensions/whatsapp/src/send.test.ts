@@ -18,9 +18,9 @@ let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./connection-controller.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller.js")>(
-    "./connection-controller.js",
+vi.mock("./connection-controller-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
+    "./connection-controller-registry.js",
   );
   return {
     ...actual,

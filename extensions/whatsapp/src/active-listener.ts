@@ -1,6 +1,6 @@
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller.js";
+import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 
 export type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";

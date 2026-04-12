@@ -1,6 +1,10 @@
 import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  registerWhatsAppConnectionController,
+  unregisterWhatsAppConnectionController,
+} from "./connection-controller-registry.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
@@ -68,27 +72,6 @@ export type WhatsAppConnectionCloseDecision = {
   healthState: "logged-out" | "conflict" | "stopped" | "reconnecting";
   normalized: NormalizedConnectionCloseReason;
 };
-
-type ConnectionRegistryState = {
-  controllers: Map<string, WhatsAppConnectionController>;
-};
-
-const CONNECTION_REGISTRY_KEY = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");
-
-function getConnectionRegistryState(): ConnectionRegistryState {
-  const globalState = globalThis as typeof globalThis & {
-    [CONNECTION_REGISTRY_KEY]?: ConnectionRegistryState;
-  };
-  const existing = globalState[CONNECTION_REGISTRY_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: ConnectionRegistryState = {
-    controllers: new Map<string, WhatsAppConnectionController>(),
-  };
-  globalState[CONNECTION_REGISTRY_KEY] = created;
-  return created;
-}
 
 function createNeverResolvePromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -233,12 +216,6 @@ export async function waitForWhatsAppLoginResult(params: {
   }
 }
 
-export function getRegisteredWhatsAppConnectionController(
-  accountId: string,
-): WhatsAppConnectionController | null {
-  return getConnectionRegistryState().controllers.get(accountId) ?? null;
-}
-
 export class WhatsAppConnectionController {
   readonly accountId: string;
   readonly authDir: string;
@@ -297,8 +274,6 @@ export class WhatsAppConnectionController {
         once: true,
       });
     }
-
-    getConnectionRegistryState().controllers.set(this.accountId, this);
   }
 
   getActiveListener(): ActiveWebListener | null {
@@ -387,6 +362,7 @@ export class WhatsAppConnectionController {
       const listener = await params.createListener({ sock, connection });
       connection.listener = listener;
       this.current = connection;
+      registerWhatsAppConnectionController(this.accountId, this);
       this.startTimers(connection, {
         onHeartbeat: params.onHeartbeat,
         onWatchdogTimeout: params.onWatchdogTimeout,
@@ -539,10 +515,7 @@ export class WhatsAppConnectionController {
   async shutdown(): Promise<void> {
     this.stopDisconnectRetries();
     await this.closeCurrentConnection();
-    const controllers = getConnectionRegistryState().controllers;
-    if (controllers.get(this.accountId) === this) {
-      controllers.delete(this.accountId);
-    }
+    unregisterWhatsAppConnectionController(this.accountId, this);
   }
 
   private startTimers(

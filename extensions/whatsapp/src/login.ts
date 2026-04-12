@@ -4,11 +4,7 @@ import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import {
-  closeWaSocketSoon,
-  waitForWhatsAppLoginResult,
-  WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
-} from "./connection-controller.js";
+import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
 export async function loginWeb(
@@ -49,7 +45,7 @@ export async function loginWeb(
     if (result.outcome === "logged-out") {
       console.error(
         danger(
-          `${WHATSAPP_LOGGED_OUT_RELINK_MESSAGE} Please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
+          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
       );
       throw new Error("Session logged out; cache cleared. Re-run login.", {
