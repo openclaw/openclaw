@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-12 (run 19)
+**Date:** 2026-04-12 (run 20)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -142,14 +142,15 @@ changes are not causing node-layer failures.
 
 ---
 
-## Actions Taken This Run (run 19 — 2026-04-12)
+## Actions Taken This Run (run 20 — 2026-04-12)
 
 **GitHub API access:** PARTIAL — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI not
-installed; `openclaw/openclaw` PRs are not accessible via MCP.
+installed; `openclaw/openclaw` PRs are not accessible via MCP write tools. **However, this run
+used WebFetch against the public GitHub REST API to obtain fresh CI, review, and PR data.**
 
 **Branch data (from fork):** Successfully fetched all four PR branch tips from `suboss87/openclaw`:
 
-| Branch                                  | SHA (tip)                                  | Changed since run 18? |
+| Branch                                  | SHA (tip)                                  | Changed since run 19? |
 | --------------------------------------- | ------------------------------------------ | --------------------- |
 | fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No                    |
 | feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No                    |
@@ -159,23 +160,52 @@ installed; `openclaw/openclaw` PRs are not accessible via MCP.
 All branch tips are **unchanged since run 9 (2026-04-06)**. No new commits on any PR branch in
 the past 6 days.
 
-**CI/Review/Upstream status:** Carried forward from run 16 (last run with full GitHub API access).
-CI and review data are now approximately 1 week stale.
+**Fresh CI data (via GitHub REST API — run 20):**
 
-**No code changes made.** No new review feedback detected; no rebases performed (upstream
-unreachable); no branch modifications.
+- #45584 head `46e2b30`: Only 3 check runs (label checks). No full CI run visible on this SHA.
+- #54730 head `f052129`: 7 failures (same as run 16). See detailed CI table above.
+  - Verified these failures are **not caused by this PR** — the PR only modifies
+    `src/gateway/assistant-identity.ts`; failing checks are extensions, contracts, security scan.
+  - Main branch latest commit `156ee544` (2026-04-12) also shows only 3 skipped checks —
+    consistent with CI instability being pre-existing on main, not from this PR.
+
+**Code fix verification (fresh — run 20):** Read the actual branch files via MCP `get_file_contents`:
+
+- **#45584 — `src/cron/types-shared.ts`**: JSDoc now correctly describes all 3 states ✓
+- **#45584 — `src/cron/service/jobs.ts`**: `createJob` sets `freshSession: input.freshSession`;
+  `applyJobPatch` guards with `typeof patch.freshSession === "boolean"` ✓
+- **#45584 — `src/cron/isolated-agent/run.ts`**: `forceNew` correctly reads `params.job.freshSession` ✓
+- **#54730 — `src/gateway/assistant-identity.ts`**: `defaultAgentId` hoisted into constant;
+  used in both `agentId` resolution and `isDefaultAgent` comparison ✓
+
+**Review thread status (fresh — run 20):**
+Both open PRs have unresolved bot review threads. Suboss87 addressed the feedback in issue comments
+and code, but did not post inline replies to the review threads themselves. Per CLAUDE.md, these
+should be replied to and resolved. **Blocked: cannot post to `openclaw/openclaw` via current MCP session.**
+
+- #45584: threads #2934411253 (JSDoc) and #2934412315 (persistence) — fixes confirmed, no inline replies
+- #54730: thread #2991387311 (redundant call) — fix confirmed in `e81666e`, no inline reply
+
+**Rebase status:** Upstream proxy returns 502 for `openclaw/openclaw`. Cannot check or fix upstream
+conflicts. Per run 16 data, #45584 was `mergeable: false, dirty` — this is likely still the case.
+#54730 had no upstream conflicts per run 16.
+
+**No code changes made this run.** Monitoring artifact cleanup still required on both open PR branches
+(see standing note below).
 
 ---
 
 ## PRs Requiring Human Attention
 
-| PR | Issue | Priority |
-| --- | --- | --- |
-| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High |
-| openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium |
-| openclaw/openclaw#54730 | Confirm CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) pre-existing vs PR-caused | High |
-| openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium |
-| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 6 days stale) | Medium |
+| PR | Issue | Priority | Update (run 20) |
+| --- | --- | --- | --- |
+| openclaw/openclaw#45584 | Upstream rebase required (dirty with `openclaw/openclaw:main`) | High | Still blocked; upstream proxy returns 502 |
+| openclaw/openclaw#45584 | Reply to review threads #2934411253 + #2934412315 and resolve them | Medium | **New finding run 20** — code fixes confirmed; inline replies missing |
+| openclaw/openclaw#45584 | Remove monitoring artifact tip commit `46e2b30607` before merge | Medium | Unchanged |
+| openclaw/openclaw#54730 | CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — **likely pre-existing** | Medium | **Updated run 20** — assessed as pre-existing (PR only touches assistant-identity.ts; main also shows CI instability) |
+| openclaw/openclaw#54730 | Reply to review thread #2991387311 and resolve it | Low | **New finding run 20** — code fix confirmed in e81666e; inline reply missing |
+| openclaw/openclaw#54730 | Remove monitoring artifact tip commits `f052129db4` + `d18c8771bb` before merge | Medium | Unchanged |
+| openclaw/openclaw#54730 | Needs human maintainer review (none yet; 6+ days stale) | Medium | Unchanged |
 
 ---
 
