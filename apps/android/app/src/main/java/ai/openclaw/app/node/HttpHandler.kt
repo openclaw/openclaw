@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -101,25 +102,8 @@ class HttpHandler(
       }
 
       // Read response body (truncated to MAX_BODY_SIZE_BYTES)
-      val responseBody = try {
-        val inputStream = if (responseCode >= 400) connection.errorStream else connection.inputStream
-        if (inputStream != null) {
-          inputStream.use { stream ->
-            val buffer = ByteArray(MAX_BODY_SIZE_BYTES)
-            var offset = 0
-            while (offset < MAX_BODY_SIZE_BYTES) {
-              val n = stream.read(buffer, offset, MAX_BODY_SIZE_BYTES - offset)
-              if (n == -1) break
-              offset += n
-            }
-            if (offset > 0) String(buffer, 0, offset, Charsets.UTF_8) else null
-          }
-        } else {
-          null
-        }
-      } catch (_: Throwable) {
-        null
-      }
+      // Throws on stream errors — outer catch handles them as REQUEST_FAILED
+      val responseBody = readResponseBody(connection, responseCode)
 
       val result = buildJsonObject {
         put("ok", responseCode in 200..299)
@@ -154,6 +138,26 @@ class HttpHandler(
       )
     } finally {
       connection.disconnect()
+    }
+  }
+
+  /**
+   * Reads the response body up to MAX_BODY_SIZE_BYTES.
+   * @throws IOException on stream read failures — caught by outer handler as REQUEST_FAILED.
+   */
+  @Throws(java.io.IOException::class)
+  private fun readResponseBody(connection: HttpURLConnection, responseCode: Int): String? {
+    val inputStream = if (responseCode >= 400) connection.errorStream else connection.inputStream
+    if (inputStream == null) return null
+    return inputStream.use { stream ->
+      val buffer = ByteArray(MAX_BODY_SIZE_BYTES)
+      var offset = 0
+      while (offset < MAX_BODY_SIZE_BYTES) {
+        val n = stream.read(buffer, offset, MAX_BODY_SIZE_BYTES - offset)
+        if (n == -1) break
+        offset += n
+      }
+      if (offset > 0) String(buffer, 0, offset, Charsets.UTF_8) else null
     }
   }
 
