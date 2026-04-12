@@ -282,6 +282,10 @@ openclaw gateway
   </Tab>
 </Tabs>
 
+### Additional manifest settings
+
+Surface different features that extend the above defaults.
+
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
 
@@ -815,7 +819,7 @@ Slash commands appear in Slack as either a single configured command or multiple
 /openclaw /help
 ```
 
-Native commands require [manifest changes](#optional-native-slash-commands) to your Slack app and are enabled with `channels.slack.commands.native: true` or `commands.native: true` in global configurations instead.
+Native commands require [additional manifest settings](#additional-manifest-settings) in your Slack app and are enabled with `channels.slack.commands.native: true` or `commands.native: true` in global configurations instead.
 
 - Native command auto-mode is **off** for Slack so `commands.native: "auto"` does not enable Slack native commands.
 
