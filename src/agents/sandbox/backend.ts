@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type {
   RegisteredSandboxBackend,
@@ -23,7 +24,10 @@ export type {
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 
-const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();
+const SANDBOX_BACKEND_FACTORIES = resolveGlobalSingleton(
+  Symbol.for("openclaw.sandboxBackendFactories"),
+  () => new Map<SandboxBackendId, RegisteredSandboxBackend>(),
+);
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
   const normalized = normalizeOptionalLowercaseString(id);
