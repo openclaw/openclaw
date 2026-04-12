@@ -1,10 +1,8 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   asConfig,
   getResolvePluginWebSearchProvidersMock,
-  resetPluginWebSearchProvidersMock,
+  setupSecretsRuntimeSnapshotTestHooks,
 } from "./runtime.test-support.ts";
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => {
@@ -26,29 +24,10 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   };
 });
 
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 
 describe("secrets runtime snapshot legacy x_search", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  beforeEach(() => {
-    resetPluginWebSearchProvidersMock();
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("keeps legacy x_search SecretRefs in place until doctor repairs them", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
