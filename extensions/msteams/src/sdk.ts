@@ -644,7 +644,11 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
     jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
   },
   {
-    issuer: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    // SingleTenant bot deployments (Microsoft's default since 2025-07-31) get
+    // tokens signed by the Azure AD v1 endpoint, whose issuer is scoped to the
+    // bot's tenant. This must be a function so each deployment accepts its own
+    // tenant rather than a single hardcoded one (#64270).
+    issuer: (tenantId: string) => `https://sts.windows.net/${tenantId}/`,
     jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
   },
 ];
