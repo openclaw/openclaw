@@ -1458,7 +1458,7 @@
   "engines": {
     "node": ">=22.14.0"
   },
-  "packageManager": "pnpm@10.32.1",
+  "packageManager": "pnpm@10.33.0",
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
