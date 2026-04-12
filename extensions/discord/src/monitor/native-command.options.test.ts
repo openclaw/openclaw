@@ -113,11 +113,11 @@ function requireAutocomplete(option: CommandOption, errorMessage: string) {
   if (typeof autocomplete !== "function") {
     throw new Error(errorMessage);
   }
-  return autocomplete;
+  return autocomplete as (interaction: unknown) => Promise<unknown>;
 }
 
 async function runAutocomplete(
-  autocomplete: (interaction: never) => Promise<unknown>,
+  autocomplete: (interaction: unknown) => Promise<unknown>,
   params: {
     userId: string;
     username?: string;

@@ -74,7 +74,9 @@ function queueShortTermRecallTracking(params: {
   });
 }
 
-function normalizeActiveMemoryQmdSearchMode(value: unknown): "inherit" | "search" | "vsearch" | "query" {
+function normalizeActiveMemoryQmdSearchMode(
+  value: unknown,
+): "inherit" | "search" | "vsearch" | "query" {
   return value === "inherit" || value === "search" || value === "vsearch" || value === "query"
     ? value
     : "search";
@@ -97,7 +99,9 @@ function resolveActiveMemoryQmdSearchModeOverride(
       ? (entry as { config?: unknown })
       : undefined;
   const pluginConfig =
-    entryRecord?.config && typeof entryRecord.config === "object" && !Array.isArray(entryRecord.config)
+    entryRecord?.config &&
+    typeof entryRecord.config === "object" &&
+    !Array.isArray(entryRecord.config)
       ? (entryRecord.config as { qmd?: { searchMode?: unknown } })
       : undefined;
   const searchMode = normalizeActiveMemoryQmdSearchMode(pluginConfig?.qmd?.searchMode);
@@ -271,7 +275,10 @@ export function createMemorySearchTool(options: {
             searchDebug = {
               backend: status.backend,
               configuredMode: latestDebug?.configuredMode,
-              effectiveMode: status.backend === "qmd" ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode) : "n/a",
+              effectiveMode:
+                status.backend === "qmd"
+                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                  : "n/a",
               fallback: latestDebug?.fallback,
               searchMs: Math.max(0, Date.now() - searchStartedAt),
               hits: rawResults.length,

@@ -114,6 +114,37 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
+function createTwilioVerificationProvider(
+  overrides: Partial<VoiceCallProvider> = {},
+): VoiceCallProvider {
+  return {
+    ...provider,
+    name: "twilio",
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    ...overrides,
+  };
+}
+
+function createTwilioStreamingProvider(
+  overrides: Partial<VoiceCallProvider> = {},
+): VoiceCallProvider {
+  return createTwilioVerificationProvider({
+    parseWebhookEvent: () => ({ events: [] }),
+    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+    hangupCall: async () => {},
+    playTts: async () => {},
+    startListening: async () => {},
+    stopListening: async () => {},
+    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+    isValidStreamToken: () => true,
+    registerCallStream: () => {},
+    unregisterCallStream: () => {},
+    hasRegisteredStream: () => true,
+    clearTtsQueue: () => {},
+    ...overrides,
+  });
+}
+
 describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
   it("auto-selects the first registered provider when streaming.provider is unset", async () => {
     const { manager } = createManager([]);
@@ -488,11 +519,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
   it("rejects missing signature headers before reading the request body", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
-    const twilioProvider: VoiceCallProvider = {
-      ...provider,
-      name: "twilio",
-      verifyWebhook,
-    };
+    const twilioProvider = createTwilioVerificationProvider({ verifyWebhook });
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
@@ -519,11 +546,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 
   it("uses the shared pre-auth body cap before verification", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
-    const twilioProvider: VoiceCallProvider = {
-      ...provider,
-      name: "twilio",
-      verifyWebhook,
-    };
+    const twilioProvider = createTwilioVerificationProvider({ verifyWebhook });
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
@@ -707,17 +730,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     } as unknown as CallManager;
 
     let currentStreamSid: string | null = "MZ-new";
-    const twilioProvider = {
-      name: "twilio" as const,
-      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
-      parseWebhookEvent: () => ({ events: [] }),
-      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
-      hangupCall: async () => {},
-      playTts: async () => {},
-      startListening: async () => {},
-      stopListening: async () => {},
-      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
-      isValidStreamToken: () => true,
+    const twilioProvider = createTwilioStreamingProvider({
       registerCallStream: (_callSid: string, streamSid: string) => {
         currentStreamSid = streamSid;
       },
@@ -731,8 +744,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         currentStreamSid = null;
       },
       hasRegisteredStream: () => currentStreamSid !== null,
-      clearTtsQueue: () => {},
-    };
+    });
 
     const config = createConfig({
       provider: "twilio",
@@ -778,22 +790,8 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 });
 
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
-  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) => ({
-    name: "twilio" as const,
-    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
-    parseWebhookEvent: () => ({ events: [] }),
-    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
-    hangupCall: async () => {},
-    playTts: async () => {},
-    startListening: async () => {},
-    stopListening: async () => {},
-    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
-    isValidStreamToken: () => true,
-    registerCallStream: () => {},
-    unregisterCallStream: () => {},
-    hasRegisteredStream: () => true,
-    clearTtsQueue,
-  });
+  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) =>
+    createTwilioStreamingProvider({ clearTtsQueue });
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
     server.getMediaStreamHandler() as unknown as {

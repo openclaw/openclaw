@@ -1116,6 +1116,7 @@
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
+    "check:static-import-sccs": "node --import tsx scripts/check-static-import-sccs.ts",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",

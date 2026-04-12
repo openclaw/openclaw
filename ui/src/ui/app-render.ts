@@ -73,10 +73,13 @@ import {
 } from "./controllers/devices.ts";
 import {
   backfillDreamDiary,
+  copyDreamingArchivePath,
+  dedupeDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
   loadWikiImportInsights,
   loadWikiMemoryPalace,
+  repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -231,6 +234,32 @@ function uniquePreserveOrder(values: string[]): string[] {
     output.push(normalized);
   }
   return output;
+}
+
+function isPluginExplicitlyEnabled(
+  configSnapshot: AppViewState["configSnapshot"],
+  pluginId: string,
+): boolean {
+  const config = configSnapshot?.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return true;
+  }
+  const plugins =
+    "plugins" in config && config.plugins && typeof config.plugins === "object"
+      ? (config.plugins as Record<string, unknown>)
+      : null;
+  if (plugins?.enabled === false) {
+    return false;
+  }
+  const entries =
+    plugins && "entries" in plugins && plugins.entries && typeof plugins.entries === "object"
+      ? (plugins.entries as Record<string, unknown>)
+      : null;
+  const entry = entries?.[pluginId];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return true;
+  }
+  return (entry as { enabled?: unknown }).enabled !== false;
 }
 
 type DismissedUpdateBanner = {
@@ -1985,9 +2014,12 @@ export function renderApp(state: AppViewState) {
               modeSaving: state.dreamingModeSaving,
               dreamDiaryLoading: state.dreamDiaryLoading,
               dreamDiaryActionLoading: state.dreamDiaryActionLoading,
+              dreamDiaryActionMessage: state.dreamDiaryActionMessage,
+              dreamDiaryActionArchivePath: state.dreamDiaryActionArchivePath,
               dreamDiaryError: state.dreamDiaryError,
               dreamDiaryPath: state.dreamDiaryPath,
               dreamDiaryContent: state.dreamDiaryContent,
+              memoryWikiEnabled: isPluginExplicitlyEnabled(state.configSnapshot, "memory-wiki"),
               wikiImportInsightsLoading: state.wikiImportInsightsLoading,
               wikiImportInsightsError: state.wikiImportInsightsError,
               wikiImportInsights: state.wikiImportInsights,
@@ -1998,10 +2030,16 @@ export function renderApp(state: AppViewState) {
               onRefreshDiary: () => loadDreamDiary(state),
               onRefreshImports: () => loadWikiImportInsights(state),
               onRefreshMemoryPalace: () => loadWikiMemoryPalace(state),
+              onOpenConfig: () => openConfigFile(state),
               onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
               onBackfillDiary: () => backfillDreamDiary(state),
+              onCopyDreamingArchivePath: () => {
+                void copyDreamingArchivePath(state);
+              },
+              onDedupeDreamDiary: () => dedupeDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
+              onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}
