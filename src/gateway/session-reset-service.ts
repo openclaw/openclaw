@@ -7,7 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
-import { clearAllCliSessions } from "../agents/cli-session.js";
+import { clearAllCliSessions, resolveBoundCliSessionProviders } from "../agents/cli-session.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -779,6 +779,7 @@ export async function performGatewaySessionReset(params: {
         currentEntry?.claudeCliSessionId
           ? true
           : undefined,
+      suppressCliHistoryImportProviders: resolveBoundCliSessionProviders(currentEntry),
       cliSessionBindings: currentEntry?.cliSessionBindings,
       cliSessionIds: currentEntry?.cliSessionIds,
       claudeCliSessionId: currentEntry?.claudeCliSessionId,

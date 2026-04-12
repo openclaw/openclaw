@@ -1,3 +1,4 @@
+import { resolveSuppressedCliHistoryImportProviders } from "../agents/cli-session.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
@@ -85,19 +86,20 @@ export function augmentChatHistoryWithCliSessionImports(params: {
   if (availableImports.length === 0) {
     return params.localMessages;
   }
-  if (params.entry?.suppressCliHistoryImport) {
-    return params.localMessages;
-  }
+  const suppressedProviders = new Set(resolveSuppressedCliHistoryImportProviders(params.entry));
+  const eligibleImports = availableImports.filter(
+    (entry) => !suppressedProviders.has(entry.provider),
+  );
 
   const matchingImports = normalizedProvider
-    ? availableImports.filter((entry) =>
+    ? eligibleImports.filter((entry) =>
         cliHistoryImportMatchesProvider(entry.provider, normalizedProvider),
       )
     : [];
   const importsToMerge = normalizedProvider
     ? matchingImports
     : params.localMessages.length === 0
-      ? availableImports
+      ? eligibleImports
       : [];
   if (importsToMerge.length === 0) {
     return params.localMessages;
