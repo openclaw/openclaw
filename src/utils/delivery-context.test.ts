@@ -160,6 +160,9 @@ describe("delivery context helpers", () => {
       channel: "telegram",
       conversationId: "42",
       parentConversationId: "-10099",
+      // Telegram bundled plugin provides resolveDeliveryTarget which returns the
+      // raw chatId; the generic "channel:" prefix only applies to channels without
+      // a bundled plugin resolver.
       expected: { to: "channel:-10099", threadId: "42" },
     },
     {
