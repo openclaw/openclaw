@@ -196,7 +196,7 @@ function toSingleLinePreview(text: string | null | undefined, fallback: string):
 
 function buildToolTimelineLabel(params: {
   phase: string;
-  output?: string;
+  output?: string | null;
   isError?: boolean;
 }): string {
   if (params.phase === "start") {
