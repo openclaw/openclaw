@@ -167,6 +167,24 @@ describe("searxng web search provider", () => {
     expect(result).toEqual({ existing: true });
   });
 
+  it("runSetup skips note when quickstartDefaults is true", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const notes: Array<{ message: string; title?: string }> = [];
+    const result = await provider.runSetup!({
+      config: { existing: true } as never,
+      runtime: {} as never,
+      quickstartDefaults: true,
+      prompter: {
+        note: async (message: string, title?: string) => {
+          notes.push({ message, title });
+        },
+      } as never,
+    });
+
+    expect(notes).toHaveLength(0);
+    expect(result).toEqual({ existing: true });
+  });
+
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
     const config = {} as Record<string, unknown>;
