@@ -39,19 +39,19 @@ type behaviorFixtureTranslator struct {
 	rules []behaviorRule
 }
 
-func (t *behaviorFixtureTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return t.run("masked", text), nil
+func (tr *behaviorFixtureTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return tr.run("masked", text), nil
 }
 
-func (t *behaviorFixtureTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return t.run("raw", text), nil
+func (tr *behaviorFixtureTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return tr.run("raw", text), nil
 }
 
-func (t *behaviorFixtureTranslator) Close() {}
+func (tr *behaviorFixtureTranslator) Close() {}
 
-func (t *behaviorFixtureTranslator) run(method, text string) string {
-	t.t.Helper()
-	for _, rule := range t.rules {
+func (tr *behaviorFixtureTranslator) run(method, text string) string {
+	tr.t.Helper()
+	for _, rule := range tr.rules {
 		if rule.Method != method {
 			continue
 		}
@@ -60,7 +60,7 @@ func (t *behaviorFixtureTranslator) run(method, text string) string {
 		}
 		switch {
 		case rule.ResponseFile != "":
-			return readFixtureText(t.t, filepath.Join(t.dir, rule.ResponseFile))
+			return readFixtureTextInDir(tr.t, tr.dir, rule.ResponseFile)
 		case len(rule.ReplacePairs) > 0:
 			out := text
 			for _, pair := range rule.ReplacePairs {
@@ -131,7 +131,7 @@ func loadBehaviorFixture(t *testing.T, dir string) behaviorFixture {
 func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 	t.Helper()
 
-	source := readFixtureText(t, filepath.Join(dir, fixture.SourceFile))
+	source := readFixtureTextInDir(t, dir, fixture.SourceFile)
 	translator := &behaviorFixtureTranslator{
 		t:     t,
 		dir:   dir,
@@ -174,7 +174,7 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 	}
 
 	if fixture.ExpectedFile != "" {
-		want := readFixtureText(t, filepath.Join(dir, fixture.ExpectedFile))
+		want := readFixtureTextInDir(t, dir, fixture.ExpectedFile)
 		if normalizeBehaviorText(got) != normalizeBehaviorText(want) {
 			t.Fatalf("unexpected output\nwant:\n%s\n\ngot:\n%s", want, got)
 		}
@@ -199,6 +199,18 @@ func readFixtureText(t *testing.T, path string) string {
 		t.Fatalf("ReadFile(%q): %v", path, err)
 	}
 	return string(data)
+}
+
+func readFixtureTextInDir(t *testing.T, dir, name string) string {
+	t.Helper()
+	if filepath.IsAbs(name) {
+		t.Fatalf("absolute fixture paths are not allowed: %q", name)
+	}
+	clean := filepath.Clean(name)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		t.Fatalf("fixture path escapes dir: %q", name)
+	}
+	return readFixtureText(t, filepath.Join(dir, clean))
 }
 
 func normalizeBehaviorText(value string) string {
