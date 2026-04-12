@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as configRuntimeModule from "openclaw/plugin-sdk/config-runtime";
 import {
   RequestScopedSubagentRuntimeError,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
+import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
@@ -654,6 +656,29 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(exists).toBe(false);
   });
 
+  it("waits once more before cleanup after timeout and logs cleanup failures", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun
+      .mockResolvedValueOnce({ status: "timeout" })
+      .mockResolvedValueOnce({ status: "ok" });
+    subagent.deleteSession.mockRejectedValue(new Error("still active"));
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["some memory"] },
+      logger,
+    });
+
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
+    expect(subagent.waitForRun.mock.calls[1][0]).toMatchObject({ timeoutMs: 120_000 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed for rem phase"),
+    );
+  });
+
   it("handles subagent error gracefully", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
@@ -763,5 +788,55 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.deleteSession).toHaveBeenCalled();
+  });
+
+  it("scrubs stale dreaming entries and orphan transcripts after cleanup", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const orphanPath = path.join(sessionsDir, "orphan.jsonl");
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify({
+        "agent:main:dreaming-narrative-light-1": {
+          sessionFile: path.join(sessionsDir, "missing.jsonl"),
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
+    const oldDate = new Date(Date.now() - 600_000);
+    await fs.utimes(orphanPath, oldDate, oldDate);
+
+    vi.spyOn(configRuntimeModule, "loadConfig").mockReturnValue({ session: {} } as never);
+    vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(((
+      _store: string | undefined,
+      { agentId }: { agentId: string },
+    ) => {
+      expect(agentId).toBe("main");
+      return storePath;
+    }) as typeof configRuntimeModule.resolveStorePath);
+    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+
+    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["memory fragment"] },
+      logger,
+    });
+
+    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
+    const sessionFiles = await fs.readdir(sessionsDir);
+    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });
 });
