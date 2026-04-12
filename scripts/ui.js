@@ -76,23 +76,44 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   );
 }
 
+function quoteWindowsCmdArg(arg) {
+  if (!arg) {
+    return '""';
+  }
+  if (!/[\s"]/.test(arg)) {
+    return arg;
+  }
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function resolveWindowsCmdInvocation(cmd, args) {
+  assertSafeWindowsShellArgs(args);
+  const comspec = process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
+  const shellCommand = path.basename(cmd);
+  const commandLine = [quoteWindowsCmdArg(shellCommand), ...args.map(quoteWindowsCmdArg)].join(" ");
+  return {
+    cmd: comspec,
+    args: ["/d", "/s", "/c", commandLine],
+  };
+}
+
 function createSpawnOptions(cmd, args, envOverride) {
   const useShell = shouldUseShellForCommand(cmd);
-  if (useShell) {
-    assertSafeWindowsShellArgs(args);
-  }
   return {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
-    ...(useShell ? { shell: true } : {}),
+    ...(useShell ? { shell: false } : {}),
   };
 }
 
 function run(cmd, args) {
+  const invocation = shouldUseShellForCommand(cmd)
+    ? resolveWindowsCmdInvocation(cmd, args)
+    : { cmd, args };
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(invocation.cmd, invocation.args, createSpawnOptions(cmd, args));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -111,9 +132,12 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
+  const invocation = shouldUseShellForCommand(cmd)
+    ? resolveWindowsCmdInvocation(cmd, args)
+    : { cmd, args };
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(invocation.cmd, invocation.args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
