@@ -1,5 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,12 +15,15 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
-const OUTBOUND_RETRY_DELAY_MS = 750;
-const OUTBOUND_MAX_ATTEMPTS = 2;
+const OUTBOUND_RETRY_DELAY_MS = 1_000;
+const OUTBOUND_MAX_ATTEMPTS = 45;
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;
@@ -145,8 +148,6 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
-  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
-
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
@@ -168,6 +169,8 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   }
 
   const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
+
+  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
 
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;

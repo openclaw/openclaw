@@ -1,11 +1,11 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import type { OpenClawConfig } from "./config.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   parseToolsBySenderTypedKey,
   type GroupToolPolicyBySenderConfig,
@@ -400,11 +400,29 @@ export function resolveChannelGroupToolsPolicy(
     cfg: OpenClawConfig;
     channel: GroupPolicyChannel;
     groupId?: string | null;
+    groupIdCandidates?: Array<string | null | undefined>;
     accountId?: string | null;
     groupIdCaseInsensitive?: boolean;
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  const groups = resolveChannelGroups(params.cfg, params.channel, params.accountId);
+  const groupIds = [
+    params.groupId,
+    ...(Array.isArray(params.groupIdCandidates) ? params.groupIdCandidates : []),
+  ];
+  let groupConfig: ChannelGroupConfig | undefined;
+  for (const rawGroupId of groupIds) {
+    const groupId = rawGroupId?.trim();
+    if (!groupId) {
+      continue;
+    }
+    // Scoped ids can collapse to a parent group; try all exact matches before wildcard fallback.
+    groupConfig = resolveChannelGroupConfig(groups, groupId, params.groupIdCaseInsensitive);
+    if (groupConfig) {
+      break;
+    }
+  }
+  const defaultConfig = groups?.["*"];
   const groupSenderPolicy = resolveToolsBySender({
     toolsBySender: groupConfig?.toolsBySender,
     senderId: params.senderId,

@@ -327,8 +327,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => mockedContextEngine),
   }));
 
@@ -482,7 +484,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildEmbeddedRunPayloads: vi.fn(() => []),
   }));
 
-  vi.doMock("./compact.js", () => ({
+  vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
+  callGatewayLeastPrivilege: vi.fn(),
+  randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -25,6 +27,11 @@ vi.mock("./channel-resolution.js", () => ({
 vi.mock("./outbound-send-service.js", () => ({
   executeSendAction: mocks.executeSendAction,
   executePollAction: mocks.executePollAction,
+}));
+
+vi.mock("./message.gateway.runtime.js", () => ({
+  callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
+  randomIdempotencyKey: mocks.randomIdempotencyKey,
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -145,6 +152,8 @@ describe("runMessageAction plugin dispatch", () => {
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "poll", ctx }),
     );
+    mocks.callGatewayLeastPrivilege.mockReset();
+    mocks.randomIdempotencyKey.mockClear();
   });
 
   describe("alias-based plugin action dispatch", () => {
@@ -302,6 +311,107 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
+      const handleAction = vi.fn(async () =>
+        jsonResult({
+          ok: true,
+          local: true,
+        }),
+      );
+      const gatewayPlugin: ChannelPlugin = {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "WhatsApp reaction test plugin.",
+        },
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        actions: {
+          describeMessageTool: () => ({ actions: ["react"] }),
+          supportsAction: ({ action }) => action === "react",
+          resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
+          handleAction,
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            whatsapp: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "whatsapp",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        toolContext: {
+          currentChannelProvider: "whatsapp",
+          currentMessageId: "wamid.1",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            channel: "whatsapp",
+            action: "react",
+            requesterSenderId: "trusted-user",
+            sessionKey: "agent:alpha:main",
+            sessionId: "session-123",
+            agentId: "alpha",
+            toolContext: expect.objectContaining({
+              currentChannelProvider: "whatsapp",
+              currentMessageId: "wamid.1",
+            }),
+            idempotencyKey: "idem-gateway-action",
+          }),
+        }),
+      );
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        kind: "action",
+        channel: "whatsapp",
+        action: "react",
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          added: "✅",
+        },
+      });
+    });
+
     it("uses requester session channel policy for host-media reads", async () => {
       const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
         jsonResult({
@@ -370,6 +480,83 @@ describe("runMessageAction plugin dispatch", () => {
           media: "/tmp/host.png",
         },
         requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
+
+    it("uses requester username policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu username policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "username:alice_u": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderUsername: "alice_u",
         sessionKey: "agent:alpha:whatsapp:group:ops",
         dryRun: false,
       });

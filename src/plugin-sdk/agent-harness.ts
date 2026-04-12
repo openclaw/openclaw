@@ -18,7 +18,7 @@ export type {
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
-export type { MessagingToolSend } from "../agents/pi-embedded-messaging.js";
+export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
 export type { AgentApprovalEventData } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
@@ -47,6 +47,7 @@ export {
   queueEmbeddedPiMessage as queueAgentHarnessMessage,
   setActiveEmbeddedRun,
 } from "../agents/pi-embedded-runner/runs.js";
+export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { createOpenClawCodingTools } from "../agents/pi-tools.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";

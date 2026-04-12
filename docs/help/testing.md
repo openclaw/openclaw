@@ -65,6 +65,99 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm openclaw qa matrix`
+  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
+  - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
+  - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
+  - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
+- `pnpm openclaw qa telegram`
+  - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
+  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
+  - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
+  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
+  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
+
+Live transport lanes share one standard contract so new transports do not drift:
+
+`qa-channel` remains the broad synthetic QA suite and is not part of the live
+transport coverage matrix.
+
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+
+### Adding a channel to QA
+
+Adding a channel to the markdown QA system requires exactly two things:
+
+1. A transport adapter for the channel.
+2. A scenario pack that exercises the channel contract.
+
+Do not add a channel-specific QA runner when the shared `qa-lab` runner can
+own the flow.
+
+`qa-lab` owns the shared mechanics:
+
+- suite startup and teardown
+- worker concurrency
+- artifact writing
+- report generation
+- scenario execution
+- compatibility aliases for older `qa-channel` scenarios
+
+The channel adapter owns the transport contract:
+
+- how the gateway is configured for that transport
+- how readiness is checked
+- how inbound events are injected
+- how outbound messages are observed
+- how transcripts and normalized transport state are exposed
+- how transport-backed actions are executed
+- how transport-specific reset or cleanup is handled
+
+The minimum adoption bar for a new channel is:
+
+1. Implement the transport adapter on the shared `qa-lab` seam.
+2. Register the adapter in the transport registry.
+3. Keep transport-specific mechanics inside the adapter or the channel harness.
+4. Author or adapt markdown scenarios under `qa/scenarios/`.
+5. Use the generic scenario helpers for new scenarios.
+6. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
+
+The decision rule is strict:
+
+- If behavior can be expressed once in `qa-lab`, put it in `qa-lab`.
+- If behavior depends on one channel transport, keep it in that adapter or plugin harness.
+- If a scenario needs a new capability that more than one channel can use, add a generic helper instead of a channel-specific branch in `suite.ts`.
+- If a behavior is only meaningful for one transport, keep the scenario transport-specific and make that explicit in the scenario contract.
+
+Preferred generic helper names for new scenarios are:
+
+- `waitForTransportReady`
+- `waitForChannelReady`
+- `injectInboundMessage`
+- `injectOutboundMessage`
+- `waitForTransportOutboundMessage`
+- `waitForChannelOutboundMessage`
+- `waitForNoTransportOutbound`
+- `getTransportSnapshot`
+- `readTransportMessage`
+- `readTransportTranscript`
+- `formatTransportTranscript`
+- `resetTransport`
+
+Compatibility aliases remain available for existing scenarios, including:
+
+- `waitForQaChannelReady`
+- `waitForOutboundMessage`
+- `waitForNoOutbound`
+- `formatConversationTranscript`
+- `resetBus`
+
+New channel work should use the generic helper names.
+Compatibility aliases exist to avoid a flag day migration, not as the model for
+new scenario authoring.
 
 ## Test suites (what runs where)
 
@@ -88,7 +181,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-  - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+  - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
   - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 - Embedded runner note:
@@ -399,6 +492,8 @@ Docker notes:
   - send a first gateway agent turn to `codex/gpt-5.4`
   - send a second turn to the same OpenClaw session and verify the app-server
     thread can resume
+  - run `/codex status` and `/codex models` through the same gateway command
+    path
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Default model: `codex/gpt-5.4`
@@ -436,6 +531,9 @@ Docker notes:
 - Docker enables the image and MCP/tool probes by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
+  test config so `openai-codex/*` or PI fallback cannot hide a Codex harness
+  regression.
 
 ### Recommended live recipes
 

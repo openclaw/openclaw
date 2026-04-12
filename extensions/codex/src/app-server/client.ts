@@ -1,24 +1,18 @@
-import { spawn } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { PassThrough, Writable } from "node:stream";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
-import WebSocket, { type RawData } from "ws";
-import {
-  codexAppServerStartOptionsKey,
-  resolveCodexAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexInitializeResponse,
   isRpcResponse,
   type CodexServerNotification,
-  type JsonObject,
   type JsonValue,
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
 } from "./protocol.js";
+import { createStdioTransport } from "./transport-stdio.js";
+import { createWebSocketTransport } from "./transport-websocket.js";
+import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
 
 export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
 
@@ -26,16 +20,20 @@ type PendingRequest = {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  cleanup: () => void;
 };
 
-type CodexAppServerTransport = {
-  stdin: { write: (data: string) => unknown };
-  stdout: NodeJS.ReadableStream;
-  stderr: NodeJS.ReadableStream;
-  killed?: boolean;
-  kill?: () => unknown;
-  once: (event: string, listener: (...args: unknown[]) => void) => unknown;
-};
+export class CodexAppServerRpcError extends Error {
+  readonly code?: number;
+  readonly data?: JsonValue;
+
+  constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
+    super(error.message || `${method} failed`);
+    this.name = "CodexAppServerRpcError";
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
 
 export type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
@@ -45,37 +43,13 @@ export type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
-export type CodexAppServerModel = {
-  id: string;
-  model: string;
-  displayName?: string;
-  description?: string;
-  hidden?: boolean;
-  isDefault?: boolean;
-  inputModalities: string[];
-  supportedReasoningEfforts: string[];
-  defaultReasoningEffort?: string;
-};
-
-export type CodexAppServerModelListResult = {
-  models: CodexAppServerModel[];
-  nextCursor?: string;
-};
-
-export type CodexAppServerListModelsOptions = {
-  limit?: number;
-  cursor?: string;
-  includeHidden?: boolean;
-  timeoutMs?: number;
-  startOptions?: CodexAppServerStartOptions;
-};
-
 export class CodexAppServerClient {
   private readonly child: CodexAppServerTransport;
   private readonly lines: ReadlineInterface;
   private readonly pending = new Map<number | string, PendingRequest>();
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
+  private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -112,11 +86,7 @@ export class CodexAppServerClient {
     if (startOptions.transport === "websocket") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
-    const child = spawn(startOptions.command, startOptions.args, {
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return new CodexAppServerClient(child);
+    return new CodexAppServerClient(createStdioTransport(startOptions));
   }
 
   static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
@@ -144,19 +114,71 @@ export class CodexAppServerClient {
     this.initialized = true;
   }
 
-  request<T = JsonValue | undefined>(method: string, params?: JsonValue): Promise<T> {
+  request<T = JsonValue | undefined>(
+    method: string,
+    params?: JsonValue,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("codex app-server client is closed"));
+    }
+    if (options.signal?.aborted) {
+      return Promise.reject(new Error(`${method} aborted`));
     }
     const id = this.nextId++;
     const message: RpcRequest = { id, method, params };
     return new Promise<T>((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let cleanupAbort: (() => void) | undefined;
+      const cleanup = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = undefined;
+        }
+        cleanupAbort?.();
+        cleanupAbort = undefined;
+      };
+      const rejectPending = (error: Error) => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.pending.delete(id);
+        cleanup();
+        reject(error);
+      };
+      if (options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+        timeout = setTimeout(
+          () => rejectPending(new Error(`${method} timed out`)),
+          Math.max(100, options.timeoutMs),
+        );
+        timeout.unref?.();
+      }
+      if (options.signal) {
+        const abortListener = () => rejectPending(new Error(`${method} aborted`));
+        options.signal.addEventListener("abort", abortListener, { once: true });
+        cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
+      }
       this.pending.set(id, {
         method,
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          cleanup();
+          resolve(value as T);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+        cleanup,
       });
-      this.writeMessage(message);
+      if (options.signal?.aborted) {
+        rejectPending(new Error(`${method} aborted`));
+        return;
+      }
+      try {
+        this.writeMessage(message);
+      } catch (error) {
+        rejectPending(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -174,12 +196,19 @@ export class CodexAppServerClient {
     return () => this.notificationHandlers.delete(handler);
   }
 
+  addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
   close(): void {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
     this.lines.close();
-    if (!this.child.killed) {
-      this.child.kill?.();
-    }
+    this.rejectPendingRequests(new Error("codex app-server client is closed"));
+    closeCodexAppServerTransport(this.child);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse): void {
@@ -230,7 +259,7 @@ export class CodexAppServerClient {
     }
     this.pending.delete(response.id);
     if (response.error) {
-      pending.reject(new Error(response.error.message || `${pending.method} failed`));
+      pending.reject(new CodexAppServerRpcError(response.error, pending.method));
       return;
     }
     pending.resolve(response.result);
@@ -271,107 +300,19 @@ export class CodexAppServerClient {
       return;
     }
     this.closed = true;
+    this.rejectPendingRequests(error);
+  }
+
+  private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
+      pending.cleanup();
       pending.reject(error);
     }
     this.pending.clear();
-    clearSharedClientIfCurrent(this);
-  }
-}
-
-let sharedClient: CodexAppServerClient | undefined;
-let sharedClientPromise: Promise<CodexAppServerClient> | undefined;
-let sharedClientKey: string | undefined;
-
-export async function getSharedCodexAppServerClient(options?: {
-  startOptions?: CodexAppServerStartOptions;
-}): Promise<CodexAppServerClient> {
-  const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
-  const key = codexAppServerStartOptionsKey(startOptions);
-  if (sharedClientKey && sharedClientKey !== key) {
-    clearSharedCodexAppServerClient();
-  }
-  sharedClientKey = key;
-  sharedClientPromise ??= (async () => {
-    const client = CodexAppServerClient.start(startOptions);
-    sharedClient = client;
-    try {
-      await client.initialize();
-      return client;
-    } catch (error) {
-      // Startup failures happen before callers own the shared client, so close
-      // the child here instead of leaving a rejected daemon attached to stdio.
-      client.close();
-      throw error;
+    for (const handler of this.closeHandlers) {
+      handler(this);
     }
-  })();
-  try {
-    return await sharedClientPromise;
-  } catch (error) {
-    sharedClient = undefined;
-    sharedClientPromise = undefined;
-    sharedClientKey = undefined;
-    throw error;
   }
-}
-
-export function resetSharedCodexAppServerClientForTests(): void {
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
-}
-
-export function clearSharedCodexAppServerClient(): void {
-  const client = sharedClient;
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
-  client?.close();
-}
-
-function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
-  if (sharedClient !== client) {
-    return;
-  }
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
-}
-
-export async function listCodexAppServerModels(
-  options: CodexAppServerListModelsOptions = {},
-): Promise<CodexAppServerModelListResult> {
-  const timeoutMs = options.timeoutMs ?? 2500;
-  return await withTimeout(
-    (async () => {
-      const client = await getSharedCodexAppServerClient({ startOptions: options.startOptions });
-      const response = await client.request<JsonObject>("model/list", {
-        limit: options.limit ?? null,
-        cursor: options.cursor ?? null,
-        includeHidden: options.includeHidden ?? null,
-      });
-      return readModelListResult(response);
-    })(),
-    timeoutMs,
-    "codex app-server model/list timed out",
-  );
-}
-
-export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
-  method: string;
-  requestParams?: JsonValue;
-  timeoutMs?: number;
-  startOptions?: CodexAppServerStartOptions;
-}): Promise<T> {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  return await withTimeout(
-    (async () => {
-      const client = await getSharedCodexAppServerClient({ startOptions: params.startOptions });
-      return await client.request<T>(params.method, params.requestParams);
-    })(),
-    timeoutMs,
-    `codex app-server ${params.method} timed out`,
-  );
 }
 
 export function defaultServerRequestResponse(
@@ -414,85 +355,6 @@ export function defaultServerRequestResponse(
     };
   }
   return {};
-}
-
-function readModelListResult(value: JsonValue | undefined): CodexAppServerModelListResult {
-  if (!isJsonObjectValue(value) || !Array.isArray(value.data)) {
-    return { models: [] };
-  }
-  const models = value.data
-    .map((entry) => readCodexModel(entry))
-    .filter((entry): entry is CodexAppServerModel => entry !== undefined);
-  const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : undefined;
-  return { models, ...(nextCursor ? { nextCursor } : {}) };
-}
-
-function readCodexModel(value: unknown): CodexAppServerModel | undefined {
-  if (!isJsonObjectValue(value)) {
-    return undefined;
-  }
-  const id = readNonEmptyString(value.id);
-  const model = readNonEmptyString(value.model) ?? id;
-  if (!id || !model) {
-    return undefined;
-  }
-  return {
-    id,
-    model,
-    ...(readNonEmptyString(value.displayName)
-      ? { displayName: readNonEmptyString(value.displayName) }
-      : {}),
-    ...(readNonEmptyString(value.description)
-      ? { description: readNonEmptyString(value.description) }
-      : {}),
-    ...(typeof value.hidden === "boolean" ? { hidden: value.hidden } : {}),
-    ...(typeof value.isDefault === "boolean" ? { isDefault: value.isDefault } : {}),
-    inputModalities: readStringArray(value.inputModalities),
-    supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
-    ...(readNonEmptyString(value.defaultReasoningEffort)
-      ? { defaultReasoningEffort: readNonEmptyString(value.defaultReasoningEffort) }
-      : {}),
-  };
-}
-
-function readReasoningEfforts(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const efforts = value
-    .map((entry) => {
-      if (!isJsonObjectValue(entry)) {
-        return undefined;
-      }
-      return readNonEmptyString(entry.reasoningEffort);
-    })
-    .filter((entry): entry is string => entry !== undefined);
-  return [...new Set(efforts)];
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return [
-    ...new Set(
-      value
-        .map((entry) => readNonEmptyString(entry))
-        .filter((entry): entry is string => entry !== undefined),
-    ),
-  ];
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
-function isJsonObjectValue(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
@@ -539,29 +401,6 @@ function numericVersionParts(version: string): number[] {
     .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutMessage: string,
-): Promise<T> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return await promise;
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(timeoutMessage)), Math.max(1, timeoutMs));
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 export function isCodexAppServerApprovalRequest(method: string): boolean {
   return method.includes("requestApproval") || method.includes("Approval");
 }
@@ -576,85 +415,6 @@ function formatExitValue(value: unknown): string {
   return "unknown";
 }
 
-function createWebSocketTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
-  if (!options.url) {
-    throw new Error(
-      "codex app-server websocket transport requires plugins.entries.codex.config.appServer.url",
-    );
-  }
-  const events = new EventEmitter();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const headers = {
-    ...options.headers,
-    ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
-  };
-  const socket = new WebSocket(options.url, { headers });
-  const pendingFrames: string[] = [];
-  let killed = false;
-
-  const sendFrame = (frame: string) => {
-    const trimmed = frame.trim();
-    if (!trimmed) {
-      return;
-    }
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(trimmed);
-      return;
-    }
-    pendingFrames.push(trimmed);
-  };
-
-  // `initialize` can be written before the WebSocket open event fires. Buffer
-  // whole JSON-RPC frames so stdio and websocket transports share call timing.
-  socket.once("open", () => {
-    for (const frame of pendingFrames.splice(0)) {
-      socket.send(frame);
-    }
-  });
-  socket.once("error", (error) => events.emit("error", error));
-  socket.once("close", (code, reason) => {
-    killed = true;
-    events.emit("exit", code, reason.toString("utf8"));
-  });
-  socket.on("message", (data) => {
-    const text = websocketFrameToText(data);
-    stdout.write(text.endsWith("\n") ? text : `${text}\n`);
-  });
-
-  const stdin = new Writable({
-    write(chunk, _encoding, callback) {
-      for (const frame of chunk.toString("utf8").split("\n")) {
-        sendFrame(frame);
-      }
-      callback();
-    },
-  });
-
-  return {
-    stdin,
-    stdout,
-    stderr,
-    get killed() {
-      return killed;
-    },
-    kill: () => {
-      killed = true;
-      socket.close();
-    },
-    once: (event, listener) => events.once(event, listener),
-  };
-}
-
-function websocketFrameToText(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
+export const __testing = {
+  closeCodexAppServerTransport,
+} as const;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
 import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
 
@@ -15,12 +15,15 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugin-sdk/media-runtime.js", () => ({
+vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
   createMediaAttachmentCache: mocks.createMediaAttachmentCache,
   normalizeMediaAttachments: mocks.normalizeMediaAttachments,
-  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
   runCapability: mocks.runCapability,
+}));
+
+vi.mock("./provider-registry.js", () => ({
+  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
 }));
 
 describe("media-understanding runtime", () => {
@@ -96,6 +99,45 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.runCapability).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the underlying provider failure when media understanding fails", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: {
+        capability: "audio",
+        outcome: "failed",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                outcome: "failed",
+                reason: "Error: Audio transcription response missing text",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "audio",
+        filePath: "/tmp/sample.ogg",
+        mime: "audio/ogg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).rejects.toThrow("Audio transcription response missing text");
+
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 });

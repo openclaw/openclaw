@@ -27,6 +27,7 @@ type CodexModelLister = (options: {
   timeoutMs: number;
   limit?: number;
   startOptions?: CodexAppServerStartOptions;
+  sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
 type BuildCodexProviderOptions = {
@@ -99,14 +100,14 @@ export async function buildCodexProviderCatalog(
   const config = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const timeoutMs = normalizeTimeoutMs(config.discovery?.timeoutMs);
-  const discovered =
-    config.discovery?.enabled === false || shouldSkipLiveDiscovery(options.env)
-      ? []
-      : await listModelsBestEffort({
-          listModels: options.listModels ?? listCodexAppServerModels,
-          timeoutMs,
-          startOptions: appServer.start,
-        });
+  let discovered: CodexAppServerModel[] = [];
+  if (config.discovery?.enabled !== false && !shouldSkipLiveDiscovery(options.env)) {
+    discovered = await listModelsBestEffort({
+      listModels: options.listModels ?? listCodexAppServerModels,
+      timeoutMs,
+      startOptions: appServer.start,
+    });
+  }
   const models = (discovered.length > 0 ? discovered : FALLBACK_CODEX_MODELS).map(
     codexModelToDefinition,
   );
@@ -175,6 +176,7 @@ async function listModelsBestEffort(params: {
       timeoutMs: params.timeoutMs,
       limit: 100,
       startOptions: params.startOptions,
+      sharedClient: false,
     });
     return result.models.filter((model) => !model.hidden);
   } catch {
@@ -189,7 +191,11 @@ function normalizeTimeoutMs(value: unknown): number {
 }
 
 function shouldSkipLiveDiscovery(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.VITEST) && env[LIVE_DISCOVERY_ENV] !== "1";
+  const override = env[LIVE_DISCOVERY_ENV]?.trim().toLowerCase();
+  if (override === "0" || override === "false") {
+    return true;
+  }
+  return Boolean(env.VITEST) && override !== "1";
 }
 
 function shouldDefaultToReasoningModel(modelId: string): boolean {

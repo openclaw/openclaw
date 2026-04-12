@@ -35,13 +35,8 @@ vi.mock("../config/sessions.js", () => ({
     }
     const agents = params?.agents?.list ?? [];
     const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-    const agentId =
-      String(rawDefault ?? "main")
-        .trim()
-        .toLowerCase() || "main";
-    const mainKeyRaw = String(params?.session?.mainKey ?? "main")
-      .trim()
-      .toLowerCase();
+    const agentId = rawDefault.trim().toLowerCase() || "main";
+    const mainKeyRaw = (params?.session?.mainKey ?? "main").trim().toLowerCase();
     const mainKey = mainKeyRaw || "main";
     return `agent:${agentId}:${mainKey}`;
   },
@@ -342,6 +337,21 @@ const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
     sessionKey: params.sessionKey,
   });
 
+const invokeAgentsListBearer = async () =>
+  await postToolsInvoke({
+    port: sharedPort,
+    headers: {
+      authorization: "Bearer secret",
+      "content-type": "application/json",
+    },
+    body: {
+      tool: "agents_list",
+      action: "json",
+      args: {},
+      sessionKey: "main",
+    },
+  });
+
 const invokeToolAuthed = async (params: {
   tool: string;
   args?: Record<string, unknown>;
@@ -458,19 +468,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
@@ -807,19 +805,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });

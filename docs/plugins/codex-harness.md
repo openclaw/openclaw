@@ -333,6 +333,89 @@ the matching config field is unset:
 
 Config is preferred for repeatable deployments.
 
+## Common recipes
+
+Local Codex with default stdio transport:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+Codex-only harness validation, with PI fallback disabled:
+
+```json5
+{
+  embeddedHarness: {
+    fallback: "none",
+  },
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+Guardian-reviewed Codex approvals:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent",
+            sandbox: "workspace-write",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Remote app-server with explicit headers:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://gateway-host:39175",
+            headers: {
+              "X-OpenClaw-Agent": "main",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Model switching stays OpenClaw-controlled. When an OpenClaw session is attached
+to an existing Codex thread, the next turn sends the currently selected
+`codex/*` model, provider, approval policy, sandbox, and service tier to
+app-server again. Switching from `codex/gpt-5.4` to `codex/gpt-5.2` keeps the
+thread binding but asks Codex to continue with the newly selected model.
+
 ## Codex command
 
 The bundled plugin registers `/codex` as an authorized slash command. It is
@@ -355,6 +438,10 @@ normal turns. On the next message, OpenClaw resumes that Codex thread, passes th
 currently selected OpenClaw `codex/*` model into app-server, and keeps extended
 history enabled.
 
+The command surface requires Codex app-server `0.118.0` or newer. Individual
+control methods are reported as `unsupported by this Codex app-server` if a
+future or custom app-server does not expose that JSON-RPC method.
+
 ## Tools, media, and compaction
 
 The Codex harness changes the low-level embedded agent executor only.
@@ -365,7 +452,9 @@ continue through the normal OpenClaw delivery path.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+history, search, `/new`, `/reset`, and future model or harness switching. The
+mirror includes the user prompt, final assistant text, and lightweight Codex
+reasoning or plan records when the app-server emits them.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as

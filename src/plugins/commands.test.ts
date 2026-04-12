@@ -186,6 +186,22 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "signal",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            resolveCommandConversation: ({ senderId }: { senderId?: string }) => {
+              const normalizedSenderId = senderId?.trim();
+              return normalizedSenderId ? { conversationId: `dm:${normalizedSenderId}` } : null;
+            },
+          },
+        },
+      },
     ]),
   );
 });
@@ -247,6 +263,23 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+  });
+
+  it("matches underscore aliases for hyphenated command names", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "active-memory",
+      description: "Active Memory command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(matchPluginCommand("/active_memory status")).toMatchObject({
+      command: expect.objectContaining({
+        name: "active-memory",
+        pluginId: "demo-plugin",
+      }),
+      args: "status",
+    });
   });
 
   it("supports provider-specific native command aliases", () => {
@@ -445,6 +478,19 @@ describe("registerPluginCommand", () => {
         accountId: "default",
       },
       expected: null,
+    },
+    {
+      name: "resolves sender-keyed command bindings when only senderId is available",
+      params: {
+        channel: "signal",
+        senderId: "signal-user-42",
+        accountId: "default",
+      },
+      expected: {
+        channel: "signal",
+        accountId: "default",
+        conversationId: "dm:signal-user-42",
+      },
     },
   ] as const)("$name", ({ params, expected }) => {
     expectBindingConversationCase(params, expected);
