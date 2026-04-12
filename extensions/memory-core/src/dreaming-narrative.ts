@@ -1,6 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  RequestScopedSubagentRuntimeError,
+  readErrorName,
+  SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+} from "openclaw/plugin-sdk/error-runtime";
+import { createAsyncLock } from "../../../src/infra/json-files.js";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -72,6 +80,88 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
+const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+
+type DreamsFileLockEntry = {
+  withLock: ReturnType<typeof createAsyncLock>;
+  refs: number;
+};
+
+const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
+
+function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
+  return (
+    err instanceof RequestScopedSubagentRuntimeError ||
+    (err instanceof Error &&
+      err.name === "RequestScopedSubagentRuntimeError" &&
+      extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE)
+  );
+}
+
+function formatFallbackWriteFailure(err: unknown): string {
+  const code = extractErrorCode(err);
+  const name = readErrorName(err);
+  if (code && name) {
+    return `code=${code} name=${name}`;
+  }
+  if (code) {
+    return `code=${code}`;
+  }
+  if (name) {
+    return `name=${name}`;
+  }
+  return "unknown error";
+}
+
+function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
+  return (
+    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
+    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
+    "A memory trace surfaced, but details were unavailable in this run."
+  );
+}
+
+async function startNarrativeRunOrFallback(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+  message: string;
+  data: NarrativePhaseData;
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+  logger: Logger;
+}): Promise<string | null> {
+  try {
+    const run = await params.subagent.run({
+      idempotencyKey: params.sessionKey,
+      sessionKey: params.sessionKey,
+      message: params.message,
+      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      deliver: false,
+    });
+    return run.runId;
+  } catch (runErr) {
+    if (!isRequestScopedSubagentRuntimeError(runErr)) {
+      throw runErr;
+    }
+    try {
+      await appendNarrativeEntry({
+        workspaceDir: params.workspaceDir,
+        narrative: buildRequestScopedFallbackNarrative(params.data),
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+      params.logger.warn(
+        `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
+      );
+    } catch (fallbackErr) {
+      params.logger.warn(
+        `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
+      );
+    }
+    return null;
+  }
+}
 
 // ── Prompt building ────────────────────────────────────────────────────
 
@@ -211,6 +301,31 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .filter((block) => block.length > 0);
 }
 
+function normalizeDiaryBlockFingerprint(block: string): string {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  let dateLine = "";
+  const bodyLines: string[] = [];
+  for (const line of lines) {
+    if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
+      dateLine = line.slice(1, -1).trim();
+      continue;
+    }
+    if (line.startsWith("<!--") || line.startsWith("#")) {
+      continue;
+    }
+    bodyLines.push(line);
+  }
+  const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
+  const normalizedBody = bodyLines
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+  return `${normalizedDate}\n${normalizedBody}`;
+}
+
 function joinDiaryBlocks(blocks: string[]): string {
   if (blocks.length === 0) {
     return "";
@@ -303,6 +418,44 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   }
 }
 
+async function updateDreamsFile<T>(params: {
+  workspaceDir: string;
+  updater: (
+    existing: string,
+    dreamsPath: string,
+  ) =>
+    | Promise<{ content: string; result: T; shouldWrite?: boolean }>
+    | {
+        content: string;
+        result: T;
+        shouldWrite?: boolean;
+      };
+}): Promise<T> {
+  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  let lockEntry = dreamsFileLocks.get(dreamsPath);
+  if (!lockEntry) {
+    lockEntry = { withLock: createAsyncLock(), refs: 0 };
+    dreamsFileLocks.set(dreamsPath, lockEntry);
+  }
+  lockEntry.refs += 1;
+  try {
+    return await lockEntry.withLock(async () => {
+      const existing = await readDreamsFile(dreamsPath);
+      const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
+      if (shouldWrite) {
+        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
+      }
+      return result;
+    });
+  } finally {
+    lockEntry.refs -= 1;
+    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
+      dreamsFileLocks.delete(dreamsPath);
+    }
+  }
+}
+
 export function buildBackfillDiaryEntry(params: {
   isoDay: string;
   bodyLines: string[];
@@ -327,51 +480,100 @@ export async function writeBackfillDiaryEntries(params: {
   }>;
   timezone?: string;
 }): Promise<{ dreamsPath: string; written: number; replaced: number }> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  const existing = await readDreamsFile(dreamsPath);
-  const stripped = stripBackfillDiaryBlocks(existing);
-  const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
-  const endIdx = stripped.updated.indexOf(DIARY_END_MARKER);
-  const inner =
-    startIdx >= 0 && endIdx > startIdx
-      ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
-      : "";
-  const preservedBlocks = splitDiaryBlocks(inner);
-  const nextBlocks = [
-    ...preservedBlocks,
-    ...params.entries.map((entry) =>
-      buildBackfillDiaryEntry({
-        isoDay: entry.isoDay,
-        bodyLines: entry.bodyLines,
-        sourcePath: entry.sourcePath,
-        timezone: params.timezone,
-      }),
-    ),
-  ];
-  const updated = replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks));
-  await writeDreamsFileAtomic(dreamsPath, updated);
-  return {
-    dreamsPath,
-    written: params.entries.length,
-    replaced: stripped.removed,
-  };
+  return await updateDreamsFile({
+    workspaceDir: params.workspaceDir,
+    updater: (existing, dreamsPath) => {
+      const stripped = stripBackfillDiaryBlocks(existing);
+      const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
+      const endIdx = stripped.updated.indexOf(DIARY_END_MARKER);
+      const inner =
+        startIdx >= 0 && endIdx > startIdx
+          ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
+          : "";
+      const preservedBlocks = splitDiaryBlocks(inner);
+      const nextBlocks = [
+        ...preservedBlocks,
+        ...params.entries.map((entry) =>
+          buildBackfillDiaryEntry({
+            isoDay: entry.isoDay,
+            bodyLines: entry.bodyLines,
+            sourcePath: entry.sourcePath,
+            timezone: params.timezone,
+          }),
+        ),
+      ];
+      return {
+        content: replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks)),
+        result: {
+          dreamsPath,
+          written: params.entries.length,
+          replaced: stripped.removed,
+        },
+      };
+    },
+  });
 }
 
 export async function removeBackfillDiaryEntries(params: {
   workspaceDir: string;
 }): Promise<{ dreamsPath: string; removed: number }> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  const existing = await readDreamsFile(dreamsPath);
-  const stripped = stripBackfillDiaryBlocks(existing);
-  if (stripped.removed > 0 || existing.length > 0) {
-    await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-    await writeDreamsFileAtomic(dreamsPath, stripped.updated);
-  }
-  return {
-    dreamsPath,
-    removed: stripped.removed,
-  };
+  return await updateDreamsFile({
+    workspaceDir: params.workspaceDir,
+    updater: (existing, dreamsPath) => {
+      const stripped = stripBackfillDiaryBlocks(existing);
+      return {
+        content: stripped.updated,
+        result: {
+          dreamsPath,
+          removed: stripped.removed,
+        },
+        shouldWrite: stripped.removed > 0 || existing.length > 0,
+      };
+    },
+  });
+}
+
+export async function dedupeDreamDiaryEntries(params: {
+  workspaceDir: string;
+}): Promise<{ dreamsPath: string; removed: number; kept: number }> {
+  return await updateDreamsFile({
+    workspaceDir: params.workspaceDir,
+    updater: (existing, dreamsPath) => {
+      const ensured = ensureDiarySection(existing);
+      const startIdx = ensured.indexOf(DIARY_START_MARKER);
+      const endIdx = ensured.indexOf(DIARY_END_MARKER);
+      if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+        return {
+          content: ensured,
+          result: { dreamsPath, removed: 0, kept: 0 },
+          shouldWrite: false,
+        };
+      }
+      const inner = ensured.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+      const blocks = splitDiaryBlocks(inner);
+      const seen = new Set<string>();
+      const keptBlocks: string[] = [];
+      let removed = 0;
+      for (const block of blocks) {
+        const fingerprint = normalizeDiaryBlockFingerprint(block);
+        if (seen.has(fingerprint)) {
+          removed += 1;
+          continue;
+        }
+        seen.add(fingerprint);
+        keptBlocks.push(block);
+      }
+      return {
+        content: replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
+        result: {
+          dreamsPath,
+          removed,
+          kept: keptBlocks.length,
+        },
+        shouldWrite: removed > 0,
+      };
+    },
+  });
 }
 
 export function buildDiaryEntry(narrative: string, dateStr: string): string {
@@ -384,49 +586,31 @@ export async function appendNarrativeEntry(params: {
   nowMs: number;
   timezone?: string;
 }): Promise<string> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
   const entry = buildDiaryEntry(params.narrative, dateStr);
-
-  let existing = "";
-  try {
-    existing = await fs.readFile(dreamsPath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw err;
-    }
-  }
-
-  let updated: string;
-  if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
-    // Append entry before end marker.
-    const endIdx = existing.lastIndexOf(DIARY_END_MARKER);
-    updated = existing.slice(0, endIdx) + entry + "\n" + existing.slice(endIdx);
-  } else if (existing.includes(DIARY_START_MARKER)) {
-    // Start marker without end — append entry and add end marker.
-    const startIdx = existing.indexOf(DIARY_START_MARKER) + DIARY_START_MARKER.length;
-    updated =
-      existing.slice(0, startIdx) +
-      entry +
-      "\n" +
-      DIARY_END_MARKER +
-      "\n" +
-      existing.slice(startIdx);
-  } else {
-    // No diary section yet — create one.
-    const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
-    if (existing.trim().length === 0) {
-      updated = diarySection;
-    } else {
-      // Prepend diary before any existing managed blocks.
-      updated = diarySection + "\n" + existing;
-    }
-  }
-
-  await writeDreamsFileAtomic(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`);
-  return dreamsPath;
+  return await updateDreamsFile({
+    workspaceDir: params.workspaceDir,
+    updater: (existing, dreamsPath) => {
+      let updated: string;
+      if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
+        const endIdx = existing.lastIndexOf(DIARY_END_MARKER);
+        updated = existing.slice(0, endIdx) + entry + "\n" + existing.slice(endIdx);
+      } else if (existing.includes(DIARY_START_MARKER)) {
+        const startIdx = existing.indexOf(DIARY_START_MARKER) + DIARY_START_MARKER.length;
+        updated =
+          existing.slice(0, startIdx) +
+          entry +
+          "\n" +
+          DIARY_END_MARKER +
+          "\n" +
+          existing.slice(startIdx);
+      } else {
+        const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
+        updated = existing.trim().length === 0 ? diarySection : `${diarySection}\n${existing}`;
+      }
+      return { content: updated, result: dreamsPath };
+    },
+  });
 }
 
 // ── Orchestrator ───────────────────────────────────────────────────────
@@ -449,13 +633,19 @@ export async function generateAndAppendDreamNarrative(params: {
   const message = buildNarrativePrompt(params.data);
 
   try {
-    const { runId } = await params.subagent.run({
-      idempotencyKey: sessionKey,
+    const runId = await startNarrativeRunOrFallback({
+      subagent: params.subagent,
       sessionKey,
       message,
-      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      deliver: false,
+      data: params.data,
+      workspaceDir: params.workspaceDir,
+      nowMs,
+      timezone: params.timezone,
+      logger: params.logger,
     });
+    if (!runId) {
+      return;
+    }
 
     const result = await params.subagent.waitForRun({
       runId,

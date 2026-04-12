@@ -1,7 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createConfiguredOllamaCompatStreamWrapper } from "../plugin-sdk/ollama-runtime.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -21,7 +20,15 @@ beforeEach(() => {
         return createMoonshotThinkingWrapper(params.context.streamFn, thinkingType);
       }
       if (params.provider === "ollama") {
-        return createConfiguredOllamaCompatStreamWrapper(params.context);
+        const modelId = params.context.model?.id ?? params.context.modelId;
+        if (typeof modelId === "string" && /^kimi-k2\.5(?::|$)/i.test(modelId)) {
+          const thinkingType = resolveMoonshotThinkingType({
+            configuredThinking: params.context.extraParams?.thinking,
+            thinkingLevel: params.context.thinkingLevel,
+          });
+          return createMoonshotThinkingWrapper(params.context.streamFn, thinkingType);
+        }
+        return params.context.streamFn;
       }
       return params.context.streamFn;
     },

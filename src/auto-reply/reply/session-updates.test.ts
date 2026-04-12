@@ -50,6 +50,8 @@ vi.mock("../../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
+  normalizeAgentId: (id: string) => id,
+  normalizeMainKey: (key?: string) => key ?? "main",
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));
 
