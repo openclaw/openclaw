@@ -56,7 +56,11 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
-  embeddedPi?: AgentEntry["embeddedPi"];
+  // Use the defaults type (which includes continuationMode/continuationBudget)
+  // rather than the narrower agent-entry type, so per-agent overrides can set
+  // these fields without type errors. The runtime zod schema already accepts
+  // them; this keeps the TypeScript surface aligned.
+  embeddedPi?: AgentDefaultsConfig["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -195,13 +199,7 @@ export function resolveAgentContinuationMode(
   if (!cfg || !agentId) {
     return defaultMode;
   }
-  // Per-agent embeddedPi may carry continuationMode if the runtime zod schema
-  // includes it. Fall back to the defaults-level value when the per-agent
-  // entry doesn't have the field (or the generated type hasn't caught up yet).
-  const agentEmbeddedPi = resolveAgentConfig(cfg, agentId)?.embeddedPi as
-    | { continuationMode?: AgentContinuationMode }
-    | undefined;
-  return agentEmbeddedPi?.continuationMode ?? defaultMode;
+  return resolveAgentConfig(cfg, agentId)?.embeddedPi?.continuationMode ?? defaultMode;
 }
 
 export function resolveAgentContinuationBudget(
@@ -212,10 +210,11 @@ export function resolveAgentContinuationBudget(
   if (!cfg || !agentId) {
     return defaultBudget ?? DEFAULT_CONTINUATION_BUDGET;
   }
-  const agentEmbeddedPi = resolveAgentConfig(cfg, agentId)?.embeddedPi as
-    | { continuationBudget?: number }
-    | undefined;
-  return agentEmbeddedPi?.continuationBudget ?? defaultBudget ?? DEFAULT_CONTINUATION_BUDGET;
+  return (
+    resolveAgentConfig(cfg, agentId)?.embeddedPi?.continuationBudget ??
+    defaultBudget ??
+    DEFAULT_CONTINUATION_BUDGET
+  );
 }
 
 export function resolveAgentSkillsFilter(

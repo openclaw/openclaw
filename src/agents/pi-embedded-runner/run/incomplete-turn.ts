@@ -413,14 +413,31 @@ export function hasContinuationIntent(texts: readonly string[]): boolean {
 }
 
 /**
+ * Tighter completion regex for the auto-continuation check. Unlike
+ * `PLANNING_ONLY_COMPLETION_RE` (which includes progress verbs like
+ * `found`, `ran`, `updated` to detect planning-only turns), this regex
+ * only matches words that signal the task is definitively DONE. Without
+ * this distinction, a message like "I found the issue; next I'll patch
+ * it" would match both continuation intent AND completion language,
+ * blocking the auto-continuation loop on a false positive.
+ */
+const AUTO_CONTINUATION_COMPLETION_RE =
+  /\b(?:done|finished|completed|all (?:set|done)|task complete|here(?:'s| is) (?:the|your) (?:result|output|answer))\b/i;
+
+/**
  * Detect completion language indicating the model considers the task done.
  * When this returns true, the auto-continuation loop should NOT continue —
  * the model is signaling it's finished, not planning more work.
+ *
+ * Uses `AUTO_CONTINUATION_COMPLETION_RE` (definitive completion signals
+ * only) rather than `PLANNING_ONLY_COMPLETION_RE` (which also matches
+ * progress verbs like "found", "ran", "updated" that co-occur with
+ * continuation intent).
  */
 export function hasCompletionLanguage(texts: readonly string[]): boolean {
   const text = texts.join("\n\n").trim();
   if (!text) {
     return false;
   }
-  return PLANNING_ONLY_COMPLETION_RE.test(text);
+  return AUTO_CONTINUATION_COMPLETION_RE.test(text);
 }
