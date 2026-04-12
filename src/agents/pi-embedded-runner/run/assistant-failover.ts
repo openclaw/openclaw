@@ -170,6 +170,7 @@ export async function handleAssistantFailover(params: {
     decision = resolveRunFailoverDecision({
       stage: "assistant",
       aborted: params.aborted,
+      externalAbort: params.externalAbort,
       fallbackConfigured: params.fallbackConfigured,
       failoverFailure: params.failoverFailure,
       failoverReason: params.failoverReason,
