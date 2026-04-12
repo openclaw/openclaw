@@ -8,7 +8,10 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -194,6 +197,56 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "155462274",
+      });
+      const getReplySpy = vi
+        .fn()
+        .mockResolvedValueOnce({ text: "Relay this cron update now" })
+        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
+      const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+
+      enqueueSystemEvent("Cron: QMD maintenance completed", {
+        sessionKey,
+        contextKey: "cron:qmd-maintenance",
+      });
+
+      const first = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+      const second = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(first.status).toBe("ran");
+      expect(second.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledTimes(2);
+
+      const firstCtx = getReplySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      expect(firstCtx.Provider).toBe("cron-event");
+      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.Provider).toBe("heartbeat");
+      expect(secondCtx.Body).toContain("Read HEARTBEAT.md");
+      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
+    });
   });
 
   it("uses an internal-only cron prompt when delivery target is none", async () => {

@@ -1033,7 +1033,10 @@ function buildPluginDebugLine(params: {
   if (fallback) {
     debugParts.push(`fallback=${fallback}`);
   }
-  if (typeof params.searchDebug?.searchMs === "number" && Number.isFinite(params.searchDebug.searchMs)) {
+  if (
+    typeof params.searchDebug?.searchMs === "number" &&
+    Number.isFinite(params.searchDebug.searchMs)
+  ) {
     debugParts.push(`searchMs=${Math.max(0, Math.round(params.searchDebug.searchMs))}`);
   }
   if (typeof params.searchDebug?.hits === "number" && Number.isFinite(params.searchDebug.hits)) {
@@ -1220,7 +1223,9 @@ function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefin
     : undefined;
 }
 
-function readActiveMemorySearchDebugFromRunResult(result: unknown): ActiveMemorySearchDebug | undefined {
+function readActiveMemorySearchDebugFromRunResult(
+  result: unknown,
+): ActiveMemorySearchDebug | undefined {
   const record = asRecord(result);
   const meta = asRecord(record?.meta);
   return (
