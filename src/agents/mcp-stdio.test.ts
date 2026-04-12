@@ -68,13 +68,29 @@ describe("getProxyEnvDefaults", () => {
     });
   });
 
-  it("ignores empty string values", () => {
+  it("preserves empty string values (explicit proxy disable)", () => {
     process.env.HTTPS_PROXY = "";
     process.env.HTTP_PROXY = "http://proxy:3128";
 
     expect(getProxyEnvDefaults()).toEqual({
+      HTTPS_PROXY: "",
       HTTP_PROXY: "http://proxy:3128",
     });
+  });
+
+  it("keeps empty lowercase proxy that overrides uppercase (disable proxy)", () => {
+    // Gateway has uppercase proxy configured, but lowercase empty overrides it
+    // to mean "no proxy". Both must be forwarded so the child's proxy resolver
+    // sees the lowercase empty and skips the uppercase fallback.
+    process.env.HTTPS_PROXY = "http://proxy:8080";
+    process.env.https_proxy = "";
+
+    const result = getProxyEnvDefaults();
+    // Case-dedup keeps only lowercase when both are present
+    expect(result).toEqual({
+      https_proxy: "",
+    });
+    expect(result).not.toHaveProperty("HTTPS_PROXY");
   });
 
   it("deduplicates when both upper and lower case proxy vars are set", () => {

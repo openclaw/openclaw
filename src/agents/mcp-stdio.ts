@@ -71,7 +71,7 @@ export function getProxyEnvDefaults(): Record<string, string> {
   const defaults: Record<string, string> = {};
   for (const key of PROXY_ENV_KEYS) {
     const value = process.env[key];
-    if (value !== undefined && value !== "") {
+    if (value !== undefined) {
       defaults[key] = value;
     }
   }
