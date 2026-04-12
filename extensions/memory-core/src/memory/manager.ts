@@ -6,6 +6,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  truncateUtf16Safe,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -337,8 +338,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
       if (!this.fts.enabled || !this.fts.available) {
-        log.warn("memory search: no provider and FTS unavailable");
-        return [];
+        const fallbackResults = await this.searchKeywordFallback(cleaned, candidates);
+        return this.selectScoredResults(fallbackResults, maxResults, minScore, 0);
       }
 
       const fullQueryResults = await this.searchKeyword(cleaned, candidates).catch(() => []);
@@ -392,7 +393,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
-    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+    if (!this.fts.enabled || !this.fts.available) {
+      const fallbackResults = await this.searchKeywordFallback(cleaned, candidates);
+      return this.selectScoredResults(fallbackResults, maxResults, minScore, 0);
+    }
+
+    if (!hybrid.enabled) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
@@ -493,7 +499,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
-      return [];
+      return await this.searchKeywordFallback(query, limit);
     }
     const sourceFilter = this.buildSourceFilter();
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
@@ -511,6 +517,81 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       bm25RankToScore,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+  }
+
+  private async searchKeywordFallback(
+    query: string,
+    limit: number,
+  ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+    if (limit <= 0) {
+      return [];
+    }
+    const terms = Array.from(
+      new Set(
+        query
+          .match(/[\p{L}\p{N}_]+/gu)
+          ?.map((term) => term.trim().toLowerCase())
+          .filter(Boolean) ?? [],
+      ),
+    );
+    if (terms.length === 0) {
+      return [];
+    }
+
+    const sourceFilter = this.buildSourceFilter();
+    const providerModel = this.provider?.model;
+    const modelClause = providerModel ? " AND model = ?" : "";
+    const modelParams = providerModel ? [providerModel] : [];
+
+    const rows = this.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text, updated_at\n` +
+          `  FROM chunks\n` +
+          ` WHERE 1=1${modelClause}${sourceFilter.sql}`,
+      )
+      .all(...modelParams, ...sourceFilter.params) as Array<{
+      id: string;
+      path: string;
+      source: MemorySource;
+      start_line: number;
+      end_line: number;
+      text: string;
+      updated_at: number;
+    }>;
+
+    const scored = rows
+      .map((row) => {
+        const haystack = `${row.path}\n${row.text}`.toLowerCase();
+        const matchedTerms = terms.filter((term) => haystack.includes(term));
+        if (matchedTerms.length === 0) {
+          return null;
+        }
+        const textScore = matchedTerms.length / terms.length;
+        return {
+          id: row.id,
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          source: row.source,
+          snippet: truncateUtf16Safe(row.text, SNIPPET_MAX_CHARS),
+          score: textScore,
+          textScore,
+          updatedAt: row.updated_at ?? 0,
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is MemorySearchResult & {
+          id: string;
+          textScore: number;
+          updatedAt: number;
+        } => entry !== null,
+      )
+      .toSorted((a, b) => b.score - a.score || b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+
+    return scored.map(({ updatedAt: _updatedAt, ...entry }) => entry);
   }
 
   private mergeHybridResults(params: {
