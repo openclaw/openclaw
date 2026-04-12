@@ -111,6 +111,19 @@ describe("operator scope authorization", () => {
     });
   });
 
+  it("requires operator.write for cron.add", () => {
+    expect(authorizeOperatorScopesForMethod("cron.add", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+    expect(authorizeOperatorScopesForMethod("cron.add", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("cron.add", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
+
   it.each(["exec.approval.get", "exec.approval.list", "exec.approval.resolve"])(
     "requires approvals scope for %s",
     (method) => {
