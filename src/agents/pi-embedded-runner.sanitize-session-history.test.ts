@@ -15,6 +15,7 @@ import {
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { validateReplayTurns } from "./pi-embedded-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
@@ -828,6 +829,57 @@ describe("sanitizeSessionHistory", () => {
           (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
       ),
     ).toBe(false);
+  });
+
+  it("preserves signed thinking turns while repairing legacy tool-result pairing for anthropic", async () => {
+    const sessionManager = makeMockSessionManager();
+    const messages: AgentMessage[] = [
+      makeUserMessage("Use the gateway"),
+      makeAssistantMessage(
+        [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolName: "gateway",
+        content: [{ type: "text", text: "legacy tool output without a linked id" }],
+        isError: false,
+        timestamp: nextTimestamp(),
+      } as AgentMessage,
+      makeUserMessage("continue"),
+    ];
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+    expect(validated.map((msg) => msg.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+
+    const assistant = validated[1] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
+    ]);
+
+    const toolResult = validated[2] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.toolCallId).toBe("toolu_legacy");
+    expect(toolResult.isError).toBe(true);
   });
 
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
