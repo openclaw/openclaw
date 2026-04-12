@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import fs from "node:fs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 /**
@@ -35,8 +34,10 @@ export function resolvePnpmRunner(params = {}) {
         shell: false,
       };
     } else {
-      // If it's a native binary (ELF on Linux/Pi or EXE on Windows), 
+      // If it's a native binary (ELF on Linux/Pi or EXE on Windows),
       // run the path directly without prepending 'node'.
+      // Note: nodeArgs (Node.js flags) cannot be passed to a native binary
+      // and are intentionally dropped here.
       return {
         command: npmExecPath,
         args: pnpmArgs,
