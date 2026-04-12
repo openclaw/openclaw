@@ -7,6 +7,10 @@ import {
 } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
+import {
+  CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
+  CDP_READY_AFTER_LAUNCH_WINDOW_MS,
+} from "./server-context.constants.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
 function setupEnsureBrowserAvailableHarness() {
@@ -47,7 +51,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
       1,
       "http://127.0.0.1:18800",
-      1000,
+      CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
       PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
       {
         allowPrivateNetwork: true,
@@ -64,7 +68,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     const promise = profile.ensureBrowserAvailable();
     const rejected = expect(promise).rejects.toThrow("not reachable after start");
-    await vi.advanceTimersByTimeAsync(15_100);
+    await vi.advanceTimersByTimeAsync(CDP_READY_AFTER_LAUNCH_WINDOW_MS + 100);
     await rejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
