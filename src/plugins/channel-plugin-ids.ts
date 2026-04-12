@@ -208,6 +208,7 @@ export function resolveScopedChannelPluginIds(params: {
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  cache?: boolean;
 }): string[] {
   return resolveScopedChannelOwnerPluginIds({
     ...params,

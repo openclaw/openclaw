@@ -70,7 +70,7 @@ function shouldForwardChannelScope(params: {
   scope: PluginRegistryScope;
   scopedLoad: boolean;
 }): boolean {
-  return !params.scopedLoad && params.scope !== "all";
+  return !params.scopedLoad && params.scope === "configured-channels";
 }
 
 export function ensurePluginRegistryLoaded(options?: {

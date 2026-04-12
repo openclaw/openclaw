@@ -236,4 +236,22 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("does not forward empty channel scopes for broad channel loads", () => {
+    mocks.resolveChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "channels",
+      config: {} as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+    expect(
+      (mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as { onlyPluginIds?: string[] }).onlyPluginIds,
+    ).toBeUndefined();
+  });
 });

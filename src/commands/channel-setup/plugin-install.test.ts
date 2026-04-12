@@ -686,6 +686,11 @@ describe("ensureChannelSetupPluginInstalled", () => {
         onlyPluginIds: ["custom-telegram-plugin"],
       }),
     );
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+      }),
+    );
   });
 
   it("uses uncached manifest discovery for activation-declared setup scoping", () => {
