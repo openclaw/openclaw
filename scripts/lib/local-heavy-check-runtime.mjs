@@ -84,6 +84,36 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   return { env: nextEnv, args: nextArgs };
 }
 
+export function shouldAcquireLocalHeavyCheckLockForOxlint(
+  args,
+  { cwd = process.cwd(), env = process.env } = {},
+) {
+  if (env.OPENCLAW_OXLINT_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  const separatorIndex = args.indexOf("--");
+  const candidateArgs = (() => {
+    if (separatorIndex !== -1) {
+      return args.slice(separatorIndex + 1);
+    }
+    const firstFlagIndex = args.findIndex((arg) => arg.startsWith("-"));
+    return firstFlagIndex === -1 ? args : args.slice(0, firstFlagIndex);
+  })();
+  const explicitTargets = candidateArgs.filter((arg) => arg.length > 0 && !arg.startsWith("-"));
+  if (explicitTargets.length === 0) {
+    return true;
+  }
+
+  return !explicitTargets.every((target) => {
+    try {
+      return fs.statSync(path.resolve(cwd, target)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function shouldThrottleLocalHeavyChecks(env, hostResources) {
   if (!isLocalCheckEnabled(env)) {
     return false;

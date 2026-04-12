@@ -5,6 +5,7 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -215,6 +216,39 @@ describe("local-heavy-check-runtime", () => {
       "--report-unused-disable-directives-severity",
       "error",
     ]);
+  });
+
+  it("skips the heavy-check lock for explicit oxlint file targets", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-skip-");
+    const target = path.join(cwd, "sample.ts");
+    fs.writeFileSync(target, "export const ok = true;\n", "utf8");
+
+    expect(
+      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], { cwd }),
+    ).toBe(false);
+  });
+
+  it("keeps the heavy-check lock for directory targets and broad oxlint runs", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-keep-");
+    fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, "src", "sample.ts"), "export const ok = true;\n", "utf8");
+
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "src"], { cwd })).toBe(
+      true,
+    );
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware"], { cwd })).toBe(true);
+  });
+
+  it("allows forcing the oxlint lock back on", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-force-");
+    fs.writeFileSync(path.join(cwd, "sample.ts"), "export const ok = true;\n", "utf8");
+
+    expect(
+      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], {
+        cwd,
+        env: makeEnv({ OPENCLAW_OXLINT_FORCE_LOCK: "1" }),
+      }),
+    ).toBe(true);
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {
