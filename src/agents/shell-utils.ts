@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-Command"];
+const DEFAULT_SHELL_ARGS = ["-c"];
+const CMD_ARGS = ["/c"];
+
+type ShellConfig = { shell: string; args: string[] };
+
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
@@ -40,42 +46,9 @@ export function resolvePowerShellPath(): string {
 
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
-    // Helper to validate and return shell config for a given path
-    const getShellConfigForPath = (shellPath: string): { shell: string; args: string[] } | null => {
-      // Skip POSIX-style paths (e.g., /usr/bin/bash from Git Bash)
-      // These are not valid Windows paths and would cause ENOENT errors.
-      if (shellPath.startsWith("/") && !shellPath.startsWith("//")) {
-        return null;
-      }
-
-      const shellName = path.basename(shellPath).toLowerCase();
-
-      // PowerShell needs special args even when explicitly configured
-      if (shellName.includes("powershell") || shellName === "pwsh.exe" || shellName === "pwsh") {
-        return { shell: shellPath, args: ["-NoProfile", "-NonInteractive", "-Command"] };
-      }
-
-      // cmd.exe needs /c not -c
-      if (shellName === "cmd.exe" || shellName === "cmd") {
-        return { shell: shellPath, args: ["/c"] };
-      }
-
-      // For other shells, use -c (works for bash, zsh, nushell, etc.)
-      return { shell: shellPath, args: ["-c"] };
-    };
-
-    // Try OPENCLAW_SHELL first, then SHELL
-    // Each is validated independently so a stale OPENCLAW_SHELL doesn't block a valid SHELL
-    const overrideShell = process.env.OPENCLAW_SHELL?.trim();
-    if (overrideShell) {
-      const config = getShellConfigForPath(overrideShell);
-      if (config) return config;
-    }
-
-    const envShell = process.env.SHELL?.trim();
-    if (envShell) {
-      const config = getShellConfigForPath(envShell);
-      if (config) return config;
+    const configuredShell = resolveConfiguredWindowsShell();
+    if (configuredShell) {
+      return { shell: configuredShell.shell, args: configuredShell.args };
     }
 
     // Use PowerShell instead of cmd.exe on Windows.
@@ -85,7 +58,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // PowerShell properly captures and redirects their output to stdout.
     return {
       shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      args: POWERSHELL_ARGS,
     };
   }
 
@@ -135,30 +108,76 @@ function normalizeShellName(value: string): string {
     .replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
-export function detectRuntimeShell(): string | undefined {
-  // Helper to validate and return shell name for a given path
-  const getShellNameForPath = (shellPath: string): string | null => {
-    // On Windows, skip POSIX-style paths (e.g., /usr/bin/bash from Git Bash)
-    // These are not valid Windows paths and should fall back to PowerShell
-    if (process.platform === "win32" && shellPath.startsWith("/") && !shellPath.startsWith("//")) {
-      return null;
-    }
-    return normalizeShellName(shellPath) || null;
-  };
+function isWindowsPosixPath(value: string): boolean {
+  return value.startsWith("/") && !value.startsWith("//");
+}
 
-  // Try OPENCLAW_SHELL first, then SHELL
-  // Each is validated independently so a stale OPENCLAW_SHELL doesn't block a valid SHELL
-  const overrideShell = process.env.OPENCLAW_SHELL?.trim();
-  if (overrideShell) {
-    const name = getShellNameForPath(overrideShell);
-    if (name) return name;
+function looksLikeExplicitPath(value: string): boolean {
+  return (
+    value.includes("\\") || value.includes("/") || value.includes(":") || value.startsWith(".")
+  );
+}
+
+function isUnixLikeShellName(name: string): boolean {
+  return (
+    name === "nu" ||
+    name === "nushell" ||
+    name === "fish" ||
+    name.includes("bash") ||
+    name.includes("zsh") ||
+    name.includes("ksh") ||
+    name.includes("sh")
+  );
+}
+
+function resolveConfiguredWindowsShellValue(
+  value: string | undefined,
+): (ShellConfig & { runtimeShell: string }) | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || isWindowsPosixPath(trimmed)) {
+    return undefined;
   }
 
+  const runtimeShell = normalizeShellName(trimmed);
+  if (!runtimeShell) {
+    return undefined;
+  }
+
+  if (
+    !looksLikeExplicitPath(trimmed) &&
+    runtimeShell !== "cmd" &&
+    runtimeShell !== "powershell" &&
+    runtimeShell !== "pwsh" &&
+    !isUnixLikeShellName(runtimeShell)
+  ) {
+    return undefined;
+  }
+
+  if (runtimeShell === "cmd") {
+    return { shell: trimmed, args: CMD_ARGS, runtimeShell };
+  }
+  if (runtimeShell === "powershell" || runtimeShell === "pwsh") {
+    return { shell: trimmed, args: POWERSHELL_ARGS, runtimeShell };
+  }
+  return { shell: trimmed, args: DEFAULT_SHELL_ARGS, runtimeShell };
+}
+
+function resolveConfiguredWindowsShell(): (ShellConfig & { runtimeShell: string }) | undefined {
+  const configuredShells = [process.env.OPENCLAW_SHELL, process.env.SHELL];
+  for (const shellValue of configuredShells) {
+    const resolved = resolveConfiguredWindowsShellValue(shellValue);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
+export function detectRuntimeShell(): string | undefined {
   if (process.platform === "win32") {
-    const envShell = process.env.SHELL?.trim();
-    if (envShell) {
-      const name = getShellNameForPath(envShell);
-      if (name) return name;
+    const configuredShell = resolveConfiguredWindowsShell();
+    if (configuredShell) {
+      return configuredShell.runtimeShell;
     }
     if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
       return "pwsh";
@@ -218,4 +237,3 @@ export function sanitizeBinaryOutput(text: string): string {
   }
   return chunks.join("");
 }
-
