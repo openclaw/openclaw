@@ -105,42 +105,12 @@ const SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS = [
 // success that evades the failure-tone net above. Criterion 2 of the
 // GPT-5.4 parity completion gate (#64227) specifically targets this: a
 // model that says "I did the thing" without actually doing it should not
-// count as a pass. A positive-tone pattern only fires as a suspicious pass
-// when the scenario is ALSO missing a recorded tool-call assertion in its
-// prose — see `scenarioLacksToolCallEvidence` below. That keeps the check
-// from false-positiving on legitimate tool-mediated scenarios that happen
-// to include "successfully" in their details.
-const SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS = [
-  /successfully (?:completed|executed|finished|handled|delegated|ran)/i,
-  /^\s*(?:[-*]\s*)?done\.?\s*$/im,
-  /task (?:done|executed|completed|handled|finished) successfully/i,
-  /everything (?:worked|ran) (?:as expected|successfully)/i,
-  /finished the operation/i,
-  /all (?:steps|tasks) (?:completed|finished) successfully/i,
-] as const;
-
-// Evidence a scenario actually did its tool-mediated work. A scenario
-// whose details contain any of these is considered tool-backed and is
-// exempt from the positive-tone fake-success check. The patterns match
-// the `plannedToolName=...` / `tool call succeeded` / `executed tool`
-// phrases scenarios emit when their `/debug/requests` assertions fire
-// (PR J #64681), so a scenario with real tool evidence is never flagged
-// even if its prose also includes "successfully".
-const TOOL_CALL_EVIDENCE_PATTERNS = [
-  /plannedToolName/i,
-  /tool call (?:succeeded|completed|returned)/i,
-  /executed tool/i,
-  /function_call_output/i,
-  /tool_use/i,
-] as const;
-
-function scenarioLacksToolCallEvidence(scenario: QaParityReportScenario): boolean {
-  const text = scenarioText(scenario);
-  if (text.length === 0) {
-    return true;
-  }
-  return !TOOL_CALL_EVIDENCE_PATTERNS.some((pattern) => pattern.test(text));
-}
+// Positive-tone patterns (like "Successfully completed") are NOT used in
+// the fakeSuccessCount check because for passing runs the `details` field
+// is the model's outbound prose, which never contains tool-call evidence.
+// The tool-call evidence approach would false-positive on every legitimate
+// pass. Criterion 2 is enforced by per-scenario `/debug/requests` tool-call
+// assertions in the scenario YAML flows (PR J), not by the parity report.
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {
   return status === "pass" || status === "fail" || status === "skip" ? status : "fail";
@@ -191,16 +161,13 @@ export function computeQaAgenticParityMetrics(
     if (scenarioHasPattern(scenario, SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS)) {
       return true;
     }
-    // Positive-tone patterns only fire when the scenario doesn't also show
-    // real tool-call evidence. A legitimate tool-mediated pass with
-    // self-congratulatory prose stays clean; a prose-only pass with
-    // "Successfully completed the delegation" gets flagged.
-    if (
-      scenarioHasPattern(scenario, SUSPICIOUS_PASS_POSITIVE_TONE_PATTERNS) &&
-      scenarioLacksToolCallEvidence(scenario)
-    ) {
-      return true;
-    }
+    // Positive-tone patterns (like "Successfully completed") are NOT checked
+    // here because for passing runs the `details` field is the model's
+    // outbound prose, which never contains tool-call evidence strings.
+    // The `scenarioLacksToolCallEvidence` check would return true for ALL
+    // passes and false-positive on legitimate completions. Criterion 2
+    // ("no fake tool completion") is instead enforced by the per-scenario
+    // `/debug/requests` tool-call assertions from the scenario YAML flows.
     return false;
   }).length;
 
