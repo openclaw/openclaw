@@ -14,12 +14,18 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  /** Hard max age (hours). 0 or undefined = disabled. */
+  maxAgeHours?: number;
+  /** Context token cap. Session resets when totalTokens exceeds this. 0 or undefined = disabled. */
+  maxContextTokens?: number;
 };
 
 export type SessionFreshness = {
   fresh: boolean;
   dailyResetAt?: number;
   idleExpiresAt?: number;
+  /** Absolute ms timestamp when the session hits its max-age wall-clock cap. */
+  maxAgeExpiresAt?: number;
 };
 
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
@@ -116,7 +122,19 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes };
+  const maxAgeHoursRaw = typeReset?.maxAgeHours ?? baseReset?.maxAgeHours;
+  const maxAgeHours =
+    maxAgeHoursRaw != null && Number.isFinite(maxAgeHoursRaw) && maxAgeHoursRaw > 0
+      ? maxAgeHoursRaw
+      : undefined;
+
+  const maxContextTokensRaw = typeReset?.maxContextTokens ?? baseReset?.maxContextTokens;
+  const maxContextTokens =
+    maxContextTokensRaw != null && Number.isFinite(maxContextTokensRaw) && maxContextTokensRaw > 0
+      ? Math.floor(maxContextTokensRaw)
+      : undefined;
+
+  return { mode, atHour, idleMinutes, maxAgeHours, maxContextTokens };
 }
 
 export function resolveChannelResetConfig(params: {
@@ -140,6 +158,10 @@ export function evaluateSessionFreshness(params: {
   updatedAt: number;
   now: number;
   policy: SessionResetPolicy;
+  /** Session birth time (ms) for max-age enforcement. */
+  createdAt?: number;
+  /** Current session total token count for token-cap enforcement. */
+  totalTokens?: number;
 }): SessionFreshness {
   const dailyResetAt =
     params.policy.mode === "daily"
@@ -149,12 +171,22 @@ export function evaluateSessionFreshness(params: {
     params.policy.idleMinutes != null && params.policy.idleMinutes > 0
       ? params.updatedAt + params.policy.idleMinutes * 60_000
       : undefined;
+  const maxAgeExpiresAt =
+    params.policy.maxAgeHours != null && params.policy.maxAgeHours > 0 && params.createdAt != null
+      ? params.createdAt + params.policy.maxAgeHours * 3_600_000
+      : undefined;
   const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
+  const staleMaxAge = maxAgeExpiresAt != null && params.now > maxAgeExpiresAt;
+  const staleTokenCap =
+    params.policy.maxContextTokens != null &&
+    params.policy.maxContextTokens > 0 &&
+    (params.totalTokens ?? 0) > params.policy.maxContextTokens;
   return {
-    fresh: !(staleDaily || staleIdle),
+    fresh: !(staleDaily || staleIdle || staleMaxAge || staleTokenCap),
     dailyResetAt,
     idleExpiresAt,
+    maxAgeExpiresAt,
   };
 }
 

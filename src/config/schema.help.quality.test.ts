@@ -143,6 +143,8 @@ const TARGET_KEYS = [
   "session.reset.mode",
   "session.reset.atHour",
   "session.reset.idleMinutes",
+  "session.reset.maxAgeHours",
+  "session.reset.maxContextTokens",
   "session.resetByType",
   "session.resetByType.direct",
   "session.resetByType.dm",
