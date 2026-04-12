@@ -1,7 +1,7 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.2.13",
-    "lastTouchedAt": "2026-02-22T10:06:46.502Z"
+    "lastTouchedVersion": "2026.4.11",
+    "lastTouchedAt": "2026-04-12T08:31:21.712Z"
   },
   "wizard": {
     "lastRunAt": "2026-02-07T16:02:46.036Z",
@@ -36,11 +36,10 @@
         "openrouter/auto": {
           "alias": "OpenRouter"
         },
-        "openrouter/minimax/minimax-m2.5": {},
-        "openrouter/minimax/minimax-m2.1": {},
+        "openrouter/minimax/minimax-m2.7": {},
         "openrouter/moonshotai/kimi-k2.5": {},
-        "openrouter/deepseek/deepseek-v3.2": {},
-        "openrouter/z-ai/glm-4.7": {}
+        "openrouter/xiaomi/mimo-v2-pro": {},
+        "openrouter/z-ai/glm-5": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "compaction": {
@@ -67,6 +66,7 @@
       {
         "id": "main",
         "default": true,
+        "workspace": "/home/node/.openclaw/workspace",
         "tools": {
           "allow": [
             "sessions_send",
@@ -74,14 +74,10 @@
             "sessions_list",
             "sessions_history",
             "agents_list",
-            "cron",
-            "gateway",
             "browser",
             "message",
             "tts",
             "canvas",
-            "nodes",
-            "web_search",
             "web_fetch",
             "memory_search",
             "memory_get",
@@ -102,13 +98,80 @@
         "name": "life-coach",
         "workspace": "/home/node/.openclaw/workspace-life-coach",
         "agentDir": "/home/node/.openclaw/agents/life-coach/agent",
-        "model": "openrouter/minimax/minimax-m2.5"
+        "model": "openrouter/minimax/minimax-m2.5",
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "web_fetch",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
+      },
+      {
+        "id": "linux-coach",
+        "name": "linux-coach",
+        "workspace": "/home/node/.openclaw/workspace-linux-coach",
+        "agentDir": "/home/node/.openclaw/agents/linux-coach/agent",
+        "model": "openrouter/minimax/minimax-m2.5",
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "web_fetch",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
+      },
+      {
+        "id": "coder",
+        "name": "Coder Agent",
+        "workspace": "/home/node/.openclaw/workspace-coder",
+        "model": "openrouter/minimax/minimax-m2.7",
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "web_fetch",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
       }
     ]
   },
   "tools": {
     "deny": []
-    },
+  },
   "bindings": [
     {
       "agentId": "main",
@@ -130,6 +193,13 @@
         "channel": "telegram",
         "accountId": "life-coach"
       }
+    },
+    {
+      "agentId": "linux-coach",
+      "match": {
+        "channel": "telegram",
+        "accountId": "linux-coach"
+      }
     }
   ],
   "messages": {
@@ -144,27 +214,44 @@
       "enabled": true,
       "dmPolicy": "pairing",
       "groupPolicy": "allowlist",
-      "streamMode": "block",
       "accounts": {
         "default": {
           "dmPolicy": "pairing",
           "botToken": "${TELEGRAM_BOT_TOKEN}",
           "groupPolicy": "allowlist",
-          "streamMode": "block"
+          "streaming": {
+            "mode": "partial"
+          }
         },
         "vision": {
           "dmPolicy": "pairing",
           "botToken": "${TELEGRAM_BOT_TOKEN_VISION}",
           "groupPolicy": "allowlist",
-          "streamMode": "block"
+          "streaming": {
+            "mode": "block"
+          }
         },
         "life-coach": {
           "enabled": true,
           "dmPolicy": "pairing",
           "botToken": "${TELEGRAM_BOT_TOKEN_LIFE_COACH}",
           "groupPolicy": "allowlist",
-          "streamMode": "block"
+          "streaming": {
+            "mode": "block"
+          }
+        },
+        "linux-coach": {
+          "enabled": true,
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN_LINUX}",
+          "groupPolicy": "allowlist",
+          "streaming": {
+            "mode": "block"
+          }
         }
+      },
+      "streaming": {
+        "mode": "block"
       }
     }
   },
@@ -178,6 +265,12 @@
     "tailscale": {
       "mode": "off",
       "resetOnExit": true
+    },
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
     }
   },
   "skills": {
@@ -189,6 +282,12 @@
   "plugins": {
     "entries": {
       "telegram": {
+        "enabled": true
+      },
+      "openrouter": {
+        "enabled": true
+      },
+      "browser": {
         "enabled": true
       }
     }
