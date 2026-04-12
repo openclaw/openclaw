@@ -39,7 +39,7 @@ import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.r
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport } from "./fetch.js";
-import { tagTelegramNetworkError } from "./network-errors.js";
+import { tagTelegramAbortOrigin, tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -114,6 +114,41 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
+type TelegramAbortReason = {
+  kind: "request-timeout" | "polling-watchdog" | "polling-stop" | "shutdown";
+  method?: string | null;
+  timeoutMs?: number | null;
+};
+
+function createTelegramAbortReason(reason: TelegramAbortReason): TelegramAbortReason {
+  return {
+    kind: reason.kind,
+    method: reason.method ?? null,
+    timeoutMs: reason.timeoutMs ?? null,
+  };
+}
+
+function readTelegramAbortReason(reason: unknown): TelegramAbortReason | null {
+  if (!reason || typeof reason !== "object") {
+    return null;
+  }
+  const kind =
+    "kind" in reason && typeof reason.kind === "string"
+      ? (reason.kind as TelegramAbortReason["kind"])
+      : null;
+  if (!kind) {
+    return null;
+  }
+  const method = "method" in reason && typeof reason.method === "string" ? reason.method : null;
+  const timeoutMs =
+    "timeoutMs" in reason && typeof reason.timeoutMs === "number" ? reason.timeoutMs : null;
+  return {
+    kind,
+    method,
+    timeoutMs,
+  };
+}
+
 export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance {
   const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -171,49 +206,77 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
+      const method = extractTelegramApiMethod(input);
+      const abortWith = (signal: AbortSignal, fallbackReason: TelegramAbortReason) =>
+        controller.abort(signal.reason ?? createTelegramAbortReason(fallbackReason));
       const shutdownSignal = opts.fetchAbortSignal;
       const onShutdown = () => {
         if (shutdownSignal) {
-          abortWith(shutdownSignal);
+          abortWith(shutdownSignal, {
+            kind: "shutdown",
+            method,
+          });
         }
       };
-      const method = extractTelegramApiMethod(input);
       const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
       const requestSignal = init?.signal;
       if (shutdownSignal?.aborted) {
-        abortWith(shutdownSignal);
+        abortWith(shutdownSignal, {
+          kind: "shutdown",
+          method,
+        });
       } else if (shutdownSignal) {
         shutdownSignal.addEventListener("abort", onShutdown, { once: true });
       }
       if (requestSignal) {
         if (requestSignal.aborted) {
-          abortWith(requestSignal);
+          abortWith(requestSignal, {
+            kind: "polling-stop",
+            method,
+          });
         } else {
-          onRequestAbort = () => abortWith(requestSignal);
+          onRequestAbort = () =>
+            abortWith(requestSignal, {
+              kind: "polling-stop",
+              method,
+            });
           requestSignal.addEventListener("abort", onRequestAbort);
         }
       }
       if (requestTimeoutMs) {
         requestTimeout = setTimeout(() => {
-          controller.abort(new Error(`Telegram ${method} timed out after ${requestTimeoutMs}ms`));
+          controller.abort(
+            createTelegramAbortReason({
+              kind: "request-timeout",
+              method,
+              timeoutMs: requestTimeoutMs,
+            }),
+          );
         }, requestTimeoutMs);
         requestTimeout.unref?.();
       }
       return callFetch(input, {
         ...init,
         signal: controller.signal,
-      }).finally(() => {
-        if (requestTimeout) {
-          clearTimeout(requestTimeout);
-        }
-        shutdownSignal?.removeEventListener("abort", onShutdown);
-        if (requestSignal && onRequestAbort) {
-          requestSignal.removeEventListener("abort", onRequestAbort);
-        }
-      });
+      })
+        .catch((err: unknown) => {
+          const abortReason = readTelegramAbortReason(controller.signal.reason);
+          if (abortReason) {
+            tagTelegramAbortOrigin(err, abortReason);
+          }
+          throw err;
+        })
+        .finally(() => {
+          if (requestTimeout) {
+            clearTimeout(requestTimeout);
+          }
+          shutdownSignal?.removeEventListener("abort", onShutdown);
+          if (requestSignal && onRequestAbort) {
+            requestSignal.removeEventListener("abort", onRequestAbort);
+          }
+        });
     };
   }
   if (finalFetch) {

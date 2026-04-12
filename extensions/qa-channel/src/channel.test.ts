@@ -1,5 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../../../src/channels/plugins/types.js";
 import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
@@ -113,6 +114,62 @@ describe("qa-channel plugin", () => {
       abort.abort();
       await task;
       await bus.stop();
+    }
+  });
+
+  it("backs off instead of crashing when the local qa bus is unavailable", async () => {
+    setQaChannelRuntime(createMockQaRuntime());
+
+    const cfg = {
+      channels: {
+        "qa-channel": {
+          baseUrl: "http://127.0.0.1:61842",
+          botUserId: "openclaw",
+          botDisplayName: "OpenClaw QA",
+          allowFrom: ["*"],
+        },
+      },
+    };
+    const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
+    const abort = new AbortController();
+    const statusUpdates: ChannelAccountSnapshot[] = [];
+    const startAccount = qaChannelPlugin.gateway?.startAccount;
+    expect(startAccount).toBeDefined();
+    const task = startAccount!(
+      createStartAccountContext({
+        account,
+        cfg,
+        abortSignal: abort.signal,
+        statusPatchSink: (snapshot) => statusUpdates.push({ ...snapshot }),
+      }),
+    );
+
+    try {
+      await vi.waitFor(
+        () =>
+          expect(
+            statusUpdates.some((snapshot) => snapshot.healthState === "qa-bus-unavailable"),
+          ).toBe(true),
+        {
+          timeout: 4_000,
+          interval: 25,
+        },
+      );
+
+      const unavailable = [...statusUpdates]
+        .toReversed()
+        .find((snapshot) => snapshot.healthState === "qa-bus-unavailable");
+      expect(unavailable).toMatchObject({
+        connected: false,
+        healthState: "qa-bus-unavailable",
+        healthMonitorSuppressionReason: "qa-bus-unavailable",
+      });
+      expect(typeof unavailable?.healthMonitorSuppressedUntil).toBe("number");
+    } finally {
+      abort.abort();
+      await task.catch((error) => {
+        expect(String(error)).toContain("aborted");
+      });
     }
   });
 

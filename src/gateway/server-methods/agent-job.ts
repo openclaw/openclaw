@@ -1,4 +1,9 @@
-import { onAgentEvent } from "../../infra/agent-events.js";
+import type {
+  AgentRunLifecyclePhase,
+  AgentRunPhaseTimings,
+  AgentRunTimeoutPhase,
+} from "../../agents/run-telemetry.types.js";
+import { getAgentRunContext, onAgentEvent } from "../../infra/agent-events.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 /**
@@ -16,9 +21,13 @@ let agentRunListenerStarted = false;
 type AgentRunSnapshot = {
   runId: string;
   status: "ok" | "error" | "timeout";
+  acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  phaseTimings?: AgentRunPhaseTimings;
+  lifecyclePhase?: AgentRunLifecyclePhase;
   ts: number;
 };
 
@@ -82,16 +91,23 @@ function createSnapshotFromLifecycleEvent(params: {
   data?: Record<string, unknown>;
 }): AgentRunSnapshot {
   const { runId, phase, data } = params;
+  const context = getAgentRunContext(runId);
   const startedAt =
-    typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
+    typeof data?.startedAt === "number"
+      ? data.startedAt
+      : (context?.startedAt ?? agentRunStarts.get(runId));
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
   return {
     runId,
     status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    ...(typeof context?.acceptedAt === "number" ? { acceptedAt: context.acceptedAt } : {}),
     startedAt,
     endedAt,
-    error,
+    error: error ?? context?.latestError,
+    ...(context?.timeoutPhase ? { timeoutPhase: context.timeoutPhase } : {}),
+    ...(context?.phaseTimings ? { phaseTimings: context.phaseTimings } : {}),
+    ...(context?.lifecyclePhase ? { lifecyclePhase: context.lifecyclePhase } : {}),
     ts: Date.now(),
   };
 }

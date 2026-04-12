@@ -12,4 +12,5 @@ export type FallbackAttempt = {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  elapsedMs?: number;
 };

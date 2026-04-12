@@ -1,5 +1,6 @@
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type { AgentRunPhaseTimings, AgentRunTimeoutPhase } from "../run-telemetry.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -37,6 +38,8 @@ export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  phaseTimings?: AgentRunPhaseTimings;
   systemPromptReport?: SessionSystemPromptReport;
   finalAssistantVisibleText?: string;
   replayInvalid?: boolean;

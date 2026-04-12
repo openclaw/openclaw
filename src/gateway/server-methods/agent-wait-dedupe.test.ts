@@ -258,6 +258,49 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("preserves timeout telemetry fields from terminal dedupe payloads", () => {
+    const dedupe = new Map();
+    const runId = "run-timeout-telemetry";
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "timeout",
+        acceptedAt: 1,
+        startedAt: 2,
+        endedAt: 3,
+        error: "provider stalled",
+        timeoutPhase: "provider_timeout",
+        phaseTimings: {
+          sessionQueueWaitMs: 5,
+          preflightMs: 9,
+        },
+        lifecyclePhase: "provider",
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      acceptedAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      error: "provider stalled",
+      timeoutPhase: "provider_timeout",
+      phaseTimings: {
+        sessionQueueWaitMs: 5,
+        preflightMs: 9,
+      },
+      lifecyclePhase: "provider",
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";

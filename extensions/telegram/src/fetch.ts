@@ -366,6 +366,29 @@ function logResolverNetworkDecisions(params: {
   }
 }
 
+function formatTransportDiagValue(value: string | boolean | null | undefined): string {
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return "default";
+}
+
+function logTransportResolved(params: {
+  mode: string;
+  proxyMode: string;
+  autoSelectFamily: boolean | null;
+  dnsResultOrder: TelegramDnsResultOrder | null;
+  stickyIpv4FallbackArmed: boolean;
+  dispatcherAttempts: number;
+}): void {
+  log.info(
+    `[telegram] transport resolved node=${process.versions.node ?? "unknown"} mode=${params.mode} proxyMode=${params.proxyMode} autoSelectFamily=${formatTransportDiagValue(params.autoSelectFamily)} dnsResultOrder=${formatTransportDiagValue(params.dnsResultOrder)} stickyIpv4Fallback=${formatTransportDiagValue(params.stickyIpv4FallbackArmed)} dispatcherAttempts=${params.dispatcherAttempts}`,
+  );
+}
+
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
   const queue: unknown[] = [err];
@@ -518,6 +541,14 @@ export function resolveTelegramTransport(
       : undiciSourceFetch;
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   if (effectiveProxyFetch && !explicitProxyUrl) {
+    logTransportResolved({
+      mode: "custom-fetch",
+      proxyMode: "custom-fetch",
+      autoSelectFamily: autoSelectDecision.value,
+      dnsResultOrder,
+      stickyIpv4FallbackArmed: false,
+      dispatcherAttempts: 0,
+    });
     return { fetch: sourceFetch, sourceFetch };
   }
 
@@ -547,6 +578,20 @@ export function resolveTelegramTransport(
     defaultDispatcher,
     allowFallback: allowStickyFallback,
     fallbackPolicy: fallbackDispatcherPolicy,
+  });
+  logTransportResolved({
+    mode: defaultDispatcher.mode,
+    proxyMode: explicitProxyUrl
+      ? "explicit-proxy"
+      : useEnvProxy
+        ? shouldBypassEnvProxy
+          ? "env-proxy-bypass-eligible"
+          : "env-proxy"
+        : "direct",
+    autoSelectFamily: autoSelectDecision.value,
+    dnsResultOrder,
+    stickyIpv4FallbackArmed: allowStickyFallback,
+    dispatcherAttempts: transportAttempts.length,
   });
 
   let stickyAttemptIndex = 0;
@@ -586,7 +631,9 @@ export function resolveTelegramTransport(
     for (let nextIndex = startIndex + 1; nextIndex < transportAttempts.length; nextIndex += 1) {
       const nextAttempt = transportAttempts[nextIndex];
       if (nextAttempt.logMessage) {
-        log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)})`);
+        log.warn(
+          `${nextAttempt.logMessage} (attempt=${nextIndex + 1}/${transportAttempts.length} node=${process.versions.node ?? "unknown"} mode=${defaultDispatcher.mode} proxyMode=${explicitProxyUrl ? "explicit-proxy" : useEnvProxy ? "env-proxy" : "direct"} autoSelectFamily=${formatTransportDiagValue(autoSelectDecision.value)} dnsResultOrder=${formatTransportDiagValue(dnsResultOrder)} codeChain=${formatErrorCodes(err)})`,
+        );
       }
       try {
         const response = await sourceFetch(

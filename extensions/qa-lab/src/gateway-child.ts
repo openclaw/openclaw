@@ -425,11 +425,32 @@ async function fetchLocalGatewayHealth(params: {
   }
 }
 
+async function probeQaBusReady(baseUrl: string): Promise<boolean> {
+  try {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${baseUrl.replace(/\/+$/, "")}/v1/state`,
+      init: {
+        signal: AbortSignal.timeout(2_000),
+      },
+      policy: { allowPrivateNetwork: true },
+      auditContext: "qa-lab-qa-bus-health",
+    });
+    try {
+      return response.ok;
+    } finally {
+      await release();
+    }
+  } catch {
+    return false;
+  }
+}
+
 export const __testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
   fetchLocalGatewayHealth,
+  probeQaBusReady,
   isRetryableGatewayCallError,
   isRetryableRpcStartupError,
   isRetryableGatewayStartupError,

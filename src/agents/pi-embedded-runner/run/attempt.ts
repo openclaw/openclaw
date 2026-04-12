@@ -91,6 +91,7 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import type { AgentRunPhaseTimings, AgentRunTimeoutPhase } from "../../run-telemetry.types.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -402,6 +403,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
 
+    const sessionLockWaitStartedAt = Date.now();
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
@@ -410,6 +412,15 @@ export async function runEmbeddedAttempt(
           compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
         }),
       }),
+    });
+    const attemptPhaseTimings: AgentRunPhaseTimings = {
+      sessionLockWaitMs: Date.now() - sessionLockWaitStartedAt,
+    };
+    params.onTimingUpdate?.({
+      lifecyclePhase: "preflight",
+      phaseTimings: {
+        sessionLockWaitMs: attemptPhaseTimings.sessionLockWaitMs,
+      },
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -1483,7 +1494,26 @@ export async function runEmbeddedAttempt(
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,
           onPartialReply: params.onPartialReply,
-          onAssistantMessageStart: params.onAssistantMessageStart,
+          onAssistantMessageStart: () => {
+            const firstTokenAt = Date.now();
+            providerFirstTokenAt ??= firstTokenAt;
+            if (providerRequestStartedAt && providerFirstTokenAt) {
+              attemptPhaseTimings.providerFirstTokenMs =
+                providerFirstTokenAt - providerRequestStartedAt;
+            }
+            params.onTimingUpdate?.({
+              lifecyclePhase: "provider",
+              firstTokenAt: providerFirstTokenAt,
+              ...(attemptPhaseTimings.providerFirstTokenMs !== undefined
+                ? {
+                    phaseTimings: {
+                      providerFirstTokenMs: attemptPhaseTimings.providerFirstTokenMs,
+                    },
+                  }
+                : {}),
+            });
+            return params.onAssistantMessageStart?.();
+          },
           onAgentEvent: params.onAgentEvent,
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
@@ -1544,6 +1574,11 @@ export async function runEmbeddedAttempt(
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
+      let promptStartedAt = 0;
+      let providerRequestStartedAt: number | undefined;
+      let providerFirstTokenAt: number | undefined;
+      let promptEndedAt: number | undefined;
+      let postTurnStartedAt: number | undefined;
       const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
         abortTimer = setTimeout(
           () => {
@@ -1635,7 +1670,10 @@ export async function runEmbeddedAttempt(
       let prePromptMessageCount = activeSession.messages.length;
       let skipPromptSubmission = false;
       try {
-        const promptStartedAt = Date.now();
+        promptStartedAt = Date.now();
+        params.onTimingUpdate?.({
+          lifecyclePhase: "preflight",
+        });
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -1960,6 +1998,15 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: effectivePrompt,
             });
+            providerRequestStartedAt = Date.now();
+            attemptPhaseTimings.preflightMs = providerRequestStartedAt - promptStartedAt;
+            params.onTimingUpdate?.({
+              lifecyclePhase: "provider",
+              providerRequestStartedAt,
+              phaseTimings: {
+                preflightMs: attemptPhaseTimings.preflightMs,
+              },
+            });
 
             // Only pass images option if there are actually images to pass
             // This avoids potential issues with models that don't expect the images parameter
@@ -1993,8 +2040,12 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
+          promptEndedAt = Date.now();
+          if (providerRequestStartedAt && promptEndedAt >= providerRequestStartedAt) {
+            attemptPhaseTimings.providerElapsedMs = promptEndedAt - providerRequestStartedAt;
+          }
           log.debug(
-            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${promptEndedAt - promptStartedAt}`,
           );
         }
 
@@ -2008,6 +2059,17 @@ export async function runEmbeddedAttempt(
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
         const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
+        postTurnStartedAt = Date.now();
+        params.onTimingUpdate?.({
+          lifecyclePhase: "post_turn",
+          ...(attemptPhaseTimings.providerElapsedMs !== undefined
+            ? {
+                phaseTimings: {
+                  providerElapsedMs: attemptPhaseTimings.providerElapsedMs,
+                },
+              }
+            : {}),
+        });
 
         try {
           // Flush buffered block replies before waiting for compaction so the
@@ -2357,6 +2419,31 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      if (postTurnStartedAt) {
+        attemptPhaseTimings.postTurnMs = Math.max(0, Date.now() - postTurnStartedAt);
+      }
+      const timeoutPhase: AgentRunTimeoutPhase | undefined = timedOut
+        ? timedOutDuringCompaction || promptErrorSource === "compaction"
+          ? "post_turn_timeout"
+          : providerRequestStartedAt
+            ? "provider_timeout"
+            : "preflight_timeout"
+        : undefined;
+      params.onTimingUpdate?.({
+        ...(timeoutPhase ? { timeoutPhase } : {}),
+        ...(attemptPhaseTimings.postTurnMs !== undefined
+          ? {
+              phaseTimings: {
+                postTurnMs: attemptPhaseTimings.postTurnMs,
+              },
+            }
+          : {}),
+        ...(promptError
+          ? { latestError: formatErrorMessage(promptError) }
+          : lastAssistant?.errorMessage
+            ? { latestError: lastAssistant.errorMessage }
+            : {}),
+      });
 
       return {
         replayMetadata,
@@ -2365,6 +2452,8 @@ export async function runEmbeddedAttempt(
         aborted,
         externalAbort,
         timedOut,
+        timeoutPhase,
+        phaseTimings: attemptPhaseTimings,
         idleTimedOut,
         timedOutDuringCompaction,
         promptError,

@@ -194,13 +194,17 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
-}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+}): Promise<
+  { success: ModelFallbackRunResult<T>; elapsedMs: number } | { error: unknown; elapsedMs: number }
+> {
+  const startedAt = Date.now();
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
     options: params.options,
   });
+  const elapsedMs = Date.now() - startedAt;
   if (runResult.ok) {
     return {
       success: buildFallbackSuccess({
@@ -209,9 +213,10 @@ async function runFallbackAttempt<T>(params: {
         model: params.model,
         attempts: params.attempts,
       }),
+      elapsedMs,
     };
   }
-  return { error: runResult.error };
+  return { error: runResult.error, elapsedMs };
 }
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
@@ -222,6 +227,7 @@ function recordFailedCandidateAttempt(params: {
   attempts: FallbackAttempt[];
   candidate: ModelCandidate;
   error: unknown;
+  elapsedMs?: number;
   runId?: string;
   requestedProvider?: string;
   requestedModel?: string;
@@ -240,6 +246,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
+    elapsedMs: params.elapsedMs,
   });
   logModelFallbackDecision({
     decision: "candidate_failed",
@@ -253,6 +260,7 @@ function recordFailedCandidateAttempt(params: {
     status: described.status,
     code: described.code,
     error: described.message,
+    elapsedMs: params.elapsedMs,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
@@ -783,6 +791,7 @@ export async function runWithModelFallback<T>(params: {
           candidate,
           attempt: i + 1,
           total: candidates.length,
+          elapsedMs: attemptRun.elapsedMs,
           previousAttempts: attempts,
           isPrimary,
           requestedModelMatched: requestedModel,
@@ -837,6 +846,7 @@ export async function runWithModelFallback<T>(params: {
           attempts,
           candidate,
           error: switchNormalized,
+          elapsedMs: attemptRun.elapsedMs,
           runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
@@ -863,6 +873,7 @@ export async function runWithModelFallback<T>(params: {
         attempts,
         candidate,
         error: normalized,
+        elapsedMs: attemptRun.elapsedMs,
         runId: params.runId,
         requestedProvider: params.provider,
         requestedModel: params.model,
@@ -934,6 +945,7 @@ export async function runWithImageModelFallback<T>(params: {
         provider: candidate.provider,
         model: candidate.model,
         error: formatErrorMessage(err),
+        elapsedMs: attemptRun.elapsedMs,
       });
       await params.onError?.({
         provider: candidate.provider,

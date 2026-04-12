@@ -359,6 +359,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               configured: true,
               running: false,
               restartPending: false,
+              healthMonitorSuppressedUntil: undefined,
+              healthMonitorSuppressionReason: undefined,
               lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
             });
             return;
@@ -375,6 +377,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               configured: false,
               running: false,
               restartPending: false,
+              healthMonitorSuppressedUntil: undefined,
+              healthMonitorSuppressionReason: undefined,
               lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
             });
             return;
@@ -390,6 +394,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               running: false,
               restartPending: false,
+              healthMonitorSuppressedUntil: undefined,
+              healthMonitorSuppressionReason: undefined,
               lastStopAt: Date.now(),
             });
             return;
@@ -411,6 +417,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             configured: true,
             running: true,
             restartPending: false,
+            healthMonitorSuppressedUntil: undefined,
+            healthMonitorSuppressionReason: undefined,
             lastStartAt: Date.now(),
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
@@ -439,6 +447,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
+                healthMonitorSuppressedUntil: undefined,
+                healthMonitorSuppressionReason: undefined,
                 lastStopAt: Date.now(),
               });
             })
@@ -501,6 +511,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               running: false,
               restartPending: false,
+              healthMonitorSuppressedUntil: undefined,
+              healthMonitorSuppressionReason: undefined,
               lastError: formatErrorMessage(error),
             });
           }

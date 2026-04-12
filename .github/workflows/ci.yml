@@ -230,6 +230,13 @@ jobs:
                             node_version: "22.x",
                             cache_key_suffix: "node22",
                           },
+                          {
+                            check_name: "checks-node-compat-node25",
+                            runtime: "node",
+                            task: "compat-node25",
+                            node_version: "25.x",
+                            cache_key_suffix: "node25",
+                          },
                         ]
                       : []),
                   ]
@@ -538,18 +545,18 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
     steps:
       - name: Skip compatibility lanes on pull requests
-        if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
+        if: github.event_name == 'pull_request' && startsWith(matrix.task, 'compat-node')
         run: echo "Skipping push-only lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        if: github.event_name != 'pull_request' || !startsWith(matrix.task, 'compat-node')
         uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        if: github.event_name != 'pull_request' || !startsWith(matrix.task, 'compat-node')
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
@@ -558,7 +565,7 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
+        if: (github.event_name != 'pull_request' || !startsWith(matrix.task, 'compat-node')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || startsWith(matrix.task, 'compat-node'))
         env:
           TASK: ${{ matrix.task }}
         run: |
@@ -586,7 +593,7 @@ jobs:
           path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        if: github.event_name != 'pull_request' || !startsWith(matrix.task, 'compat-node')
         env:
           TASK: ${{ matrix.task }}
           NODE_OPTIONS: --max-old-space-size=6144
@@ -600,7 +607,7 @@ jobs:
             channels)
               pnpm test:channels
               ;;
-            compat-node22)
+            compat-node22|compat-node25)
               pnpm build
               pnpm ui:build
               node openclaw.mjs --help

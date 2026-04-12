@@ -9,7 +9,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { getTelegramAbortOrigin, isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
@@ -22,6 +22,31 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+
+type TelegramPollingAbortReason = {
+  kind: "polling-watchdog" | "polling-stop" | "shutdown";
+  method: "getupdates";
+};
+
+function createPollingAbortReason(
+  kind: TelegramPollingAbortReason["kind"],
+): TelegramPollingAbortReason {
+  return {
+    kind,
+    method: "getupdates",
+  };
+}
+
+function formatAbortOriginSuffix(err: unknown): string {
+  const abortOrigin = getTelegramAbortOrigin(err);
+  if (!abortOrigin) {
+    return "";
+  }
+  const timeoutSuffix =
+    typeof abortOrigin.timeoutMs === "number" ? ` timeoutMs=${abortOrigin.timeoutMs}` : "";
+  const methodSuffix = abortOrigin.method ? ` method=${abortOrigin.method}` : "";
+  return ` abortOrigin=${abortOrigin.kind}${methodSuffix}${timeoutSuffix}`;
+}
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -57,6 +82,15 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  /** Runtime status patch hook from the channel supervisor. */
+  setStatus?: (patch: {
+    connected?: boolean;
+    restartPending?: boolean;
+    healthState?: string;
+    healthMonitorSuppressedUntil?: number | null;
+    healthMonitorSuppressionReason?: string | null;
+    lastError?: string | null;
+  }) => void;
 };
 
 export class TelegramPollingSession {
@@ -87,8 +121,31 @@ export class TelegramPollingSession {
     this.#transportState.markDirty();
   }
 
-  abortActiveFetch() {
-    this.#activeFetchAbort?.abort();
+  abortActiveFetch(reason: TelegramPollingAbortReason = createPollingAbortReason("polling-stop")) {
+    this.#activeFetchAbort?.abort(reason);
+  }
+
+  #clearRestartPendingStatus() {
+    this.opts.setStatus?.({
+      restartPending: false,
+      healthMonitorSuppressedUntil: undefined,
+      healthMonitorSuppressionReason: undefined,
+    });
+  }
+
+  #markRestartPendingStatus(params: {
+    delayMs: number;
+    suppressionReason: string;
+    lastError?: string | null;
+  }) {
+    this.opts.setStatus?.({
+      connected: false,
+      restartPending: true,
+      healthState: "polling-restart-pending",
+      healthMonitorSuppressedUntil: Date.now() + Math.max(0, params.delayMs),
+      healthMonitorSuppressionReason: params.suppressionReason,
+      ...(params.lastError !== undefined ? { lastError: params.lastError } : {}),
+    });
   }
 
   async runUntilAbort(): Promise<void> {
@@ -106,6 +163,7 @@ export class TelegramPollingSession {
         return;
       }
 
+      this.#clearRestartPendingStatus();
       const state = await this.#runPollingCycle(bot);
       if (state === "exit") {
         return;
@@ -113,10 +171,18 @@ export class TelegramPollingSession {
     }
   }
 
-  async #waitBeforeRestart(buildLine: (delay: string) => string): Promise<boolean> {
+  async #waitBeforeRestart(
+    buildLine: (delay: string) => string,
+    opts?: { suppressionReason?: string; lastError?: string | null },
+  ): Promise<boolean> {
     this.#restartAttempts += 1;
     const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, this.#restartAttempts);
     const delay = formatDurationPrecise(delayMs);
+    this.#markRestartPendingStatus({
+      delayMs,
+      suppressionReason: opts?.suppressionReason ?? "telegram-polling-restart",
+      lastError: opts?.lastError,
+    });
     this.opts.log(buildLine(delay));
     try {
       await sleepWithAbort(delayMs, this.opts.abortSignal);
@@ -138,6 +204,10 @@ export class TelegramPollingSession {
     }
     return this.#waitBeforeRestart(
       (delay) => `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
+      {
+        suppressionReason: "telegram-setup-retry",
+        lastError: formatErrorMessage(err),
+      },
     );
   }
 
@@ -281,12 +351,15 @@ export class TelegramPollingSession {
     const runner = run(bot, this.opts.runnerOptions);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
-    const abortFetch = () => {
-      fetchAbortController?.abort();
+    const abortFetch = (reason?: TelegramPollingAbortReason) => {
+      fetchAbortController?.abort(reason);
+    };
+    const abortFetchOnAbort = () => {
+      abortFetch(createPollingAbortReason("shutdown"));
     };
 
     if (this.opts.abortSignal && fetchAbortController) {
-      this.opts.abortSignal.addEventListener("abort", abortFetch, { once: true });
+      this.opts.abortSignal.addEventListener("abort", abortFetchOnAbort, { once: true });
     }
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
@@ -295,8 +368,8 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
-    const stopRunner = () => {
-      fetchAbortController?.abort();
+    const stopRunner = (reason?: TelegramPollingAbortReason) => {
+      abortFetch(reason ?? createPollingAbortReason("polling-stop"));
       stopPromise ??= Promise.resolve(runner.stop())
         .then(() => undefined)
         .catch(() => {
@@ -313,7 +386,7 @@ export class TelegramPollingSession {
     };
     const stopOnAbort = () => {
       if (this.opts.abortSignal?.aborted) {
-        void stopRunner();
+        void stopRunner(createPollingAbortReason("shutdown"));
       }
     };
 
@@ -357,7 +430,7 @@ export class TelegramPollingSession {
         this.opts.log(
           `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
         );
-        void stopRunner();
+        void stopRunner(createPollingAbortReason("polling-watchdog"));
         void stopBot();
         if (!forceCycleTimer) {
           forceCycleTimer = setTimeout(() => {
@@ -390,6 +463,10 @@ export class TelegramPollingSession {
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
+        {
+          suppressionReason: "telegram-polling-restart",
+          lastError: lastGetUpdatesError,
+        },
       );
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
@@ -411,10 +488,14 @@ export class TelegramPollingSession {
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
       this.opts.log(
-        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${String(lastGetUpdatesError)}` : ""}`,
+        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${String(lastGetUpdatesError)}` : ""}${formatAbortOriginSuffix(err)}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
+        {
+          suppressionReason: "telegram-polling-restart",
+          lastError: errMsg,
+        },
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
@@ -422,7 +503,7 @@ export class TelegramPollingSession {
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
       }
-      this.opts.abortSignal?.removeEventListener("abort", abortFetch);
+      this.opts.abortSignal?.removeEventListener("abort", abortFetchOnAbort);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await waitForGracefulStop(stopRunner);
       await waitForGracefulStop(stopBot);

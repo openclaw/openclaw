@@ -188,6 +188,8 @@ export type ChannelAccountSnapshot = {
   lastEventAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  healthMonitorSuppressedUntil?: number | null;
+  healthMonitorSuppressionReason?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;

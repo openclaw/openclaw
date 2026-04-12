@@ -42,11 +42,13 @@ describe("createTelegramBot fetch abort", () => {
     );
 
     const observedSignalPromise = clientFetch("https://example.test");
-    shutdown.abort(new Error("shutdown"));
+    shutdown.abort();
     const observedSignal = (await observedSignalPromise) as AbortSignal;
 
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal.aborted).toBe(true);
+    expect(observedSignal.reason).toBeInstanceOf(DOMException);
+    expect((observedSignal.reason as DOMException).name).toBe("AbortError");
   });
 
   it("tags wrapped Telegram fetch failures with the Bot API method", async () => {
@@ -86,6 +88,11 @@ describe("createTelegramBot fetch abort", () => {
 
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal.aborted).toBe(true);
+    expect(observedSignal.reason).toEqual({
+      kind: "request-timeout",
+      method: "getupdates",
+      timeoutMs: 45_000,
+    });
     vi.useRealTimers();
   });
 

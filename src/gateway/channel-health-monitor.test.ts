@@ -227,6 +227,39 @@ describe("channel-health-monitor", () => {
     await expectNoStart(manager);
   });
 
+  it("skips channels already marked restart-pending by the runtime", async () => {
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: false,
+          connected: false,
+          enabled: true,
+          configured: true,
+          restartPending: true,
+          lastError: "polling restart pending",
+        },
+      },
+    });
+    await expectNoStart(manager);
+  });
+
+  it("skips channels with an active runtime suppression window", async () => {
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: false,
+          connected: false,
+          enabled: true,
+          configured: true,
+          healthMonitorSuppressedUntil: Date.now() + 60_000,
+          healthMonitorSuppressionReason: "telegram-polling-restart",
+          lastError: "polling restart pending",
+        },
+      },
+    });
+    await expectNoStart(manager);
+  });
+
   it("skips channels with health monitor disabled globally for that account", async () => {
     const manager = createSnapshotManager(
       {

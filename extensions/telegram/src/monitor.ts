@@ -100,7 +100,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
       pollingSession?.markForceRestarted();
       pollingSession?.markTransportDirty();
-      pollingSession?.abortActiveFetch();
+      pollingSession?.abortActiveFetch({ kind: "polling-stop", method: "getupdates" });
       void activeRunner.stop().catch(() => {});
       log("[telegram][diag] marking transport dirty after polling network failure");
       log(
@@ -227,6 +227,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
+      setStatus: opts.setStatus,
     });
     await pollingSession.runUntilAbort();
   } finally {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
@@ -114,6 +114,42 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+
+  it("enriches lifecycle snapshots with run context telemetry", async () => {
+    const runId = `run-telemetry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    registerAgentRunContext(runId, {
+      acceptedAt: 10,
+      startedAt: 20,
+      lifecyclePhase: "provider",
+      timeoutPhase: "provider_timeout",
+      phaseTimings: {
+        sessionQueueWaitMs: 4,
+        preflightMs: 11,
+      },
+      latestError: "provider timed out",
+    });
+
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 45, aborted: true },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "timeout",
+      acceptedAt: 10,
+      startedAt: 20,
+      endedAt: 45,
+      error: "provider timed out",
+      timeoutPhase: "provider_timeout",
+      lifecyclePhase: "provider",
+      phaseTimings: {
+        sessionQueueWaitMs: 4,
+        preflightMs: 11,
+      },
+    });
   });
 });
 

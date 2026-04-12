@@ -1,3 +1,8 @@
+import type {
+  AgentRunLifecyclePhase,
+  AgentRunPhaseTimings,
+  AgentRunTimeoutPhase,
+} from "../agents/run-telemetry.types.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
@@ -109,6 +114,14 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  acceptedAt?: number;
+  startedAt?: number;
+  lifecyclePhase?: AgentRunLifecyclePhase;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  phaseTimings?: AgentRunPhaseTimings;
+  latestError?: string;
+  providerRequestStartedAt?: number;
+  firstTokenAt?: number;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -158,10 +171,44 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
+  if (typeof context.acceptedAt === "number") {
+    existing.acceptedAt = context.acceptedAt;
+  }
+  if (typeof context.startedAt === "number") {
+    existing.startedAt = context.startedAt;
+  }
+  if (context.lifecyclePhase) {
+    existing.lifecyclePhase = context.lifecyclePhase;
+  }
+  if (context.timeoutPhase) {
+    existing.timeoutPhase = context.timeoutPhase;
+  }
+  if (context.phaseTimings) {
+    existing.phaseTimings = {
+      ...existing.phaseTimings,
+      ...context.phaseTimings,
+    };
+  }
+  if (typeof context.latestError === "string") {
+    existing.latestError = context.latestError;
+  }
+  if (typeof context.providerRequestStartedAt === "number") {
+    existing.providerRequestStartedAt = context.providerRequestStartedAt;
+  }
+  if (typeof context.firstTokenAt === "number") {
+    existing.firstTokenAt = context.firstTokenAt;
+  }
 }
 
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+export function updateAgentRunContext(runId: string, patch: AgentRunContext) {
+  if (!runId) {
+    return;
+  }
+  registerAgentRunContext(runId, patch);
 }
 
 export function clearAgentRunContext(runId: string) {

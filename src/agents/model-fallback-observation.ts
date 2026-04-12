@@ -43,6 +43,7 @@ export function logModelFallbackDecision(params: {
   status?: number;
   code?: string;
   error?: string;
+  elapsedMs?: number;
   nextCandidate?: ModelCandidate;
   isPrimary?: boolean;
   requestedModelMatched?: boolean;
@@ -83,16 +84,19 @@ export function logModelFallbackDecision(params: {
     fallbackConfigured: params.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     profileCount: params.profileCount,
+    elapsedMs: params.elapsedMs,
     previousAttempts: params.previousAttempts?.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,
       reason: attempt.reason,
       status: attempt.status,
       code: attempt.code,
+      elapsedMs: attempt.elapsedMs,
       ...buildErrorObservationFields(attempt.error),
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}` +
+      `${typeof params.elapsedMs === "number" ? ` elapsedMs=${params.elapsedMs}` : ""}${detailSuffix}`,
   });
 }

@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import {
+  emitAgentPlanEvent,
+  getAgentRunContext,
+  updateAgentRunContext,
+} from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -65,6 +69,11 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import type {
+  AgentRunLifecyclePhase,
+  AgentRunPhaseTimings,
+  AgentRunTimeoutPhase,
+} from "../run-telemetry.types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -210,12 +219,66 @@ export async function runEmbeddedPiAgent(
   };
 
   throwIfAborted();
+  const queuePhaseTimings: AgentRunPhaseTimings = {};
+  const applyRunTimingUpdate = (update: {
+    lifecyclePhase?: AgentRunLifecyclePhase;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    phaseTimings?: Partial<AgentRunPhaseTimings>;
+    latestError?: string;
+    providerRequestStartedAt?: number;
+    firstTokenAt?: number;
+    startedAt?: number;
+  }) => {
+    updateAgentRunContext(params.runId, {
+      ...(update.lifecyclePhase ? { lifecyclePhase: update.lifecyclePhase } : {}),
+      ...(update.timeoutPhase ? { timeoutPhase: update.timeoutPhase } : {}),
+      ...(update.phaseTimings ? { phaseTimings: update.phaseTimings } : {}),
+      ...(typeof update.latestError === "string" ? { latestError: update.latestError } : {}),
+      ...(typeof update.providerRequestStartedAt === "number"
+        ? { providerRequestStartedAt: update.providerRequestStartedAt }
+        : {}),
+      ...(typeof update.firstTokenAt === "number" ? { firstTokenAt: update.firstTokenAt } : {}),
+      ...(typeof update.startedAt === "number" ? { startedAt: update.startedAt } : {}),
+    });
+  };
+  const mergePhaseTimings = (
+    attemptPhaseTimings?: AgentRunPhaseTimings,
+  ): AgentRunPhaseTimings | undefined => {
+    const merged = {
+      ...queuePhaseTimings,
+      ...attemptPhaseTimings,
+    };
+    return Object.values(merged).some((value) => typeof value === "number") ? merged : undefined;
+  };
 
+  const sessionEnqueuedAt = Date.now();
   return enqueueSession(() => {
     throwIfAborted();
+    queuePhaseTimings.sessionQueueWaitMs = Date.now() - sessionEnqueuedAt;
+    applyRunTimingUpdate({
+      phaseTimings: {
+        sessionQueueWaitMs: queuePhaseTimings.sessionQueueWaitMs,
+      },
+    });
+    const globalEnqueuedAt = Date.now();
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+      queuePhaseTimings.globalQueueWaitMs = started - globalEnqueuedAt;
+      const acceptedAt = getAgentRunContext(params.runId)?.acceptedAt;
+      if (typeof acceptedAt === "number") {
+        queuePhaseTimings.acceptedToStartMs = started - acceptedAt;
+      }
+      applyRunTimingUpdate({
+        lifecyclePhase: "preflight",
+        startedAt: started,
+        phaseTimings: {
+          globalQueueWaitMs: queuePhaseTimings.globalQueueWaitMs,
+          ...(queuePhaseTimings.acceptedToStartMs !== undefined
+            ? { acceptedToStartMs: queuePhaseTimings.acceptedToStartMs }
+            : {}),
+        },
+      });
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -475,7 +538,7 @@ export async function runEmbeddedPiAgent(
         modelId?: string;
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason || reason === "timeout") {
+        if (!profileId || !reason) {
           return;
         }
         await markAuthProfileFailure({
@@ -488,12 +551,17 @@ export async function runEmbeddedPiAgent(
           modelId: failure.modelId,
         });
       };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
+      const resolveAuthProfileFailureReason = (params: {
+        failoverReason: FailoverReason | null;
+        allowTimeoutFailure?: boolean;
+      }): AuthProfileFailureReason | null => {
+        // Repeated timeout failures should open the same short-lived
+        // auth-profile cooldown window as other transient provider failures.
+        const { failoverReason, allowTimeoutFailure = true } = params;
+        if (!failoverReason) {
+          return null;
+        }
+        if (failoverReason === "timeout" && !allowTimeoutFailure) {
           return null;
         }
         return failoverReason;
@@ -696,6 +764,9 @@ export async function runEmbeddedPiAgent(
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
+            onTimingUpdate: (update) => {
+              applyRunTimingUpdate(update);
+            },
             onPartialReply: params.onPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
             onBlockReply: params.onBlockReply,
@@ -726,12 +797,29 @@ export async function runEmbeddedPiAgent(
             promptErrorSource,
             preflightRecovery,
             timedOut,
+            timeoutPhase,
             idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          const allowTimeoutProfileFailure = timeoutPhase === "provider_timeout";
+          const phaseTimings = mergePhaseTimings(attempt.phaseTimings);
+          applyRunTimingUpdate({
+            lifecyclePhase: timedOutDuringCompaction
+              ? "post_turn"
+              : timeoutPhase === "provider_timeout"
+                ? "provider"
+                : "preflight",
+            ...(timeoutPhase ? { timeoutPhase } : {}),
+            ...(phaseTimings ? { phaseTimings } : {}),
+            ...(promptError
+              ? { latestError: formatErrorMessage(promptError) }
+              : sessionLastAssistant?.errorMessage
+                ? { latestError: sessionLastAssistant.errorMessage }
+                : {}),
+          });
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature
@@ -1147,6 +1235,8 @@ export async function runEmbeddedPiAgent(
                   lastAssistant: sessionLastAssistant,
                   lastTurnTotal,
                 }),
+                timeoutPhase,
+                phaseTimings,
                 systemPromptReport: attempt.systemPromptReport,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
@@ -1201,6 +1291,8 @@ export async function runEmbeddedPiAgent(
                     lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
+                  timeoutPhase,
+                  phaseTimings,
                   systemPromptReport: attempt.systemPromptReport,
                   replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
@@ -1239,6 +1331,8 @@ export async function runEmbeddedPiAgent(
                     lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
+                  timeoutPhase,
+                  phaseTimings,
                   systemPromptReport: attempt.systemPromptReport,
                   replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
@@ -1248,8 +1342,10 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
-            const promptProfileFailureReason =
-              resolveAuthProfileFailureReason(promptFailoverReason);
+            const promptProfileFailureReason = resolveAuthProfileFailureReason({
+              failoverReason: promptFailoverReason,
+              allowTimeoutFailure: allowTimeoutProfileFailure,
+            });
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
@@ -1369,8 +1465,10 @@ export async function runEmbeddedPiAgent(
               provider: assistantForFailover?.provider,
             },
           );
-          const assistantProfileFailureReason =
-            resolveAuthProfileFailureReason(assistantFailoverReason);
+          const assistantProfileFailureReason = resolveAuthProfileFailureReason({
+            failoverReason: assistantFailoverReason,
+            allowTimeoutFailure: allowTimeoutProfileFailure,
+          });
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
@@ -1533,7 +1631,7 @@ export async function runEmbeddedPiAgent(
               : "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);
-            const livenessState = resolveRunLivenessState({
+            const livenessState: EmbeddedRunLivenessState = resolveRunLivenessState({
               payloadCount: payloads.length,
               aborted,
               timedOut,
@@ -1555,6 +1653,8 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta,
                 aborted,
+                timeoutPhase,
+                phaseTimings,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
                 replayInvalid,
@@ -1657,6 +1757,8 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta,
                 aborted,
+                timeoutPhase,
+                phaseTimings,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
                 replayInvalid,
@@ -1672,7 +1774,7 @@ export async function runEmbeddedPiAgent(
           }
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
-            const livenessState = resolveRunLivenessState({
+            const livenessState: EmbeddedRunLivenessState = resolveRunLivenessState({
               payloadCount: payloads.length,
               aborted,
               timedOut,
@@ -1694,7 +1796,10 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+                reason: resolveAuthProfileFailureReason({
+                  failoverReason: assistantFailoverReason,
+                  allowTimeoutFailure: allowTimeoutProfileFailure,
+                }),
               });
             }
 
@@ -1709,6 +1814,8 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta,
                 aborted,
+                timeoutPhase,
+                phaseTimings,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
                 replayInvalid,
@@ -1740,7 +1847,7 @@ export async function runEmbeddedPiAgent(
             });
           }
           const replayInvalid = resolveReplayInvalidForAttempt(null);
-          const livenessState = resolveRunLivenessState({
+          const livenessState: EmbeddedRunLivenessState = resolveRunLivenessState({
             payloadCount: payloads.length,
             aborted,
             timedOut,
@@ -1757,6 +1864,8 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
+              timeoutPhase,
+              phaseTimings,
               systemPromptReport: attempt.systemPromptReport,
               finalAssistantVisibleText,
               replayInvalid,
@@ -1799,5 +1908,14 @@ export async function runEmbeddedPiAgent(
         }
       }
     });
+  }).catch((error) => {
+    if (error instanceof Error && error.name === "GatewayDrainingError") {
+      applyRunTimingUpdate({
+        lifecyclePhase: "gateway_draining",
+        timeoutPhase: "gateway_draining",
+        latestError: formatErrorMessage(error),
+      });
+    }
+    throw error;
   });
 }

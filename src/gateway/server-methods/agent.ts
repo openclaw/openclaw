@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import type { AgentRunTimeoutPhase } from "../../agents/run-telemetry.types.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
@@ -21,7 +22,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { getAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -99,6 +100,64 @@ function resolveAllowModelOverrideFromClient(
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
+}
+
+function readAcceptedAtFromAgentDedupe(params: {
+  dedupe: Map<string, { payload?: unknown }>;
+  runId: string;
+}): number | undefined {
+  const payload = params.dedupe.get(`agent:${params.runId}`)?.payload as
+    | {
+        acceptedAt?: unknown;
+      }
+    | undefined;
+  return typeof payload?.acceptedAt === "number" && Number.isFinite(payload.acceptedAt)
+    ? payload.acceptedAt
+    : undefined;
+}
+
+function buildAgentWaitTimeoutSnapshot(params: {
+  dedupe: Map<string, { payload?: unknown }>;
+  runId: string;
+  endedAt?: number;
+}): AgentWaitTerminalSnapshot | null {
+  const context = getAgentRunContext(params.runId);
+  const acceptedAt = readAcceptedAtFromAgentDedupe(params) ?? context?.acceptedAt;
+  const startedAt = context?.startedAt;
+  if (acceptedAt === undefined && startedAt === undefined) {
+    return null;
+  }
+  const timeoutPhase: AgentRunTimeoutPhase =
+    context?.timeoutPhase ??
+    (!startedAt
+      ? "queue_timeout"
+      : context?.lifecyclePhase === "post_turn"
+        ? "post_turn_timeout"
+        : context?.lifecyclePhase === "provider"
+          ? "provider_timeout"
+          : context?.lifecyclePhase === "gateway_draining"
+            ? "gateway_draining"
+            : "preflight_timeout");
+  const error =
+    timeoutPhase === "queue_timeout"
+      ? "agent.wait timed out while the run was still queued"
+      : timeoutPhase === "provider_timeout"
+        ? "agent.wait timed out while waiting for the provider response"
+        : timeoutPhase === "post_turn_timeout"
+          ? "agent.wait timed out during post-turn cleanup"
+          : timeoutPhase === "gateway_draining"
+            ? "agent.wait timed out because the gateway was draining for restart"
+            : "agent.wait timed out during preflight";
+  return {
+    status: "timeout",
+    acceptedAt,
+    startedAt,
+    endedAt: params.endedAt ?? Date.now(),
+    error,
+    timeoutPhase,
+    phaseTimings: context?.phaseTimings,
+    lifecyclePhase: context?.lifecyclePhase ?? (!startedAt ? "accepted" : "preflight"),
+  };
 }
 
 async function runSessionResetFromAgent(params: {
@@ -233,11 +292,20 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      const runContext = getAgentRunContext(params.runId);
       const payload = {
         runId: params.runId,
         status: "ok" as const,
         summary: "completed",
         result,
+        ...(typeof runContext?.acceptedAt === "number"
+          ? { acceptedAt: runContext.acceptedAt }
+          : {}),
+        ...(typeof runContext?.startedAt === "number" ? { startedAt: runContext.startedAt } : {}),
+        endedAt: Date.now(),
+        ...(result.meta.timeoutPhase ? { timeoutPhase: result.meta.timeoutPhase } : {}),
+        ...(result.meta.phaseTimings ? { phaseTimings: result.meta.phaseTimings } : {}),
+        lifecyclePhase: "completed" as const,
       };
       setGatewayDedupeEntry({
         dedupe: params.context.dedupe,
@@ -253,11 +321,21 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      const runContext = getAgentRunContext(params.runId);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
         status: "error" as const,
         summary: String(err),
+        ...(typeof runContext?.acceptedAt === "number"
+          ? { acceptedAt: runContext.acceptedAt }
+          : {}),
+        ...(typeof runContext?.startedAt === "number" ? { startedAt: runContext.startedAt } : {}),
+        endedAt: Date.now(),
+        ...(runContext?.timeoutPhase ? { timeoutPhase: runContext.timeoutPhase } : {}),
+        ...(runContext?.phaseTimings ? { phaseTimings: runContext.phaseTimings } : {}),
+        lifecyclePhase: "error" as const,
+        ...(typeof runContext?.latestError === "string" ? { error: runContext.latestError } : {}),
       };
       setGatewayDedupeEntry({
         dedupe: params.context.dedupe,
@@ -793,6 +871,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       status: "accepted" as const,
       acceptedAt: Date.now(),
     };
+    registerAgentRunContext(runId, {
+      ...(resolvedSessionKey ? { sessionKey: resolvedSessionKey } : {}),
+      acceptedAt: accepted.acceptedAt,
+      lifecyclePhase: "accepted",
+    });
     // Store an in-flight ack so retries do not spawn a second run.
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
@@ -978,9 +1061,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       respond(true, {
         runId,
         status: cachedGatewaySnapshot.status,
+        acceptedAt: cachedGatewaySnapshot.acceptedAt,
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
+        phaseTimings: cachedGatewaySnapshot.phaseTimings,
+        lifecyclePhase: cachedGatewaySnapshot.lifecyclePhase,
       });
       return;
     }
@@ -1012,7 +1099,25 @@ export const agentHandlers: GatewayRequestHandlers = {
       first.snapshot;
     if (snapshot) {
       if (first.source === "lifecycle") {
-        dedupeAbortController.abort();
+        const dedupeSnapshot = readTerminalSnapshotFromGatewayDedupe({
+          dedupe: context.dedupe,
+          runId,
+          ignoreAgentTerminalSnapshot: hasActiveChatRun,
+        });
+        const activePhase = getAgentRunContext(runId)?.lifecyclePhase;
+        if (dedupeSnapshot) {
+          snapshot = dedupeSnapshot;
+          dedupeAbortController.abort();
+        } else if (
+          activePhase === "preflight" ||
+          activePhase === "provider" ||
+          activePhase === "post_turn"
+        ) {
+          snapshot = (await dedupePromise) ?? snapshot;
+          dedupeAbortController.abort();
+        } else {
+          dedupeAbortController.abort();
+        }
       } else {
         lifecycleAbortController.abort();
       }
@@ -1023,18 +1128,33 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (!snapshot) {
+      const timeoutSnapshot = buildAgentWaitTimeoutSnapshot({
+        dedupe: context.dedupe,
+        runId,
+      });
       respond(true, {
         runId,
         status: "timeout",
+        acceptedAt: timeoutSnapshot?.acceptedAt,
+        startedAt: timeoutSnapshot?.startedAt,
+        endedAt: timeoutSnapshot?.endedAt,
+        error: timeoutSnapshot?.error,
+        timeoutPhase: timeoutSnapshot?.timeoutPhase,
+        phaseTimings: timeoutSnapshot?.phaseTimings,
+        lifecyclePhase: timeoutSnapshot?.lifecyclePhase,
       });
       return;
     }
     respond(true, {
       runId,
       status: snapshot.status,
+      acceptedAt: snapshot.acceptedAt,
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      timeoutPhase: snapshot.timeoutPhase,
+      phaseTimings: snapshot.phaseTimings,
+      lifecyclePhase: snapshot.lifecyclePhase,
     });
   },
 };

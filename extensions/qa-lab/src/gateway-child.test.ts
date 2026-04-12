@@ -280,6 +280,29 @@ describe("buildQaRuntimeEnv", () => {
     });
   });
 
+  it("reports the QA bus as ready when the health probe succeeds", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: { ok: true },
+      release,
+    });
+
+    await expect(__testing.probeQaBusReady("http://127.0.0.1:61842/")).resolves.toBe(true);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:61842/v1/state",
+        auditContext: "qa-lab-qa-bus-health",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the QA bus as unavailable when the health probe throws", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+
+    await expect(__testing.probeQaBusReady("http://127.0.0.1:61842")).resolves.toBe(false);
+  });
+
   it("allows loopback gateway health probes through the SSRF guard", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

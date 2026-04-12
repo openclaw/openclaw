@@ -112,6 +112,24 @@ describe("qa suite failure reply handling", () => {
     expect(result).toEqual([10, 20, 30, 40]);
   });
 
+  it("detects when qa-channel is enabled in a config snapshot", () => {
+    expect(
+      qaSuiteTesting.hasEnabledQaChannel({
+        channels: {
+          "qa-channel": { enabled: true },
+        },
+      } as Record<string, unknown>),
+    ).toBe(true);
+    expect(
+      qaSuiteTesting.hasEnabledQaChannel({
+        channels: {
+          "qa-channel": { enabled: false },
+        },
+      } as Record<string, unknown>),
+    ).toBe(false);
+    expect(qaSuiteTesting.hasEnabledQaChannel({} as Record<string, unknown>)).toBe(false);
+  });
+
   it("keeps explicitly requested provider-specific scenarios", () => {
     const scenarios = [
       makeScenario("generic"),

@@ -6,6 +6,11 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type {
+  AgentRunLifecyclePhase,
+  AgentRunPhaseTimings,
+  AgentRunTimeoutPhase,
+} from "../../run-telemetry.types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
@@ -26,6 +31,15 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextTokenBudget?: number;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
+  /** Best-effort timing/phase updates for queue attribution and wait telemetry. */
+  onTimingUpdate?: (update: {
+    lifecyclePhase?: AgentRunLifecyclePhase;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    phaseTimings?: Partial<AgentRunPhaseTimings>;
+    latestError?: string;
+    providerRequestStartedAt?: number;
+    firstTokenAt?: number;
+  }) => void;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */
@@ -44,6 +58,8 @@ export type EmbeddedRunAttemptResult = {
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  phaseTimings?: AgentRunPhaseTimings;
   /** True when the no-response LLM idle watchdog caused the timeout. */
   idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */

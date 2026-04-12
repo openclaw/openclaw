@@ -1,10 +1,19 @@
+import type {
+  AgentRunLifecyclePhase,
+  AgentRunPhaseTimings,
+  AgentRunTimeoutPhase,
+} from "../../agents/run-telemetry.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 
 export type AgentWaitTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
+  acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  phaseTimings?: AgentRunPhaseTimings;
+  lifecyclePhase?: AgentRunLifecyclePhase;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -68,10 +77,14 @@ export function readTerminalSnapshotFromDedupeEntry(
   const payload = entry.payload as
     | {
         status?: unknown;
+        acceptedAt?: unknown;
         startedAt?: unknown;
         endedAt?: unknown;
         error?: unknown;
         summary?: unknown;
+        timeoutPhase?: unknown;
+        phaseTimings?: unknown;
+        lifecyclePhase?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -79,8 +92,21 @@ export function readTerminalSnapshotFromDedupeEntry(
     return null;
   }
 
+  const acceptedAt = asFiniteNumber(payload?.acceptedAt);
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
+  const timeoutPhase =
+    typeof payload?.timeoutPhase === "string"
+      ? (payload.timeoutPhase as AgentRunTimeoutPhase)
+      : undefined;
+  const phaseTimings =
+    payload?.phaseTimings && typeof payload.phaseTimings === "object"
+      ? (payload.phaseTimings as AgentRunPhaseTimings)
+      : undefined;
+  const lifecyclePhase =
+    typeof payload?.lifecyclePhase === "string"
+      ? (payload.lifecyclePhase as AgentRunLifecyclePhase)
+      : undefined;
   const errorMessage =
     typeof payload?.error === "string"
       ? payload.error
@@ -91,17 +117,25 @@ export function readTerminalSnapshotFromDedupeEntry(
   if (status === "ok" || status === "timeout") {
     return {
       status,
-      startedAt,
+      ...(acceptedAt !== undefined ? { acceptedAt } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
       endedAt,
       error: status === "timeout" ? errorMessage : undefined,
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(phaseTimings ? { phaseTimings } : {}),
+      ...(lifecyclePhase ? { lifecyclePhase } : {}),
     };
   }
   if (status === "error" || !entry.ok) {
     return {
       status: "error",
-      startedAt,
+      ...(acceptedAt !== undefined ? { acceptedAt } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
       endedAt,
       error: errorMessage,
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(phaseTimings ? { phaseTimings } : {}),
+      ...(lifecyclePhase ? { lifecyclePhase } : {}),
     };
   }
   return null;

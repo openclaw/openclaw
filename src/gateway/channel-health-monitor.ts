@@ -54,6 +54,17 @@ type RestartRecord = {
   restartsThisHour: { at: number }[];
 };
 
+function resolveHealthMonitorSuppressedUntil(status: {
+  healthMonitorSuppressedUntil?: number | null;
+}): number | null {
+  const suppressedUntil = status.healthMonitorSuppressedUntil;
+  return typeof suppressedUntil === "number" &&
+    Number.isFinite(suppressedUntil) &&
+    suppressedUntil > 0
+    ? suppressedUntil
+    : null;
+}
+
 function resolveTimingPolicy(
   deps: Pick<
     ChannelHealthMonitorDeps,
@@ -119,10 +130,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!status) {
             continue;
           }
+          if (status.restartPending === true) {
+            continue;
+          }
           if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
             continue;
           }
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
+            continue;
+          }
+          const suppressedUntil = resolveHealthMonitorSuppressedUntil(status);
+          if (suppressedUntil !== null && suppressedUntil > now) {
             continue;
           }
           const healthPolicy: ChannelHealthPolicy = {

@@ -204,6 +204,18 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function hasEnabledQaChannel(config: Record<string, unknown>) {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  const qaChannel = (channels as Record<string, unknown>)["qa-channel"];
+  if (!qaChannel || typeof qaChannel !== "object" || Array.isArray(qaChannel)) {
+    return false;
+  }
+  return (qaChannel as { enabled?: unknown }).enabled !== false;
+}
+
 function scenarioMatchesLiveLane(params: {
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
   primaryModel: string;
@@ -591,10 +603,12 @@ async function waitForConfigRestartSettle(
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
 ) {
-  // config.patch/config.apply can still restart asynchronously after the RPC returns
-  // in reload-off or restart-required hot-mode paths. Give that window time to fire.
-  await sleep(restartDelayMs + 750);
-  await waitForGatewayHealthy(env, timeoutMs);
+  const settleTimeoutMs = Math.max(timeoutMs, restartDelayMs + 10_000);
+  await waitForGatewayHealthy(env, settleTimeoutMs);
+  const snapshot = await readConfigSnapshot(env);
+  if (hasEnabledQaChannel(snapshot.config)) {
+    await waitForQaChannelReady(env, settleTimeoutMs);
+  }
 }
 
 function isGatewayRestartRace(error: unknown) {
@@ -1290,6 +1304,7 @@ export const qaSuiteTesting = {
   getGatewayRetryAfterMs,
   isConfigHashConflict,
   mapQaSuiteWithConcurrency,
+  hasEnabledQaChannel,
   normalizeQaSuiteConcurrency,
   scenarioMatchesLiveLane,
   selectQaSuiteScenarios,
@@ -1810,11 +1825,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     await gateway.stop({
       keepTemp,
       preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-    });
-    await disposeRegisteredAgentHarnesses();
-    await mock?.stop();
+    }).catch(() => undefined);
+    await disposeRegisteredAgentHarnesses().catch(() => undefined);
+    await mock?.stop().catch(() => undefined);
     if (ownsLab) {
-      await lab.stop();
+      await lab.stop().catch(() => undefined);
     } else {
       lab.setControlUi({
         controlUiUrl: null,

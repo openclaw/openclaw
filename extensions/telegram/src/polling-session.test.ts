@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
+const getTelegramAbortOriginMock = vi.hoisted(() => vi.fn(() => null));
 const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -16,6 +17,7 @@ vi.mock("./bot.js", () => ({
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
+  getTelegramAbortOrigin: getTelegramAbortOriginMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -197,6 +199,7 @@ describe("TelegramPollingSession", () => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
+    getTelegramAbortOriginMock.mockReset().mockReturnValue(null);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
   });
@@ -263,6 +266,7 @@ describe("TelegramPollingSession", () => {
     const botStop = vi.fn(async () => undefined);
     const firstRunnerStop = vi.fn(async () => undefined);
     const secondRunnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
     const bot = {
       api: {
         deleteWebhook: vi.fn(async () => true),
@@ -314,6 +318,7 @@ describe("TelegramPollingSession", () => {
       persistUpdateId: async () => undefined,
       log,
       telegramTransport: undefined,
+      setStatus,
     });
 
     try {
@@ -327,6 +332,20 @@ describe("TelegramPollingSession", () => {
       expect(botStop).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connected: false,
+          restartPending: true,
+          healthState: "polling-restart-pending",
+          healthMonitorSuppressionReason: "telegram-polling-restart",
+          lastError: null,
+        }),
+      );
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          restartPending: false,
+        }),
+      );
     } finally {
       watchdogHarness.restore();
     }

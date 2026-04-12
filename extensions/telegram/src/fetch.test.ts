@@ -337,6 +337,24 @@ describe("resolveTelegramFetch", () => {
     expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
   });
 
+  it("logs the resolved transport mode with node and fallback metadata", () => {
+    resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `[telegram] transport resolved node=${process.versions.node ?? "unknown"}`,
+      ),
+    );
+    expect(loggerInfo).toHaveBeenCalledWith(expect.stringContaining("mode=direct"));
+    expect(loggerInfo).toHaveBeenCalledWith(expect.stringContaining("stickyIpv4Fallback=true"));
+    expect(loggerInfo).toHaveBeenCalledWith(expect.stringContaining("dispatcherAttempts=3"));
+  });
+
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {
     vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     undiciFetch.mockResolvedValue({ ok: true } as Response);

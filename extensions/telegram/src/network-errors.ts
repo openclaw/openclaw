@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+const TELEGRAM_ABORT_ORIGIN = Symbol("openclaw.telegram.abort-origin");
 
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
@@ -109,6 +110,12 @@ export type TelegramNetworkErrorOrigin = {
   url?: string | null;
 };
 
+export type TelegramAbortOrigin = {
+  kind: "request-timeout" | "polling-watchdog" | "polling-stop" | "shutdown";
+  method?: string | null;
+  timeoutMs?: number | null;
+};
+
 function normalizeTelegramNetworkMethod(method?: string | null): string | null {
   const trimmed = method?.trim();
   if (!trimmed) {
@@ -142,6 +149,47 @@ export function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErro
     const method = "method" in origin && typeof origin.method === "string" ? origin.method : null;
     const url = "url" in origin && typeof origin.url === "string" ? origin.url : null;
     return { method, url };
+  }
+  return null;
+}
+
+export function tagTelegramAbortOrigin(err: unknown, origin: TelegramAbortOrigin): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, TELEGRAM_ABORT_ORIGIN, {
+    value: {
+      kind: origin.kind,
+      method: normalizeTelegramNetworkMethod(origin.method),
+      timeoutMs:
+        typeof origin.timeoutMs === "number" && Number.isFinite(origin.timeoutMs)
+          ? origin.timeoutMs
+          : null,
+    } satisfies TelegramAbortOrigin,
+    configurable: true,
+  });
+}
+
+export function getTelegramAbortOrigin(err: unknown): TelegramAbortOrigin | null {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const origin = (candidate as Record<PropertyKey, unknown>)[TELEGRAM_ABORT_ORIGIN];
+    if (!origin || typeof origin !== "object") {
+      continue;
+    }
+    const kind =
+      "kind" in origin && typeof origin.kind === "string"
+        ? (origin.kind as TelegramAbortOrigin["kind"])
+        : null;
+    if (!kind) {
+      continue;
+    }
+    const method = "method" in origin && typeof origin.method === "string" ? origin.method : null;
+    const timeoutMs =
+      "timeoutMs" in origin && typeof origin.timeoutMs === "number" ? origin.timeoutMs : null;
+    return { kind, method, timeoutMs };
   }
   return null;
 }

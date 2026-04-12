@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { clearAccountEntryFields, createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -909,6 +910,10 @@ export const telegramPlugin = createChatChannelPlugin({
           webhookHost: account.config.webhookHost,
           webhookPort: account.config.webhookPort,
           webhookCertPath: account.config.webhookCertPath,
+          setStatus: createAccountStatusSink({
+            accountId: account.accountId,
+            setStatus: ctx.setStatus,
+          }),
         });
       },
       logoutAccount: async ({ accountId, cfg }) => {
