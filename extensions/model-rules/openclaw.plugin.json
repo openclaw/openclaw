@@ -1,8 +1,8 @@
 {
-  "id": "claw-models",
-  "name": "Claw Models",
+  "id": "model-rules",
+  "name": "Model Rules",
   "description": "Per-model corrective instructions — patches known model defects like hallucination and tool-call fabrication",
-  "skills": ["skills/claw-models"],
+  "skills": ["./skills/model-rules"],
   "uiHints": {
     "enabled": {
       "label": "Enabled",

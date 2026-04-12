@@ -1,11 +1,11 @@
 ---
-name: claw-models
+name: model-rules
 description: "Per-model corrective instructions that patch known model defects"
 metadata:
   { "openclaw": { "emoji": "🎯" } }
 ---
 
-# Claw Models — Per-Model Corrective Rules
+# Model Rules — Per-Model Corrective Rules
 
 This plugin injects model-specific corrective instructions into your context at bootstrap. Only rules for your exact model ID are injected — you never see rules for other models. If no rules exist for the current model, nothing is injected.
 
@@ -17,7 +17,7 @@ Add the plugin to your `~/.openclaw/openclaw.json`:
 {
   plugins: {
     entries: {
-      "claw-models": {}
+      "model-rules": {}
     }
   }
 }

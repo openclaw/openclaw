@@ -1,15 +1,13 @@
 {
-  "name": "@openclaw/claw-models",
+  "name": "@openclaw/model-rules",
   "version": "2026.4.11",
   "private": true,
   "description": "Per-model corrective instructions — patches known model defects like hallucination and tool-call fabrication",
   "type": "module",
-  "license": "MIT",
-  "author": "Ali Romman, Kavin Lingham",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./index.ts"]
   }
 }

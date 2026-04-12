@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { readModelsFile, findModelSection, parseModelRef } from "./parser.js";
 import { ensureDefaultModelsFile } from "./defaults.js";
 
-interface ClawModelsConfig {
+interface ModelRulesConfig {
   enabled?: boolean;
   modelsFile?: string;
   disabledModels?: string[];
@@ -15,15 +15,15 @@ interface BootstrapEvent {
 }
 
 export default definePluginEntry({
-  id: "claw-models",
-  name: "Claw Models",
+  id: "model-rules",
+  name: "Model Rules",
   description:
     "Per-model corrective instructions — patches known model defects like hallucination and tool-call fabrication",
 
   register(api) {
-    const pluginConfig = (api.pluginConfig ?? {}) as ClawModelsConfig;
+    const pluginConfig = (api.pluginConfig ?? {}) as ModelRulesConfig;
     if (pluginConfig.enabled === false) {
-      api.logger.info("claw-models: disabled via config");
+      api.logger.info("model-rules: disabled via config");
       return;
     }
 
@@ -50,18 +50,18 @@ export default definePluginEntry({
           if (!modelRef) return;
 
           const log = api.logger;
-          log.debug?.(`claw-models: active model is ${modelRef}`);
+          log.debug?.(`model-rules: active model is ${modelRef}`);
 
           const { bareId } = parseModelRef(modelRef);
           if (disabledModels.has(bareId.toLowerCase())) {
             log.debug?.(
-              `claw-models: model ${bareId} is in disabledModels, skipping`,
+              `model-rules: model ${bareId} is in disabledModels, skipping`,
             );
             return;
           }
           if (disabledModels.has(modelRef.toLowerCase())) {
             log.debug?.(
-              `claw-models: model ${modelRef} is in disabledModels, skipping`,
+              `model-rules: model ${modelRef} is in disabledModels, skipping`,
             );
             return;
           }
@@ -73,23 +73,23 @@ export default definePluginEntry({
 
           if (section) {
             log.debug?.(
-              `claw-models: matched section for ${bareId} (${section.length} chars)`,
+              `model-rules: matched section for ${bareId} (${section.length} chars)`,
             );
             pushSection(event as BootstrapEvent, section);
           } else {
             log.debug?.(
-              `claw-models: no section found for ${bareId}, skipping injection`,
+              `model-rules: no section found for ${bareId}, skipping injection`,
             );
           }
         } catch (err) {
           api.logger.warn(
-            `claw-models: bootstrap injection failed: ${err instanceof Error ? err.message : String(err)}`,
+            `model-rules: bootstrap injection failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
     );
 
-    api.logger.info("claw-models: registered");
+    api.logger.info("model-rules: registered");
   },
 });
 
