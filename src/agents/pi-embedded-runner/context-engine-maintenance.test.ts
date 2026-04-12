@@ -204,7 +204,14 @@ describe("runContextEngineMaintenance", () => {
     const maintain = vi.fn(async (params?: unknown) => {
       await (params as { runtimeContext?: ContextEngineRuntimeContext } | undefined)?.runtimeContext?.rewriteTranscriptEntries?.({
         replacements: [
-          { entryId: "entry-1", message: { role: "assistant", content: "done", timestamp: 2 } },
+          {
+            entryId: "entry-1",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              timestamp: 2,
+            },
+          },
         ],
       });
       return {
@@ -242,7 +249,11 @@ describe("runContextEngineMaintenance", () => {
         replacements: [
           {
             entryId: "entry-1",
-            message: { role: "assistant", content: "done", timestamp: 2 },
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              timestamp: 2,
+            },
           },
         ],
       },
