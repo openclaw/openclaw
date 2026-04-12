@@ -766,7 +766,7 @@ describe("runReplyAgent claude-cli routing", () => {
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
-    opts: { storePath?: string; sessionKey?: string } = {},
+    opts: { storePath?: string; sessionKey?: string; messageThreadId?: string } = {},
   ) {
     const typing = createMockTypingController();
     const sessionKey = opts.sessionKey ?? "main";
@@ -775,6 +775,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       OriginatingTo: "channel:C1",
       AccountId: "primary",
       MessageSid: "msg",
+      MessageThreadId: opts.messageThreadId,
     } as unknown as TemplateContext;
     const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
     const followupRun = {
@@ -882,6 +883,28 @@ describe("runReplyAgent messaging tool suppression", () => {
     });
 
     const result = await createRun("slack");
+
+    expect(result).toMatchObject({ text: "hello world!" });
+  });
+
+  it("delivers replies when Slack channel matches but thread differs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "1712345678.999999",
+        },
+      ],
+      meta: {},
+    });
+
+    const result = await createRun("slack", {
+      messageThreadId: "1712345678.123456",
+    });
 
     expect(result).toMatchObject({ text: "hello world!" });
   });

@@ -405,7 +405,12 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    const threadIdRaw =
+      typeof args.threadId === "number"
+        ? String(args.threadId)
+        : (normalizeOptionalString(args.threadId) ?? "");
+    const threadId = threadIdRaw.trim() || undefined;
+    return to ? { tool: toolName, provider, accountId, to, threadId } : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {

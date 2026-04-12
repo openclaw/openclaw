@@ -83,4 +83,44 @@ describe("resolveFollowupDeliveryPayloads", () => {
       }),
     ).toEqual([{ text: "hello world!" }]);
   });
+
+  it("suppresses Slack replies when channel and thread both match", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "1712345678.123456",
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not suppress Slack replies when channel matches but thread differs", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "1712345678.999999",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "hello world!" }]);
+  });
 });

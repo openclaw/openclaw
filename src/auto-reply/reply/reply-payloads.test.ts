@@ -219,4 +219,40 @@ describe("shouldSuppressMessagingToolReplies", () => {
       }),
     ).toBe(true);
   });
+
+  it("suppresses Slack replies when channel and thread both match", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "1712345678.123456",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress Slack replies when channel matches but thread differs", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "1712345678.123456",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "1712345678.999999",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
 });

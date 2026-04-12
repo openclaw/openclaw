@@ -60,4 +60,18 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
   });
+
+  it("preserves threadId for generic message sends", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "thread-reply",
+      provider: "slack",
+      to: "channel:C1",
+      threadId: "1712345678.123456",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("slack");
+    expect(result?.to).toBe("channel:C1");
+    expect(result?.threadId).toBe("1712345678.123456");
+  });
 });

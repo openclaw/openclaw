@@ -103,6 +103,7 @@ function resolveTargetProviderForComparison(params: {
 function targetsMatchForSuppression(params: {
   provider: string;
   originTarget: string;
+  originThreadId?: string;
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
@@ -114,6 +115,11 @@ function targetsMatchForSuppression(params: {
       targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
     });
   }
+  const originThreadId = normalizeThreadIdForComparison(params.originThreadId);
+  const targetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+  if (originThreadId || targetThreadId) {
+    return params.targetKey === params.originTarget && originThreadId === targetThreadId;
+  }
   return params.targetKey === params.originTarget;
 }
 
@@ -121,6 +127,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): boolean {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -128,6 +135,8 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   const originRawTarget = normalizeOptionalString(params.originatingTo);
+  const originThreadId =
+    params.originatingThreadId != null ? String(params.originatingThreadId) : undefined;
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
@@ -146,7 +155,7 @@ export function shouldSuppressMessagingToolReplies(params: {
       return false;
     }
     const targetRaw = normalizeOptionalString(target.to);
-    if (originRawTarget && targetRaw === originRawTarget && !target.threadId) {
+    if (originRawTarget && targetRaw === originRawTarget && !target.threadId && !originThreadId) {
       return true;
     }
     const originTarget = normalizeTargetForProvider(provider, originRawTarget);
@@ -160,6 +169,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     return targetsMatchForSuppression({
       provider,
       originTarget,
+      originThreadId,
       targetKey,
       targetThreadId: target.threadId,
     });

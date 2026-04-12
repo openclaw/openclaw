@@ -592,6 +592,7 @@ export async function runReplyAgent(params: {
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,
       }),
+      originatingThreadId: sessionCtx.MessageThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: normalizeReplyMediaPaths,
     });

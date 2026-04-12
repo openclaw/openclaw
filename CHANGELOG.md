@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/agents: keep same-channel reply suppression thread-aware so threaded `message` tool sends only suppress replies in the matching Slack thread instead of silencing a different thread in the same channel.
+
 ## 2026.4.11
 
 ### Changes
