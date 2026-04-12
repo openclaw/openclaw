@@ -249,13 +249,13 @@ export type AgentDefaultsConfig = {
      */
     executionContract?: EmbeddedPiExecutionContract;
     /**
-     * Hybrid personality mode. When "hybrid", the harness routes execution
-     * turns to the primary model (e.g. gpt-5.4) and personality/conversational
-     * turns to `personalityModel` (e.g. gpt-5.2). After execution completes,
-     * the personality model rewrites the visible output in its natural voice.
-     * The user sees a synthetic model name (e.g. `gpt-5.4-psn`).
+     * Hybrid personality mode. When "hybrid", the harness routes personality
+     * and conversational turns (short messages, heartbeats) to
+     * `personalityModel` (e.g. gpt-5.2) and execution turns (tool work,
+     * code tasks) to the primary model (e.g. gpt-5.4). Both models share
+     * the GPT-5 KV cache so switching is near-zero latency.
      * - off (default): single-model behavior
-     * - hybrid: turn routing + emotional closeout
+     * - hybrid: turn-level routing based on intent classification
      */
     personalityMode?: "off" | "hybrid";
     /**

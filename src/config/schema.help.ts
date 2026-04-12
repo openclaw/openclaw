@@ -1210,7 +1210,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].embeddedPi.executionContract":
     'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
   "agents.defaults.embeddedPi.personalityMode":
-    'Hybrid personality mode: "off" (default) uses a single model, "hybrid" routes execution turns to the primary model (e.g. gpt-5.4) and personality/conversational turns to personalityModel (e.g. gpt-5.2). After execution, the personality model rewrites the output in its natural voice. The user sees a synthetic model name like gpt-5.4-psn.',
+    'Hybrid personality mode: "off" (default) uses a single model, "hybrid" routes personality and conversational turns (short messages, heartbeats) to personalityModel (e.g. gpt-5.2) and execution turns (tool work, code tasks) to the primary model. Both models share the GPT-5 KV cache for near-zero switching latency.',
   "agents.defaults.embeddedPi.personalityModel":
     'Model used for personality turns and emotional closeouts when personalityMode is "hybrid". Should be a GPT-5 family model that shares KV cache with the primary model for near-zero switching latency. Default: "openai/gpt-5.2".',
   "agents.list[].embeddedPi.personalityMode":

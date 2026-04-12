@@ -36,8 +36,9 @@ export function classifyTurnIntent(params: {
   trigger?: string;
   disableTools?: boolean;
 }): PersonalityTurnIntent {
-  // Heartbeats are always personality — they exist for proactive warmth
-  if (params.trigger === "cron") {
+  // Heartbeats and proactive triggers are always personality — they exist
+  // for warmth and initiative, not tool execution.
+  if (params.trigger === "cron" || params.trigger === "heartbeat") {
     return "personality";
   }
 

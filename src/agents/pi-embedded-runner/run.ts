@@ -107,7 +107,7 @@ import {
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
-import { buildPersonalityHybridModelName, classifyTurnIntent } from "./run/personality-routing.js";
+import { classifyTurnIntent } from "./run/personality-routing.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
@@ -300,12 +300,15 @@ export async function runEmbeddedPiAgent(
       // Store the original execution model for agentMeta display
       const executionModelId = modelId;
       const executionProvider = provider;
-      // Swap to personality model for personality turns
+      // Swap to personality model for personality turns. Use first-slash
+      // semantics so refs like `openai/gpt-5.2-instant` split correctly
+      // (provider = "openai", model = "gpt-5.2-instant") regardless of
+      // whether the model portion itself contains slashes.
       if (personalityMode === "hybrid" && turnIntent === "personality" && personalityModelRef) {
-        const parts = personalityModelRef.split("/");
-        if (parts.length === 2) {
-          provider = parts[0];
-          modelId = parts[1];
+        const slashIndex = personalityModelRef.indexOf("/");
+        if (slashIndex > 0) {
+          provider = personalityModelRef.slice(0, slashIndex);
+          modelId = personalityModelRef.slice(slashIndex + 1);
         } else {
           // Bare model name — keep the same provider
           modelId = personalityModelRef;
@@ -1535,13 +1538,14 @@ export async function runEmbeddedPiAgent(
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
-            // In hybrid personality mode, show the synthetic `-psn` model name
-            // so the execution↔personality switching is invisible to the user.
-            // Use the stored executionModelId (not model.id which may be the
-            // personality model for personality turns).
+            // agentMeta.model is persisted into the session store and used for
+            // context window resolution, model fallback, and status reporting.
+            // Do NOT write the synthetic `-psn` display name here — it would
+            // break model resolution downstream. In hybrid mode, use the
+            // execution model ID (which is the real model being resolved).
             model:
               personalityMode === "hybrid"
-                ? buildPersonalityHybridModelName(executionModelId)
+                ? `${executionProvider}/${executionModelId}`
                 : (sessionLastAssistant?.model ?? model.id),
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
