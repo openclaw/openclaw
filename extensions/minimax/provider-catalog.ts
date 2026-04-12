@@ -55,13 +55,18 @@ function buildMinimaxTextModel(params: {
   return buildMinimaxModel({ ...params, input: ["text"] });
 }
 
+function isImageCapableModel(modelId: string): boolean {
+  return modelId === "MiniMax-M2.7" || modelId.startsWith("MiniMax-M2.7-");
+}
+
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
     const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-    return buildMinimaxTextModel({
+    return buildMinimaxModel({
       id,
       name: model.name,
       reasoning: model.reasoning,
+      input: isImageCapableModel(id) ? ["text", "image"] : ["text"],
       cost: resolveMinimaxApiCost(id),
     });
   });
