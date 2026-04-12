@@ -314,6 +314,27 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerBase = loggingState.cachedLogger;
+  let fileLoggerDayKey = "";
+
+  const getCurrentLocalDayKey = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  };
+
+  const getFileLogger = () => {
+    const currentDayKey = getCurrentLocalDayKey();
+    if (
+      !fileLogger ||
+      fileLoggerBase !== loggingState.cachedLogger ||
+      fileLoggerDayKey !== currentDayKey
+    ) {
+      fileLogger = getChildLogger({ subsystem });
+      fileLoggerBase = loggingState.cachedLogger;
+      fileLoggerDayKey = currentDayKey;
+    }
+    return fileLogger;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -336,10 +357,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -402,10 +420,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
