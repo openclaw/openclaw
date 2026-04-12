@@ -20,8 +20,13 @@ export function buildOpenAICompatibleReplayPolicy(
     return undefined;
   }
 
+  const isResponsesApi =
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses";
+
   return {
-    sanitizeToolCallIds: true,
+    sanitizeToolCallIds: !isResponsesApi,
     toolCallIdMode: "strict",
     ...(modelApi === "openai-completions"
       ? {
