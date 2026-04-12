@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
   createConfiguredMatrixDefaultAccountConfig,
+  createConfiguredMatrixTopLevelConfig,
   createLegacyMatrixTopLevelConfig,
   createMatrixTokenAddAccountPrompter,
+  createMatrixUpdateKeepCredentialsPrompter,
   installMatrixOnboardingEnvRestoreHooks,
   createMatrixWizardPrompter,
   runMatrixAddAccountAllowlistConfigure,
@@ -289,30 +291,13 @@ describe("matrix onboarding", () => {
 
     process.env.MATRIX_ACCESS_TOKEN = "env-token";
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": false,
-      },
-    });
+    const prompter = createMatrixUpdateKeepCredentialsPrompter();
 
     const result = await runMatrixInteractiveConfigure({
       cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-          },
-        },
+        ...createConfiguredMatrixTopLevelConfig({
+          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+        }),
         secrets: {
           defaults: {
             env: "default",
@@ -418,36 +403,16 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
     const notes: string[] = [];
 
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
       notes,
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-        "Matrix invite auto-join": "off",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": true,
-        "Update Matrix invite auto-join?": true,
-      },
+      inviteAutoJoin: "off",
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: "matrix-token",
-            autoJoin: "allowlist",
-            autoJoinAllowlist: ["#ops:example.org"],
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixTopLevelConfig({
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["#ops:example.org"],
+      }),
       prompter,
       configured: true,
     });
@@ -470,23 +435,9 @@ describe("matrix onboarding", () => {
     const notes: string[] = [];
     let inviteAllowlistPrompts = 0;
 
-    const prompter = createMatrixWizardPrompter({
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
       notes,
-      select: {
-        "Matrix already configured. What do you want to do?": "update",
-        "Matrix invite auto-join": "allowlist",
-      },
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix device name (optional)": "OpenClaw Gateway",
-      },
-      confirm: {
-        "Matrix credentials already configured. Keep them?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-        "Configure Matrix rooms access?": false,
-        "Configure Matrix invite auto-join?": true,
-        "Update Matrix invite auto-join?": true,
-      },
+      inviteAutoJoin: "allowlist",
       onText: async (message) => {
         if (message === "Matrix invite auto-join allowlist (comma-separated)") {
           inviteAllowlistPrompts += 1;
@@ -497,14 +448,7 @@ describe("matrix onboarding", () => {
     });
 
     const result = await runMatrixInteractiveConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            accessToken: "matrix-token",
-          },
-        },
-      } as CoreConfig,
+      cfg: createConfiguredMatrixTopLevelConfig(),
       prompter,
       configured: true,
     });
