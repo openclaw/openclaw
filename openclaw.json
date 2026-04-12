@@ -30,7 +30,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax/minimax-m2.5"
+        "primary": "openrouter/minimax/minimax-m2.7"
       },
       "thinkingDefault": "minimal",
       "models": {
@@ -38,9 +38,8 @@
           "alias": "OpenRouter"
         },
         "openrouter/minimax/minimax-m2.7": {},
-        "openrouter/moonshotai/kimi-k2.5": {},
         "openrouter/xiaomi/mimo-v2-pro": {},
-        "openrouter/z-ai/glm-5": {}
+        "openrouter/z-ai/glm-5.1": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "compaction": {
