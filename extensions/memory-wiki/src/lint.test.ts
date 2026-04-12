@@ -8,6 +8,43 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
+  it("does not flag valid relative markdown links as broken", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-relative-links-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await Promise.all(
+      ["reports", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "reports", "stale-pages.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "report", id: "report.stale-pages", title: "Stale Pages" },
+        body: "# Stale Pages\n\n- [Alpha](../sources/alpha.md)\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(
+      result.issues.some(
+        (issue) => issue.code === "broken-wikilink" && issue.path === "reports/stale-pages.md",
+      ),
+    ).toBe(false);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",

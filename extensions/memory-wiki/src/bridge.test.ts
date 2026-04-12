@@ -147,6 +147,96 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(logLines).toHaveLength(2);
   });
 
+  it("sanitizes reply tags in bridged markdown sources", async () => {
+    const workspaceDir = await createBridgeWorkspace("reply-tags-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("reply-tags-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "# Durable Memory\n\n[[reply_to_current]]\n\n[[reply_to: 12345]]\n",
+      "utf8",
+    );
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: path.join(workspaceDir, "MEMORY.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const rendered = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
+
+    expect(rendered).not.toContain("[[reply_to_current]]");
+    expect(rendered).not.toContain("[[reply_to: 12345]]");
+    expect(rendered).toContain("`reply_to_current`");
+    expect(rendered).toContain("`reply_to:12345`");
+  });
+
+  it("rebuilds malformed cached bridge pages even when source sync state matches", async () => {
+    const workspaceDir = await createBridgeWorkspace("malformed-cache-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("malformed-cache-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: path.join(workspaceDir, "MEMORY.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = path.join(vaultDir, first.pagePaths[0] ?? "");
+    await fs.writeFile(pagePath, "corrupted cached page\n", "utf8");
+
+    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const repaired = await fs.readFile(pagePath, "utf8");
+
+    expect(second.updatedCount).toBe(1);
+    expect(second.skippedCount).toBe(0);
+    expect(repaired.startsWith("---\n")).toBe(true);
+    expect(repaired).toContain("## Bridge Source");
+  });
+
   it("returns a no-op result outside bridge mode", async () => {
     const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });
 

@@ -209,10 +209,13 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       return [
         `- Stale pages: ${matches.length}`,
         "",
-        ...matches.map(
-          ({ page, freshness }) =>
-            `- ${formatPageLink(config, page)}: ${formatFreshnessLabel(freshness)}`,
-        ),
+        ...matches.map(({ page, freshness }) => {
+          const link =
+            config.vault.renderMode === "obsidian"
+              ? formatPageLink(config, page)
+              : `[${page.title}](${path.posix.relative("reports", page.relativePath)})`;
+          return `- ${link}: ${formatFreshnessLabel(freshness)}`;
+        }),
       ].join("\n");
     },
   },

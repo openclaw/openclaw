@@ -26,6 +26,8 @@ type BridgeArtifact = {
   absolutePath: string;
 };
 
+const BRIDGE_SOURCE_RENDER_VERSION = "2026-04-12-reply-tag-sanitizer-v1";
+
 export type BridgeMemoryWikiResult = {
   importedCount: number;
   updatedCount: number;
@@ -35,6 +37,15 @@ export type BridgeMemoryWikiResult = {
   workspaces: number;
   pagePaths: string[];
 };
+
+function sanitizeBridgeSourceMarkdown(content: string): string {
+  return content
+    .replace(/\[\[\s*reply_to_current\s*\]\]/g, "`reply_to_current`")
+    .replace(
+      /\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/g,
+      (_match, replyId: string) => `\`reply_to:${replyId.trim()}\``,
+    );
+}
 
 function shouldImportArtifact(
   artifact: MemoryPluginPublicArtifact,
@@ -140,6 +151,8 @@ async function writeBridgeSourcePage(params: {
         workspaceDir: params.artifact.workspaceDir,
         relativePath: params.artifact.relativePath,
         agentIds: params.agentIds,
+        renderVersion:
+          params.artifact.artifactType === "markdown" ? BRIDGE_SOURCE_RENDER_VERSION : "base",
       }),
     )
     .digest("hex");
@@ -156,6 +169,7 @@ async function writeBridgeSourcePage(params: {
     buildRendered: (raw, updatedAt) => {
       const contentLanguage =
         params.artifact.artifactType === "memory-events" ? "json" : "markdown";
+      const renderedRaw = contentLanguage === "markdown" ? sanitizeBridgeSourceMarkdown(raw) : raw;
       return renderWikiMarkdown({
         frontmatter: {
           pageType: "source",
@@ -183,7 +197,7 @@ async function writeBridgeSourcePage(params: {
           `- Updated: ${updatedAt}`,
           "",
           "## Content",
-          renderMarkdownFence(raw, contentLanguage),
+          renderMarkdownFence(renderedRaw, contentLanguage),
           "",
           "## Notes",
           "<!-- openclaw:human:start -->",

@@ -61,7 +61,14 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      const normalizedTarget = linkTarget.replace(/\.md$/i, "");
+      const resolvedTarget =
+        normalizedTarget.startsWith("./") || normalizedTarget.startsWith("../")
+          ? path.posix.normalize(
+              path.posix.join(path.posix.dirname(page.relativePath), normalizedTarget),
+            )
+          : normalizedTarget;
+      if (!validTargets.has(normalizedTarget) && !validTargets.has(resolvedTarget)) {
         issues.push({
           severity: "warning",
           category: "links",

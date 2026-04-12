@@ -89,10 +89,11 @@ export async function shouldSkipImportedSourceWrite(params: {
     return false;
   }
   const pagePath = path.join(params.vaultRoot, params.expectedPagePath);
-  return await fs
-    .access(pagePath)
-    .then(() => true)
-    .catch(() => false);
+  const existing = await fs.readFile(pagePath, "utf8").catch(() => null);
+  if (typeof existing !== "string") {
+    return false;
+  }
+  return existing.startsWith("---\n");
 }
 
 export async function pruneImportedSourceEntries(params: {

@@ -85,6 +85,36 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("writes stale-page report links relative to the reports directory in native mode", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha",
+          updatedAt: "2025-10-01T00:00:00.000Z",
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
+    ).resolves.toContain("[Alpha](../sources/alpha.md)");
+  });
+
   it("renders obsidian-friendly links when configured", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -270,7 +300,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md): missing updatedAt");
+    ).resolves.toContain("[Alpha](../entities/alpha.md): missing updatedAt");
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {
