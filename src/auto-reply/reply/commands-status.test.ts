@@ -324,6 +324,27 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("does not surface completed task output in the /status task line", async () => {
+    createRunningTaskRun({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-completed-output",
+      runId: "run-status-task-completed-output",
+      task: "daily briefing",
+    });
+    completeTaskRunByRunId({
+      runId: "run-status-task-completed-output",
+      endedAt: Date.now(),
+      terminalSummary:
+        "Daily briefing output: this is already delivered to chat and should not be replayed in /status.",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).not.toContain("recently finished");
+    expect(reply?.text).not.toContain("Daily briefing output");
+  });
+
   it("does not leak internal runtime context through the task status line", async () => {
     createRunningTaskRun({
       runtime: "subagent",
@@ -408,6 +429,28 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
     expect(reply?.text).not.toContain("later successful task");
     expect(reply?.text).not.toContain("all done");
+  });
+
+  it("falls back to same-agent recent failure counts when the current session has none", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:other",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-failed",
+      runId: "run-status-agent-fallback-failed",
+      agentId: "main",
+      task: "hidden failed task title",
+    });
+    failTaskRunByRunId({
+      runId: "run-status-agent-fallback-failed",
+      endedAt: Date.now(),
+      error: "hidden failure detail",
+    });
+
+    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · 1 total · agent-local");
+    expect(reply?.text).not.toContain("hidden failed task title");
+    expect(reply?.text).not.toContain("hidden failure detail");
   });
 
   it("falls back to same-agent task counts without details when the current session has none", async () => {
