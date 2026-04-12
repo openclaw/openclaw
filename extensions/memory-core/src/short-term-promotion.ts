@@ -13,7 +13,8 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[\w.-]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
+const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -799,7 +800,7 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
 
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
-  if (normalized.startsWith("memory/dreaming/")) {
+  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
   }
   if (SHORT_TERM_PATH_RE.test(normalized)) {
