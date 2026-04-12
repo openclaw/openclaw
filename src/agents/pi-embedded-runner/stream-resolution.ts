@@ -117,11 +117,14 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
-    if (boundaryAwareStreamFn) {
-      return boundaryAwareStreamFn;
-    }
+  // Prefer boundary-aware transport stream when available, regardless of
+  // currentStreamFn.  Previously this only activated when currentStreamFn
+  // was undefined or streamSimple, which caused custom-API sessions (where
+  // ensureCustomApiRegistered sets a named streamFn) to bypass the transport
+  // layer entirely — breaking tool_calls handling for local LLM providers.
+  const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+  if (boundaryAwareStreamFn) {
+    return boundaryAwareStreamFn;
   }
 
   return currentStreamFn;
