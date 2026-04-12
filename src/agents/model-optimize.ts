@@ -8,8 +8,6 @@
  *   premium  – highest capability, highest cost (use only when needed)
  */
 
-import { DEFAULT_PROVIDER } from "./defaults.js";
-import { parseModelRef } from "./model-selection-normalize.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 export type ModelCostTier = "economy" | "standard" | "premium";
@@ -72,6 +70,10 @@ function splitModelRef(model: string): { provider: string; modelId: string } {
   return { provider: model.slice(0, slash), modelId: model.slice(slash + 1) };
 }
 
+function normalizeProvider(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
 function resolveCatalogProvider(model: string, catalog: ModelCatalogEntry[]): string | null {
   const trimmed = model.trim();
   if (!trimmed) {
@@ -79,14 +81,16 @@ function resolveCatalogProvider(model: string, catalog: ModelCatalogEntry[]): st
   }
 
   if (trimmed.includes("/")) {
-    return parseModelRef(trimmed, DEFAULT_PROVIDER)?.provider ?? null;
+    const { provider, modelId } = splitModelRef(trimmed);
+    const normalizedProvider = normalizeProvider(provider);
+    return normalizedProvider && modelId.trim() ? normalizedProvider : null;
   }
 
   const normalized = trimmed.toLowerCase();
   const providers = new Set<string>();
   for (const entry of catalog) {
     if (entry.id.trim().toLowerCase() === normalized || entry.alias?.trim().toLowerCase() === normalized) {
-      providers.add(entry.provider);
+      providers.add(normalizeProvider(entry.provider));
     }
   }
 
@@ -129,7 +133,7 @@ export function getOptimizedModel(
   const targetTier: ModelCostTier = currentTier === "premium" ? "standard" : "economy";
 
   // Filter catalog to the same provider (if known) and target tier.
-  const providerCatalog = catalog.filter((m) => m.provider === provider);
+  const providerCatalog = catalog.filter((m) => normalizeProvider(m.provider) === provider);
 
   const candidates = providerCatalog.filter((m) => getModelTier(m.id) === targetTier);
 

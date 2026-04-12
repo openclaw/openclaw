@@ -210,7 +210,7 @@ async function applyRecommendations(
       let newModel: string | { primary: string; fallbacks?: string[] } = rec.recommended;
       if (existingModel && typeof existingModel === "object" && !Array.isArray(existingModel)) {
         const fallbacks = (existingModel as { fallbacks?: unknown }).fallbacks;
-        if (Array.isArray(fallbacks) && fallbacks.length > 0) {
+        if (Array.isArray(fallbacks)) {
           newModel = { primary: rec.recommended, fallbacks: fallbacks as string[] };
         }
       }
