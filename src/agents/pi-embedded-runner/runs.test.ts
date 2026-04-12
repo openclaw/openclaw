@@ -5,11 +5,15 @@ import {
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
+  forceDetachEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunActive,
+  isEmbeddedPiRunActiveForSessionKey,
   requestEmbeddedRunModelSwitch,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
+  waitForEmbeddedPiRunEnd,
 } from "./runs.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
@@ -171,5 +175,77 @@ describe("pi-embedded runner run registry", () => {
     clearActiveEmbeddedRun("session-clear-switch", handle);
 
     expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
+  });
+});
+
+describe("isEmbeddedPiRunActiveForSessionKey", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  it("returns true when a run is active for the resolved session key", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-abc", handle, "key-abc");
+    expect(isEmbeddedPiRunActiveForSessionKey("key-abc")).toBe(true);
+  });
+
+  it("returns false when no run is active for the session key", () => {
+    expect(isEmbeddedPiRunActiveForSessionKey("key-nonexistent")).toBe(false);
+  });
+
+  it("returns false after the run is cleared", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-cleared", handle, "key-cleared");
+    clearActiveEmbeddedRun("session-cleared", handle, "key-cleared");
+    expect(isEmbeddedPiRunActiveForSessionKey("key-cleared")).toBe(false);
+  });
+});
+
+describe("forceDetachEmbeddedRun", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  it("removes the run from the registry without notifying global waiters", async () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-detach", handle, "key-detach");
+
+    // A concurrent waiter (e.g. session-reset) should NOT be resolved by
+    // forceDetach — the detached run is still executing in the background.
+    const waitPromise = waitForEmbeddedPiRunEnd("session-detach", 500);
+
+    const detached = forceDetachEmbeddedRun("session-detach");
+    expect(detached).toBe(true);
+
+    // Registry is cleared
+    expect(isEmbeddedPiRunActive("session-detach")).toBe(false);
+    expect(isEmbeddedPiRunActiveForSessionKey("key-detach")).toBe(false);
+
+    // Waiter resolves with false (force-detach cleans up waiters with
+    // conservative "not cleanly ended" signal). session-reset should see
+    // the run as still active since the detached run is still executing.
+    const ended = await waitPromise;
+    expect(ended).toBe(false);
+  });
+
+  it("returns false when no run is registered", () => {
+    expect(forceDetachEmbeddedRun("nonexistent")).toBe(false);
+  });
+
+  it("old run's clearActiveEmbeddedRun becomes no-op after force-detach", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-overlap", handle, "key-overlap");
+
+    forceDetachEmbeddedRun("session-overlap");
+
+    // Register a new run for the same session
+    const newHandle = createRunHandle();
+    setActiveEmbeddedRun("session-overlap", newHandle, "key-overlap");
+
+    // Old run's finally block calls clearActiveEmbeddedRun with old handle
+    clearActiveEmbeddedRun("session-overlap", handle, "key-overlap");
+
+    // New run should still be active (handle mismatch → no-op)
+    expect(isEmbeddedPiRunActive("session-overlap")).toBe(true);
   });
 });
