@@ -881,16 +881,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
 
-    // Extract quote metadata for reply context (mirrors Telegram's describeReplyTarget)
-    const signalQuote = dataMessage.quote
-      ? {
-          id: dataMessage.quote.id != null ? String(dataMessage.quote.id) : undefined,
-          author:
-            dataMessage.quote.author ?? dataMessage.quote.authorNumber ?? undefined,
-          text: dataMessage.quote.text?.trim() || undefined,
-        }
-      : undefined;
-
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
