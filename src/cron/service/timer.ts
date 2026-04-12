@@ -965,6 +965,13 @@ async function planStartupCatchup(
     if (missed.length === 0) {
       return { candidates: [], deferredJobIds: [] };
     }
+    // Guard: ensure job.state exists before accessing. Jobs loaded from storage
+    // may be missing state if created via CronJobCreate (where state is optional).
+    for (const job of missed) {
+      if (!job.state) {
+        job.state = {};
+      }
+    }
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
     );
@@ -987,6 +994,9 @@ async function planStartupCatchup(
       );
     }
     for (const job of startupCandidates) {
+      if (!job.state) {
+        job.state = {};
+      }
       job.state.runningAtMs = now;
       job.state.lastError = undefined;
     }
