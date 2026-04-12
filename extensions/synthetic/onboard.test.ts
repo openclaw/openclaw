@@ -1,6 +1,6 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
+import { expectProviderOnboardMergedLegacyConfig } from "../../test/helpers/plugins/provider-onboard.js";
 import { SYNTHETIC_DEFAULT_MODEL_REF as SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC } from "./api.js";
 import {
   applySyntheticConfig,
@@ -21,16 +21,14 @@ describe("synthetic onboard", () => {
   });
 
   it("merges existing synthetic provider models", () => {
-    const cfg = applySyntheticProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "synthetic",
-        api: "openai-completions",
-      }),
-    );
-    expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-    expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
-    expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
-    const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
+    const provider = expectProviderOnboardMergedLegacyConfig({
+      applyProviderConfig: applySyntheticProviderConfig,
+      providerId: "synthetic",
+      providerApi: "anthropic-messages",
+      baseUrl: "https://api.synthetic.new/anthropic",
+      legacyApi: "openai-completions",
+    });
+    const ids = provider?.models.map((m) => m.id);
     expect(ids).toContain("old-model");
     expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_REF.replace(/^synthetic\//, ""));
   });
