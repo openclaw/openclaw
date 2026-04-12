@@ -42,12 +42,16 @@ import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import {
+  buildChatSessionCacheKey,
+  CHAT_SESSION_CACHE_MAX,
+  getTelegramSequentialKey,
+} from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
 
-export { getTelegramSequentialKey };
+export { buildChatSessionCacheKey, CHAT_SESSION_CACHE_MAX, getTelegramSequentialKey };
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -387,7 +391,52 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  // Cache chatId:threadId[:senderId] → {sessionKey, needsImmediateDelivery} so the sequential
+  // key middleware can check whether an embedded Pi run is active and whether the session
+  // uses a queue mode that needs immediate delivery — without heavy session resolution per update.
+  //
+  // NOTE (cache population order): The sequentializer runs BEFORE the handler that populates
+  // this cache, so the very first message in any chat always gets the default sequential key
+  // (cache miss). This is correct by design — there can't be an active run to bypass for
+  // until after at least one message has been handled.
+  //
+  // Capped at CHAT_SESSION_CACHE_MAX entries to prevent unbounded memory growth.
+  const chatSessionCache = new Map<
+    string,
+    { sessionKey: string; needsImmediateDelivery: boolean }
+  >();
+
+  // Capture once to avoid re-reading the getter per update and remove non-null assertions.
+  const isRunActiveForSessionKey = telegramDeps.isRunActiveForSessionKey;
+
+  bot.use(
+    botRuntime.sequentialize((ctx) =>
+      getTelegramSequentialKey(ctx, {
+        isRunActiveForChat: isRunActiveForSessionKey
+          ? (chatId, threadId, senderId) => {
+              // Try conversation-level key first (groups), then per-sender key (DMs).
+              const convKey = buildChatSessionCacheKey(chatId, threadId);
+              const senderKey = senderId
+                ? buildChatSessionCacheKey(chatId, threadId, senderId)
+                : undefined;
+              const cached =
+                chatSessionCache.get(convKey) ??
+                (senderKey ? chatSessionCache.get(senderKey) : undefined);
+              if (!cached?.needsImmediateDelivery) {
+                return false;
+              }
+              // When a run is active and mode needs immediate delivery, the sequentializer
+              // returns a per-message key so multiple messages can race into runReplyAgent
+              // in parallel. They will each try to abort and recreate the run; the retry
+              // in agent-runner.ts mitigates the resulting ReplyOperation race, but under
+              // rapid bursts the last arrival can still hit the user-facing "still shutting
+              // down" message. This is better than full serialization behind the debouncer.
+              return isRunActiveForSessionKey(cached.sessionKey);
+            }
+          : undefined,
+      }),
+    ),
+  );
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
@@ -619,6 +668,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     processMessage,
     logger,
     telegramDeps,
+    chatSessionCache,
   });
 
   const originalStop = bot.stop.bind(bot);
