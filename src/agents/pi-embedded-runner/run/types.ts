@@ -11,7 +11,7 @@ import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
-import type { PreemptiveCompactionRoute } from "./preemptive-compaction.js";
+import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
@@ -41,6 +41,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the abort originated from the caller-provided abortSignal. */
+  externalAbort: boolean;
   timedOut: boolean;
   /** True when the no-response LLM idle watchdog caused the timeout. */
   idleTimedOut: boolean;

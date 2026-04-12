@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { qaSuiteTesting } from "./suite.js";
+import { qaSuiteTesting, runQaSuite } from "./suite.js";
 
 describe("qa suite failure reply handling", () => {
   const makeScenario = (
@@ -37,6 +40,57 @@ describe("qa suite failure reply handling", () => {
         process.env.OPENCLAW_QA_SUITE_CONCURRENCY = previous;
       }
     }
+  });
+
+  it("keeps programmatic suite output dirs within the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-existing-root-"));
+    try {
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(
+          repoRoot,
+          path.join(repoRoot, ".artifacts", "qa-e2e", "custom"),
+        ),
+      ).resolves.toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "custom"));
+      await expect(
+        lstat(path.join(repoRoot, ".artifacts", "qa-e2e", "custom")).then((stats) =>
+          stats.isDirectory(),
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(repoRoot, "/tmp/outside"),
+      ).rejects.toThrow("QA suite outputDir must stay within the repo root.");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked suite output dirs that escape the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-root-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-outside-"));
+    try {
+      await mkdir(path.join(repoRoot, ".artifacts"), { recursive: true });
+      await symlink(outsideRoot, path.join(repoRoot, ".artifacts", "qa-e2e"), "dir");
+
+      await expect(
+        qaSuiteTesting.resolveQaSuiteOutputDir(repoRoot, ".artifacts/qa-e2e/custom"),
+      ).rejects.toThrow("QA suite outputDir must not traverse symlinks.");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported transport ids before starting the lab", async () => {
+    const startLab = vi.fn();
+
+    await expect(
+      runQaSuite({
+        transportId: "qa-nope" as unknown as "qa-channel",
+        startLab,
+      }),
+    ).rejects.toThrow("unsupported QA transport: qa-nope");
+
+    expect(startLab).not.toHaveBeenCalled();
   });
 
   it("maps suite work with bounded concurrency while preserving order", async () => {
@@ -271,5 +325,57 @@ describe("qa suite failure reply handling", () => {
     });
 
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
+  });
+
+  it("reads transport transcripts with generic helper names", () => {
+    const state = createQaBusState();
+    state.addInboundMessage({
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "alice",
+      senderName: "Alice",
+      text: "hello",
+    });
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "working on it",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "done",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    const messages = qaSuiteTesting.readTransportTranscript(state, {
+      conversationId: "qa-operator",
+      direction: "outbound",
+    });
+    const formatted = qaSuiteTesting.formatTransportTranscript(state, {
+      conversationId: "qa-operator",
+    });
+
+    expect(messages.map((message) => message.text)).toEqual(["working on it", "done"]);
+    expect(formatted).toContain("USER Alice: hello");
+    expect(formatted).toContain("ASSISTANT OpenClaw QA: working on it");
+  });
+
+  it("waits for outbound replies through the generic transport alias", async () => {
+    const state = createQaBusState();
+    const pending = qaSuiteTesting.waitForTransportOutboundMessage(
+      state,
+      (candidate) => candidate.conversation.id === "qa-operator" && candidate.text.includes("done"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "done",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).resolves.toMatchObject({ text: "done" });
   });
 });

@@ -35,7 +35,7 @@ self-contained, safe-default setup:
           enabled: true,
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
@@ -51,7 +51,7 @@ self-contained, safe-default setup:
 
 This turns the plugin on for the `main` agent, keeps it limited to direct-message
 style sessions by default, lets it inherit the current session model first, and
-still allows the built-in remote fallback if no explicit or inherited model is
+uses the configured fallback model only if no explicit or inherited model is
 available.
 
 After that, restart the gateway:
@@ -64,6 +64,7 @@ To inspect it live in a conversation:
 
 ```text
 /verbose on
+/trace on
 ```
 
 ## Turn active memory on
@@ -85,7 +86,7 @@ Start with this in `openclaw.json`:
         config: {
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
@@ -111,7 +112,7 @@ What this means:
 - `config.agents: ["main"]` opts only the `main` agent into active memory
 - `config.allowedChatTypes: ["direct"]` keeps active memory on for direct-message style sessions only by default
 - if `config.model` is unset, active memory inherits the current session model first
-- `config.modelFallbackPolicy: "default-remote"` keeps the built-in remote fallback as the default when no explicit or inherited model is available
+- `config.modelFallback` optionally provides your own fallback provider/model for recall
 - `config.promptStyle: "balanced"` uses the default general-purpose prompt style for `recent` mode
 - active memory still runs only on eligible interactive persistent chat sessions
 
@@ -148,21 +149,24 @@ The global form writes `plugins.entries.active-memory.config.enabled`. It leaves
 `plugins.entries.active-memory.enabled` on so the command remains available to
 turn active memory back on later.
 
-If you want to see what active memory is doing in a live session, turn verbose
-mode on for that session:
+If you want to see what active memory is doing in a live session, turn on the
+session toggles that match the output you want:
 
 ```text
 /verbose on
+/trace on
 ```
 
-With verbose enabled, OpenClaw can show:
+With those enabled, OpenClaw can show:
 
-- an active memory status line such as `Active Memory: ok 842ms recent 34 chars`
-- a readable debug summary such as `Active Memory Debug: Lemon pepper wings with blue cheese.`
+- an active memory status line such as `Active Memory: ok 842ms recent 34 chars` when `/verbose on`
+- a readable debug summary such as `Active Memory Debug: Lemon pepper wings with blue cheese.` when `/trace on`
 
 Those lines are derived from the same active memory pass that feeds the hidden
 system context, but they are formatted for humans instead of exposing raw prompt
-markup.
+markup. They are sent as a follow-up diagnostic message after the normal
+assistant reply so channel clients like Telegram do not flash a separate
+pre-reply diagnostic bubble.
 
 By default, the blocking memory sub-agent transcript is temporary and deleted
 after the run completes.
@@ -171,6 +175,7 @@ Example flow:
 
 ```text
 /verbose on
+/trace on
 what wings should i order?
 ```
 
@@ -335,26 +340,22 @@ If `config.model` is unset, Active Memory tries to resolve a model in this order
 explicit plugin model
 -> current session model
 -> agent primary model
--> optional built-in remote fallback
+-> optional configured fallback model
 ```
 
-`config.modelFallbackPolicy` controls the last step.
+`config.modelFallback` controls the configured fallback step.
 
-Default:
+Optional custom fallback:
 
 ```json5
-modelFallbackPolicy: "default-remote"
+modelFallback: "google/gemini-3-flash"
 ```
 
-Other option:
+If no explicit, inherited, or configured fallback model resolves, Active Memory
+skips recall for that turn.
 
-```json5
-modelFallbackPolicy: "resolved-only"
-```
-
-Use `resolved-only` if you want Active Memory to skip recall instead of falling
-back to the built-in remote default when no explicit or inherited model is
-available.
+`config.modelFallbackPolicy` is retained only as a deprecated compatibility
+field for older configs. It no longer changes runtime behavior.
 
 ## Advanced escape hatches
 
@@ -572,8 +573,10 @@ Start with `recent`.
 }
 ```
 
-If you want to inspect live behavior while tuning, use `/verbose on` in the
-session instead of looking for a separate active-memory debug command.
+If you want to inspect live behavior while tuning, use `/verbose on` for the
+normal status line and `/trace on` for the active-memory debug summary instead
+of looking for a separate active-memory debug command. In chat channels, those
+diagnostic lines are sent after the main assistant reply rather than before it.
 
 Then move to:
 
@@ -600,6 +603,58 @@ If active memory is too slow:
 - lower `timeoutMs`
 - reduce recent turn counts
 - reduce per-turn char caps
+
+## Common issues
+
+### Embedding provider changed unexpectedly
+
+Active Memory relies on the normal memory search embedding provider under
+`agents.defaults.memorySearch`. If you do not set that provider explicitly,
+OpenClaw auto-detects the first available embedding provider.
+
+That can be confusing in real deployments:
+
+- a newly available API key can change which provider memory search uses
+- one command or diagnostics surface may make the selected provider look
+  different from the path you are actually hitting during live memory sync or
+  search bootstrap
+- hosted providers can fail with quota or rate-limit errors that only show up
+  once Active Memory starts issuing recall searches before each reply
+
+If you care about predictable behavior, pin the memory embedding provider
+explicitly instead of relying on auto-detection.
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "ollama",
+        model: "nomic-embed-text",
+      },
+    },
+  },
+}
+```
+
+Or, if you want Gemini embeddings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "gemini",
+      },
+    },
+  },
+}
+```
+
+After changing the provider, restart the gateway and run a fresh test with
+`/trace on` so the Active Memory debug line reflects the new embedding path.
 
 ## Related pages
 

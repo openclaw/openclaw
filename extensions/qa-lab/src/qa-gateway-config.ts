@@ -7,6 +7,7 @@ import {
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
+import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
@@ -56,8 +57,6 @@ export function buildQaGatewayConfig(params: {
   gatewayPort: number;
   gatewayToken: string;
   providerBaseUrl?: string;
-  qaBusBaseUrl: string;
-  includeQaChannel?: boolean;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
@@ -68,11 +67,12 @@ export function buildQaGatewayConfig(params: {
   imageGenerationModel?: string | null;
   enabledProviderIds?: string[];
   enabledPluginIds?: string[];
+  transportPluginIds?: readonly string[];
+  transportConfig?: QaTransportGatewayConfig;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
-  const includeQaChannel = params.includeQaChannel !== false;
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
@@ -163,14 +163,23 @@ export function buildQaGatewayConfig(params: {
           ),
         ]
       : [];
+  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+    .map((pluginId) => pluginId.trim())
+    .filter((pluginId) => pluginId.length > 0);
   const pluginEntries =
     providerMode === "live-frontier"
       ? Object.fromEntries(selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]))
       : {};
-  const allowedPlugins =
-    providerMode === "live-frontier"
-      ? ["memory-core", ...selectedPluginIds, ...(includeQaChannel ? ["qa-channel"] : [])]
-      : ["memory-core", ...(includeQaChannel ? ["qa-channel"] : [])];
+  const transportPluginEntries = Object.fromEntries(
+    transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
+  const allowedPlugins = [
+    ...new Set(
+      providerMode === "live-frontier"
+        ? ["memory-core", ...selectedPluginIds, ...transportPluginIds]
+        : ["memory-core", ...transportPluginIds],
+    ),
+  ];
   const liveModelParams =
     providerMode === "live-frontier"
       ? (modelRef: string) => ({
@@ -199,7 +208,7 @@ export function buildQaGatewayConfig(params: {
           enabled: true,
         },
         ...pluginEntries,
-        ...(includeQaChannel ? { "qa-channel": { enabled: true } } : {}),
+        ...transportPluginEntries,
       },
     },
     agents: {
@@ -307,24 +316,7 @@ export function buildQaGatewayConfig(params: {
         mode: "off",
       },
     },
-    ...(includeQaChannel
-      ? {
-          channels: {
-            "qa-channel": {
-              enabled: true,
-              baseUrl: params.qaBusBaseUrl,
-              botUserId: "openclaw",
-              botDisplayName: "OpenClaw QA",
-              allowFrom: ["*"],
-              pollTimeoutMs: 250,
-            },
-          },
-        }
-      : {}),
-    messages: {
-      groupChat: {
-        mentionPatterns: ["\\b@?openclaw\\b"],
-      },
-    },
+    ...(params.transportConfig?.channels ? { channels: params.transportConfig.channels } : {}),
+    ...(params.transportConfig?.messages ? { messages: params.transportConfig.messages } : {}),
   } satisfies OpenClawConfig;
 }

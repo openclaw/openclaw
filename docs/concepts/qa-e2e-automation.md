@@ -132,6 +132,22 @@ agent. The baseline list should stay broad enough to cover:
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
 
+## Transport adapters
+
+`qa-lab` owns a generic transport seam for markdown QA scenarios.
+`qa-channel` is the first adapter on that seam, but the design target is wider:
+future real or synthetic channels should plug into the same suite runner
+instead of adding a transport-specific QA runner.
+
+At the architecture level, the split is:
+
+- `qa-lab` owns scenario execution, worker concurrency, artifact writing, and reporting.
+- the transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
+- scenarios stay markdown-first under `qa/scenarios/`.
+
+Maintainer-facing adoption guidance for new channel adapters lives in
+[Testing](/help/testing#adding-a-channel-to-qa).
+
 ## Reporting
 
 `qa-lab` exports a Markdown protocol report from the observed bus timeline.

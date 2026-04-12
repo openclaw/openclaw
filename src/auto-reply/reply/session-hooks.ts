@@ -4,7 +4,7 @@ import type {
   PluginHookSessionEndEvent,
   PluginHookSessionEndReason,
   PluginHookSessionStartEvent,
-} from "../../plugins/types.js";
+} from "../../plugins/hook-types.js";
 
 export type SessionHookContext = {
   sessionId: string;
