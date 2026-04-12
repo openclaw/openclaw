@@ -283,7 +283,10 @@ function moveLegacyStreamingShapeForPath(params: {
   const hadLegacyStreamingScalar =
     typeof legacyStreaming === "string" || typeof legacyStreaming === "boolean";
 
-  if (params.resolveMode && (hadLegacyStreamMode || hadLegacyStreamingScalar)) {
+  if (
+    params.resolveMode &&
+    (hadLegacyStreamMode || hadLegacyStreamingScalar || typeof legacyStreaming === "boolean")
+  ) {
     const streaming = ensureNestedRecord(params.entry, "streaming");
     if (!hasOwnKey(streaming, "mode")) {
       const resolvedMode = params.resolveMode(legacyStreamingInput);
