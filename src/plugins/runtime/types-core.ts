@@ -5,6 +5,11 @@ import type {
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
+import type {
+  ListSpeechVoices,
+  TextToSpeech,
+  TextToSpeechTelephony,
+} from "../../plugin-sdk/tts-runtime.types.js";
 
 export type { HeartbeatRunResult };
 
@@ -87,9 +92,9 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
+    textToSpeech: TextToSpeech;
+    textToSpeechTelephony: TextToSpeechTelephony;
+    listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
