@@ -209,13 +209,25 @@ function buildQuerySignals(query: string): QuerySignals {
   return { queryLower, queryTerms };
 }
 
+function tokenizeText(textLower: string): Set<string> {
+  return new Set(textLower.match(/[\p{L}\p{N}]+/gu) ?? []);
+}
+
+function minimumMatchingTerms(queryTerms: string[]): number {
+  if (queryTerms.length <= 1) {
+    return queryTerms.length;
+  }
+  return 2;
+}
+
 function countMatchingTerms(textLower: string, queryTerms: string[]): number {
   if (!textLower || queryTerms.length === 0) {
     return 0;
   }
+  const textTokens = tokenizeText(textLower);
   let count = 0;
   for (const term of queryTerms) {
-    if (textLower.includes(term)) {
+    if (textTokens.has(term)) {
       count += 1;
     }
   }
@@ -229,7 +241,9 @@ function matchesQuery(textLower: string, signals: QuerySignals): boolean {
   if (signals.queryLower && textLower.includes(signals.queryLower)) {
     return true;
   }
-  return countMatchingTerms(textLower, signals.queryTerms) > 0;
+  return (
+    countMatchingTerms(textLower, signals.queryTerms) >= minimumMatchingTerms(signals.queryTerms)
+  );
 }
 
 function scoreTokenCoverage(
