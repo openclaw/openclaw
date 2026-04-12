@@ -9,7 +9,34 @@ import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { resolvePromptBuildHookResult } from "./pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { describeUnknownError } from "./pi-embedded-runner/utils.js";
+
+const MAX_ERROR_MESSAGE_LENGTH = 500;
+
+/**
+ * Sanitize an error string for safe forwarding/logging.
+ * Strips ANSI control sequences and truncates to prevent excessive output.
+ */
+function sanitizeErrorString(input: string, maxLen = MAX_ERROR_MESSAGE_LENGTH): string {
+  return input
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "") // ANSI escape sequences
+    .replace(/[\r\n\t]/g, " ") // collapse whitespace
+    .slice(0, maxLen);
+}
+
+/**
+ * Produce a safe, minimal error shape for plugin consumption.
+ * Avoids forwarding raw error messages that may contain sensitive data.
+ */
+function safeErrorPayload(err: unknown): { name: string; message: string } | undefined {
+  if (err == null) {
+    return undefined;
+  }
+  if (err instanceof Error) {
+    return { name: err.name, message: sanitizeErrorString(err.message) };
+  }
+  const raw = typeof err === "string" ? err : String(err);
+  return { name: "UnknownError", message: sanitizeErrorString(raw) };
+}
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
   const context = await prepareCliRunContext(params);
@@ -135,14 +162,14 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
           {
             messages,
             success,
-            error: runError ? describeUnknownError(runError) : undefined,
+            error: safeErrorPayload(runError),
             durationMs: Date.now() - context.started,
           },
           hookCtx,
         )
         .catch((err: unknown) => {
           // fire-and-forget; log failures but don't propagate
-          console.warn(`agent_end hook failed: ${String(err)}`);
+          console.warn(`agent_end hook failed: ${sanitizeErrorString(String(err))}`);
         });
     }
     await context.preparedBackend.cleanup?.();
