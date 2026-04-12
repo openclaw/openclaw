@@ -120,6 +120,8 @@ describe("describeCronExpression", () => {
     expect(describeCronExpression("0 */6 * * *")).toBe("Every 6 hours");
     expect(describeCronExpression("0 */2 * * *")).toBe("Every 2 hours");
     expect(describeCronExpression("0 */1 * * *")).toBe("Every hour");
+    expect(describeCronExpression("15 */8 * * *")).toBe("Every 8 hours at :15");
+    expect(describeCronExpression("30 */1 * * *")).toBe("Every hour at :30");
   });
 
   it("describes every-hour-at-minute patterns", () => {

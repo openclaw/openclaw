@@ -148,10 +148,16 @@ export function describeCronExpression(expr: string): string {
     const hourStep = hour.match(/^\*\/(\d+)$/);
     if (hourStep && /^\d+$/.test(minute)) {
       const n = Number(hourStep[1]);
-      if (n === 0) {
+      const m = Number(minute);
+      if (n === 0 || m < 0 || m > 59) {
         return expr;
       }
-      return n === 1 ? "Every hour" : `Every ${n} hours`;
+      if (m === 0) {
+        return n === 1 ? "Every hour" : `Every ${n} hours`;
+      }
+      return n === 1
+        ? `Every hour at :${minute.padStart(2, "0")}`
+        : `Every ${n} hours at :${minute.padStart(2, "0")}`;
     }
     if (hour === "*" && /^\d+$/.test(minute)) {
       // minute is fixed, hour is *, e.g. "30 * * * *"
