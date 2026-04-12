@@ -1538,14 +1538,14 @@ export async function runEmbeddedPiAgent(
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
-            // agentMeta.model is persisted into the session store and used for
-            // context window resolution, model fallback, and status reporting.
-            // Do NOT write the synthetic `-psn` display name here — it would
-            // break model resolution downstream. In hybrid mode, use the
-            // execution model ID (which is the real model being resolved).
+            // agentMeta.model is persisted into the session store. The store
+            // already tracks provider separately, so model should be the bare
+            // provider-local ID (e.g. "gpt-5.4"), not a provider-qualified
+            // ref which would produce a doubled "openai/openai/gpt-5.4" pair.
+            // In hybrid mode, use the stored execution model ID directly.
             model:
               personalityMode === "hybrid"
-                ? `${executionProvider}/${executionModelId}`
+                ? executionModelId
                 : (sessionLastAssistant?.model ?? model.id),
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
