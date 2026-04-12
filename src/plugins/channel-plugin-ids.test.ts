@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
@@ -135,16 +135,16 @@ function expectStartupPluginIds(params: {
   activationSourceConfig?: OpenClawConfig;
   expected: readonly string[];
 }) {
-  expect(
-    resolveGatewayStartupPluginIds({
-      config: params.config,
-      ...(params.activationSourceConfig !== undefined
-        ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-      workspaceDir: "/tmp",
-      env: process.env,
-    }),
-  ).toEqual(params.expected);
+  const runtimeParams = {
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    workspaceDir: "/tmp",
+    env: process.env,
+  } satisfies Parameters<typeof resolveGatewayStartupPluginIds>[0];
+
+  expect(resolveGatewayStartupPluginIds(runtimeParams)).toEqual(params.expected);
   expect(loadPluginManifestRegistry).toHaveBeenCalled();
 }
 
