@@ -264,6 +264,44 @@ Set them at top level or per account:
 }
 ```
 
+### Typing indicator emoji
+
+By default, the typing indicator reaction uses the `Typing` (keyboard) emoji. You can customize it per-account so each agent expresses its own personality while processing messages.
+
+The emoji is resolved with the same priority chain used by other channels:
+
+1. **Account-level** `channels.feishu.accounts.<id>.ackReaction`
+2. **Channel-level** `channels.feishu.ackReaction`
+3. **Global** `messages.ackReaction`
+4. **Agent identity** `agents[].identity.emoji`
+5. Built-in default: `Typing`
+
+The value must be a valid [Feishu emoji type name](https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce) (e.g. `"SMILE"`, `"Thumbsup"`, `"Thinking"`).
+
+```json5
+{
+  channels: {
+    feishu: {
+      // Channel-wide default
+      ackReaction: "Thinking",
+      accounts: {
+        kim: {
+          appId: "cli_aaa",
+          appSecret: "${KIM_APP_SECRET}",
+          // Per-account override — Kim uses a different emoji
+          ackReaction: "Celebrate",
+        },
+        klaasje: {
+          appId: "cli_bbb",
+          appSecret: "${KLAASJE_APP_SECRET}",
+          // Klaasje falls back to channel default ("Thinking")
+        },
+      },
+    },
+  },
+}
+```
+
 ---
 
 ## Step 3: Start + test

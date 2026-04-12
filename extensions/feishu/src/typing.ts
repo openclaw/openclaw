@@ -109,6 +109,8 @@ export async function addTypingIndicator(params: {
   messageId: string;
   accountId?: string;
   runtime?: RuntimeEnv;
+  /** Override the default "Typing" emoji. Falls back to TYPING_EMOJI when not provided. */
+  emoji?: string;
 }): Promise<TypingIndicatorState> {
   const { cfg, messageId, accountId, runtime } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
@@ -117,12 +119,22 @@ export async function addTypingIndicator(params: {
   }
 
   const client = createFeishuClient(account);
+  // Feishu emoji_type names are ASCII word strings (e.g. "Typing", "THUMBSUP").
+  // Unicode emoji (e.g. "👀") and non-Feishu aliases are not valid — fall back to TYPING_EMOJI.
+  const resolvedEmoji = params.emoji?.trim();
+  const isFeishuCompatible = !!resolvedEmoji && /^\w+$/.test(resolvedEmoji);
+  if (resolvedEmoji && !isFeishuCompatible && getFeishuRuntime().logging.shouldLogVerbose()) {
+    runtime?.log?.(
+      `[feishu] ackReaction "${resolvedEmoji}" is not a valid Feishu emoji type name (must match /^\\w+$/); falling back to "${TYPING_EMOJI}"`,
+    );
+  }
+  const emojiType = isFeishuCompatible ? resolvedEmoji : TYPING_EMOJI;
 
   try {
     const response = await client.im.messageReaction.create({
       path: { message_id: messageId },
       data: {
-        reaction_type: { emoji_type: TYPING_EMOJI },
+        reaction_type: { emoji_type: emojiType },
       },
     });
 

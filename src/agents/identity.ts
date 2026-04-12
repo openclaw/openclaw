@@ -14,7 +14,7 @@ export function resolveAgentIdentity(
 export function resolveAckReaction(
   cfg: OpenClawConfig,
   agentId: string,
-  opts?: { channel?: string; accountId?: string },
+  opts?: { channel?: string; accountId?: string; channelDefault?: string },
 ): string {
   // L1: Channel account level
   if (opts?.channel && opts?.accountId) {
@@ -43,7 +43,7 @@ export function resolveAckReaction(
 
   // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
-  return emoji || DEFAULT_ACK_REACTION;
+  return emoji || opts?.channelDefault || DEFAULT_ACK_REACTION;
 }
 
 export function resolveIdentityNamePrefix(
