@@ -805,4 +805,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/env_file:\n\s+- \.\/\.env/g)).toHaveLength(2);
     expect(compose).not.toContain("/app/.env:ro");
   });
+
+  it("keeps the gateway on image-default user and entrypoint", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).not.toContain("user: root");
+    expect(compose).not.toContain('entrypoint: ["/app/scripts/docker/gateway-entrypoint.sh"]');
+  });
 });
