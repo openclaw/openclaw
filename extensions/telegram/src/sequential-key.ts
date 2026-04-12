@@ -25,6 +25,36 @@ export type TelegramSequentialKeyContext = {
   };
 };
 
+export type TelegramSequentialKeyOptions = {
+  /**
+   * When provided, the sequentializer checks whether an embedded Pi run is
+   * active for the resolved chat/thread.  If a run is active, the key is
+   * scoped to the individual message so it can be dispatched in parallel
+   * (needed for steer / interrupt queue modes).
+   */
+  isRunActiveForChat?: (chatId: number, threadId: number | undefined, senderId: string) => boolean;
+};
+
+/**
+ * Maximum entries in the chatSessionCache before FIFO eviction kicks in.
+ */
+export const CHAT_SESSION_CACHE_MAX = 500;
+
+/**
+ * Build the cache key used by chatSessionCache.
+ * For groups: keyed by conversation (chatId + threadId) — the session is shared.
+ * For DMs: includes senderId because DM bridge/business-chat deliveries can
+ * route different senders sharing the same chatId to different sessions.
+ */
+export function buildChatSessionCacheKey(
+  chatId: number | string,
+  threadId: number | undefined,
+  senderId?: string,
+): string {
+  const base = threadId != null ? `${chatId}:${threadId}` : String(chatId);
+  return senderId ? `${base}:${senderId}` : base;
+}
+
 function resolveStatusCommandControlLane(params: {
   rawText?: string;
   botUsername?: string;
@@ -46,7 +76,10 @@ function resolveStatusCommandControlLane(params: {
   return command?.category === "status" && command.key !== "export-session";
 }
 
-export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+export function getTelegramSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+  options?: TelegramSequentialKeyOptions,
+): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
@@ -98,7 +131,22 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;
+
   if (typeof chatId === "number") {
+    // When a run is active and the queue mode needs immediate delivery,
+    // use a per-message key so grammY dispatches this update in parallel
+    // rather than serializing it behind the active handler.
+    if (options?.isRunActiveForChat) {
+      const senderId = msg?.from?.id ? String(msg.from.id) : "";
+      if (options.isRunActiveForChat(chatId, threadId, senderId)) {
+        const messageId = msg?.message_id;
+        if (typeof messageId === "number") {
+          const base =
+            threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+          return `${base}:msg:${messageId}`;
+        }
+      }
+    }
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";

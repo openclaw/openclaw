@@ -41,11 +41,8 @@ const {
   useSpy,
 } = harness;
 const { resolveTelegramFetch } = await import("./fetch.js");
-const {
-  createTelegramBot: createTelegramBotBase,
-  getTelegramSequentialKey,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -204,7 +201,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    // The key function is now wrapped to pass isRunActiveForChat options,
+    // so we verify it's a function rather than checking reference identity.
+    expect(typeof harness.sequentializeKey).toBe("function");
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {

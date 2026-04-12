@@ -1,6 +1,6 @@
 import type { Chat, Message } from "@grammyjs/types";
-import { describe, expect, it } from "vitest";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { describe, expect, it, vi } from "vitest";
+import { buildChatSessionCacheKey, getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
   chat as Chat;
@@ -126,50 +126,6 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
       "telegram:123:control",
     ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 123 }) }),
-            data: "/approve plugin:abc123 allow-once",
-          },
-        },
-      },
-      "telegram:123:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 456 }) }),
-            data: "/approve exec:def456 deny",
-          },
-        },
-      },
-      "telegram:456:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 789 }) }),
-            data: "/approve plugin:ghi789 always",
-          },
-        },
-      },
-      "telegram:789:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 123 }) }),
-            data: "some-other-button",
-          },
-        },
-      },
-      "telegram:123",
-    ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) }, "telegram:123"],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) }, "telegram:123"],
     [
@@ -178,5 +134,144 @@ describe("getTelegramSequentialKey", () => {
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
+  });
+});
+
+describe("getTelegramSequentialKey with isRunActiveForChat bypass", () => {
+  it("returns per-message key when run is active for the chat", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 42,
+          date: 0,
+          chat: { id: 123, type: "private" } as Chat,
+          from: { id: 999, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => true,
+      },
+    );
+    expect(key).toBe("telegram:123:msg:42");
+  });
+
+  it("returns default key when run is NOT active", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 42,
+          date: 0,
+          chat: { id: 123, type: "private" } as Chat,
+          from: { id: 999, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => false,
+      },
+    );
+    expect(key).toBe("telegram:123");
+  });
+
+  it("returns per-message key scoped to topic for forum groups", () => {
+    const key = getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 55,
+          date: 0,
+          chat: { id: -100999, type: "supergroup", is_forum: true } as Chat,
+          message_thread_id: 7,
+          from: { id: 888, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      {
+        isRunActiveForChat: () => true,
+      },
+    );
+    expect(key).toBe("telegram:-100999:topic:7:msg:55");
+  });
+
+  it("passes chatId, threadId, and senderId to the callback", () => {
+    const spy = vi.fn().mockReturnValue(false);
+    getTelegramSequentialKey(
+      {
+        message: {
+          message_id: 10,
+          date: 0,
+          chat: { id: 456, type: "supergroup", is_forum: true } as Chat,
+          message_thread_id: 3,
+          from: { id: 777, first_name: "Test", is_bot: false },
+        } as Message,
+      },
+      { isRunActiveForChat: spy },
+    );
+    expect(spy).toHaveBeenCalledWith(456, 3, "777");
+  });
+});
+
+describe("getTelegramSequentialKey — approval callback", () => {
+  it("returns approval key for exec approval callback_query", () => {
+    const key = getTelegramSequentialKey({
+      update: {
+        callback_query: {
+          message: {
+            message_id: 10,
+            date: 0,
+            chat: { id: 123, type: "private" } as Chat,
+          } as Message,
+          data: "/approve req-1 allow-once",
+        },
+      },
+    });
+    expect(key).toBe("telegram:123:approval");
+  });
+
+  it("returns default key for non-approval callback_query", () => {
+    const key = getTelegramSequentialKey({
+      update: {
+        callback_query: {
+          message: {
+            message_id: 10,
+            date: 0,
+            chat: { id: 123, type: "private" } as Chat,
+          } as Message,
+          data: "some-other-callback",
+        },
+      },
+    });
+    expect(key).toBe("telegram:123");
+  });
+
+  it("returns fallback approval key when chatId is missing", () => {
+    const key = getTelegramSequentialKey({
+      update: {
+        callback_query: {
+          message: { message_id: 10, date: 0, chat: {} } as unknown as Message,
+          data: "/approve req-1 allow-once",
+        },
+      },
+    });
+    expect(key).toBe("telegram:approval");
+  });
+});
+
+describe("buildChatSessionCacheKey", () => {
+  it("builds key from chatId only", () => {
+    expect(buildChatSessionCacheKey(123, undefined)).toBe("123");
+  });
+
+  it("includes threadId when present", () => {
+    expect(buildChatSessionCacheKey(123, 7)).toBe("123:7");
+  });
+
+  it("includes senderId when present", () => {
+    expect(buildChatSessionCacheKey(123, undefined, "999")).toBe("123:999");
+  });
+
+  it("includes all three components", () => {
+    expect(buildChatSessionCacheKey(123, 7, "999")).toBe("123:7:999");
+  });
+
+  it("handles string chatId", () => {
+    expect(buildChatSessionCacheKey("abc", 5, "sender")).toBe("abc:5:sender");
   });
 });

@@ -58,3 +58,4 @@ export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";
+export { isEmbeddedPiRunActiveForSessionKey } from "../agents/pi-embedded-runner/run-active-check.js";
