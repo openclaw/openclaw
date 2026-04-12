@@ -197,6 +197,30 @@ describe("resolveGatewayInstallToken", () => {
     });
   });
 
+  it("persists auto-generated token with mode none when no existing auth config", async () => {
+    const result = await resolveGatewayInstallToken({
+      config: {
+        gateway: { auth: {} },
+      } as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+      autoGenerateWhenMissing: true,
+      persistGeneratedToken: true,
+    });
+
+    expect(result.token).toBe("generated-token");
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      baseHash: undefined,
+      nextConfig: expect.objectContaining({
+        gateway: {
+          auth: {
+            mode: "none",
+            token: "generated-token",
+          },
+        },
+      }),
+    });
+  });
+
   it("drops generated plaintext when config changes to SecretRef before persist", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
