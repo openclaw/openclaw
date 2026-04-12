@@ -25,6 +25,9 @@ const log = createSubsystemLogger("gmail-watcher");
 let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
+// Set when stopGmailWatcher is called so the exit handler knows the stop was intentional.
+// Prevents a restart from being scheduled after a new watcher has already started.
+let stopped = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 
 /**
@@ -92,10 +95,11 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("exit", (code, signal) => {
-    if (shuttingDown) {
+    if (shuttingDown || stopped) {
       return;
     }
     if (addressInUse) {
+      stopped = true;
       log.warn(
         "gog serve failed to bind (address already in use); stopping restarts. " +
           "Another watcher is likely running. Set OPENCLAW_SKIP_GMAIL_WATCHER=1 or stop the other process.",
@@ -106,7 +110,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
     watcherProcess = null;
     setTimeout(() => {
-      if (shuttingDown || !currentConfig) {
+      if (shuttingDown || stopped || !currentConfig) {
         return;
       }
       watcherProcess = spawnGogServe(currentConfig);
@@ -133,6 +137,13 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
 
   if (!cfg.hooks?.gmail?.account) {
     return { started: false, reason: "no gmail account configured" };
+  }
+
+  // Guard: refuse to start if a watcher is already running. This prevents duplicate
+  // watchers when startGmailWatcher is called multiple times (e.g. hot-reload race or
+  // after a process exits with addressInUse without the module state being updated).
+  if (watcherProcess != null && !shuttingDown) {
+    return { started: false, reason: "watcher already running" };
   }
 
   // Check if gog is available
@@ -202,6 +213,7 @@ export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatch
  */
 export async function stopGmailWatcher(): Promise<void> {
   shuttingDown = true;
+  stopped = true;
 
   if (renewInterval) {
     clearInterval(renewInterval);
