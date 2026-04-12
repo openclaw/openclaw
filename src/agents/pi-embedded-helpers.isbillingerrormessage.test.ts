@@ -958,6 +958,11 @@ describe("classifyFailoverReason", () => {
         'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
       ),
     ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '400 {"error":{"message":"Selected model deepseek/deepseek-chat does not support tools. Retry without tools or let the client fall back to a tool-capable model.","type":"invalid_request_error","code":"tool_incompatible","param":"model"}}',
+      ),
+    ).toBe("format");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(

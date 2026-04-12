@@ -823,6 +823,17 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isToolIncompatibleErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return (
+    /"code":"tool_incompatible"/i.test(raw) ||
+    /\bdoes not support tools\b/i.test(raw) ||
+    /\btool-capable model\b/i.test(raw)
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -890,6 +901,9 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   if (isCloudCodeAssistFormatError(raw)) {
+    return toReasonClassification("format");
+  }
+  if (isToolIncompatibleErrorMessage(raw)) {
     return toReasonClassification("format");
   }
   if (isTimeoutErrorMessage(raw)) {
