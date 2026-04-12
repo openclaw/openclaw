@@ -120,12 +120,6 @@ async function safeSaveCreds(
       throw new Error("creds.json empty after save");
     }
     JSON.parse(savedRaw); // Validate JSON
-
-    // Update backup with validated new creds
-    fsSync.copyFileSync(credsPath, backupPath);
-    try {
-      fsSync.chmodSync(backupPath, 0o600);
-    } catch {}
   } catch (err) {
     logger.warn({ error: String(err) }, "creds validation failed after save");
 
