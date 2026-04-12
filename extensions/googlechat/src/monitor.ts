@@ -419,6 +419,7 @@ async function deliverGoogleChatReply(params: {
             suppressCaption = Boolean(text.trim());
           } catch (updateErr) {
             runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+            typingMessageName = undefined;
           }
         }
       }
