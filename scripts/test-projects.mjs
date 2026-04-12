@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
+import {
+  forwardVitestOutput,
+  installVitestNoOutputWatchdog,
+  resolveVitestCliEntry,
+  resolveVitestNodeArgs,
+  resolveVitestNoOutputTimeoutMs,
+  shouldSuppressVitestStderrLine,
+} from "./run-vitest.mjs";
 import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
@@ -12,6 +19,7 @@ import {
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -106,17 +114,36 @@ function runVitestSpec(spec) {
       detached: shouldUseDetachedVitestProcessGroup(),
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
+      stdio: ["inherit", "pipe", "pipe"],
     });
     const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+    const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
+      streams: [child.stdout, child.stderr],
+      timeoutMs: resolveVitestNoOutputTimeoutMs(spec.env),
+      log: (message) => {
+        console.error(message);
+      },
+      onTimeout: () => {
+        forwardSignalToVitestProcessGroup({ child, signal: "SIGTERM" });
+      },
+      onForceKill: () => {
+        forwardSignalToVitestProcessGroup({ child, signal: "SIGKILL" });
+      },
+    });
+
+    forwardVitestOutput(child.stdout, process.stdout);
+    forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
     child.on("exit", (code, signal) => {
       teardownChildCleanup();
+      teardownNoOutputWatchdog();
       cleanupVitestRunSpec(spec);
       resolve({ code: code ?? 1, signal });
     });
 
     child.on("error", (error) => {
       teardownChildCleanup();
+      teardownNoOutputWatchdog();
       cleanupVitestRunSpec(spec);
       reject(error);
     });
