@@ -247,6 +247,7 @@ vi.mock("../web-fetch/runtime.js", () => ({
 describe("capability cli", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {

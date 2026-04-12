@@ -411,8 +411,9 @@ function providerHasGenericConfig(params: {
   const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
   const ttsProviders = (params.cfg.messages?.tts?.providers ?? {}) as Record<string, unknown>;
-  const envVars = params.envVars ?? getProviderEnvVars(params.providerId);
-  const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
+  const envConfigured = (params.envVars ?? []).some((envVar) =>
+    Boolean(process.env[envVar]?.trim()),
+  );
   return (
     getAuthProfileIdsForProvider(params.cfg, params.providerId).length > 0 ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
@@ -1487,7 +1488,14 @@ export function registerCapabilityCli(program: Command) {
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+            configured: providerHasGenericConfig({
+              cfg,
+              providerId: provider.id,
+              envVars: getProviderEnvVars(provider.id, {
+                config: cfg,
+                includeUntrustedWorkspacePlugins: false,
+              }),
+            }),
             selected: false,
             id: provider.id,
             capabilities: provider.capabilities,

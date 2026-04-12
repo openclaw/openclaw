@@ -49,4 +49,62 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(mod.listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
+
+  it("excludes untrusted workspace plugin env vars when requested", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["AWS_SECRET_ACCESS_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([]);
+    expect(
+      mod.listKnownProviderAuthEnvVarNames({
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).not.toContain("AWS_SECRET_ACCESS_KEY");
+  });
+
+  it("keeps explicitly trusted workspace plugin env vars when requested", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: {
+          plugins: {
+            allow: ["workspace-audio"],
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual(["WHISPERX_API_KEY"]);
+  });
 });
