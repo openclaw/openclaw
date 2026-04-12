@@ -107,6 +107,7 @@ export async function assertBrowserNavigationAllowed(
   // the same address that passed policy checks.
   if (
     opts.ssrfPolicy &&
+    opts.ssrfPolicy.dangerouslyAllowPrivateNetwork === false &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
     !isIpLiteralHostname(parsed.hostname) &&
     !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)
