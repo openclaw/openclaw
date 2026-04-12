@@ -185,6 +185,14 @@ export function detectRuntimeShell(): string | undefined {
     return "powershell";
   }
 
+  const overrideShell = process.env.OPENCLAW_SHELL?.trim();
+  if (overrideShell) {
+    const name = normalizeShellName(overrideShell);
+    if (name) {
+      return name;
+    }
+  }
+
   const envShell = process.env.SHELL?.trim();
   if (envShell) {
     const name = normalizeShellName(envShell);
