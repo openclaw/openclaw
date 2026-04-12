@@ -98,6 +98,90 @@ async function requestAllowOnceApproval(
   return approvalId;
 }
 
+async function connectPairedLinuxNode(params: {
+  port: number;
+  deviceIdentity: DeviceIdentity;
+  commands: string[];
+  onInvoke: (payload: unknown) => void;
+}): Promise<GatewayClient> {
+  const startClient = async () => {
+    let readyResolve: (() => void) | null = null;
+    const ready = new Promise<void>((resolve) => {
+      readyResolve = resolve;
+    });
+
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${params.port}`,
+      // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
+      // trigger reconnect backoff loops under load.
+      connectChallengeTimeoutMs: 2_000,
+      token: "secret",
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientVersion: "1.0.0",
+      platform: "linux",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      scopes: [],
+      commands: params.commands,
+      deviceIdentity: params.deviceIdentity,
+      onHelloOk: () => readyResolve?.(),
+      onEvent: (evt) => {
+        if (evt.event !== "node.invoke.request") {
+          return;
+        }
+        params.onInvoke(evt.payload);
+        const payload = evt.payload as {
+          id?: string;
+          nodeId?: string;
+        };
+        const id = typeof payload?.id === "string" ? payload.id : "";
+        const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
+        if (!id || !nodeId) {
+          return;
+        }
+        void client.request("node.invoke.result", {
+          id,
+          nodeId,
+          ok: true,
+          payloadJSON: JSON.stringify({ ok: true }),
+        });
+      },
+    });
+    client.start();
+    await Promise.race([
+      ready,
+      sleep(NODE_CONNECT_TIMEOUT_MS).then(() => {
+        throw new Error("timeout waiting for node to connect");
+      }),
+    ]);
+    return client;
+  };
+
+  let client = await startClient();
+  const { approveNodePairing, listNodePairing, requestNodePairing } = await import(
+    "../infra/node-pairing.js"
+  );
+  const nodeId = params.deviceIdentity.deviceId;
+  const existingRequest = (await listNodePairing()).pending.find((pending) => pending.nodeId === nodeId);
+  const requestId =
+    existingRequest?.requestId ??
+    (
+      await requestNodePairing({
+        nodeId,
+        platform: "linux",
+        commands: params.commands,
+      })
+    ).request.requestId;
+  await approveNodePairing(requestId, {
+    callerScopes: ["operator.pairing", "operator.admin", "operator.write"],
+  });
+
+  // Node pairing approval only affects the next connect, so reconnect to refresh the live session.
+  await client.stopAndWait();
+  client = await startClient();
+  return client;
+}
+
 describe("node.invoke approval bypass", () => {
   let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
   let port: number;
@@ -205,57 +289,13 @@ describe("node.invoke approval bypass", () => {
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
   ) => {
-    let readyResolve: (() => void) | null = null;
-    const ready = new Promise<void>((resolve) => {
-      readyResolve = resolve;
-    });
-
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
-      // trigger reconnect backoff loops under load.
-      connectChallengeTimeoutMs: 2_000,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientVersion: "1.0.0",
-      platform: "linux",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands,
+    return await connectPairedLinuxNode({
+      port,
       deviceIdentity: resolvedDeviceIdentity,
-      onHelloOk: () => readyResolve?.(),
-      onEvent: (evt) => {
-        if (evt.event !== "node.invoke.request") {
-          return;
-        }
-        onInvoke(evt.payload);
-        const payload = evt.payload as {
-          id?: string;
-          nodeId?: string;
-        };
-        const id = typeof payload?.id === "string" ? payload.id : "";
-        const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
-        if (!id || !nodeId) {
-          return;
-        }
-        void client.request("node.invoke.result", {
-          id,
-          nodeId,
-          ok: true,
-          payloadJSON: JSON.stringify({ ok: true }),
-        });
-      },
+      commands,
+      onInvoke,
     });
-    client.start();
-    await Promise.race([
-      ready,
-      sleep(NODE_CONNECT_TIMEOUT_MS).then(() => {
-        throw new Error("timeout waiting for node to connect");
-      }),
-    ]);
-    return client;
   };
 
   test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {
