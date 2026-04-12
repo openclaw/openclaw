@@ -3492,6 +3492,8 @@ def validate_s3_bucket_name(name):
         errors.append("Name must start/end with letter or number, only lowercase letters, numbers, hyphens, dots allowed")
     if '..' in name:
         errors.append("Name cannot contain consecutive dots")
+    if '--' in name:
+        errors.append("Name cannot contain consecutive hyphens")
     if re.match(r'^\d+\.\d+\.\d+\.\d+$', name):
         errors.append("Name cannot be formatted as an IP address")
     if name.startswith('xn--'):
@@ -3513,6 +3515,8 @@ def validate_landing_zone_name(name):
         errors.append("Name must start/end with a letter or number and use only lowercase letters, numbers, and hyphens")
     if '..' in name:
         errors.append("Name cannot contain consecutive dots")
+    if '--' in name:
+        errors.append("Name cannot contain consecutive hyphens")
     if name.startswith('xn--'):
         errors.append("Name cannot start with 'xn--'")
     if name.startswith('sthree-'):
