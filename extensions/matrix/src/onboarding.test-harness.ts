@@ -156,3 +156,52 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
     configured: true,
   });
 }
+
+export function createConfiguredMatrixDefaultAccountConfig(): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        accounts: {
+          default: {
+            homeserver: "https://matrix.main.example.org",
+            accessToken: "main-token",
+          },
+        },
+      },
+    },
+  } as CoreConfig;
+}
+
+export function createLegacyMatrixTopLevelConfig(): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        homeserver: "https://matrix.main.example.org",
+        userId: "@main:example.org",
+        accessToken: "main-token",
+        avatarUrl: "mxc://matrix.main.example.org/main-avatar",
+      },
+    },
+  } as CoreConfig;
+}
+
+export function createMatrixTokenAddAccountPrompter(params?: {
+  accountName?: string;
+  homeserver?: string;
+  accessToken?: string;
+  deviceName?: string;
+}) {
+  return createMatrixWizardPrompter({
+    select: {
+      "Matrix already configured. What do you want to do?": "add-account",
+      "Matrix auth method": "token",
+    },
+    text: {
+      "Matrix account name": params?.accountName ?? "ops",
+      "Matrix homeserver URL": params?.homeserver ?? "https://matrix.ops.example.org",
+      "Matrix access token": params?.accessToken ?? "ops-token",
+      "Matrix device name (optional)": params?.deviceName ?? "",
+    },
+    onConfirm: async () => false,
+  });
+}
