@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   hasExplicitManifestOwnerTrust,
+  isActivatedManifestOwner,
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
@@ -90,6 +91,32 @@ describe("manifest owner policy", () => {
       hasExplicitManifestOwnerTrust({
         plugin: { id: "demo" },
         normalizedConfig: normalizePluginsConfig({}),
+      }),
+    ).toBe(false);
+  });
+
+  it("uses effective activation state for activated manifest owners", () => {
+    expect(
+      isActivatedManifestOwner({
+        plugin: {
+          id: "demo",
+          origin: "bundled",
+          enabledByDefault: true,
+        },
+        normalizedConfig: normalizePluginsConfig({}),
+      }),
+    ).toBe(true);
+
+    expect(
+      isActivatedManifestOwner({
+        plugin: {
+          id: "demo",
+          origin: "bundled",
+          enabledByDefault: true,
+        },
+        normalizedConfig: normalizePluginsConfig({
+          enabled: false,
+        }),
       }),
     ).toBe(false);
   });
