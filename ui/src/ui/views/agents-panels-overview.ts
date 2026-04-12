@@ -6,6 +6,7 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../types.ts";
+import { getOptimizedModel, isModelAlreadyOptimized } from "../../../../src/agents/model-optimize.js";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -34,6 +35,7 @@ export function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  onModelOptimize: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const {
@@ -47,6 +49,7 @@ export function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
+    onModelOptimize,
     onSelectPanel,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
@@ -208,6 +211,27 @@ export function renderAgentOverview(params: {
           >
             ${t("common.reloadConfig")}
           </button>
+          ${(() => {
+            const optimizeResult = getOptimizedModel(effectivePrimary, params.modelCatalog);
+            const alreadyOptimized = isModelAlreadyOptimized(effectivePrimary);
+            if (alreadyOptimized) {
+              return html`<span class="pill success" title="Already using an economy-tier model">Optimized</span>`;
+            }
+            if (!optimizeResult) {
+              return nothing;
+            }
+            return html`
+              <button
+                type="button"
+                class="btn btn--sm"
+                title="Switch to ${optimizeResult.recommended} — ${optimizeResult.reason}"
+                ?disabled=${disabled}
+                @click=${() => onModelOptimize(agent.id)}
+              >
+                Optimize (→&nbsp;${optimizeResult.recommended})
+              </button>
+            `;
+          })()}
           <button
             type="button"
             class="btn btn--sm primary"

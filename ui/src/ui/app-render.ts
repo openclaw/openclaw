@@ -126,6 +126,7 @@ import {
   resolveModelPrimary,
   sortLocaleStrings,
 } from "./views/agents-utils.ts";
+import { getOptimizedModel } from "../../../src/agents/model-optimize.js";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
@@ -1720,6 +1721,36 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                },
+                onModelOptimize: (agentId) => {
+                  // Resolve the current effective primary model for this agent.
+                  const currentConfig = getCurrentConfigValue();
+                  const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
+                  const effectivePrimary =
+                    resolveModelPrimary(resolvedConfig.entry?.model) ??
+                    resolveModelPrimary(resolvedConfig.defaults?.model) ??
+                    null;
+                  const result = getOptimizedModel(effectivePrimary, state.chatModelCatalog ?? []);
+                  if (!result) {
+                    return;
+                  }
+                  // Apply as a model change exactly like onModelChange does.
+                  const index = ensureAgentIndex(agentId);
+                  if (index < 0) {
+                    return;
+                  }
+                  const { basePath, existing } = resolveAgentModelFormEntry(index);
+                  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                    const next = {
+                      primary: result.recommended,
+                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                    };
+                    updateConfigFormValue(state, basePath, next);
+                  } else {
+                    updateConfigFormValue(state, basePath, result.recommended);
+                  }
+                  void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
               }),
             )

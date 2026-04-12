@@ -6,6 +6,7 @@ import {
   agentsBindCommand,
   agentsDeleteCommand,
   agentsListCommand,
+  agentsOptimizeCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
 } from "../../commands/agents.js";
@@ -264,6 +265,39 @@ ${formatHelpExamples([
           {
             id: String(id),
             force: Boolean(opts.force),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("optimize [agent]")
+    .description("Recommend and optionally apply cheaper model assignments per agent")
+    .option("--agent <id>", "Optimize a specific agent (default: all agents)")
+    .option("--apply", "Apply the recommendations without interactive confirmation", false)
+    .option("--json", "Output recommendations as JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ["openclaw agents optimize", "Show recommendations for all agents."],
+  ['openclaw agents optimize --agent coder', "Show recommendation for the 'coder' agent."],
+  ["openclaw agents optimize --apply", "Auto-apply cheaper models for all agents."],
+  ['openclaw agents optimize --agent main --apply', "Apply cheaper model for 'main' agent."],
+  ["openclaw agents optimize --json", "Output recommendations as JSON."],
+])}
+`,
+    )
+    .action(async (agent, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsOptimizeCommand(
+          {
+            agent: (opts.agent as string | undefined) ?? (typeof agent === "string" ? agent : undefined),
+            apply: Boolean(opts.apply),
             json: Boolean(opts.json),
           },
           defaultRuntime,

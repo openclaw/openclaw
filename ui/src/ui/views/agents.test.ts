@@ -108,6 +108,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
+    onModelOptimize: () => undefined,
     onChannelsRefresh: () => undefined,
     onCronRefresh: () => undefined,
     onCronRunNow: () => undefined,
