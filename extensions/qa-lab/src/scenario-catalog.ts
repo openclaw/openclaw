@@ -352,7 +352,7 @@ export function readQaScenarioById(id: string): QaSeedScenario {
 }
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
-  return readQaScenarioById(id).execution?.config;
+  return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {
