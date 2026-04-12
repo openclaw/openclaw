@@ -33,7 +33,7 @@ function extractRelevantSnippet(
   // Use the same tokenizer as the search engine so CJK terms and
   // conversational queries produce correct anchor terms.
   const lowerText = text.toLowerCase();
-  const queryTerms = extractKeywords(query).sort((a, b) => b.length - a.length);
+  const queryTerms = extractKeywords(query).toSorted((a, b) => b.length - a.length);
 
   let matchIndex = -1;
 
@@ -46,13 +46,15 @@ function extractRelevantSnippet(
     }
   }
 
-  // If no match found, fall back to beginning
+  // If no match found, return the full chunk text rather than truncating to
+  // the beginning.  Semantic/vector matches often don't share literal keywords
+  // with the query, so trimming from the start would discard the relevant
+  // section when it appears later in the chunk.
   if (matchIndex === -1) {
-    const fallback = truncateUtf16Safe(text, maxChars);
     return {
-      snippet: fallback,
+      snippet: text,
       offsetLines: 0,
-      snippetLines: (fallback.match(/\n/g) || []).length,
+      snippetLines: (text.match(/\n/g) || []).length,
       anchorFound: false,
     };
   }
