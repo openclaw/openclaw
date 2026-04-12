@@ -31,8 +31,10 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
-const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
-const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
+// Repeated dreaming revisits should be able to clear the default promotion gate
+// without requiring separate organic recall traffic for the same snippet.
+const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
+const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();

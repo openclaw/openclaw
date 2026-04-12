@@ -150,19 +150,16 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "partial" });
+    expect(res.config.channels?.discord?.streaming).toBe(true);
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.work?.streaming).toEqual({ mode: "off" });
+    expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe(false);
     expect(
       getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
     ).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-    ]);
+    expect(res.changes).toEqual([]);
   });
 
-  it("migrates Discord legacy streamMode into nested streaming.mode", () => {
+  it("keeps Discord legacy streamMode untouched", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -174,11 +171,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-    ]);
+    expect(res.config.channels?.discord?.streaming).toBe(false);
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBe("block");
+    expect(res.changes).toEqual([]);
   });
 
   it("migrates Telegram streamMode into nested streaming.mode", () => {

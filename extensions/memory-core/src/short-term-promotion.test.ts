@@ -179,6 +179,80 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("lets repeated dreaming-only daily signals clear the default promotion gates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
+      let candidateKey = "";
+
+      for (const [index, day] of queryDays.entries()) {
+        const nowMs = Date.parse(`${day}T10:00:00.000Z`);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `__dreaming_daily__:${day}`,
+          signalType: "daily",
+          dedupeByQueryPerDay: true,
+          dayBucket: day,
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.62,
+              snippet: "Move backups to S3 Glacier.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs,
+        });
+        candidateKey = ranked[0]?.key ?? candidateKey;
+        expect(candidateKey).toBeTruthy();
+
+        await recordDreamingPhaseSignals({
+          workspaceDir,
+          phase: "light",
+          keys: [candidateKey],
+          nowMs,
+        });
+        await recordDreamingPhaseSignals({
+          workspaceDir,
+          phase: "rem",
+          keys: [candidateKey],
+          nowMs: nowMs + 60_000,
+        });
+
+        if (index < 2) {
+          const beforeThreshold = await rankShortTermPromotionCandidates({
+            workspaceDir,
+            nowMs,
+          });
+          expect(beforeThreshold).toHaveLength(0);
+        }
+      }
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]).toMatchObject({
+        recallCount: 0,
+        dailyCount: 3,
+        uniqueQueries: 3,
+      });
+      expect(ranked[0]?.recallDays).toEqual(queryDays);
+      expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+    });
+  });
+
   it("lets grounded durable evidence satisfy default deep thresholds", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
