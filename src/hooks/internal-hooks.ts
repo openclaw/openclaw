@@ -17,8 +17,20 @@ import type {
   InternalHookEvent,
   InternalHookEventType,
   InternalHookHandler,
+  ToolBeforeExecuteHookContext,
+  ToolBeforeExecuteHookEvent,
+  ToolAfterExecuteHookContext,
+  ToolAfterExecuteHookEvent,
 } from "./internal-hook-types.js";
-export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
+export type {
+  InternalHookEvent,
+  InternalHookEventType,
+  InternalHookHandler,
+  ToolBeforeExecuteHookContext,
+  ToolBeforeExecuteHookEvent,
+  ToolAfterExecuteHookContext,
+  ToolAfterExecuteHookEvent,
+};
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;

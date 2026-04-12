@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { triggerInternalHook, createInternalHookEvent } from "../../hooks/internal-hooks.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -528,20 +529,57 @@ export function handleToolExecutionStart(
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
+      return onBlockReplyFlushResult.then(async () => {
+        await continueToolExecutionStart();
       });
     }
-    continueToolExecutionStart();
+    void continueToolExecutionStart();
     return undefined;
   };
 
-  const continueToolExecutionStart = () => {
+  const continueToolExecutionStart = async (): Promise<void> => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    const sessionKey = ctx.params.sessionKey;
+
+    // ===== [NEW] Trigger tool:beforeExecute hook =====
+    try {
+      const hookEvent = createInternalHookEvent("tool", "beforeExecute", sessionKey, {
+        toolName,
+        toolInput: args as Record<string, unknown>,
+        toolCallId,
+        isSubagent: ctx.params.isSubagent ?? false,
+      });
+      const hookResult = await triggerInternalHook(hookEvent);
+
+      // Handle permissionDecision
+      if (hookResult?.permissionDecision === "deny") {
+        ctx.log.warn(`tool:beforeExecute hook denied: tool=${toolName} toolCallId=${toolCallId}`);
+        const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+        ctx.state.toolMetaById.set(toolCallId, {
+          ...buildToolCallSummary(toolName, args, meta),
+          blocked: true,
+          blockReason: hookResult.systemMessage,
+        });
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "tool",
+          data: {
+            phase: "end",
+            name: toolName,
+            toolCallId,
+            error: hookResult.systemMessage ?? "Blocked by hook",
+          },
+        });
+        return;
+      }
+    } catch (hookError) {
+      ctx.log.error(`tool:beforeExecute hook error: ${formatErrorMessage(hookError)}`);
+    }
+    // ===== [END NEW] =====
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
@@ -759,6 +797,23 @@ export async function handleToolExecutionEnd(
   const isError = evt.isError;
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
+  const sessionKey = ctx.params.sessionKey;
+
+  // ===== [NEW] Trigger tool:afterExecute hook =====
+  try {
+    const hookEvent = createInternalHookEvent("tool", "afterExecute", sessionKey, {
+      toolName,
+      toolInput: evt.args as Record<string, unknown> | undefined,
+      toolResult: result,
+      isError: isToolError,
+      toolCallId,
+      isSubagent: ctx.params.isSubagent ?? false,
+    });
+    await triggerInternalHook(hookEvent);
+  } catch (hookError) {
+    ctx.log.error(`tool:afterExecute hook error: ${formatErrorMessage(hookError)}`);
+  }
+  // ===== [END NEW] =====
   const sanitizedResult = sanitizeToolResult(result);
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
