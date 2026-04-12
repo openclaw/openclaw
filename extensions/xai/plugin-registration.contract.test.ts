@@ -4,4 +4,7 @@ describePluginRegistrationContract({
   pluginId: "xai",
   providerIds: ["xai"],
   webSearchProviderIds: ["grok"],
+  videoGenerationProviderIds: ["xai"],
+  toolNames: ["code_execution", "x_search"],
+  requireGenerateVideo: true,
 });

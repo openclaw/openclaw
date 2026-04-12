@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { probeGatewayStatus } from "./probe.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const probeGatewayMock = vi.hoisted(() => vi.fn());
@@ -14,8 +15,6 @@ vi.mock("../../gateway/probe.js", () => ({
 vi.mock("../progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
-
-const { probeGatewayStatus } = await import("./probe.js");
 
 describe("probeGatewayStatus", () => {
   it("uses lightweight token-only probing for daemon status", async () => {

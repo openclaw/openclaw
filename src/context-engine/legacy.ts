@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
 import { registerContextEngineForOwner } from "./registry.js";
 import type {
@@ -40,6 +41,8 @@ export class LegacyContextEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
     model?: string;
   }): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline

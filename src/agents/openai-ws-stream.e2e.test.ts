@@ -9,7 +9,7 @@
  *  - Connection lifecycle cleanup via releaseWsSession
  *
  * Run manually with a valid OPENAI_API_KEY:
- *   OPENCLAW_LIVE_TEST=1 pnpm exec vitest run --config vitest.e2e.config.ts src/agents/openai-ws-stream.e2e.test.ts
+ *   OPENCLAW_LIVE_TEST=1 pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/openai-ws-stream.e2e.test.ts
  *
  * Skipped in CI — no API key available and we avoid billable external calls.
  */
@@ -38,8 +38,8 @@ let openAIWsConnectionModule: OpenAIWsConnectionModule;
 const model = {
   api: "openai-responses" as const,
   provider: "openai",
-  id: "gpt-5.2",
-  name: "gpt-5.2",
+  id: "gpt-5.4",
+  name: "gpt-5.4",
   contextWindow: 128_000,
   maxTokens: 4_096,
   reasoning: true,
@@ -181,8 +181,9 @@ function freshSession(name: string): string {
 describe("OpenAI WebSocket e2e", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    vi.doMock("@mariozechner/pi-ai", async () => {
+      const actual =
+        await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
       return {
         ...actual,
         createAssistantMessageEventStream: actual.createAssistantMessageEventStream,

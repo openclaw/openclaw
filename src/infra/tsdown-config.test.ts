@@ -3,6 +3,9 @@ import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
+  deps?: {
+    neverBundle?: string[] | ((id: string) => boolean);
+  };
   entry?: Record<string, string> | string[];
   outDir?: string;
 };
@@ -40,11 +43,13 @@ describe("tsdown config", () => {
     expect(entryKeys(distGraphs[0])).toEqual(
       expect.arrayContaining([
         "agents/auth-profiles.runtime",
+        "agents/model-catalog.runtime",
+        "agents/models-config.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
         "commands/status.summary.runtime",
+        "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
-        "plugins/runtime/runtime-line.contract",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
@@ -68,5 +73,20 @@ describe("tsdown config", () => {
           : false,
       ),
     ).toBe(false);
+  });
+
+  it("externalizes staged bundled plugin runtime dependencies", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const unifiedGraph = configs.find((config) => entryKeys(config).includes("index"));
+    const neverBundle = unifiedGraph?.deps?.neverBundle;
+
+    if (typeof neverBundle === "function") {
+      expect(neverBundle("silk-wasm")).toBe(true);
+      expect(neverBundle("ws")).toBe(true);
+      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("not-a-runtime-dependency")).toBe(false);
+    } else {
+      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+    }
   });
 });

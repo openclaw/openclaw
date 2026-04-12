@@ -1,4 +1,5 @@
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ZcaUserInfo } from "./types.js";
 import { getZaloUserInfo } from "./zalo-js.js";
 
@@ -28,7 +29,7 @@ export async function probeZalouser(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     };
   }
 }

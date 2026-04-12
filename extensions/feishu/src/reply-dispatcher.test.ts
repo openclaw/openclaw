@@ -21,6 +21,33 @@ const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: 
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
+function mergeStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous) || next.includes(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next) || previous.includes(next)) {
+    return previous;
+  }
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+      return `${previous}${next.slice(overlap)}`;
+    }
+  }
+  return `${previous}${next}`;
+}
+
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
@@ -38,10 +65,9 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const actual = await vi.importActual<typeof import("./streaming-card.js")>("./streaming-card.js");
+vi.mock("./streaming-card.js", () => {
   return {
-    mergeStreamingText: actual.mergeStreamingText,
+    mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
       start = vi.fn(async () => {
@@ -392,7 +418,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    await result.replyOptions.onPartialReply?.({ text: "hello" });
+    result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -498,6 +524,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -512,7 +539,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
-      String(c[0] ?? ""),
+      typeof c[0] === "string" ? c[0] : "",
     );
     const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
@@ -531,13 +558,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toContain("answer part final");
   });
 
-  it("provides onReasoningStream and onReasoningEnd when streaming is enabled", () => {
+  it("provides onReasoningStream and onReasoningEnd when reasoning previews are allowed", () => {
     const { result } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     expect(result.replyOptions.onReasoningStream).toBeTypeOf("function");
     expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
+  });
+
+  it("omits reasoning callbacks unless reasoning previews are allowed", () => {
+    const { result } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
   });
 
   it("omits reasoning callbacks when streaming is disabled", () => {
@@ -563,6 +600,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("renders reasoning-only card when no answer text arrives", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -582,6 +620,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("ignores empty reasoning payloads", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -598,6 +637,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("deduplicates final text by raw answer payload, not combined card text", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();

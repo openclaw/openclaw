@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+} from "../shared/chat-message-content.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+} from "./openai-tool-schema.js";
 import type {
   ContentPart,
   FunctionToolDefinition,
@@ -9,6 +19,7 @@ import type {
   ResponseObject,
 } from "./openai-ws-connection.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
+import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
@@ -29,48 +40,8 @@ function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
-
-function parseAssistantTextSignature(
-  value: unknown,
-): { id: string; phase?: OpenAIResponsesAssistantPhase } | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { v?: unknown; id?: unknown; phase?: unknown };
-    if (parsed.v !== 1 || typeof parsed.id !== "string") {
-      return null;
-    }
-    return {
-      id: parsed.id,
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
@@ -253,7 +224,7 @@ function extractReasoningSummaryText(value: unknown): string {
         return "";
       }
       const record = item as { text?: unknown };
-      return typeof record.text === "string" ? record.text.trim() : "";
+      return normalizeOptionalString(record.text) ?? "";
     })
     .filter(Boolean)
     .join("\n")
@@ -269,19 +240,29 @@ function extractResponseReasoningText(item: unknown): string {
   if (summaryText) {
     return summaryText;
   }
-  return typeof record.content === "string" ? record.content.trim() : "";
+  return normalizeOptionalString(record.content) ?? "";
 }
 
-export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] {
+export function convertTools(
+  tools: Context["tools"],
+  options?: { strict?: boolean | null },
+): FunctionToolDefinition[] {
   if (!tools || tools.length === 0) {
     return [];
   }
-  return tools.map((tool) => ({
-    type: "function" as const,
-    name: tool.name,
-    description: typeof tool.description === "string" ? tool.description : undefined,
-    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-  }));
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
+  return tools.map((tool) => {
+    return {
+      type: "function" as const,
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters ?? {},
+        strict === true,
+      ) as Record<string, unknown>,
+      ...(strict === undefined ? {} : { strict }),
+    };
+  });
 }
 
 export function planTurnInput(params: {
@@ -345,10 +326,21 @@ export function convertMessagesToInputItems(
 
     if (m.role === "assistant") {
       const content = m.content;
-      let assistantPhase = normalizeAssistantPhase(m.phase);
+      const assistantMessagePhase = normalizeAssistantPhase(m.phase);
       if (Array.isArray(content)) {
         const textParts: string[] = [];
-        const pushAssistantText = () => {
+        let currentTextPhase: OpenAIResponsesAssistantPhase | undefined;
+        const hasExplicitBlockPhase = content.some((block) => {
+          if (!block || typeof block !== "object") {
+            return false;
+          }
+          const record = block as { type?: unknown; textSignature?: unknown };
+          return (
+            record.type === "text" &&
+            Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+          );
+        });
+        const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
             return;
           }
@@ -356,7 +348,7 @@ export function convertMessagesToInputItems(
             type: "message",
             role: "assistant",
             content: textParts.join(""),
-            ...(assistantPhase ? { phase: assistantPhase } : {}),
+            ...(phase ? { phase } : {}),
           });
           textParts.length = 0;
         };
@@ -372,15 +364,23 @@ export function convertMessagesToInputItems(
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
-            if (!assistantPhase) {
-              assistantPhase = parsedSignature?.phase;
+            const blockPhase =
+              parsedSignature?.phase ??
+              (parsedSignature?.id
+                ? assistantMessagePhase
+                : hasExplicitBlockPhase
+                  ? undefined
+                  : assistantMessagePhase);
+            if (textParts.length > 0 && blockPhase !== currentTextPhase) {
+              pushAssistantText(currentTextPhase);
             }
             textParts.push(block.text);
+            currentTextPhase = blockPhase;
             continue;
           }
 
           if (block.type === "thinking") {
-            pushAssistantText();
+            pushAssistantText(currentTextPhase);
             const reasoningItem = parseThinkingSignature(block.thinkingSignature);
             if (reasoningItem) {
               items.push(reasoningItem);
@@ -392,7 +392,7 @@ export function convertMessagesToInputItems(
             continue;
           }
 
-          pushAssistantText();
+          pushAssistantText(currentTextPhase);
           const replayId = decodeToolCallReplayId(block.id);
           const toolName = toNonEmptyString(block.name);
           if (!replayId || !toolName) {
@@ -410,7 +410,7 @@ export function convertMessagesToInputItems(
           });
         }
 
-        pushAssistantText();
+        pushAssistantText(currentTextPhase);
         continue;
       }
 
@@ -422,7 +422,7 @@ export function convertMessagesToInputItems(
         type: "message",
         role: "assistant",
         content: text,
-        ...(assistantPhase ? { phase: assistantPhase } : {}),
+        ...(assistantMessagePhase ? { phase: assistantMessagePhase } : {}),
       });
       continue;
     }
@@ -467,16 +467,43 @@ export function buildAssistantMessageFromResponse(
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
   const content: AssistantMessage["content"] = [];
-  let assistantPhase: OpenAIResponsesAssistantPhase | undefined;
+  const assistantMessageOutputs = (response.output ?? []).filter(
+    (item): item is Extract<ResponseObject["output"][number], { type: "message" }> =>
+      item.type === "message",
+  );
+  const hasExplicitPhasedAssistantText = assistantMessageOutputs.some((item) => {
+    const itemPhase = normalizeAssistantPhase(item.phase);
+    return Boolean(
+      itemPhase && item.content?.some((part) => part.type === "output_text" && Boolean(part.text)),
+    );
+  });
+  const hasFinalAnswerText = assistantMessageOutputs.some((item) => {
+    if (normalizeAssistantPhase(item.phase) !== "final_answer") {
+      return false;
+    }
+    return item.content?.some((part) => part.type === "output_text" && Boolean(part.text)) ?? false;
+  });
+  const includedAssistantPhases = new Set<OpenAIResponsesAssistantPhase>();
+  let hasIncludedUnphasedAssistantText = false;
 
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       const itemPhase = normalizeAssistantPhase(item.phase);
-      if (itemPhase) {
-        assistantPhase = itemPhase;
-      }
       for (const part of item.content ?? []) {
         if (part.type === "output_text" && part.text) {
+          const shouldIncludeText = hasFinalAnswerText
+            ? itemPhase === "final_answer"
+            : hasExplicitPhasedAssistantText
+              ? itemPhase === undefined
+              : true;
+          if (!shouldIncludeText) {
+            continue;
+          }
+          if (itemPhase) {
+            includedAssistantPhases.add(itemPhase);
+          } else {
+            hasIncludedUnphasedAssistantText = true;
+          }
           content.push({
             type: "text",
             text: part.text,
@@ -505,7 +532,7 @@ export function buildAssistantMessageFromResponse(
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
           } catch {
-            return {} as Record<string, unknown>;
+            return item.arguments as unknown as Record<string, unknown>;
           }
         })(),
       });
@@ -535,19 +562,35 @@ export function buildAssistantMessageFromResponse(
 
   const hasToolCalls = content.some((part) => part.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
+  const normalizedUsage = normalizeUsage(response.usage);
+  const rawTotalTokens = normalizedUsage?.total;
+  const resolvedTotalTokens =
+    rawTotalTokens && rawTotalTokens > 0
+      ? rawTotalTokens
+      : (normalizedUsage?.input ?? 0) +
+        (normalizedUsage?.output ?? 0) +
+        (normalizedUsage?.cacheRead ?? 0) +
+        (normalizedUsage?.cacheWrite ?? 0);
 
   const message = buildAssistantMessage({
     model: modelInfo,
     content,
     stopReason,
     usage: buildUsageWithNoCost({
-      input: response.usage?.input_tokens ?? 0,
-      output: response.usage?.output_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      input: normalizedUsage?.input ?? 0,
+      output: normalizedUsage?.output ?? 0,
+      cacheRead: normalizedUsage?.cacheRead ?? 0,
+      cacheWrite: normalizedUsage?.cacheWrite ?? 0,
+      totalTokens: resolvedTotalTokens > 0 ? resolvedTotalTokens : undefined,
     }),
   });
 
-  return assistantPhase
-    ? ({ ...message, phase: assistantPhase } as AssistantMessageWithPhase)
+  const finalAssistantPhase =
+    includedAssistantPhases.size === 1 && !hasIncludedUnphasedAssistantText
+      ? [...includedAssistantPhases][0]
+      : undefined;
+
+  return finalAssistantPhase
+    ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)
     : message;
 }

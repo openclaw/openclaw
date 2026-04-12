@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   isLoopbackHost,
   isWebSocketUrl,
@@ -66,17 +67,50 @@ export async function captureScreenshot(opts: {
   return await withCdpSocket(opts.wsUrl, async (send) => {
     await send("Page.enable");
 
-    let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
+    // For full-page captures, temporarily expand the viewport to the content
+    // size so the entire page is within the viewport bounds.  We save the
+    // current viewport state and restore it after capture so pre-existing
+    // device emulation (mobile width, DPR, touch) is not lost.
+    let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
     if (opts.fullPage) {
       const metrics = (await send("Page.getLayoutMetrics")) as {
         cssContentSize?: { width?: number; height?: number };
         contentSize?: { width?: number; height?: number };
       };
       const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const width = Number(size?.width ?? 0);
-      const height = Number(size?.height ?? 0);
-      if (width > 0 && height > 0) {
-        clip = { x: 0, y: 0, width, height, scale: 1 };
+      const contentWidth = size?.width ?? 0;
+      const contentHeight = size?.height ?? 0;
+      if (contentWidth > 0 && contentHeight > 0) {
+        const vpResult = (await send("Runtime.evaluate", {
+          expression:
+            "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
+          returnByValue: true,
+        })) as {
+          result?: {
+            value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
+          };
+        };
+        const v = vpResult?.result?.value;
+        const currentW = v?.w ?? 0;
+        const currentH = v?.h ?? 0;
+        savedVp = {
+          w: currentW,
+          h: currentH,
+          dpr: v?.dpr ?? 1,
+          sw: v?.sw ?? currentW,
+          sh: v?.sh ?? currentH,
+        };
+        // mobile: false is the safe default — CDP provides no way to query
+        // the active mobile flag, and inferring from navigator.maxTouchPoints
+        // would false-positive on touch-enabled desktops.
+        await send("Emulation.setDeviceMetricsOverride", {
+          width: Math.ceil(Math.max(currentW, contentWidth)),
+          height: Math.ceil(Math.max(currentH, contentHeight)),
+          deviceScaleFactor: savedVp.dpr,
+          mobile: false,
+          screenWidth: savedVp.sw,
+          screenHeight: savedVp.sh,
+        });
       }
     }
 
@@ -84,19 +118,51 @@ export async function captureScreenshot(opts: {
     const quality =
       format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
-    const result = (await send("Page.captureScreenshot", {
-      format,
-      ...(quality !== undefined ? { quality } : {}),
-      fromSurface: true,
-      captureBeyondViewport: true,
-      ...(clip ? { clip } : {}),
-    })) as { data?: string };
+    try {
+      // Chromium bug 40760789 (cross-origin textures missing with
+      // fromSurface: true + captureBeyondViewport: true) was fixed around
+      // Chrome 130. Chrome 146+ managed/headful browsers now reject
+      // fromSurface: false, so we omit it and keep captureBeyondViewport: true.
+      const result = (await send("Page.captureScreenshot", {
+        format,
+        ...(quality !== undefined ? { quality } : {}),
+        captureBeyondViewport: true,
+      })) as { data?: string };
 
-    const base64 = result?.data;
-    if (!base64) {
-      throw new Error("Screenshot failed: missing data");
+      const base64 = result?.data;
+      if (!base64) {
+        throw new Error("Screenshot failed: missing data");
+      }
+      return Buffer.from(base64, "base64");
+    } finally {
+      if (savedVp) {
+        // Clear the temporary viewport expansion first.  If the tab had
+        // prior device emulation the clear will change the viewport back to
+        // the browser's natural dimensions — detect that and re-apply the
+        // saved emulation so the tab's original state is preserved.
+        await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+        try {
+          const postResult = (await send("Runtime.evaluate", {
+            expression:
+              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
+            returnByValue: true,
+          })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
+          const p = postResult?.result?.value;
+          if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
+            await send("Emulation.setDeviceMetricsOverride", {
+              width: savedVp.w,
+              height: savedVp.h,
+              deviceScaleFactor: savedVp.dpr,
+              mobile: false,
+              screenWidth: savedVp.sw,
+              screenHeight: savedVp.sh,
+            });
+          }
+        } catch {
+          // Best-effort restoration; ignore failures in the cleanup path.
+        }
+      }
     }
-    return Buffer.from(base64, "base64");
   });
 }
 
@@ -113,25 +179,29 @@ export async function createTargetViaCdp(opts: {
   let wsUrl: string;
   if (isWebSocketUrl(opts.cdpUrl)) {
     // Direct WebSocket URL — skip /json/version discovery.
+    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
       1500,
+      undefined,
+      opts.ssrfPolicy,
     );
-    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
+    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
     wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
+    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
   return await withCdpSocket(wsUrl, async (send) => {
     const created = (await send("Target.createTarget", { url: opts.url })) as {
       targetId?: string;
     };
-    const targetId = String(created?.targetId ?? "").trim();
+    const targetId = created?.targetId?.trim() ?? "";
     if (!targetId) {
       throw new Error("CDP Target.createTarget returned no targetId");
     }
@@ -307,6 +377,7 @@ export async function snapshotDom(opts: {
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxTextChars)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const nodes = [];
     const root = document.documentElement;
     if (!root) return { nodes };
@@ -316,7 +387,7 @@ export async function snapshotDom(opts: {
       const el = cur.el;
       if (!el || el.nodeType !== 1) continue;
       const ref = "n" + String(nodes.length + 1);
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
@@ -437,9 +508,10 @@ export async function querySelector(opts: {
     const lim = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxText)};
     const maxHtml = ${JSON.stringify(maxHtml)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
     return els.map((el, i) => {
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       let text = "";

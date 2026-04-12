@@ -1,8 +1,9 @@
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
-import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
-import { HEARTBEAT_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { sendMessageWhatsApp } from "../send.js";
+import type { getReplyFromConfig } from "./heartbeat-runner.runtime.js";
+
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 
 const state = vi.hoisted(() => ({
   visibility: { showAlerts: true, showOk: true, useIndicator: false },
@@ -22,45 +23,7 @@ const state = vi.hoisted(() => ({
   heartbeatWarnLogs: [] as string[],
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  appendCronStyleCurrentTimeLine: (body: string) =>
-    `${body}\nCurrent time: 2026-02-15T00:00:00Z (mock)`,
-}));
-
-// Perf: this module otherwise pulls a large dependency graph that we don't need
-// for these unit tests.
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
-  resolveWhatsAppHeartbeatRecipients: () => [],
-}));
-
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
-  return {
-    ...actual,
-    normalizeMainKey: () => null,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
-  return {
-    ...actual,
-    resolveHeartbeatVisibility: () => state.visibility,
-    emitHeartbeatEvent: (event: unknown) => state.events.push(event),
-    resolveIndicatorType: (status: string) => `indicator:${status}`,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("./heartbeat-runner.runtime.js", () => {
   const logger = {
     child: () => logger,
     info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
@@ -69,38 +32,46 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
     debug: vi.fn(),
   };
   return {
-    ...actual,
+    DEFAULT_HEARTBEAT_ACK_MAX_CHARS: 32,
+    HEARTBEAT_TOKEN,
+    appendCronStyleCurrentTimeLine: (body: string) =>
+      `${body}\nCurrent time: 2026-02-15T00:00:00Z (mock)`,
+    canonicalizeMainSessionAlias: ({ sessionKey }: { sessionKey: string }) => sessionKey,
+    emitHeartbeatEvent: (event: unknown) => state.events.push(event),
+    formatError: (err: unknown) => `ERR:${String(err)}`,
     getChildLogger: () => logger,
-    createSubsystemLogger: () => logger,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
-  return {
-    ...actual,
-    redactIdentifier,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
     getReplyFromConfig: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
+    hasOutboundReplyContent: (payload: { text?: string } | undefined) =>
+      Boolean(payload?.text?.trim()),
     loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
     loadSessionStore: () => state.store,
+    normalizeMainKey: () => null,
+    redactIdentifier,
+    resolveHeartbeatPrompt: (prompt?: string) => prompt || "Heartbeat",
+    resolveHeartbeatReplyPayload: (reply: unknown) => reply,
+    resolveHeartbeatVisibility: () => state.visibility,
+    resolveIndicatorType: (status: string) => `indicator:${status}`,
+    resolveSendableOutboundReplyParts: (payload: { text?: string }) => ({
+      text: payload.text ?? "",
+      hasMedia: false,
+    }),
     resolveSessionKey: () => "k",
     resolveStorePath: () => "/tmp/store.json",
+    resolveWhatsAppHeartbeatRecipients: () => [],
+    sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
+    stripHeartbeatToken: (text: string) => {
+      const trimmed = text.trim();
+      if (trimmed === HEARTBEAT_TOKEN) {
+        return { shouldSkip: true, text: "" };
+      }
+      return { shouldSkip: false, text: trimmed };
+    },
     updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
       updater(state.store);
+    },
+    whatsappHeartbeatLog: {
+      info: (msg: string) => state.heartbeatInfoLogs.push(msg),
+      warn: (msg: string) => state.heartbeatWarnLogs.push(msg),
     },
   };
 });
@@ -109,41 +80,8 @@ vi.mock("./session-snapshot.js", () => ({
   getSessionSnapshot: () => state.snapshot,
 }));
 
-vi.mock("../auth-store.js", () => ({
-  WA_WEB_AUTH_DIR: "/tmp/openclaw-oauth/whatsapp/default",
-  resolveDefaultWebAuthDir: () => "/tmp/openclaw-oauth/whatsapp/default",
-  hasWebCredsSync: () => false,
-  maybeRestoreCredsFromBackup: () => undefined,
-  webAuthExists: async () => false,
-  logoutWeb: async () => undefined,
-  readWebSelfId: () => null,
-  getWebAuthAgeMs: () => null,
-  logWebSelfId: () => undefined,
-  pickWebChannel: async () => undefined,
-}));
-
-vi.mock("./loggers.js", () => ({
-  whatsappHeartbeatLog: {
-    info: (msg: string) => state.heartbeatInfoLogs.push(msg),
-    warn: (msg: string) => state.heartbeatWarnLogs.push(msg),
-  },
-}));
-
 vi.mock("../reconnect.js", () => ({
   newConnectionId: () => "run-1",
-}));
-
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
-  return {
-    ...actual,
-    sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
-    sendReactionWhatsApp: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("../session.js", () => ({
-  formatError: (err: unknown) => `ERR:${String(err)}`,
 }));
 
 describe("runWebHeartbeatOnce", () => {
@@ -162,7 +100,6 @@ describe("runWebHeartbeatOnce", () => {
   });
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ runWebHeartbeatOnce } = await import("./heartbeat-runner.js"));
   });
 

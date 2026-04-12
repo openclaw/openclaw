@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
+  AgentEmbeddedHarnessSchema,
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -16,9 +18,15 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
+    /** Global default provider params applied to all models before per-model and per-agent overrides. */
+    params: z.record(z.string(), z.unknown()).optional(),
+    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
+    videoGenerationModel: AgentModelSchema.optional(),
+    musicGenerationModel: AgentModelSchema.optional(),
+    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -37,8 +45,11 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
+    systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
+    contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
@@ -93,7 +104,7 @@ export const AgentDefaultsSchema = z
           .nonnegative()
           .optional()
           .describe(
-            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
           ),
       })
       .strict()
@@ -101,6 +112,7 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        provider: z.string().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
@@ -139,6 +151,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -147,6 +160,7 @@ export const AgentDefaultsSchema = z
         projectSettingsPolicy: z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
+        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
       })
       .strict()
       .optional(),
@@ -179,6 +193,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z
           .number()
@@ -203,6 +218,7 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

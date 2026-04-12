@@ -13,6 +13,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
 import { normalizeAgentId } from "../../../../src/routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
@@ -107,7 +108,7 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }
@@ -118,10 +119,20 @@ function scopeCollectionBase(base: string, agentId: string): string {
 
 function canonicalizePathForContainment(rawPath: string): string {
   const resolved = path.resolve(rawPath);
-  try {
-    return path.normalize(fs.realpathSync.native(resolved));
-  } catch {
-    return path.normalize(resolved);
+  let current = resolved;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const canonical = path.normalize(fs.realpathSync.native(current));
+      return path.normalize(path.join(canonical, ...suffix));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.normalize(resolved);
+      }
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
   }
 }
 
@@ -358,9 +369,20 @@ export function resolveMemoryBackendConfig(params: {
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
+  const mergedExtraCollections = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
+  );
 
-  // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+  // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.
+  const allQmdPaths: MemoryQmdIndexPath[] = [
+    ...(qmdCfg?.paths ?? []),
+    ...searchExtraPaths,
+    ...mergedExtraCollections,
+  ];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),

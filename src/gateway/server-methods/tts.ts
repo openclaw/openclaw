@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -9,6 +10,7 @@ import {
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
+  resolveExplicitTtsOverrides,
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
@@ -77,7 +79,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.convert": async ({ params, respond }) => {
-    const text = typeof params.text === "string" ? params.text.trim() : "";
+    const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(
         false,
@@ -88,8 +90,29 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
-      const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const channel = normalizeOptionalString(params.channel);
+      const providerRaw = normalizeOptionalString(params.provider);
+      const modelId = normalizeOptionalString(params.modelId);
+      const voiceId = normalizeOptionalString(params.voiceId);
+      let overrides;
+      try {
+        overrides = resolveExplicitTtsOverrides({
+          cfg,
+          provider: providerRaw,
+          modelId,
+          voiceId,
+        });
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        return;
+      }
+      const result = await textToSpeech({
+        text,
+        cfg,
+        channel,
+        overrides,
+        disableFallback: Boolean(overrides.provider || modelId || voiceId),
+      });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,
@@ -111,7 +134,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.setProvider": async ({ params, respond }) => {
     const cfg = loadConfig();
     const provider = canonicalizeSpeechProviderId(
-      typeof params.provider === "string" ? params.provider.trim() : "",
+      normalizeOptionalString(params.provider) ?? "",
       cfg,
     );
     if (!provider || !getSpeechProvider(provider, cfg)) {

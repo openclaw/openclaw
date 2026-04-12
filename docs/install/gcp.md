@@ -25,6 +25,9 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
+That mounted `~/.openclaw` state includes `openclaw.json`, per-agent
+`agents/<agentId>/agent/auth-profiles.json`, and `.env`.
+
 The Gateway can be accessed via:
 
 - SSH port forwarding from your laptop
@@ -229,6 +232,10 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     **Do not commit this file.**
 
+    This `.env` file is for container/runtime env such as `OPENCLAW_GATEWAY_TOKEN`.
+    Stored provider OAuth/API-key auth lives in the mounted
+    `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+
   </Step>
 
   <Step title="Docker Compose configuration">
@@ -310,13 +317,16 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     `http://127.0.0.1:18789/`
 
-    Fetch a fresh tokenized dashboard link:
+    Reprint a clean dashboard link:
 
     ```bash
     docker compose run --rm openclaw-cli dashboard --no-open
     ```
 
-    Paste the token from that URL.
+    If the UI prompts for shared-secret auth, paste the configured token or
+    password into Control UI settings. This Docker flow writes a token by
+    default; if you switch the container config to password auth, use that
+    password instead.
 
     If Control UI shows `unauthorized` or `disconnected (1008): pairing required`, approve the browser device:
 

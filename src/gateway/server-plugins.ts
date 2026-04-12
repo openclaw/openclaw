@@ -5,8 +5,12 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
@@ -378,8 +382,23 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
+function createGatewayPluginRegistrationLogger(params?: {
+  suppressInfoLogs?: boolean;
+}): PluginLogger {
+  const logger = createPluginRuntimeLoaderLogger();
+  if (params?.suppressInfoLogs !== true) {
+    return logger;
+  }
+  return {
+    ...logger,
+    info: (_message: string) => undefined,
+  };
+}
+
 export function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
+  autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir: string;
   log: {
     info: (msg: string) => void;
@@ -389,26 +408,61 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
+  suppressPluginInfoLogs?: boolean;
 }) {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
-    env: process.env,
-  }).config;
-  const pluginRegistry = loadOpenClawPlugins({
-    config: resolvedConfig,
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: resolveGatewayStartupPluginIds({
+  const activationAutoEnabled =
+    params.activationSourceConfig !== undefined
+      ? applyPluginAutoEnable({
+          config: params.activationSourceConfig,
+          env: process.env,
+        })
+      : undefined;
+  const autoEnabled =
+    params.activationSourceConfig !== undefined
+      ? {
+          config: params.cfg,
+          changes: activationAutoEnabled?.changes ?? [],
+          autoEnabledReasons:
+            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
+        }
+      : params.autoEnabledReasons !== undefined
+        ? {
+            config: params.cfg,
+            changes: [],
+            autoEnabledReasons: params.autoEnabledReasons,
+          }
+        : applyPluginAutoEnable({
+            config: params.cfg,
+            env: process.env,
+          });
+  const resolvedConfig = autoEnabled.config;
+  const pluginIds =
+    params.pluginIds ??
+    resolveGatewayStartupPluginIds({
       config: resolvedConfig,
+      activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
+    });
+  if (pluginIds.length === 0) {
+    const pluginRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    return {
+      pluginRegistry,
+      gatewayMethods: [...params.baseMethods],
+    };
+  }
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: pluginIds,
+    logger: createGatewayPluginRegistrationLogger({
+      suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
-    logger: {
-      info: (msg) => params.log.info(msg),
-      warn: (msg) => params.log.warn(msg),
-      error: (msg) => params.log.error(msg),
-      debug: (msg) => params.log.debug(msg),
-    },
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,

@@ -51,35 +51,36 @@ describe("buildRandomTempFilePath", () => {
 });
 
 describe("withTempDownloadPath", () => {
-  it("creates a temp path under tmp dir and cleans up the temp directory", async () => {
+  it.each([
+    {
+      name: "creates a temp path under tmp dir and cleans up the temp directory",
+      input: { prefix: "line-media" },
+      expectCleanup: true,
+      expectedBasename: undefined,
+    },
+    {
+      name: "sanitizes prefix and fileName",
+      input: { prefix: "../../channels/../media", fileName: "../../evil.bin" },
+      expectCleanup: false,
+      expectedBasename: "evil.bin",
+    },
+  ])("$name", async ({ input, expectCleanup, expectedBasename }) => {
     let capturedPath = "";
-    await withTempDownloadPath(
-      {
-        prefix: "line-media",
-      },
-      async (tmpPath) => {
-        capturedPath = tmpPath;
+    await withTempDownloadPath(input, async (tmpPath) => {
+      capturedPath = tmpPath;
+      if (expectCleanup) {
         await fs.writeFile(tmpPath, "ok");
-      },
-    );
-
-    expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
-    await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("sanitizes prefix and fileName", async () => {
-    let capturedPath = "";
-    await withTempDownloadPath(
-      {
-        prefix: "../../channels/../media",
-        fileName: "../../evil.bin",
-      },
-      async (tmpPath) => {
-        capturedPath = tmpPath;
-      },
-    );
+      }
+    });
 
     expectPathInsideTmpRoot(capturedPath);
-    expect(path.basename(capturedPath)).toBe("evil.bin");
+    if (expectedBasename) {
+      expect(path.basename(capturedPath)).toBe(expectedBasename);
+    } else {
+      expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
+    }
+    if (expectCleanup) {
+      await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 });

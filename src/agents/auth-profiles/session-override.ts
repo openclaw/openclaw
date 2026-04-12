@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { normalizeProviderId } from "../model-selection.js";
 
@@ -71,9 +71,27 @@ export async function resolveSessionAuthProfileOverride(params: {
     return sessionEntry?.authProfileOverride;
   }
 
+  const hasConfiguredAuthProfiles =
+    Boolean(params.cfg.auth?.profiles && Object.keys(params.cfg.auth.profiles).length > 0) ||
+    Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
+  if (
+    !sessionEntry.authProfileOverride?.trim() &&
+    !hasConfiguredAuthProfiles &&
+    !hasAnyAuthProfileStoreSource(agentDir)
+  ) {
+    return undefined;
+  }
+
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   let current = sessionEntry.authProfileOverride?.trim();
+  const source =
+    sessionEntry.authProfileOverrideSource ??
+    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined);
 
   if (current && !store.profiles[current]) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
@@ -85,7 +103,8 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  if (current && order.length > 0 && !order.includes(current)) {
+  // Explicit user picks should survive provider rotation order changes.
+  if (current && order.length > 0 && !order.includes(current) && source !== "user") {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -115,14 +134,6 @@ export async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
-
-  const source =
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? "auto"
-      : current
-        ? "user"
-        : undefined);
   if (source === "user" && current && !isNewSession) {
     return current;
   }

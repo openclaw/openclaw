@@ -7,6 +7,8 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
 import { loadConfig } from "../../config/config.js";
 import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -21,6 +23,7 @@ import { runCliAgent } from "../cli-runner.js";
 import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
+import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
@@ -136,7 +139,7 @@ export function prependInternalEventContext(
   body: string,
   events: AgentCommandOpts["internalEvents"],
 ): string {
-  if (body.includes("OpenClaw runtime context (internal):")) {
+  if (hasInternalRuntimeContext(body)) {
     return body;
   }
   const renderedEvents = formatAgentInternalEventsForPrompt(events);
@@ -149,6 +152,7 @@ export function prependInternalEventContext(
 export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";
+  let rawVisibleText = "";
   const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
 
   const resolveNextCandidate = (base: string, chunk: string): string => {
@@ -168,16 +172,16 @@ export function createAcpVisibleTextAccumulator() {
     return `${base}${chunk}`;
   };
 
-  const mergeVisibleChunk = (base: string, chunk: string): { text: string; delta: string } => {
+  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
     if (!base) {
-      return { text: chunk, delta: chunk };
+      return { rawText: chunk, delta: chunk };
     }
     if (chunk.startsWith(base) && chunk.length > base.length) {
       const delta = chunk.slice(base.length);
-      return { text: chunk, delta };
+      return { rawText: chunk, delta };
     }
     return {
-      text: `${base}${chunk}`,
+      rawText: `${base}${chunk}`,
       delta: chunk,
     };
   };
@@ -198,8 +202,22 @@ export function createAcpVisibleTextAccumulator() {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
+        // Strip leading NO_REPLY token when it is glued to visible text
+        // (e.g. "NO_REPLYThe user is saying...") so the token never leaks.
+        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
+          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
+          if (stripped) {
+            pendingSilentPrefix = "";
+            rawVisibleText = leadCandidate;
+            visibleText = stripped;
+            return { text: stripped, delta: stripped };
+          }
+          pendingSilentPrefix = leadCandidate;
+          return null;
+        }
         if (pendingSilentPrefix) {
           pendingSilentPrefix = "";
+          rawVisibleText = leadCandidate;
           visibleText = leadCandidate;
           return {
             text: visibleText,
@@ -208,9 +226,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(visibleText, chunk);
-      visibleText = nextVisible.text;
-      return nextVisible.delta ? nextVisible : null;
+      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
+      rawVisibleText = nextVisible.rawText;
+      if (!nextVisible.delta) {
+        return null;
+      }
+      visibleText = `${visibleText}${nextVisible.delta}`;
+      return { text: visibleText, delta: nextVisible.delta };
     },
     finalize(): string {
       return visibleText.trim();
@@ -368,7 +390,12 @@ export function runAgentAttempt(params: {
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
+        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        skillsSnapshot: params.skillsSnapshot,
         streamParams: params.opts.streamParams,
+        messageProvider: params.messageChannel,
+        agentAccountId: params.runContext.accountId,
+        senderIsOwner: params.opts.senderIsOwner,
       });
     return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
       if (
@@ -394,6 +421,7 @@ export function runAgentAttempt(params: {
             sessionKey: params.sessionKey,
             storePath: params.storePath,
             entry: updatedEntry,
+            clearedFields: ["cliSessionBindings", "cliSessionIds", "claudeCliSessionId"],
           });
 
           params.sessionEntry = updatedEntry;
@@ -455,6 +483,7 @@ export function runAgentAttempt(params: {
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
+    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -467,6 +496,9 @@ export function runAgentAttempt(params: {
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
+    bootstrapContextMode: params.opts.bootstrapContextMode,
+    bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
+    internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,

@@ -1,12 +1,15 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import {
+  convertMarkdownTables,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
-import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
+import type { MentionTarget } from "./mention-target.types.js";
+import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
-import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
@@ -32,7 +35,7 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
-  const msg = response.msg?.toLowerCase() ?? "";
+  const msg = normalizeLowercaseStringOrEmpty(response.msg);
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
@@ -186,7 +189,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   const elements = Array.isArray(candidate.elements)
     ? candidate.elements
     : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
+      ? candidate.body.elements
       : null;
   if (!elements) {
     return "[Interactive Card]";
@@ -273,7 +276,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+    createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };
 }
@@ -385,8 +388,12 @@ export async function listFeishuThreadMessages(params: {
   const results: FeishuThreadMessageInfo[] = [];
 
   for (const item of items) {
-    if (currentMessageId && item.message_id === currentMessageId) continue;
-    if (rootMessageId && item.message_id === rootMessageId) continue;
+    if (currentMessageId && item.message_id === currentMessageId) {
+      continue;
+    }
+    if (rootMessageId && item.message_id === rootMessageId) {
+      continue;
+    }
 
     const parsed = parseFeishuMessageItem(item);
 
@@ -399,7 +406,9 @@ export async function listFeishuThreadMessages(params: {
       createTime: parsed.createTime,
     });
 
-    if (results.length >= limit) break;
+    if (results.length >= limit) {
+      break;
+    }
   }
 
   // Restore chronological order (oldest first) since we fetched newest-first.
@@ -587,7 +596,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      width_mode: "fill",
     },
     body: {
       elements: [
@@ -609,7 +618,7 @@ export type CardHeaderConfig = {
 };
 
 export function resolveFeishuCardTemplate(template?: string): string | undefined {
-  const normalized = template?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(template);
   if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
     return undefined;
   }
@@ -634,7 +643,7 @@ export function buildStructuredCard(
   }
   const card: Record<string, unknown> = {
     schema: "2.0",
-    config: { wide_screen_mode: true },
+    config: { width_mode: "fill" },
     body: { elements },
   };
   if (options?.header) {

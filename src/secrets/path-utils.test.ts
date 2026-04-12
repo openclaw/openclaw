@@ -76,4 +76,15 @@ describe("secrets path utils", () => {
     expect(changed).toBe(false);
     expect(getPath(config, ["talk", "apiKey"])).toBe("same");
   });
+
+  it("setPathCreateStrict works on nested config sub-objects", () => {
+    const pluginConfig: Record<string, unknown> = {};
+    const changed = setPathCreateStrict(pluginConfig, ["webSearch", "mode"], "llm-context");
+    expect(changed).toBe(true);
+    expect(pluginConfig).toEqual({
+      webSearch: {
+        mode: "llm-context",
+      },
+    });
+  });
 });

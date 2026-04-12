@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
@@ -15,7 +16,7 @@ export async function runNonInteractiveRemoteSetup(params: {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "remote" as const;
 
-  const remoteUrl = opts.remoteUrl?.trim();
+  const remoteUrl = normalizeOptionalString(opts.remoteUrl);
   if (!remoteUrl) {
     runtime.error("Missing --remote-url for remote mode.");
     runtime.exit(1);
@@ -29,7 +30,7 @@ export async function runNonInteractiveRemoteSetup(params: {
       mode: "remote",
       remote: {
         url: remoteUrl,
-        token: opts.remoteToken?.trim() || undefined,
+        token: normalizeOptionalString(opts.remoteToken),
       },
     },
   };

@@ -3,7 +3,6 @@ import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
@@ -11,11 +10,10 @@ import {
   createGeminiEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
-  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
-  listMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviderAdapters,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
@@ -23,6 +21,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { formatErrorMessage } from "../dreaming-shared.js";
+import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -32,10 +33,6 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 function isMissingApiKeyError(err: unknown): boolean {
   return formatErrorMessage(err).includes("No API key found for provider");
 }
@@ -44,9 +41,11 @@ function sanitizeHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],
 ): Array<[string, string]> {
-  const excluded = new Set(excludedHeaderNames.map((name) => name.toLowerCase()));
+  const excluded = new Set(
+    excludedHeaderNames.map((name) => normalizeLowercaseStringOrEmpty(name)),
+  );
   return Object.entries(headers)
-    .filter(([key]) => !excluded.has(key.toLowerCase()))
+    .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value]);
 }
@@ -289,29 +288,6 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
-const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
-  id: "ollama",
-  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  transport: "remote",
-  create: async (options) => {
-    const { provider, client } = await createOllamaEmbeddingProvider({
-      ...options,
-      provider: "ollama",
-      fallback: "none",
-    });
-    return {
-      provider,
-      runtime: {
-        id: "ollama",
-        cacheKeyData: {
-          provider: "ollama",
-          model: client.model,
-        },
-      },
-    };
-  },
-};
-
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -344,7 +320,6 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
-  ollamaAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -360,11 +335,13 @@ export function getBuiltinMemoryEmbeddingProviderAdapter(
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
 }): void {
-  const existingIds = new Set(listMemoryEmbeddingProviders().map((adapter) => adapter.id));
-  for (const adapter of builtinMemoryEmbeddingProviderAdapters) {
-    if (existingIds.has(adapter.id)) {
-      continue;
-    }
+  // Only inspect providers already registered in the current load. Falling back
+  // to capability discovery here can recursively trigger plugin loading while
+  // memory-core itself is still registering.
+  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
+    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
+    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
+  })) {
     register.registerMemoryEmbeddingProvider(adapter);
   }
 }
@@ -403,7 +380,6 @@ export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   canAutoSelectLocal,

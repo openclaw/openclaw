@@ -40,6 +40,7 @@ describe("registerPluginCliCommands browser plugin integration", () => {
       cache: false,
       env: {
         ...process.env,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR:
           bundledFixture?.rootDir ?? path.join(process.cwd(), "extensions"),
       } as NodeJS.ProcessEnv,
@@ -61,6 +62,12 @@ describe("registerPluginCliCommands browser plugin integration", () => {
         },
       } as OpenClawConfig,
       cache: false,
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR:
+          bundledFixture?.rootDir ?? path.join(process.cwd(), "extensions"),
+      } as NodeJS.ProcessEnv,
     });
 
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain("browser");

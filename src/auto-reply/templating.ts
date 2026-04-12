@@ -1,14 +1,13 @@
-import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { InternalMessageChannel } from "../utils/message-channel.js";
-import type { CommandArgs } from "./commands-registry.types.js";
+import type { CommandArgs } from "./commands-args.types.js";
+import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
-export type OriginatingChannelType = ChannelId | InternalMessageChannel;
+export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
 export type StickerContextMetadata = {
   cachedDescription?: string;
@@ -65,6 +64,8 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Per-turn reply-threading overrides. */
+  ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -156,10 +157,14 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Trusted system override for contexts that must never inherit owner semantics. */
+  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
+  NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /** Warning: DM has topics enabled but this message is not in a topic. */

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn());
 const probeMatrixMock = vi.hoisted(() => vi.fn());
@@ -28,8 +29,6 @@ vi.mock("./matrix/client.js", async () => {
   };
 });
 
-const { matrixPlugin } = await import("./channel.js");
-
 describe("matrix account path propagation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -49,13 +48,20 @@ describe("matrix account path propagation", () => {
       homeserver: "https://matrix.example.org",
       userId: "@poe:example.org",
       accessToken: "poe-token",
+      deviceId: "POEDEVICE",
     });
   });
 
   it("forwards accountId when notifying pairing approval", async () => {
-    await matrixPlugin.pairing!.notifyApproval?.({
-      cfg: {},
+    const pairingText = createMatrixPairingText(sendMessageMatrixMock);
+
+    expect(pairingText.normalizeAllowEntry("  matrix:@user:example.org  ")).toBe(
+      "@user:example.org",
+    );
+
+    await pairingText.notify({
       id: "@user:example.org",
+      message: pairingText.message,
       accountId: "poe",
     });
 
@@ -66,8 +72,13 @@ describe("matrix account path propagation", () => {
     );
   });
 
-  it("forwards accountId to matrix probes", async () => {
-    await matrixPlugin.status!.probeAccount?.({
+  it("forwards accountId and deviceId to matrix probes", async () => {
+    const probeAccount = createMatrixProbeAccount({
+      resolveMatrixAuth: resolveMatrixAuthMock,
+      probeMatrix: probeMatrixMock,
+    });
+
+    await probeAccount({
       cfg: {} as never,
       timeoutMs: 500,
       account: {
@@ -83,6 +94,7 @@ describe("matrix account path propagation", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "poe-token",
       userId: "@poe:example.org",
+      deviceId: "POEDEVICE",
       timeoutMs: 500,
       accountId: "poe",
     });

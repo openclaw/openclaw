@@ -8,6 +8,7 @@ import {
 } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
+import type { ResolvedZaloAccount } from "./types.js";
 
 export async function notifyZaloPairingApproval(params: { cfg: OpenClawConfig; id: string }) {
   const { resolveZaloAccount } = await import("./accounts.js");
@@ -41,7 +42,9 @@ export async function probeZaloAccount(params: {
 }
 
 export async function startZaloGatewayAccount(
-  ctx: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0],
+  ctx: Parameters<
+    NonNullable<NonNullable<ChannelPlugin<ResolvedZaloAccount>["gateway"]>["startAccount"]>
+  >[0],
 ) {
   const account = ctx.account;
   const token = account.token.trim();

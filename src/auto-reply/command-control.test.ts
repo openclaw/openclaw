@@ -159,6 +159,39 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
+  it("uses explicit owner allowlist when allowFrom is empty", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
+      channels: { whatsapp: {} },
+    } as OpenClawConfig;
+
+    const ownerAuth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15551234567",
+        SenderE164: "+15551234567",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(ownerAuth.senderIsOwner).toBe(true);
+    expect(ownerAuth.isAuthorizedSender).toBe(true);
+
+    const otherAuth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+19995551234",
+        SenderE164: "+19995551234",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(otherAuth.senderIsOwner).toBe(false);
+    expect(otherAuth.isAuthorizedSender).toBe(false);
+  });
+
   it("uses owner allowlist override from context when configured", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -192,6 +225,27 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.senderIsOwner).toBe(true);
     expect(auth.ownerList).toEqual(["123"]);
+  });
+
+  it("suppresses inherited owner status when the context forbids it", () => {
+    const cfg = {
+      channels: { telegram: { allowFrom: ["owner-123"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "exec-event",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        From: "owner-123",
+        To: "owner-123",
+        ForceSenderIsOwnerFalse: true,
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
   });
 
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
@@ -855,5 +909,41 @@ describe("control command parsing", () => {
         botUsername: "openclaw",
       }),
     ).toBe(true);
+  });
+
+  it("detects commands wrapped in inbound metadata blocks", () => {
+    const metaWrapped = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-abc","chat_id":"chat-123"}',
+      "```",
+      "",
+      "/model spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /new command after metadata prefix", () => {
+    const metaWrapped = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name":"Alice","id":"user-1"}',
+      "```",
+      "",
+      "/new spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /status command after timestamp + metadata prefix", () => {
+    const metaWrapped = [
+      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"chat-123"}',
+      "```",
+      "",
+      "/status",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });
