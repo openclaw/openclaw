@@ -771,12 +771,12 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
-  it("uses config.modelFallback before the built-in default fallback", async () => {
+  it("uses config.modelFallback when no session or agent model resolves", async () => {
     api.config = {};
     api.pluginConfig = {
       agents: ["main"],
       modelFallback: "google/gemini-3-flash",
-      modelFallbackPolicy: "resolved-only",
+      modelFallbackPolicy: "default-remote",
     };
     await plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -794,6 +794,9 @@ describe("active-memory plugin", () => {
       provider: "google",
       model: "gemini-3-flash-preview",
     });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("config.modelFallbackPolicy is deprecated"),
+    );
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
