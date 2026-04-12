@@ -12,7 +12,6 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
-import { buildBuiltinChatCommands } from "../auto-reply/commands-registry.shared.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
@@ -71,6 +70,8 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
+const builtinRuntimeSlashCommandAliases = new Map<string, string>([["commands", "/commands"]]);
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -118,19 +119,6 @@ export function resolveMissingPluginCommandMessage(
     }
   }
 
-  const builtinRuntimeCommand = buildBuiltinChatCommands().find(
-    (command) =>
-      normalizeOptionalLowercaseString(command.nativeName) === normalizedPluginId &&
-      command.textAliases.length > 0,
-  );
-  if (builtinRuntimeCommand) {
-    const [firstAlias] = builtinRuntimeCommand.textAliases;
-    return (
-      `"${normalizedPluginId}" is a built-in runtime slash command (${firstAlias}), not a CLI command. ` +
-      `Use \`${firstAlias}\` in a chat session.`
-    );
-  }
-
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
@@ -143,6 +131,14 @@ export function resolveMissingPluginCommandMessage(
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
       "the bundled plugin CLI surface."
+    );
+  }
+
+  const builtinRuntimeSlashAlias = builtinRuntimeSlashCommandAliases.get(normalizedPluginId);
+  if (builtinRuntimeSlashAlias) {
+    return (
+      `"${normalizedPluginId}" is a built-in runtime slash command (${builtinRuntimeSlashAlias}), not a CLI command. ` +
+      `Use \`${builtinRuntimeSlashAlias}\` in a chat session.`
     );
   }
   return null;
