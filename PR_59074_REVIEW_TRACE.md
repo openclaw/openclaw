@@ -8,3 +8,4 @@ Track review-driven changes, commits, and pushes so the branch can be reviewed a
 ## Entries
 
 - 2026-04-09: Recurring watcher configured to check PR review observations every 15 minutes, update the feature branch, commit, and push changes.
+- 2026-04-12: Fixed landing-zone name validation so normalization happens before trail-bucket derivation; clarified GuardDuty delegated-admin requirements in the generated landing-zone template.
