@@ -114,6 +114,17 @@ export function shouldAcquireLocalHeavyCheckLockForOxlint(
   });
 }
 
+export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env) {
+  if (env.OPENCLAW_TSGO_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  return !args.some(
+    (arg) =>
+      arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v" || arg === "--init",
+  );
+}
+
 export function shouldThrottleLocalHeavyChecks(env, hostResources) {
   if (!isLocalCheckEnabled(env)) {
     return false;

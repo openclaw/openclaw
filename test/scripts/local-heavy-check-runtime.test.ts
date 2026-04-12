@@ -6,6 +6,7 @@ import {
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
   shouldAcquireLocalHeavyCheckLockForOxlint,
+  shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -172,6 +173,28 @@ describe("local-heavy-check-runtime", () => {
     ]);
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
+  it("skips the heavy-check lock for tsgo metadata commands", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--help"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-h"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--version"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-v"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--init"])).toBe(false);
+  });
+
+  it("keeps the heavy-check lock for real tsgo runs", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo([])).toBe(true);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--extendedDiagnostics"])).toBe(true);
+  });
+
+  it("allows forcing the tsgo lock back on", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLockForTsgo(
+        ["--help"],
+        makeEnv({ OPENCLAW_TSGO_FORCE_LOCK: "1" }),
+      ),
+    ).toBe(true);
   });
 
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {
