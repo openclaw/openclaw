@@ -685,6 +685,21 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
+
+  it("short-circuits runtime provider resolution when no provider plugins are enabled", () => {
+    const providers = resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["browser"],
+        },
+      },
+      onlyPluginIds: ["browser"],
+    });
+
+    expect(providers).toEqual([]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("activates owning plugins for explicit provider refs", () => {
     setOwningProviderManifestPlugins();
 
