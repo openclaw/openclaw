@@ -255,6 +255,193 @@ fallback catalog:
 }
 ```
 
+## App-server connection and policy
+
+By default, the plugin starts Codex locally with:
+
+```bash
+codex app-server --listen stdio://
+```
+
+You can keep that default and only tune Codex native policy:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            approvalPolicy: "on-request",
+            sandbox: "workspace-write",
+            serviceTier: "priority",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+For an already-running app-server, use WebSocket transport:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            authToken: "${CODEX_APP_SERVER_TOKEN}",
+            requestTimeoutMs: 60000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Supported `appServer` fields:
+
+| Field               | Default                                  | Meaning                                                                  |
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                 |
+| `command`           | `"codex"`                                | Executable for stdio transport.                                          |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                           |
+| `url`               | unset                                    | WebSocket app-server URL.                                                |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                    |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.           |
+| `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
+| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
+| `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |
+
+The older environment variables still work as fallbacks for local testing when
+the matching config field is unset:
+
+- `OPENCLAW_CODEX_APP_SERVER_BIN`
+- `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
+- `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
+- `OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1`
+
+Config is preferred for repeatable deployments.
+
+## Common recipes
+
+Local Codex with default stdio transport:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+Codex-only harness validation, with PI fallback disabled:
+
+```json5
+{
+  embeddedHarness: {
+    fallback: "none",
+  },
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+Guardian-reviewed Codex approvals:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent",
+            sandbox: "workspace-write",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Remote app-server with explicit headers:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://gateway-host:39175",
+            headers: {
+              "X-OpenClaw-Agent": "main",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Model switching stays OpenClaw-controlled. When an OpenClaw session is attached
+to an existing Codex thread, the next turn sends the currently selected
+`codex/*` model, provider, approval policy, sandbox, and service tier to
+app-server again. Switching from `codex/gpt-5.4` to `codex/gpt-5.2` keeps the
+thread binding but asks Codex to continue with the newly selected model.
+
+## Codex command
+
+The bundled plugin registers `/codex` as an authorized slash command. It is
+generic and works on any channel that supports OpenClaw text commands.
+
+Common forms:
+
+- `/codex status` shows live app-server connectivity, models, account, rate limits, MCP servers, and skills.
+- `/codex models` lists live Codex app-server models.
+- `/codex threads [filter]` lists recent Codex threads.
+- `/codex resume <thread-id>` attaches the current OpenClaw session to an existing Codex thread.
+- `/codex compact` asks Codex app-server to compact the attached thread.
+- `/codex review` starts Codex native review for the attached thread.
+- `/codex account` shows account and rate-limit status.
+- `/codex mcp` lists Codex app-server MCP server status.
+- `/codex skills` lists Codex app-server skills.
+
+`/codex resume` writes the same sidecar binding file that the harness uses for
+normal turns. On the next message, OpenClaw resumes that Codex thread, passes the
+currently selected OpenClaw `codex/*` model into app-server, and keeps extended
+history enabled.
+
+The command surface requires Codex app-server `0.118.0` or newer. Individual
+control methods are reported as `unsupported by this Codex app-server` if a
+future or custom app-server does not expose that JSON-RPC method.
+
 ## Tools, media, and compaction
 
 The Codex harness changes the low-level embedded agent executor only.
@@ -265,7 +452,9 @@ continue through the normal OpenClaw delivery path.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+history, search, `/new`, `/reset`, and future model or harness switching. The
+mirror includes the user prompt, final assistant text, and lightweight Codex
+reasoning or plan records when the app-server emits them.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as
@@ -285,6 +474,9 @@ reports version `0.118.0` or newer.
 
 **Model discovery is slow:** lower `plugins.entries.codex.config.discovery.timeoutMs`
 or disable discovery.
+
+**WebSocket transport fails immediately:** check `appServer.url`, `authToken`,
+and that the remote app-server speaks the same Codex app-server protocol version.
 
 **A non-Codex model uses PI:** that is expected. The Codex harness only claims
 `codex/*` model refs.

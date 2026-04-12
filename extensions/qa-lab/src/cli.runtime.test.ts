@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +8,7 @@ const {
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
+  runMatrixQaLive,
   runTelegramQaLive,
   startQaLabServer,
   writeQaDockerHarnessFiles,
@@ -16,6 +19,7 @@ const {
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
+  runMatrixQaLive: vi.fn(),
   runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
   writeQaDockerHarnessFiles: vi.fn(),
@@ -39,7 +43,11 @@ vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
 }));
 
-vi.mock("./telegram-live.runtime.js", () => ({
+vi.mock("./live-transports/matrix/matrix-live.runtime.js", () => ({
+  runMatrixQaLive,
+}));
+
+vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
   runTelegramQaLive,
 }));
 
@@ -56,17 +64,19 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
+import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
-  __testing,
   runQaLabSelfCheckCommand,
   runQaDockerBuildImageCommand,
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaManualLaneCommand,
+  runQaParityReportCommand,
   runQaSuiteCommand,
-  runQaTelegramCommand,
 } from "./cli.runtime.js";
+import { runQaMatrixCommand } from "./live-transports/matrix/cli.runtime.js";
+import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
@@ -77,6 +87,7 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
+    runMatrixQaLive.mockReset();
     runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
     writeQaDockerHarnessFiles.mockReset();
@@ -106,6 +117,13 @@ describe("qa cli runtime", () => {
       guestScriptPath: "/tmp/multipass/multipass-guest-run.sh",
       vmName: "openclaw-qa-test",
       scenarioIds: ["channel-chat-baseline"],
+    });
+    runMatrixQaLive.mockResolvedValue({
+      outputDir: "/tmp/matrix",
+      reportPath: "/tmp/matrix/report.md",
+      summaryPath: "/tmp/matrix/summary.json",
+      observedEventsPath: "/tmp/matrix/observed.json",
+      scenarios: [],
     });
     runTelegramQaLive.mockResolvedValue({
       outputDir: "/tmp/telegram",
@@ -186,13 +204,37 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("resolves matrix qa repo-root-relative paths before dispatching", async () => {
+    await runQaMatrixCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa/matrix",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["matrix-thread-follow-up"],
+      sutAccountId: "sut-live",
+    });
+
+    expect(runMatrixQaLive).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/matrix"),
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["matrix-thread-follow-up"],
+      sutAccountId: "sut-live",
+    });
+  });
+
   it("rejects output dirs that escape the repo root", () => {
-    expect(() =>
-      __testing.resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "../outside"),
-    ).toThrow("--output-dir must stay within the repo root.");
-    expect(() =>
-      __testing.resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "/tmp/outside"),
-    ).toThrow("--output-dir must be a relative path inside the repo root.");
+    expect(() => resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "../outside")).toThrow(
+      "--output-dir must stay within the repo root.",
+    );
+    expect(() => resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "/tmp/outside")).toThrow(
+      "--output-dir must be a relative path inside the repo root.",
+    );
   });
 
   it("defaults telegram qa runs onto the live provider lane", async () => {
@@ -202,6 +244,20 @@ describe("qa cli runtime", () => {
     });
 
     expect(runTelegramQaLive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        providerMode: "live-frontier",
+      }),
+    );
+  });
+
+  it("defaults matrix qa runs onto the live provider lane", async () => {
+    await runQaMatrixCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["matrix-thread-follow-up"],
+    });
+
+    expect(runMatrixQaLive).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         providerMode: "live-frontier",
@@ -262,6 +318,28 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("expands the agentic parity pack onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      parityPack: "agentic",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        scenarioIds: [
+          "channel-chat-baseline",
+          "approval-turn-tool-followthrough",
+          "model-switch-tool-continuity",
+          "source-docs-discovery-report",
+          "image-understanding-attachment",
+          "compaction-retry-mutating-tool",
+        ],
+      }),
+    );
+  });
+
   it("rejects unknown suite CLI auth modes", async () => {
     await expect(
       runQaSuiteCommand({
@@ -269,6 +347,40 @@ describe("qa cli runtime", () => {
         cliAuthMode: "magic",
       }),
     ).rejects.toThrow("--cli-auth-mode must be one of auto, api-key, subscription");
+  });
+
+  it("sets a failing exit code when the parity gate fails", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-parity-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "candidate.json"),
+        JSON.stringify({
+          scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(repoRoot, "baseline.json"),
+        JSON.stringify({
+          scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        candidateSummary: "candidate.json",
+        baselineSummary: "baseline.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves character eval paths and passes model refs through", async () => {

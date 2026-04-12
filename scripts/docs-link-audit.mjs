@@ -62,8 +62,8 @@ function stripInlineCode(text) {
 const docsConfig = JSON.parse(fs.readFileSync(DOCS_JSON_PATH, "utf8"));
 const redirects = new Map();
 for (const item of docsConfig.redirects || []) {
-  const source = normalizeRoute(String(item.source || ""));
-  const destination = normalizeRoute(String(item.destination || ""));
+  const source = normalizeRoute(item.source || "");
+  const destination = normalizeRoute(item.destination || "");
   redirects.set(source, destination);
 }
 
@@ -110,9 +110,7 @@ for (const abs of markdownFiles) {
   if (!match) {
     continue;
   }
-  const permalink = String(match[1])
-    .trim()
-    .replace(/^['"]|['"]$/g, "");
+  const permalink = match[1].trim().replace(/^['"]|['"]$/g, "");
   routes.add(normalizeRoute(permalink));
 }
 
@@ -414,7 +412,7 @@ export function auditDocsLinks() {
   }
 
   for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
-    if (isGeneratedTranslatedDoc(String(page))) {
+    if (isGeneratedTranslatedDoc(page)) {
       continue;
     }
     checked++;

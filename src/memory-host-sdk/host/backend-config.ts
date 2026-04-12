@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionSendPolicyConfig } from "../../config/types.base.js";
 import type {
   MemoryBackend,
@@ -12,6 +11,7 @@ import type {
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -375,8 +375,9 @@ export function resolveMemoryBackendConfig(params: {
   const mergedExtraCollections = [
     ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
     ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
-  ].filter((value): value is MemoryQmdIndexPath =>
-    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
   );
 
   // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.

@@ -1,5 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  buildQaAgenticParityComparison,
+  renderQaAgenticParityMarkdownReport,
+  type QaParitySuiteSummary,
+} from "./agentic-parity-report.js";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
+import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -15,27 +23,11 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import { runTelegramQaLive } from "./telegram-live.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
-
-function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
-  if (!outputDir) {
-    return undefined;
-  }
-  if (path.isAbsolute(outputDir)) {
-    throw new Error("--output-dir must be a relative path inside the repo root.");
-  }
-  const resolved = path.resolve(repoRoot, outputDir);
-  const relative = path.relative(repoRoot, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("--output-dir must stay within the repo root.");
-  }
-  return resolved;
-}
 
 function resolveQaManualLaneModels(opts: {
   providerMode: QaProviderMode;
@@ -228,6 +220,7 @@ export async function runQaSuiteCommand(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   image?: string;
@@ -237,6 +230,10 @@ export async function runQaSuiteCommand(opts: {
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const runner = (opts.runner ?? "host").trim().toLowerCase();
+  const scenarioIds = resolveQaParityPackScenarioIds({
+    parityPack: opts.parityPack,
+    scenarioIds: opts.scenarioIds,
+  });
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -262,7 +259,7 @@ export async function runQaSuiteCommand(opts: {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
-      scenarioIds: opts.scenarioIds,
+      scenarioIds,
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
@@ -286,7 +283,7 @@ export async function runQaSuiteCommand(opts: {
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-    scenarioIds: opts.scenarioIds,
+    scenarioIds,
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
@@ -296,34 +293,48 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
 }
 
-export async function runQaTelegramCommand(opts: {
+export async function runQaParityReportCommand(opts: {
   repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
   outputDir?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  scenarioIds?: string[];
-  sutAccountId?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const providerMode: QaProviderMode =
-    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
-  const result = await runTelegramQaLive({
-    repoRoot,
-    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
-    providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
-    fastMode: opts.fastMode,
-    scenarioIds: opts.scenarioIds,
-    sutAccountId: opts.sutAccountId,
-  });
-  process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
-  process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
-  process.stdout.write(`Telegram QA observed messages: ${result.observedMessagesPath}\n`);
-}
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
 
+  const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
+  const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
+  const candidateSummary = JSON.parse(
+    await fs.readFile(candidateSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+  const baselineSummary = JSON.parse(
+    await fs.readFile(baselineSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+
+  const comparison = buildQaAgenticParityComparison({
+    candidateLabel: opts.candidateLabel?.trim() || "openai/gpt-5.4",
+    baselineLabel: opts.baselineLabel?.trim() || "anthropic/claude-opus-4-6",
+    candidateSummary,
+    baselineSummary,
+  });
+  const report = renderQaAgenticParityMarkdownReport(comparison);
+  const reportPath = path.join(outputDir, "qa-agentic-parity-report.md");
+  const summaryPath = path.join(outputDir, "qa-agentic-parity-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
+
+  process.stdout.write(`QA parity report: ${reportPath}\n`);
+  process.stdout.write(`QA parity summary: ${summaryPath}\n`);
+  process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
+  if (!comparison.pass) {
+    process.exitCode = 1;
+  }
+}
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
   outputDir?: string;

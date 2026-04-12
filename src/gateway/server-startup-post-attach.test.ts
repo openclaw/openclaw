@@ -45,10 +45,16 @@ vi.mock("../agents/subagent-registry.js", () => ({
   scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
 }));
 
-vi.mock("../config/paths.js", () => ({
-  STATE_DIR: "/tmp/openclaw-state",
-  resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
-}));
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...actual,
+    STATE_DIR: "/tmp/openclaw-state",
+    resolveConfigPath: vi.fn(() => "/tmp/openclaw-state/openclaw.json"),
+    resolveGatewayPort: vi.fn(() => 18789),
+    resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
+  };
+});
 
 vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
   startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
@@ -127,7 +133,6 @@ describe("startGatewayPostAttachRuntime", () => {
       bindHosts: ["127.0.0.1"],
       port: 18789,
       tlsEnabled: false,
-      pluginCount: 0,
       log: { info: vi.fn(), warn: vi.fn() },
       isNixMode: false,
       broadcast: vi.fn(),
@@ -140,7 +145,14 @@ describe("startGatewayPostAttachRuntime", () => {
         error: vi.fn(),
       },
       gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
-      pluginRegistry: { plugins: [] } as never,
+      pluginRegistry: {
+        plugins: [
+          { id: "beta", status: "loaded" },
+          { id: "alpha", status: "loaded" },
+          { id: "cold", status: "disabled" },
+          { id: "broken", status: "error" },
+        ],
+      } as never,
       defaultWorkspaceDir: "/tmp/openclaw-workspace",
       deps: {} as never,
       startChannels: vi.fn(async () => undefined),
@@ -159,5 +171,8 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(unavailableGatewayMethods.has("chat.history")).toBe(false);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
+    );
   });
 });

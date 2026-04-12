@@ -1,5 +1,8 @@
 import type { Command } from "commander";
+import { collectString } from "./cli-options.js";
+import { LIVE_TRANSPORT_QA_CLI_REGISTRATIONS } from "./live-transports/cli.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
@@ -23,6 +26,7 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -35,20 +39,17 @@ async function runQaSuite(opts: {
   await runtime.runQaSuiteCommand(opts);
 }
 
-async function runQaTelegram(opts: {
+async function runQaParityReport(opts: {
   repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
   outputDir?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  scenarioIds?: string[];
-  sutAccountId?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaTelegramCommand(opts);
+  await runtime.runQaParityReportCommand(opts);
 }
-
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -78,11 +79,6 @@ async function runQaManualLane(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaManualLaneCommand(opts);
-}
-
-function collectString(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
 }
 
 async function runQaUi(opts: {
@@ -142,6 +138,10 @@ async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
   await runtime.runQaMockOpenAiCommand(opts);
 }
 
+export function isQaLabCliAvailable(): boolean {
+  return hasQaScenarioPack();
+}
+
 export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
@@ -171,6 +171,7 @@ export function registerQaLabCli(program: Command) {
       "--cli-auth-mode <mode>",
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
+    .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
@@ -189,6 +190,7 @@ export function registerQaLabCli(program: Command) {
         model?: string;
         altModel?: string;
         cliAuthMode?: string;
+        parityPack?: string;
         scenario?: string[];
         concurrency?: number;
         fast?: boolean;
@@ -206,6 +208,7 @@ export function registerQaLabCli(program: Command) {
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           cliAuthMode: opts.cliAuthMode,
+          parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
           image: opts.image,
@@ -216,52 +219,30 @@ export function registerQaLabCli(program: Command) {
       },
     );
 
-  qa.command("telegram")
-    .description("Run the manual Telegram live QA lane against a private bot-to-bot group harness")
+  qa.command("parity-report")
+    .description("Compare two QA suite summaries and write an agentic parity gate report")
+    .requiredOption("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
+    .requiredOption("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", "Telegram QA artifact directory")
-    .option(
-      "--provider-mode <mode>",
-      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
-    )
-    .option("--model <ref>", "Primary provider/model ref")
-    .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option(
-      "--scenario <id>",
-      "Run only the named Telegram QA scenario (repeatable)",
-      collectString,
-      [],
-    )
-    .option("--fast", "Enable provider fast mode where supported", false)
-    .option(
-      "--sut-account <id>",
-      "Temporary Telegram account id inside the QA gateway config",
-      "sut",
-    )
+    .option("--candidate-label <label>", "Candidate display label", "openai/gpt-5.4")
+    .option("--baseline-label <label>", "Baseline display label", "anthropic/claude-opus-4-6")
+    .option("--output-dir <path>", "Artifact directory for the parity report")
     .action(
       async (opts: {
         repoRoot?: string;
+        candidateSummary: string;
+        baselineSummary: string;
+        candidateLabel?: string;
+        baselineLabel?: string;
         outputDir?: string;
-        providerMode?: QaProviderModeInput;
-        model?: string;
-        altModel?: string;
-        scenario?: string[];
-        fast?: boolean;
-        sutAccount?: string;
       }) => {
-        await runQaTelegram({
-          repoRoot: opts.repoRoot,
-          outputDir: opts.outputDir,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          fastMode: opts.fast,
-          scenarioIds: opts.scenario,
-          sutAccountId: opts.sutAccount,
-        });
+        await runQaParityReport(opts);
       },
     );
+
+  for (const lane of LIVE_TRANSPORT_QA_CLI_REGISTRATIONS) {
+    lane.register(qa);
+  }
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

@@ -84,6 +84,67 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   return { env: nextEnv, args: nextArgs };
 }
 
+export function shouldAcquireLocalHeavyCheckLockForOxlint(
+  args,
+  { cwd = process.cwd(), env = process.env } = {},
+) {
+  if (env.OPENCLAW_OXLINT_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  if (
+    args.some(
+      (arg) =>
+        arg === "--help" ||
+        arg === "-h" ||
+        arg === "--version" ||
+        arg === "-V" ||
+        arg === "--rules" ||
+        arg === "--print-config" ||
+        arg === "--init",
+    )
+  ) {
+    return false;
+  }
+
+  const separatorIndex = args.indexOf("--");
+  const candidateArgs = (() => {
+    if (separatorIndex !== -1) {
+      return args.slice(separatorIndex + 1);
+    }
+    const firstFlagIndex = args.findIndex((arg) => arg.startsWith("-"));
+    return firstFlagIndex === -1 ? args : args.slice(0, firstFlagIndex);
+  })();
+  const explicitTargets = candidateArgs.filter((arg) => arg.length > 0 && !arg.startsWith("-"));
+  if (explicitTargets.length === 0) {
+    return true;
+  }
+
+  return !explicitTargets.every((target) => {
+    try {
+      return fs.statSync(path.resolve(cwd, target)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env) {
+  if (env.OPENCLAW_TSGO_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  return !args.some(
+    (arg) =>
+      arg === "--help" ||
+      arg === "-h" ||
+      arg === "--version" ||
+      arg === "-v" ||
+      arg === "--init" ||
+      arg === "--showConfig",
+  );
+}
+
 export function shouldThrottleLocalHeavyChecks(env, hostResources) {
   if (!isLocalCheckEnabled(env)) {
     return false;
@@ -133,6 +194,9 @@ export function acquireLocalHeavyCheckLockSync(params) {
   let lastProgressAt = 0;
 
   fs.mkdirSync(locksDir, { recursive: true });
+  if (!params.lockName) {
+    cleanupLegacyLockDirs(locksDir, staleLockMs);
+  }
 
   for (;;) {
     try {
@@ -210,6 +274,20 @@ export function resolveGitCommonDir(cwd) {
   return path.join(cwd, ".git");
 }
 
+function cleanupLegacyLockDirs(locksDir, staleLockMs) {
+  for (const legacyLockName of ["test"]) {
+    const legacyLockDir = path.join(locksDir, `${legacyLockName}.lock`);
+    if (!fs.existsSync(legacyLockDir)) {
+      continue;
+    }
+
+    const owner = readOwnerFile(path.join(legacyLockDir, "owner.json"));
+    if (shouldReclaimLock({ owner, lockDir: legacyLockDir, staleLockMs })) {
+      fs.rmSync(legacyLockDir, { recursive: true, force: true });
+    }
+  }
+}
+
 function insertBeforeSeparator(args, ...items) {
   if (items.length > 0 && hasFlag(args, items[0])) {
     return;
@@ -228,7 +306,9 @@ function readLocalCheckMode(env) {
   if (raw === "full" || raw === "fast") {
     return "full";
   }
-  return "auto";
+  // Keep local heavy checks conservative by default. Developers can still opt
+  // into full-speed runs explicitly with OPENCLAW_LOCAL_CHECK_MODE=full.
+  return "throttled";
 }
 
 function resolveHostResources(hostResources) {

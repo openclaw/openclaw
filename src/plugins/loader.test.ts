@@ -719,6 +719,37 @@ describe("loadOpenClawPlugins", () => {
     expect(bundled?.status).toBe("disabled");
   });
 
+  it("registers standalone text transforms", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "text-shim",
+      filename: "text-shim.cjs",
+      body: `module.exports = {
+        id: "text-shim",
+        register(api) {
+          api.registerTextTransforms({
+            input: [{ from: /red basket/g, to: "blue basket" }],
+            output: [{ from: /blue basket/g, to: "red basket" }],
+          });
+        },
+      };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["text-shim"] },
+    });
+
+    expect(registry.textTransforms).toHaveLength(1);
+    expect(registry.textTransforms[0]).toMatchObject({
+      pluginId: "text-shim",
+      transforms: {
+        input: expect.any(Array),
+        output: expect.any(Array),
+      },
+    });
+  });
+
   it.each([
     {
       name: "loads bundled telegram plugin when enabled",
@@ -835,7 +866,7 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
-  it("keeps auto-enabled bundled channels behind restrictive allowlists", () => {
+  it("materializes auto-enabled bundled channels into restrictive allowlists", () => {
     setupBundledTelegramPlugin();
     const rawConfig = {
       channels: {
@@ -861,8 +892,15 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-    expect(telegram?.status).toBe("disabled");
-    expect(telegram?.error).toBe("not in allowlist");
+    expect(autoEnabled.config.plugins?.allow).toEqual(["browser", "telegram"]);
+    expect(telegram?.status).toBe("loaded");
+    expect(telegram?.error).toBeUndefined();
+    expect(telegram).toMatchObject({
+      explicitlyEnabled: false,
+      activated: true,
+      activationSource: "auto",
+      activationReason: "telegram configured",
+    });
   });
 
   it("preserves all auto-enable reasons in activation metadata", () => {
@@ -2741,6 +2779,99 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const disabled = registry.plugins.find((entry) => entry.id === "config-disable");
     expect(disabled?.status).toBe("disabled");
+  });
+
+  it("loads bundled channel entries through nested default export wrappers", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/nested-default-channel",
+          openclaw: {
+            extensions: ["./index.cjs"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "nested-default-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["nested-default-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+  default: {
+    default: {
+      id: "nested-default-channel",
+      kind: "bundled-channel-entry",
+      name: "Nested Default Channel",
+      description: "interop-wrapped bundled channel entry",
+      register(api) {
+        require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+        api.registerChannel({
+          plugin: {
+            id: "nested-default-channel",
+            meta: {
+              id: "nested-default-channel",
+              label: "Nested Default Channel",
+              selectionLabel: "Nested Default Channel",
+              docsPath: "/channels/nested-default-channel",
+              blurb: "interop-wrapped bundled channel entry",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({ accountId: "default", token: "configured" }),
+            },
+            outbound: { deliveryMode: "direct" },
+          },
+        });
+      },
+    },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        channels: {
+          "nested-default-channel": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["nested-default-channel"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(registry.plugins.find((entry) => entry.id === "nested-default-channel")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.channels.some((entry) => entry.plugin.id === "nested-default-channel")).toBe(
+      true,
+    );
   });
 
   it("does not treat manifest channel ids as scoped plugin id matches", () => {
