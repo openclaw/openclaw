@@ -488,6 +488,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
+  vi.doMock("./compaction-hooks.js", () => ({
+    runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
+  }));
+
   vi.doMock("./utils.js", () => ({
     describeUnknownError: vi.fn((err: unknown) => {
       if (err instanceof Error) {
