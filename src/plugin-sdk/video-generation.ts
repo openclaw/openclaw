@@ -3,8 +3,8 @@
 // Keep these public type declarations local to the plugin-sdk entrypoint so the
 // emitted declaration surface stays stable for package-boundary consumers.
 
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   GeneratedVideoAsset as CoreGeneratedVideoAsset,
   VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
@@ -22,7 +22,12 @@ import type {
 } from "../video-generation/types.js";
 
 export type GeneratedVideoAsset = {
-  buffer: Buffer;
+  /** Raw video bytes. Either buffer or url must be present. */
+  buffer?: Buffer;
+  /** Pre-signed or provider-hosted URL for the video. When set and buffer is
+   * absent, callers can deliver or download the asset without requiring the
+   * provider to materialize the full file in memory first. */
+  url?: string;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;

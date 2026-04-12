@@ -14,12 +14,8 @@ import { resolveVideoGenerationSupportedDurations } from "./duration-support.js"
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
-import type {
-  VideoGenerationIgnoredOverride,
-  VideoGenerationProviderOptionType,
-  VideoGenerationResult,
-} from "./types.js";
 import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
+import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
 export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
@@ -268,6 +264,13 @@ export async function generateVideo(
       });
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");
+      }
+      for (const [index, video] of result.videos.entries()) {
+        if (!video.buffer && !video.url) {
+          throw new Error(
+            `Video generation provider returned an undeliverable asset at index ${index}: neither buffer nor url is set.`,
+          );
+        }
       }
       return {
         videos: result.videos,
