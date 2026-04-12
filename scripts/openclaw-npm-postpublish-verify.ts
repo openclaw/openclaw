@@ -41,6 +41,8 @@ type InstalledBundledExtensionManifestRecord = {
 };
 
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
+const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
+  "Failed to load legacy context engine runtime.";
 const NPM_UPDATE_COMPAT_EXTENSION_DIRS = new Set(
   [...NPM_UPDATE_COMPAT_SIDECAR_PATHS].map((relativePath) => {
     const pathParts = relativePath.split("/");
@@ -101,6 +103,7 @@ export function collectInstalledPackageErrors(params: {
     }
   }
 
+  errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledMirroredRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -110,6 +113,48 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   const trimmed = output.trim();
   const versionMatch = /\b\d{4}\.\d{1,2}\.\d{1,2}(?:-\d+|-beta\.\d+)?\b/u.exec(trimmed);
   return versionMatch?.[0] ?? trimmed;
+}
+
+function listDistJavaScriptFiles(packageRoot: string): string[] {
+  const distDir = join(packageRoot, "dist");
+  if (!existsSync(distDir)) {
+    return [];
+  }
+
+  const pending = [distDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".js")) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  for (const filePath of listDistJavaScriptFiles(packageRoot)) {
+    const contents = readFileSync(filePath, "utf8");
+    if (contents.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+      errors.push(
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      );
+      break;
+    }
+  }
+  return errors;
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
