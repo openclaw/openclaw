@@ -63,12 +63,12 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     {
       name: "strips fc ids when replayable reasoning metadata is missing",
       withReasoning: false,
-      expectedToolId: "call_123",
+      expectedToolId: "call123",
     },
     {
       name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
       withReasoning: true,
-      expectedToolId: "call_123|fc_123",
+      expectedToolId: "call123fc123",
     },
   ])("$name", async ({ withReasoning, expectedToolId }) => {
     const result = await sanitizeSessionHistory({
