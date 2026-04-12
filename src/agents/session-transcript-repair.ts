@@ -8,6 +8,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
+const REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
+const SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -94,18 +96,57 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   if (!Array.isArray(raw)) {
     return value;
   }
+  let changed = false;
   const next = raw.map((item) => {
-    if (!item || typeof item !== "object") {
+    if (isRedactedSessionsSpawnAttachment(item)) {
       return item;
     }
-    const a = item as Record<string, unknown>;
-    if (!Object.hasOwn(a, "content")) {
-      return item;
-    }
-    const { content: _content, ...rest } = a;
-    return { ...rest, content: "__OPENCLAW_REDACTED__" };
+    changed = true;
+    return redactSessionsSpawnAttachment(item);
   });
+  if (!changed) {
+    return value;
+  }
   return { ...rec, attachments: next };
+}
+
+function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    content: REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
+  };
+  if (!item || typeof item !== "object") {
+    return next;
+  }
+  const attachment = item as Record<string, unknown>;
+  for (const key of SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS) {
+    const value = attachment[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+export function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+  const attachment = item as Record<string, unknown>;
+  if (attachment.content !== REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT) {
+    return false;
+  }
+  for (const key of Object.keys(attachment)) {
+    if (key === "content") {
+      continue;
+    }
+    if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
+      return false;
+    }
+    if (typeof attachment[key] !== "string" || (attachment[key] as string).trim().length === 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -232,7 +273,7 @@ export type ToolCallInputRepairReport = {
 
 export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
-  preserveImmutableThinkingTurns?: boolean;
+  allowProviderOwnedThinkingReplay?: boolean;
 };
 
 export type ErroredAssistantResultPolicy = "preserve" | "drop";
@@ -270,7 +311,7 @@ export function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
-  const preserveImmutableThinkingTurns = options?.preserveImmutableThinkingTurns === true;
+  const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -284,7 +325,7 @@ export function repairToolCallInputs(
     }
 
     if (
-      preserveImmutableThinkingTurns &&
+      allowProviderOwnedThinkingReplay &&
       msg.content.some((block) => isThinkingLikeBlock(block)) &&
       countRawToolCallBlocks(msg.content) > 0
     ) {

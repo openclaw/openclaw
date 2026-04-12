@@ -2,7 +2,10 @@ import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  isRedactedSessionsSpawnAttachment,
+  sanitizeToolUseResultPairing,
+} from "../../session-transcript-repair.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 
@@ -251,14 +254,7 @@ function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): bool
       continue;
     }
     for (const attachment of attachments) {
-      if (!attachment || typeof attachment !== "object") {
-        continue;
-      }
-      if (!Object.hasOwn(attachment, "content")) {
-        continue;
-      }
-      const content = (attachment as { content?: unknown }).content;
-      if (content !== "__OPENCLAW_REDACTED__") {
+      if (!isRedactedSessionsSpawnAttachment(attachment)) {
         return true;
       }
     }
@@ -331,7 +327,7 @@ function resolveReplayToolCallName(
 function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
-  preserveImmutableThinkingTurns?: boolean,
+  allowProviderOwnedThinkingReplay?: boolean,
 ): ReplayToolCallSanitizeReport {
   let changed = false;
   let droppedAssistantMessages = 0;
@@ -347,7 +343,7 @@ function sanitizeReplayToolCallInputs(
       continue;
     }
     if (
-      preserveImmutableThinkingTurns &&
+      allowProviderOwnedThinkingReplay &&
       message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
@@ -641,7 +637,8 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     const sanitized = sanitizeReplayToolCallInputs(
       messages as AgentMessage[],
       allowedToolNames,
-      transcriptPolicy?.validateAnthropicTurns === true,
+      transcriptPolicy?.validateAnthropicTurns === true &&
+        (model as { api?: unknown })?.api === "anthropic-messages",
     );
     if (sanitized.messages === messages) {
       return baseFn(model, context, options);
