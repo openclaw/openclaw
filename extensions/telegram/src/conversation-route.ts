@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveTelegramAccountConfig } from "./accounts.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -59,6 +60,43 @@ export function resolveTelegramConversationRoute(params: {
     },
     parentPeer,
   });
+
+  const rawAccountAgentId = resolveTelegramAccountConfig(
+    params.cfg,
+    params.accountId,
+  )?.agentId?.trim();
+  if (route.matchedBy === "default" && rawAccountAgentId) {
+    const accountAgentId = sanitizeAgentId(rawAccountAgentId);
+    const sessionKey = normalizeLowercaseStringOrEmpty(
+      buildAgentSessionKey({
+        agentId: accountAgentId,
+        channel: "telegram",
+        accountId: params.accountId,
+        peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
+        dmScope: params.cfg.session?.dmScope,
+        identityLinks: params.cfg.session?.identityLinks,
+      }),
+    );
+    const mainSessionKey = normalizeLowercaseStringOrEmpty(
+      buildAgentMainSessionKey({
+        agentId: accountAgentId,
+      }),
+    );
+    route = {
+      ...route,
+      agentId: accountAgentId,
+      sessionKey,
+      mainSessionKey,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey,
+        mainSessionKey,
+      }),
+      matchedBy: "binding.account",
+    };
+    logVerbose(
+      `telegram: account route override: account=${params.accountId} agent=${accountAgentId} sessionKey=${route.sessionKey}`,
+    );
+  }
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {

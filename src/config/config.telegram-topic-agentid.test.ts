@@ -164,6 +164,20 @@ describe("telegram account agentId schema", () => {
     expect(res.data.channels?.telegram?.accounts?.builder?.agentId).toBe("builder");
     expect(res.data.channels?.telegram?.accounts?.main?.botToken).toBe("123:AAA");
   });
+
+  it("rejects top-level telegram agentId", () => {
+    const res = OpenClawSchema.safeParse({
+      channels: {
+        telegram: {
+          botToken: "123:AAA",
+          dmPolicy: "pairing",
+          agentId: "main",
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("telegram disableAudioPreflight schema", () => {
