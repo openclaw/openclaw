@@ -2,6 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -16,6 +17,7 @@ import {
   type RetryConfig,
   type RetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
@@ -352,6 +354,43 @@ async function sendDiscordChunkWithFallback(params: {
   );
 }
 
+/**
+ * Apply message_sending plugin hooks before Discord delivery.
+ * Mirrors the pattern used by the Slack extension's applySlackMessageSendingHooks.
+ */
+const hookLog = createSubsystemLogger("discord/reply-delivery-hooks");
+
+async function applyDiscordMessageSendingHooks(params: {
+  hookRunner: NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+  to: string;
+  text: string;
+  accountId: string;
+}): Promise<{ cancelled: boolean; text: string }> {
+  try {
+    const hookResult = await params.hookRunner.runMessageSending(
+      {
+        to: params.to,
+        content: params.text,
+        metadata: { channel: "discord", channelId: params.to, accountId: params.accountId },
+      },
+      { channelId: params.to, accountId: params.accountId },
+    );
+    if (hookResult?.cancel) {
+      hookLog.debug(`message_sending hook cancelled delivery to ${params.to}`);
+      return { cancelled: true, text: params.text };
+    }
+    if (hookResult?.content && hookResult.content !== params.text) {
+      hookLog.debug(`message_sending hook replaced content for ${params.to}`);
+      return { cancelled: false, text: hookResult.content };
+    }
+    return { cancelled: false, text: hookResult?.content ?? params.text };
+  } catch (err) {
+    // Don't block delivery on hook failure.
+    hookLog.error(`message_sending hook error for ${params.to}: ${String(err)}`);
+    return { cancelled: false, text: params.text };
+  }
+}
+
 export async function deliverDiscordReply(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -402,8 +441,29 @@ export async function deliverDiscordReply(params: {
   const request: RetryRunner | undefined = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
+
+  // Check for message_sending hooks once before the payload loop.
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+
   let deliveredAny = false;
-  for (const payload of params.replies) {
+  for (let payload of params.replies) {
+    // Run message_sending plugin hook (may modify content or cancel delivery).
+    if (hasMessageSendingHooks) {
+      const hookResult = await applyDiscordMessageSendingHooks({
+        hookRunner: hookRunner!,
+        to: params.target,
+        text: payload.text ?? "",
+        accountId: account.accountId,
+      });
+      if (hookResult.cancelled) {
+        continue;
+      }
+      if (hookResult.text !== (payload.text ?? "")) {
+        payload = { ...payload, text: hookResult.text };
+      }
+    }
+
     const resolvePayloadReplyTo = createPayloadReplyToResolver({
       payload,
       replyToMode,
