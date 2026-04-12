@@ -21,5 +21,7 @@ export function isStrictAgenticExecutionContractActive(params: {
   if (provider !== "openai" && provider !== "openai-codex") {
     return false;
   }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId?.trim() ?? "");
+  const rawModelId = params.modelId?.trim() ?? "";
+  const modelId = rawModelId.replace(/^[^/:]+[/:]/, "");
+  return /^gpt-5(?:[.\-o]|$)/i.test(modelId);
 }
