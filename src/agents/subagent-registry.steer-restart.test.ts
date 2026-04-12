@@ -622,6 +622,7 @@ describe("subagent registry steer restarts", () => {
 
   it("recovers announce cleanup when completion arrives after a kill marker", async () => {
     const childSessionKey = "agent:main:subagent:kill-race";
+    const initialEndedHookCalls = runSubagentEndedHookMock.mock.calls.length;
     registerRun({
       runId: "run-kill-race",
       childSessionKey,
@@ -649,7 +650,16 @@ describe("subagent registry steer restarts", () => {
     expect(run?.suppressAnnounceReason).toBeUndefined();
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
-    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+    const killRaceHookCalls = runSubagentEndedHookMock.mock.calls
+      .slice(initialEndedHookCalls)
+      .filter((call) => ((call[0] ?? {}) as { runId?: string }).runId === "run-kill-race");
+    expect(killRaceHookCalls).toHaveLength(1);
+    expect(killRaceHookCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        runId: "run-kill-race",
+        reason: "subagent-killed",
+      }),
+    );
   });
 
   it("retries deferred parent cleanup after a descendant announces", async () => {
