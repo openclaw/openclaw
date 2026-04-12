@@ -932,6 +932,130 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(doneEvent?.message.stopReason).toBe("toolUse");
   });
 
+  it("buffers partial text until final_answer phase is known", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-buffer");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      output_index: 0,
+      content_index: 0,
+      delta: "Hello",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_final",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Hello" }],
+        phase: "final_answer",
+      },
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        ...makeResponseObject("resp_phase_buffer", "Hello", undefined, "final_answer"),
+        output: [
+          {
+            type: "message",
+            id: "item_final",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Hello" }],
+            phase: "final_answer",
+          },
+        ],
+      },
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((e) => (e as { type?: string }).type === "text_delta") as Array<{
+      delta: string;
+      partial?: { phase?: string };
+    }>;
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Hello");
+    expect(textDeltaEvents[0]?.partial?.phase).toBe("final_answer");
+  });
+
+  it("suppresses buffered commentary partial text once commentary phase is known", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-commentary-buffer");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_commentary",
+      output_index: 0,
+      content_index: 0,
+      delta: "Need act verify",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_commentary",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Need act verify" }],
+        phase: "commentary",
+      },
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        ...makeResponseObject("resp_phase_commentary", "Need act verify", "exec", "commentary"),
+        output: [
+          {
+            type: "message",
+            id: "item_commentary",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Need act verify" }],
+            phase: "commentary",
+          },
+          {
+            type: "function_call",
+            id: "item_tool",
+            call_id: "call_abc",
+            name: "exec",
+            arguments: '{"arg":"value"}',
+          },
+        ],
+      },
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((e) => (e as { type?: string }).type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(0);
+  });
+
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
     // Set the class-level flag BEFORE calling streamFn so the new instance
     // fails on connect().  We patch the static default via MockManager directly.

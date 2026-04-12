@@ -233,9 +233,62 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+type AssistantTextPhase = "commentary" | "final_answer";
+
+function normalizeAssistantTextPhase(value: unknown): AssistantTextPhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function parseAssistantTextSignaturePhase(value: unknown): AssistantTextPhase | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  if (!value.trimStart().startsWith("{")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as { phase?: unknown };
+    return normalizeAssistantTextPhase(parsed.phase);
+  } catch {
+    return undefined;
+  }
+}
+
+function filterUserVisibleAssistantContent(content: unknown): unknown {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  const textEntries = content.filter(
+    (block) => block && typeof block === "object" && (block as { type?: unknown }).type === "text",
+  ) as Array<{ text?: unknown; textSignature?: unknown }>;
+  const hasFinalAnswerText = textEntries.some(
+    (block) => parseAssistantTextSignaturePhase(block.textSignature) === "final_answer",
+  );
+
+  return content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      return true;
+    }
+    const phase = parseAssistantTextSignaturePhase((block as { textSignature?: unknown }).textSignature);
+    if (phase === "commentary") {
+      return false;
+    }
+    if (hasFinalAnswerText) {
+      return phase === "final_answer";
+    }
+    return true;
+  });
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
+  if (normalizeAssistantTextPhase((msg as { phase?: unknown }).phase) === "commentary") {
+    return "";
+  }
   const extracted =
-    extractTextFromChatContent(msg.content, {
+    extractTextFromChatContent(filterUserVisibleAssistantContent(msg.content), {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
           stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),

@@ -605,3 +605,53 @@ describe("empty input handling", () => {
     }
   });
 });
+
+describe("extractAssistantText phase filtering", () => {
+  it("returns empty text for commentary-phase assistant messages", () => {
+    expect(
+      extractAssistantText({
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "Need act verify each sample exists in library." }],
+        stopReason: "toolUse",
+      } as any),
+    ).toBe("");
+  });
+
+  it("ignores commentary text blocks when final_answer blocks are present", () => {
+    expect(
+      extractAssistantText({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Need act verify each sample exists in library.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Done. I set the setting to true.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+        stopReason: "stop",
+      } as any),
+    ).toBe("Done. I set the setting to true.");
+  });
+
+  it("suppresses commentary-only text blocks even without a top-level phase", () => {
+    expect(
+      extractAssistantText({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Need act verify each sample exists in library.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+        ],
+        stopReason: "toolUse",
+      } as any),
+    ).toBe("");
+  });
+});

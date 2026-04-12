@@ -855,10 +855,60 @@ export function createOpenAIWebSocketStreamFn(
         };
         session.manager.on("close", closeHandler);
 
+        const itemPhaseById = new Map<string, OpenAIResponsesAssistantPhase | "unknown">();
+        const bufferedDeltaByItemId = new Map<string, string[]>();
+
+        const emitVisibleDelta = (
+          delta: string,
+          phase?: OpenAIResponsesAssistantPhase,
+        ) => {
+          const partialMsg = buildAssistantMessageWithZeroUsage({
+            model,
+            content: [{ type: "text", text: delta }],
+            stopReason: "stop",
+          }) as AssistantMessageWithPhase;
+          if (phase) {
+            partialMsg.phase = phase;
+          }
+          eventStream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta,
+            partial: partialMsg,
+          });
+        };
+
+        const flushBufferedItemDelta = (itemId: string, phase?: OpenAIResponsesAssistantPhase) => {
+          const chunks = bufferedDeltaByItemId.get(itemId);
+          if (!chunks || chunks.length === 0) {
+            return;
+          }
+          bufferedDeltaByItemId.delete(itemId);
+          if (phase === "commentary") {
+            return;
+          }
+          for (const chunk of chunks) {
+            emitVisibleDelta(chunk, phase);
+          }
+        };
+
+        const noteItemPhase = (item: { id?: unknown; type?: unknown; phase?: unknown }) => {
+          if (item.type !== "message" || typeof item.id !== "string") {
+            return;
+          }
+          const phase = normalizeAssistantPhase(item.phase);
+          itemPhaseById.set(item.id, phase ?? "unknown");
+          if (phase) {
+            flushBufferedItemDelta(item.id, phase);
+          }
+        };
+
         const cleanup = () => {
           signal?.removeEventListener("abort", abortHandler);
           session.manager.off("close", closeHandler);
           unsubscribe();
+          itemPhaseById.clear();
+          bufferedDeltaByItemId.clear();
         };
 
         const unsubscribe = session.manager.onMessage((event) => {
@@ -883,19 +933,23 @@ export function createOpenAIWebSocketStreamFn(
           } else if (event.type === "error") {
             cleanup();
             reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+          } else if (
+            event.type === "response.output_item.added" ||
+            event.type === "response.output_item.done"
+          ) {
+            noteItemPhase(event.item);
           } else if (event.type === "response.output_text.delta") {
-            // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
-            });
+            const phase = itemPhaseById.get(event.item_id);
+            if (phase === "commentary") {
+              return;
+            }
+            if (phase === "final_answer") {
+              emitVisibleDelta(event.delta, phase);
+              return;
+            }
+            const chunks = bufferedDeltaByItemId.get(event.item_id) ?? [];
+            chunks.push(event.delta);
+            bufferedDeltaByItemId.set(event.item_id, chunks);
           }
         });
       });
