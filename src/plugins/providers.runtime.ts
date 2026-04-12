@@ -182,7 +182,7 @@ function resolveRuntimeProviderPluginLoadState(
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
   const runtimeRequestedPluginIds =
-    params.onlyPluginIds?.length || explicitOwnerPluginIds.length > 0
+    base.requestedPluginIds !== undefined
       ? dedupeSortedPluginIds([...(params.onlyPluginIds ?? []), ...explicitOwnerPluginIds])
       : undefined;
   const requestConfig = withActivatedPluginIds({

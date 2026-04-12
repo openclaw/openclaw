@@ -164,7 +164,6 @@ function isProviderPluginEligibleForRuntimeOwnerActivation(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   rootConfig?: PluginLoadOptions["config"];
-  includeUntrustedWorkspacePlugins?: boolean;
 }): boolean {
   if (!params.normalizedConfig.enabled) {
     return false;
@@ -175,16 +174,22 @@ function isProviderPluginEligibleForRuntimeOwnerActivation(params: {
   if (params.normalizedConfig.entries[params.plugin.id]?.enabled === false) {
     return false;
   }
-  if (params.includeUntrustedWorkspacePlugins === false && params.plugin.origin === "workspace") {
-    return resolveEffectivePluginActivationState({
-      id: params.plugin.id,
-      origin: params.plugin.origin,
-      config: params.normalizedConfig,
-      rootConfig: params.rootConfig,
-      enabledByDefault: params.plugin.enabledByDefault,
-    }).activated;
+  if (
+    params.normalizedConfig.allow.length > 0 &&
+    !params.normalizedConfig.allow.includes(params.plugin.id)
+  ) {
+    return false;
   }
-  return true;
+  if (params.plugin.origin !== "workspace") {
+    return true;
+  }
+  return resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+    enabledByDefault: params.plugin.enabledByDefault,
+  }).activated;
 }
 
 export function resolveActivatableProviderOwnerPluginIds(params: {
@@ -212,7 +217,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
           plugin,
           normalizedConfig,
           rootConfig: params.config,
-          includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
         }),
     )
     .map((plugin) => plugin.id)

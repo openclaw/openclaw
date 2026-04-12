@@ -546,7 +546,7 @@ describe("resolvePluginProviders", () => {
             "workspace-provider",
           ]),
           entries: expect.objectContaining({
-            google: { enabled: true },
+            google: { enabled: false },
             kilocode: { enabled: true },
             moonshot: { enabled: true },
             "workspace-provider": { enabled: true },
@@ -799,6 +799,29 @@ describe("resolvePluginProviders", () => {
     ).toEqual([]);
   });
 
+  it("does not activate explicit runtime owners outside the allowlist", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "activation-owned-provider",
+        providerIds: [],
+        activation: {
+          onProviders: ["activation-owned"],
+        },
+      }),
+    ]);
+
+    expect(
+      resolveActivatableProviderOwnerPluginIds({
+        pluginIds: ["activation-owned-provider"],
+        config: {
+          plugins: {
+            allow: ["other-plugin"],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -826,6 +849,78 @@ describe("resolvePluginProviders", () => {
             allow: ["setup-owned-provider"],
             entries: {
               "setup-owned-provider": { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not override global plugin disable during setup owner loading", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "setup-owned-provider",
+        providerIds: [],
+        setup: {
+          providers: [{ id: "setup-owned" }],
+        },
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          enabled: false,
+        },
+      },
+      providerRefs: ["setup-owned"],
+      activate: true,
+      mode: "setup",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            enabled: false,
+            allow: ["setup-owned-provider"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not override explicitly disabled setup owners", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "setup-owned-provider",
+        providerIds: [],
+        setup: {
+          providers: [{ id: "setup-owned" }],
+        },
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          entries: {
+            "setup-owned-provider": { enabled: false },
+          },
+        },
+      },
+      providerRefs: ["setup-owned"],
+      activate: true,
+      mode: "setup",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["setup-owned-provider"],
+            entries: {
+              "setup-owned-provider": { enabled: false },
             },
           }),
         }),
@@ -881,6 +976,69 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         config: {},
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
+  it("does not auto-activate workspace runtime owners by default", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "workspace-activation-owner",
+        providerIds: [],
+        origin: "workspace",
+        activation: {
+          onProviders: ["workspace-activation"],
+        },
+      }),
+    ]);
+    resolveRuntimePluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
+
+    const providers = resolvePluginProviders({
+      config: {},
+      providerRefs: ["workspace-activation"],
+      activate: true,
+    });
+
+    expect(providers).toEqual([]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
+  it("keeps explicit provider requests scoped when runtime owner activation resolves nothing", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "activation-owned-provider",
+        providerIds: [],
+        activation: {
+          onProviders: ["activation-owned"],
+        },
+      }),
+    ]);
+    resolveRuntimePluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
+
+    const providers = resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["other-plugin"],
+        },
+      },
+      providerRefs: ["activation-owned"],
+      activate: true,
+    });
+
+    expect(providers).toEqual([]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          plugins: {
+            allow: ["other-plugin"],
+          },
+        },
         onlyPluginIds: [],
       }),
     );
