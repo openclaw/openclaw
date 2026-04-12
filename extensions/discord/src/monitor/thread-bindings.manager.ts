@@ -635,15 +635,11 @@ export function createThreadBindingManager(
 
       if (placement === "child") {
         createThread = true;
+        // For child placement the conversationId is the target channel where
+        // the new thread should be created. Use it directly instead of the
+        // API-resolution fallback that treats it as a threadId.
         if (!channelId && conversationId) {
-          const cfg = resolveCurrentCfg();
-          channelId =
-            (await resolveChannelIdForBinding({
-              cfg,
-              accountId,
-              token: resolveCurrentToken(),
-              threadId: conversationId,
-            })) ?? undefined;
+          channelId = conversationId;
         }
       } else {
         threadId = conversationId || undefined;

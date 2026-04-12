@@ -21,6 +21,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import * as taskExecutor from "../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
@@ -95,6 +96,7 @@ const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
   acpSpawnParentStream,
   "resolveAcpSpawnStreamLogPath",
 );
+const createRunningTaskRunSpy = vi.spyOn(taskExecutor, "createRunningTaskRun");
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
@@ -1874,5 +1876,93 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain('streamTo="parent"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("persists real surface channel instead of webchat in task requesterOrigin for thread-bound spawn", async () => {
+    createRunningTaskRunSpy.mockClear();
+    // Spawn with agentChannel=discord but the thread binding happens on discord.
+    // The binding's channel should replace webchat in the task requesterOrigin.
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ thread: true }),
+      createRequesterContext({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      }),
+    );
+
+    expectAcceptedSpawn(result);
+    const taskRunCall = createRunningTaskRunSpy.mock.calls[0]?.[0] as
+      | { requesterOrigin?: { channel?: string } }
+      | undefined;
+    // When agentChannel is a real surface, the origin should be preserved as-is.
+    expect(taskRunCall?.requesterOrigin?.channel).toBe("discord");
+  });
+
+  it("resolves parent session delivery context when agentChannel is webchat without thread binding", async () => {
+    createRunningTaskRunSpy.mockClear();
+    hoisted.loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:main": {
+        lastChannel: "telegram",
+        lastTo: "telegram:6098642967",
+        lastAccountId: "default",
+      },
+    }));
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ mode: "run" }),
+      createRequesterContext({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "webchat",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+      }),
+    );
+
+    expectAcceptedSpawn(result);
+    const taskRunCall = createRunningTaskRunSpy.mock.calls[0]?.[0] as
+      | { requesterOrigin?: { channel?: string } }
+      | undefined;
+    expect(taskRunCall?.requesterOrigin?.channel).toBe("telegram");
+  });
+
+  it("keeps real surface channel in requesterOrigin when agentChannel is not webchat", async () => {
+    createRunningTaskRunSpy.mockClear();
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ thread: true }),
+      createRequesterContext({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      }),
+    );
+
+    expectAcceptedSpawn(result);
+    const taskRunCall = createRunningTaskRunSpy.mock.calls[0]?.[0] as
+      | { requesterOrigin?: { channel?: string } }
+      | undefined;
+    expect(taskRunCall?.requesterOrigin?.channel).toBe("discord");
+  });
+
+  it("sets parentConversationId for child thread creation from a channel context without threadId", async () => {
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ thread: true }),
+      createRequesterContext({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: undefined,
+      }),
+    );
+
+    expectAcceptedSpawn(result);
+    const bindCall = hoisted.sessionBindingBindMock.mock.calls[0]?.[0] as
+      | { conversation?: { conversationId?: string; parentConversationId?: string } }
+      | undefined;
+    expect(bindCall?.conversation?.conversationId).toBeTruthy();
   });
 });

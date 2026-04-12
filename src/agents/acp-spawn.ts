@@ -57,7 +57,9 @@ import {
   formatConversationTarget,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
+  type DeliveryContext,
 } from "../utils/delivery-context.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -562,7 +564,7 @@ function resolveConversationRefForThreadBinding(params: {
   if (genericConversationId) {
     return normalizeConversationTargetRef({
       conversationId: genericConversationId,
-      parentConversationId: params.threadId != null ? parentConversationId : undefined,
+      parentConversationId,
     });
   }
   return null;
@@ -1165,6 +1167,40 @@ export async function spawnAcpDirect(
         )
       : undefined;
 
+  // When the agent processes internally (webchat), the captured requesterOrigin
+  // has channel=webchat which causes announce-time routing to fall back to the
+  // parent session's lastChannel — potentially the wrong surface. Resolve the
+  // real external surface before persisting into the task context.
+  const effectiveRequesterOrigin: DeliveryContext | undefined = (() => {
+    const captured = requesterState.origin;
+    if (!captured?.channel || !isInternalMessageChannel(captured.channel)) {
+      return captured;
+    }
+    if (preparedBinding) {
+      return normalizeDeliveryContext({
+        channel: preparedBinding.channel,
+        accountId: preparedBinding.accountId ?? captured.accountId,
+        to: ctx.agentTo,
+        threadId: ctx.agentThreadId,
+      });
+    }
+    if (parentSessionKey) {
+      const parentDelivery =
+        parentDeliveryCtx ??
+        deliveryContextFromSession(
+          loadSessionStore(
+            resolveStorePath(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            }),
+          )[parentSessionKey],
+        );
+      if (parentDelivery?.channel && !isInternalMessageChannel(parentDelivery.channel)) {
+        return parentDelivery;
+      }
+    }
+    return captured;
+  })();
+
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -1235,7 +1271,7 @@ export async function spawnAcpDirect(
         sourceId: childRunId,
         ownerKey: requesterInternalKey,
         scopeKind: "session",
-        requesterOrigin: requesterState.origin,
+        requesterOrigin: effectiveRequesterOrigin,
         childSessionKey: sessionKey,
         runId: childRunId,
         label: params.label,
@@ -1267,7 +1303,7 @@ export async function spawnAcpDirect(
       sourceId: childRunId,
       ownerKey: requesterInternalKey,
       scopeKind: "session",
-      requesterOrigin: requesterState.origin,
+      requesterOrigin: effectiveRequesterOrigin,
       childSessionKey: sessionKey,
       runId: childRunId,
       label: params.label,

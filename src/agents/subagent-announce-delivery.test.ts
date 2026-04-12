@@ -61,3 +61,40 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
     });
   });
 });
+
+describe("resolveAnnounceOrigin cross-surface isolation", () => {
+  it("does not leak to telegram when requesterOrigin has discord channel", () => {
+    const result = resolveAnnounceOrigin(
+      {
+        lastChannel: "telegram",
+        lastTo: "telegram:6098642967",
+        lastAccountId: "default",
+      },
+      {
+        channel: "discord",
+        to: "channel:1492794036396757072",
+        accountId: "default",
+      },
+    );
+    expect(result?.channel).toBe("discord");
+    expect(result?.to).toBe("channel:1492794036396757072");
+  });
+
+  it("falls back to session entry when requesterOrigin is webchat", () => {
+    const result = resolveAnnounceOrigin(
+      {
+        lastChannel: "telegram",
+        lastTo: "telegram:6098642967",
+        lastAccountId: "default",
+      },
+      {
+        channel: "webchat",
+        accountId: "default",
+      },
+    );
+    // When requesterOrigin is webchat (internal), the session entry's channel
+    // fills in — this documents the pre-fix behavior that the spawn-time
+    // origin correction is designed to prevent from being reached.
+    expect(result?.channel).toBe("telegram");
+  });
+});
