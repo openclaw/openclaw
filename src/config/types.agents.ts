@@ -102,6 +102,10 @@ export type AgentConfig = {
   embeddedPi?: {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedPiExecutionContract;
+    /** Optional per-agent personality mode override. */
+    personalityMode?: "off" | "hybrid";
+    /** Optional per-agent personality model override. */
+    personalityModel?: string;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

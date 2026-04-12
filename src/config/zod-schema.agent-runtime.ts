@@ -833,6 +833,8 @@ export const AgentEntrySchema = z
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        personalityMode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
+        personalityModel: z.string().optional(),
       })
       .strict()
       .optional(),

@@ -248,6 +248,23 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Hybrid personality mode. When "hybrid", the harness routes execution
+     * turns to the primary model (e.g. gpt-5.4) and personality/conversational
+     * turns to `personalityModel` (e.g. gpt-5.2). After execution completes,
+     * the personality model rewrites the visible output in its natural voice.
+     * The user sees a synthetic model name (e.g. `gpt-5.4-psn`).
+     * - off (default): single-model behavior
+     * - hybrid: turn routing + emotional closeout
+     */
+    personalityMode?: "off" | "hybrid";
+    /**
+     * Model used for personality turns and emotional closeouts when
+     * `personalityMode` is `"hybrid"`. Should be a GPT-5 family model
+     * that shares KV cache with the primary model for near-zero
+     * switching latency. Default: `"openai/gpt-5.2"`.
+     */
+    personalityModel?: string;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

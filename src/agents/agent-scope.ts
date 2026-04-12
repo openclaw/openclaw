@@ -183,6 +183,36 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export type AgentPersonalityMode = "off" | "hybrid";
+
+const DEFAULT_PERSONALITY_MODEL = "openai/gpt-5.2";
+
+export function resolveAgentPersonalityMode(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): AgentPersonalityMode | undefined {
+  const defaultMode = cfg?.agents?.defaults?.embeddedPi?.personalityMode;
+  if (!cfg || !agentId) {
+    return defaultMode;
+  }
+  return resolveAgentConfig(cfg, agentId)?.embeddedPi?.personalityMode ?? defaultMode;
+}
+
+export function resolveAgentPersonalityModel(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): string {
+  const defaultModel = cfg?.agents?.defaults?.embeddedPi?.personalityModel;
+  if (!cfg || !agentId) {
+    return defaultModel ?? DEFAULT_PERSONALITY_MODEL;
+  }
+  return (
+    resolveAgentConfig(cfg, agentId)?.embeddedPi?.personalityModel ??
+    defaultModel ??
+    DEFAULT_PERSONALITY_MODEL
+  );
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

@@ -177,6 +177,8 @@ export const AgentDefaultsSchema = z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        personalityMode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
+        personalityModel: z.string().optional(),
       })
       .strict()
       .optional(),

@@ -1209,6 +1209,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
   "agents.list[].embeddedPi.executionContract":
     'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+  "agents.defaults.embeddedPi.personalityMode":
+    'Hybrid personality mode: "off" (default) uses a single model, "hybrid" routes execution turns to the primary model (e.g. gpt-5.4) and personality/conversational turns to personalityModel (e.g. gpt-5.2). After execution, the personality model rewrites the output in its natural voice. The user sees a synthetic model name like gpt-5.4-psn.',
+  "agents.defaults.embeddedPi.personalityModel":
+    'Model used for personality turns and emotional closeouts when personalityMode is "hybrid". Should be a GPT-5 family model that shares KV cache with the primary model for near-zero switching latency. Default: "openai/gpt-5.2".',
+  "agents.list[].embeddedPi.personalityMode":
+    'Optional per-agent personality mode override. Set "hybrid" to enable dual-model personality routing for this agent, or "off" to use single-model behavior.',
+  "agents.list[].embeddedPi.personalityModel":
+    "Optional per-agent personality model override. Defaults to the global personalityModel setting.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
