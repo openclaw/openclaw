@@ -18,6 +18,8 @@ services:
       - sh
       - -lc
       - |
+        set -eu
+        mkdir -p /home/node/.openclaw /home/node/.openclaw/workspace
         mkdir -p /home/node/.cache /home/node/.npm "${PNPM_HOME:-/home/node/.local/share/pnpm}" \
           "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}/bin" "${GOPATH:-/home/node/go}/bin"
         chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm \

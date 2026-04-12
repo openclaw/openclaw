@@ -449,8 +449,6 @@ write_extra_compose() {
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
-  openclaw-gateway:
-    volumes:
 YAML
 
   if [[ -n "$home_volume" ]]; then
@@ -460,6 +458,21 @@ YAML
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
+    cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
+  openclaw-init:
+    volumes:
+YAML
+    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+  fi
+
+  cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
+  openclaw-gateway:
+    volumes:
+YAML
+
+  if [[ -n "$home_volume" ]]; then
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
@@ -633,7 +646,8 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'mkdir -p /home/node/.cache /home/node/.npm \
+  'set -eu; \
+   mkdir -p /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.cache /home/node/.npm \
       "${PNPM_HOME:-/home/node/.local/share/pnpm}" \
       "${NPM_CONFIG_PREFIX:-/home/node/.npm-global}/bin" \
       "${GOPATH:-/home/node/go}/bin"; \

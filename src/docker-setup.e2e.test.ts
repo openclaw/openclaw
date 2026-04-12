@@ -316,7 +316,11 @@ describe("scripts/docker/setup.sh", () => {
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
     );
+    expect(extraCompose).toContain("openclaw-init:");
     expect(extraCompose).toContain("openclaw-home:/home/node");
+    expect(extraCompose).toContain(
+      "openclaw-init:\n    volumes:\n      - openclaw-home:/home/node",
+    );
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readDockerLog(activeSandbox);
@@ -572,6 +576,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("set -eu;");
     expect(log).toContain("/home/node/.cache");
     expect(log).toContain("/home/node/.npm-global");
     expect(log).toContain("/home/node/go");
@@ -815,6 +820,7 @@ describe("scripts/docker/setup.sh", () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose).toContain("openclaw-init:");
     expect(compose).toContain("condition: service_completed_successfully");
+    expect(compose).toContain("set -eu");
     expect(compose).toContain(
       'mkdir -p /home/node/.cache /home/node/.npm "${PNPM_HOME:-/home/node/.local/share/pnpm}"',
     );
