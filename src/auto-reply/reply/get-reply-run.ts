@@ -49,6 +49,8 @@ import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updat
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
+import { maybeBuildChiefSpecialistConsultationPrompt } from "./chief-specialist-consultation.js";
+import { buildChiefReplyStyleGuard } from "./reply-style-guard.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -268,11 +270,19 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  const chiefReplyStyleGuard = buildChiefReplyStyleGuard({
+    agentId,
+    workspaceDir,
+    isHeartbeat,
+    userText:
+      ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? sessionCtx.BodyStripped ?? sessionCtx.Body,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    chiefReplyStyleGuard,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
@@ -425,6 +435,22 @@ export async function runPreparedReply(
     });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
+  const chiefSpecialistConsultationPrompt = await maybeBuildChiefSpecialistConsultationPrompt({
+    cfg,
+    chiefAgentId: agentId,
+    chiefWorkspaceDir: workspaceDir,
+    chiefSessionKey: sessionKey,
+    userText: baseBodyTrimmedRaw,
+    chiefTimeoutMs: timeoutMs,
+    existingPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+    runConsultation: async (consultationRun) => {
+      const { runEmbeddedPiAgent } = await loadPiEmbeddedRuntime();
+      return runEmbeddedPiAgent(consultationRun);
+    },
+  });
+  if (chiefSpecialistConsultationPrompt) {
+    extraSystemPromptParts.push(chiefSpecialistConsultationPrompt);
+  }
   const sessionFile = resolveSessionFilePath(
     sessionIdFinal,
     sessionEntry,

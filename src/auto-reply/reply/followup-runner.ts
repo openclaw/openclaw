@@ -33,6 +33,11 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+import {
+  appendChiefSpecialistConsultationPrompt,
+  maybeBuildChiefSpecialistConsultationPrompt,
+} from "./chief-specialist-consultation.js";
+import { appendChiefReplyStyleGuard, buildChiefReplyStyleGuard } from "./reply-style-guard.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -149,7 +154,17 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
+      const chiefSpecialistConsultationPrompt = await maybeBuildChiefSpecialistConsultationPrompt({
+        cfg: queued.run.config,
+        chiefAgentId: queued.run.agentId,
+        chiefWorkspaceDir: queued.run.workspaceDir,
+        chiefSessionKey: queued.run.sessionKey,
+        userText: queued.summaryLine ?? queued.prompt,
+        chiefTimeoutMs: queued.run.timeoutMs,
+        existingPrompt: queued.run.extraSystemPrompt,
+        runConsultation: async (consultationRun) => runEmbeddedPiAgent(consultationRun),
+      });
+      let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
@@ -200,7 +215,18 @@ export function createFollowupRunner(params: {
                 config: queued.run.config,
                 skillsSnapshot: queued.run.skillsSnapshot,
                 prompt: queued.prompt,
-                extraSystemPrompt: queued.run.extraSystemPrompt,
+                extraSystemPrompt: appendChiefReplyStyleGuard(
+                  appendChiefSpecialistConsultationPrompt(
+                    queued.run.extraSystemPrompt,
+                    chiefSpecialistConsultationPrompt,
+                  ),
+                  buildChiefReplyStyleGuard({
+                    agentId: queued.run.agentId,
+                    workspaceDir: queued.run.workspaceDir,
+                    isHeartbeat: opts?.isHeartbeat === true,
+                    userText: queued.summaryLine,
+                  }),
+                ),
                 ownerNumbers: queued.run.ownerNumbers,
                 enforceFinalTag: queued.run.enforceFinalTag,
                 provider,
