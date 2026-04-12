@@ -6,9 +6,33 @@ import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword } from "./manager-search.js";
 
-describe("searchKeyword trigram fallback", () => {
-  const { DatabaseSync } = requireNodeSqlite();
+const { DatabaseSync } = requireNodeSqlite();
 
+function hasFts5Support(): boolean {
+  const db = new DatabaseSync(":memory:");
+  try {
+    ensureMemoryIndexSchema({
+      db,
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+      ftsEnabled: true,
+      ftsTokenizer: "trigram",
+    });
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("chunks_fts") as { name?: string } | undefined;
+    return row?.name === "chunks_fts";
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
+const describeTrigramFallback = hasFts5Support() ? describe : describe.skip;
+
+describeTrigramFallback("searchKeyword trigram fallback", () => {
   function createTrigramDb() {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
