@@ -12,6 +12,7 @@ import {
 import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
+  PLANNING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
@@ -281,7 +282,10 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
-        toolMetas: [{ toolName: "bash", meta: "ls" }],
+        toolMetas: [
+          { toolName: "read", meta: "path=src/index.ts" },
+          { toolName: "search", meta: "pattern=runEmbeddedPiAgent" },
+        ],
       }),
     });
 
@@ -434,5 +438,82 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
+  const openaiParams = { provider: "openai", modelId: "gpt-5.4" } as const;
+
+  function makeAttemptWithTools(
+    toolNames: string[],
+    assistantText: string,
+  ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
+    return {
+      toolMetas: toolNames.map((toolName) => ({ toolName })),
+      assistantTexts: [assistantText],
+      lastAssistant: { stopReason: "stop" },
+      itemLifecycle: { startedCount: toolNames.length },
+      replayMetadata: { hadPotentialSideEffects: false },
+      clientToolCall: null,
+      yieldDetected: false,
+      didSendDeterministicApprovalPrompt: false,
+      didSendViaMessagingTool: false,
+      lastToolError: null,
+    } as unknown as Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"];
+  }
+
+  it("retries when exactly 1 non-plan tool call plus 'i can do that' prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I can do that next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 non-plan tool call plus planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry when 2+ non-plan tool calls are present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus completion language is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Done. The file looks correct."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry when 1 tool call plus 'let me know' handoff is present", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
+    });
+
+    expect(result).toBeNull();
   });
 });

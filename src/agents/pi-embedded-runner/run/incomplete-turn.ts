@@ -54,6 +54,9 @@ const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
+const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
+const SINGLE_ACTION_NARRATIVE_RE =
+  /\b(?:i(?:'ll| will)|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that|let me (?!know\b)\w+)/i;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
@@ -284,8 +287,33 @@ function countPlanOnlyToolMetas(toolMetas: PlanningOnlyAttempt["toolMetas"]): nu
   return toolMetas.filter((entry) => entry.toolName === "update_plan").length;
 }
 
+function countNonPlanToolCalls(toolMetas: PlanningOnlyAttempt["toolMetas"]): number {
+  return toolMetas.filter((entry) => entry.toolName !== "update_plan").length;
+}
+
 function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
   return toolMetas.some((entry) => entry.toolName !== "update_plan");
+}
+
+/**
+ * Treat a turn with exactly one non-plan tool call plus visible "I'll do X
+ * next" prose as effectively planning-only from the user's perspective. This
+ * closes the one-action-then-narrative loophole without changing the 2+ tool
+ * call path, which still counts as real multi-step progress.
+ */
+function isSingleActionThenNarrativePattern(params: {
+  toolMetas: PlanningOnlyAttempt["toolMetas"];
+  assistantTexts: readonly string[];
+}): boolean {
+  const nonPlanCount = countNonPlanToolCalls(params.toolMetas);
+  if (nonPlanCount !== 1) {
+    return false;
+  }
+  const text = params.assistantTexts.join("\n\n").trim();
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
+    return false;
+  }
+  return SINGLE_ACTION_NARRATIVE_RE.test(text);
 }
 
 export function resolvePlanningOnlyRetryLimit(
@@ -304,6 +332,10 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   attempt: PlanningOnlyAttempt;
 }): string | null {
   const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+  const singleActionNarrative = isSingleActionThenNarrativePattern({
+    toolMetas: params.attempt.toolMetas,
+    assistantTexts: params.attempt.assistantTexts,
+  });
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
@@ -316,8 +348,8 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
-    hasNonPlanToolActivity(params.attempt.toolMetas) ||
-    params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) && !singleActionNarrative) ||
+    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount && !singleActionNarrative) ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;
@@ -329,7 +361,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   }
 
   const text = params.attempt.assistantTexts.join("\n\n").trim();
-  if (!text || text.length > 700 || text.includes("```")) {
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
     return null;
   }
   if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningOnlyFormat(text)) {
