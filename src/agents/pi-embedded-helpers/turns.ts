@@ -15,6 +15,14 @@ function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
 }
 
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function isAbortedAssistantTurn(message: AgentMessage): boolean {
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   return stopReason === "aborted" || stopReason === "error";
@@ -114,6 +122,10 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     };
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     if (originalContent.length === 0) {
+      result.push(msg);
+      continue;
+    }
+    if (originalContent.some((block) => isThinkingLikeBlock(block))) {
       result.push(msg);
       continue;
     }
