@@ -38,4 +38,23 @@ describe("buildPageContradictionClusters", () => {
     expect(clusters).toHaveLength(1);
     expect(clusters[0]?.entries).toHaveLength(2);
   });
+
+  it("keeps combining-mark contradiction notes in separate clusters", () => {
+    const clusters = buildPageContradictionClusters([
+      createPage({
+        relativePath: "entities/alpha.md",
+        title: "Alpha",
+        contradictions: ["किताब"],
+      }),
+      createPage({
+        relativePath: "entities/beta.md",
+        title: "Beta",
+        contradictions: ["कीताब"],
+      }),
+    ]);
+
+    expect(clusters).toHaveLength(2);
+    expect(clusters.map((cluster) => cluster.key).toSorted()).toEqual(["किताब", "कीताब"]);
+    expect(clusters.every((cluster) => cluster.entries)).toBe(true);
+  });
 });

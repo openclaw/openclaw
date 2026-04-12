@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -65,13 +66,40 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
+const MAX_WIKI_SEGMENT_BYTES = 240;
+const WIKI_SEGMENT_HASH_BYTES = 12;
+
+function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const char of value) {
+    const nextBytes = Buffer.byteLength(char);
+    if (bytes + nextBytes > maxBytes) {
+      break;
+    }
+    result += char;
+    bytes += nextBytes;
+  }
+  return result;
+}
 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return slug || "page";
+  if (!slug) {
+    return "page";
+  }
+  if (Buffer.byteLength(slug) <= MAX_WIKI_SEGMENT_BYTES) {
+    return slug;
+  }
+  const suffix = createHash("sha1").update(slug).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  const truncated = truncateUtf8CodePointSafe(
+    slug,
+    MAX_WIKI_SEGMENT_BYTES - Buffer.byteLength(`-${suffix}`),
+  ).replace(/-+$/g, "");
+  return `${truncated || "page"}-${suffix}`;
 }
 
 export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {

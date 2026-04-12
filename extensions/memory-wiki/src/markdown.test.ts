@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { slugifyWikiSegment } from "./markdown.js";
 
@@ -11,5 +12,22 @@ describe("slugifyWikiSegment", () => {
   it("keeps ASCII behavior unchanged", () => {
     expect(slugifyWikiSegment("hello world")).toBe("hello-world");
     expect(slugifyWikiSegment("")).toBe("page");
+  });
+
+  it("retains combining marks so distinct titles do not collapse", () => {
+    expect(slugifyWikiSegment("किताब")).toBe("किताब");
+    expect(slugifyWikiSegment("कुतुब")).toBe("कुतुब");
+    expect(slugifyWikiSegment("कीताब")).toBe("कीताब");
+  });
+
+  it("caps long Unicode slugs to a safe filename byte length", () => {
+    const title = "漢".repeat(90);
+    const slug = slugifyWikiSegment(title);
+
+    expect(slug.endsWith(`-${createHash("sha1").update(title).digest("hex").slice(0, 12)}`)).toBe(
+      true,
+    );
+    expect(Buffer.byteLength(slug)).toBeLessThanOrEqual(240);
+    expect(slugifyWikiSegment(title)).toBe(slug);
   });
 });
