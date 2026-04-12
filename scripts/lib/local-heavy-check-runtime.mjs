@@ -92,6 +92,10 @@ export function shouldAcquireLocalHeavyCheckLockForOxlint(
     return true;
   }
 
+  if (args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-V")) {
+    return false;
+  }
+
   const separatorIndex = args.indexOf("--");
   const candidateArgs = (() => {
     if (separatorIndex !== -1) {
