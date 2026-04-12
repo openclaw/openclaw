@@ -42,6 +42,7 @@ export type VerifiedIdentity = {
   firstName?: string;
   lastName?: string;
   email?: string;
+  authToken?: string;
   raw: Record<string, unknown>;
 };
 
@@ -159,6 +160,7 @@ async function verifyViaEndpoint(
       firstName: data.first_name as string | undefined,
       lastName: data.last_name as string | undefined,
       email: data.email as string | undefined,
+      authToken: data.auth_token as string | undefined,
       raw: data,
     };
   } catch {
@@ -206,6 +208,7 @@ export async function verifyViaPasscode(
       firstName: data.first_name as string | undefined,
       lastName: data.last_name as string | undefined,
       email: data.email as string | undefined,
+      authToken: data.auth_token as string | undefined,
       raw: data,
     };
   } catch {

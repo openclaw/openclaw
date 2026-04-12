@@ -286,6 +286,26 @@ const persistUserIdentityPlugin = {
           await linkExternalId(sql, existingLink.id, verified.externalId, channel, peerId);
         }
 
+        // Store Syntropy auth token if present in the pairing response
+        if (verified.authToken) {
+          try {
+            await sql`
+              INSERT INTO syntropy_tokens (user_id, auth_token, origin)
+              VALUES (${user.id}, ${verified.authToken}, 'pairing')
+              ON CONFLICT (user_id) DO UPDATE
+                SET auth_token = EXCLUDED.auth_token,
+                    origin     = EXCLUDED.origin,
+                    updated_at = now()
+            `;
+            api.logger.info(
+              `persist-user-identity: stored Syntropy auth token for user ${user.id}`,
+            );
+          } catch (tokenErr) {
+            // Non-fatal: syntropy_tokens table may not exist yet if syntropy plugin isn't loaded
+            api.logger.warn(`persist-user-identity: could not store Syntropy token: ${tokenErr}`);
+          }
+        }
+
         const channels = await listUserChannels(sql, user.id);
         const channelList = channels.map((c) => `${c.channel}:${c.channel_peer_id}`).join(", ");
         const name =

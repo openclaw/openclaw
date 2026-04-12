@@ -31,7 +31,8 @@
       "memory-graphiti",
       "voice-call",
       "whatsapp",
-      "catch-phrases"
+      "catch-phrases",
+      "syntropy"
     ],
     "entries": {
       "persist-user-identity": {
@@ -39,7 +40,7 @@
         "config": {
           "auth": {
             "mode": "passcode-endpoint",
-            "passcodeVerifyUrl": "http://localhost:3000/auth/passcodes/verify",
+            "passcodeVerifyUrl": "http://localhost:3000/api/ext/pairing/verify",
             "userLookupUrl": "http://localhost:3000/api/ext/users/search",
             "apiToken": ""
           }
@@ -87,6 +88,12 @@
               "matchMode": "startsWith"
             }
           ]
+        }
+      },
+      "syntropy": {
+        "enabled": true,
+        "config": {
+          "syntropyBaseUrl": "http://localhost:3000"
         }
       }
     },

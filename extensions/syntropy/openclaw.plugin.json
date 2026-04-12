@@ -1,0 +1,29 @@
+{
+  "id": "syntropy",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "syntropyBaseUrl": {
+        "type": "string",
+        "description": "Syntropy API base URL (e.g., http://localhost:3000)"
+      },
+      "databaseUrl": {
+        "type": "string",
+        "description": "PostgreSQL URL for identity + token storage. Falls back to DATABASE_URL."
+      }
+    },
+    "required": []
+  },
+  "uiHints": {
+    "syntropyBaseUrl": {
+      "label": "Syntropy Base URL",
+      "placeholder": "http://localhost:3000"
+    },
+    "databaseUrl": {
+      "label": "Database URL",
+      "sensitive": true,
+      "help": "Must point to the same database as persist-user-identity."
+    }
+  }
+}
