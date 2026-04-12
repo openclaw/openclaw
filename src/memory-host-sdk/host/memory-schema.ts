@@ -114,5 +114,5 @@ function ensureColumn(
     return;
   }
   const quotedColumn = quoteIdentifier(column);
-  db.exec(`ALTER TABLE ${quotedTable} ADD COLUMN ${quotedColumn} ${definition}`);
+  db.exec(`ALTER TABLE ${quotedTable} ADD COLUMN ${quotedColumn} ${definition}`); // definition must be a hardcoded DDL fragment, never user-controlled
 }
