@@ -55,8 +55,15 @@ describe("resolveMergedAssistantText", () => {
       });
       expect(result).toBe("Hello world!");
     });
+  });
 
-    test("passes through cumulative snapshots that start from an empty buffer", () => {
+  describe("incremental delta path (nextDelta provided, no cumulative text)", () => {
+    test("returns the delta directly on the first frame when the buffer is empty", () => {
+      // With an empty `previousText`, the `nextText && previousText` guard is
+      // false and the function skips the cumulative-snapshot branch entirely,
+      // so the result comes from the delta path regardless of whether the
+      // adapter also supplied a `nextText`.  Pinning the behavior here keeps
+      // future refactors honest about the initial-frame handling.
       const result = resolveMergedAssistantText({
         previousText: "",
         nextText: "Hello",
@@ -64,9 +71,7 @@ describe("resolveMergedAssistantText", () => {
       });
       expect(result).toBe("Hello");
     });
-  });
 
-  describe("incremental delta path (nextDelta provided, no cumulative text)", () => {
     test("appends a pure delta chunk to the buffer", () => {
       const result = resolveMergedAssistantText({
         previousText: "Hello",
