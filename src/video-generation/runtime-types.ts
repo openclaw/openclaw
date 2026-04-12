@@ -1,4 +1,4 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -25,6 +25,7 @@ export type GenerateVideoParams = {
   inputImages?: VideoGenerationSourceAsset[];
   inputVideos?: VideoGenerationSourceAsset[];
   inputAudios?: VideoGenerationSourceAsset[];
+  /** Arbitrary provider-specific options forwarded as-is to provider.generateVideo. */
   providerOptions?: Record<string, unknown>;
 };
 

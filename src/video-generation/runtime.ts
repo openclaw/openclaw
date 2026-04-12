@@ -265,6 +265,13 @@ export async function generateVideo(
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");
       }
+      for (const [index, video] of result.videos.entries()) {
+        if (!video.buffer && !video.url) {
+          throw new Error(
+            `Video generation provider returned an undeliverable asset at index ${index}: neither buffer nor url is set.`,
+          );
+        }
+      }
       return {
         videos: result.videos,
         provider: candidate.provider,
