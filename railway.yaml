@@ -3,6 +3,7 @@ services:
     name: openclaw
     runtime: docker
     port: 8080
+    buildCommand: docker build -f Dockerfile.railway -t openclaw .
     envVars:
       - key: PORT
         value: 8080
