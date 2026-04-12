@@ -66,6 +66,15 @@ describe("getShellConfig", () => {
       });
     });
 
+    it("strips paired quotes from configured Windows shell paths", () => {
+      process.env.OPENCLAW_SHELL = '"C:\\Program Files\\Git\\bin\\bash.exe"';
+
+      expect(getShellConfig()).toEqual({
+        shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+        args: ["-c"],
+      });
+    });
+
     it("falls back to SHELL when OPENCLAW_SHELL is an invalid POSIX path", () => {
       process.env.OPENCLAW_SHELL = "/usr/bin/bash";
       process.env.SHELL = "cmd.exe";
@@ -272,6 +281,12 @@ describe("detectRuntimeShell", () => {
   if (isWin) {
     it("reports the configured custom shell on Windows", () => {
       process.env.OPENCLAW_SHELL = "C:\\Program Files\\Git\\bin\\bash.exe";
+
+      expect(detectRuntimeShell()).toBe("bash");
+    });
+
+    it("detects quoted custom shell paths on Windows", () => {
+      process.env.OPENCLAW_SHELL = '"C:\\Program Files\\Git\\bin\\bash.exe"';
 
       expect(detectRuntimeShell()).toBe("bash");
     });

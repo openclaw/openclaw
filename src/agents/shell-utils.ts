@@ -108,6 +108,14 @@ function normalizeShellName(value: string): string {
     .replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
+function unwrapPairedQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 function isWindowsPosixPath(value: string): boolean {
   return value.startsWith("/") && !value.startsWith("//");
 }
@@ -133,7 +141,7 @@ function isUnixLikeShellName(name: string): boolean {
 function resolveConfiguredWindowsShellValue(
   value: string | undefined,
 ): (ShellConfig & { runtimeShell: string }) | undefined {
-  const trimmed = value?.trim();
+  const trimmed = value ? unwrapPairedQuotes(value) : undefined;
   if (!trimmed || isWindowsPosixPath(trimmed)) {
     return undefined;
   }
