@@ -43,7 +43,9 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
 }
 
 function resolveDefaultProviderEnvVar(provider: string): string | undefined {
-  const envVars = getProviderEnvVars(provider);
+  const envVars = getProviderEnvVars(provider, {
+    includeUntrustedWorkspacePlugins: false,
+  });
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
 }
 
@@ -57,7 +59,12 @@ export function resolveRefFallbackInput(params: {
   preferredEnvVar?: string;
   env?: NodeJS.ProcessEnv;
 }): { ref: SecretRef; resolvedValue: string } {
-  const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
+  const fallbackEnvVar =
+    params.preferredEnvVar ??
+    getProviderEnvVars(params.provider, {
+      config: params.config,
+      includeUntrustedWorkspacePlugins: false,
+    }).find((candidate) => normalizeOptionalString(candidate) !== undefined);
   if (!fallbackEnvVar) {
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
