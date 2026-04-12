@@ -451,4 +451,16 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Grace period in milliseconds after a channel starts connecting before the
+   * health monitor begins evaluating its health. This prevents premature
+   * restart attempts during normal channel startup. Default: 120000 (120s).
+   */
+  channelConnectGraceMs?: number;
+  /**
+   * Grace period in milliseconds after the gateway starts before the health
+   * monitor begins evaluating any channels. This allows channels time to
+   * establish connections during gateway startup. Default: 60000 (60s).
+   */
+  monitorStartupGraceMs?: number;
 };

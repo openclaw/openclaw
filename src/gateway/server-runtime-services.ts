@@ -37,6 +37,10 @@ export function startGatewayChannelHealthMonitor(params: {
   return startChannelHealthMonitor({
     channelManager: params.channelManager,
     checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+    timing: {
+      channelConnectGraceMs: params.cfg.gateway?.channelConnectGraceMs,
+      monitorStartupGraceMs: params.cfg.gateway?.monitorStartupGraceMs,
+    },
     ...(staleEventThresholdMinutes != null && {
       staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
     }),
