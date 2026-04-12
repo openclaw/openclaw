@@ -106,7 +106,7 @@ export async function assertBrowserNavigationAllowed(
   // resolvers, so Node-side pinning cannot guarantee the browser connects to
   // the same address that passed policy checks.
   if (
-    opts.ssrfPolicy &&
+    opts.ssrfPolicy && opts.ssrfPolicy.dangerouslyAllowPrivateNetwork === false &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
     !isIpLiteralHostname(parsed.hostname) &&
     !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)
