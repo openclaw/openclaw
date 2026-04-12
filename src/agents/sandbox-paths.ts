@@ -19,13 +19,17 @@ function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
+function resolveHome(): string {
+  return process.env.HOME || process.env.USERPROFILE || os.homedir();
+}
+
 function expandPath(filePath: string): string {
   const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
   if (normalized === "~") {
-    return os.homedir();
+    return resolveHome();
   }
   if (normalized.startsWith("~/")) {
-    return os.homedir() + normalized.slice(1);
+    return resolveHome() + normalized.slice(1);
   }
   return normalized;
 }
