@@ -14,6 +14,7 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-registry.js";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { resolveSessionLane } from "./lanes.js";
 
@@ -249,11 +250,11 @@ describe("runContextEngineMaintenance", () => {
         replacements: [
           {
             entryId: "entry-1",
-            message: {
+            message: castAgentMessage({
               role: "assistant",
               content: [{ type: "text", text: "done" }],
               timestamp: 2,
-            },
+            }),
           },
         ],
       });
@@ -292,11 +293,11 @@ describe("runContextEngineMaintenance", () => {
         replacements: [
           {
             entryId: "entry-1",
-            message: {
+            message: castAgentMessage({
               role: "assistant",
               content: [{ type: "text", text: "done" }],
               timestamp: 2,
-            },
+            }),
           },
         ],
       },
