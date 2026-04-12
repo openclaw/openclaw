@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { resolveProviderVariant, startQaMockOpenAiServer } from "./mock-openai-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
@@ -166,6 +166,42 @@ describe("qa mock openai server", () => {
       { model: "gpt-5.4" },
       { model: "gpt-5.4-alt" },
     ]);
+  });
+
+  it("keeps remember prompts prose-only even when they mention repo cleanup", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain('"name":"read"');
   });
 
   it("drives the compaction retry mutating tool parity flow", async () => {
@@ -842,5 +878,608 @@ describe("qa mock openai server", () => {
         },
       ],
     });
+  });
+
+  it("advertises Anthropic claude-opus-4-6 baseline model on /v1/models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((entry) => entry.id);
+    expect(ids).toContain("claude-opus-4-6");
+    expect(ids).toContain("gpt-5.4");
+  });
+
+  it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      type: string;
+      role: string;
+      model: string;
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.type).toBe("message");
+    expect(body.role).toBe("assistant");
+    expect(body.model).toBe("claude-opus-4-6");
+    expect(body.stop_reason).toBe("tool_use");
+    const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
+      | { name: string; input: Record<string, unknown> }
+      | undefined;
+    expect(toolUseBlock?.name).toBe("read");
+    expect(toolUseBlock?.input).toEqual({ path: "QA_SCENARIO_PLAN.md" });
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      model: "claude-opus-4-6",
+      plannedToolName: "read",
+    });
+  });
+
+  it("dispatches Anthropic /v1/messages tool_result follow-ups through the shared scenario logic", async () => {
+    // This verifies the Anthropic adapter correctly feeds tool_result
+    // content blocks into the shared scenario dispatcher so downstream
+    // "has this scenario already called a tool?" logic fires the same way
+    // it does on the OpenAI /v1/responses route. The subagent handoff
+    // scenario is ideal because the mock has a two-stage flow: first
+    // delegate prompt → sessions_spawn tool_use, then tool_result →
+    // "Delegated task: ..." prose summary.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_1",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_1",
+                content: "SUBAGENT-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    const textBlock = body.content.find((block) => block.type === "text") as
+      | { text: string }
+      | undefined;
+    // The mock's subagent-handoff branch echoes "Delegated task", a
+    // tool-output evidence line, and a folded-back "Evidence" marker.
+    expect(textBlock?.text).toContain("Delegated task");
+    expect(textBlock?.text).toContain("Evidence");
+  });
+
+  it("places tool_result after the parent user message even in mixed-content turns", async () => {
+    // Regression for the loop-6 Copilot / Greptile finding: a user message
+    // that mixes a tool_result block with fresh text blocks must still land
+    // the function_call_output AFTER the parent user message in the
+    // converted ResponsesInputItem[], otherwise extractToolOutput (which
+    // scans AFTER the last user-role index) fails to see the tool output
+    // and the downstream scenario dispatcher behaves as if no tool output
+    // was returned. We verify the conversion directly via the snapshot
+    // that /debug/last-request exposes: the last-request `toolOutput`
+    // field should be the stringified tool_result content, and `prompt`
+    // should be the trailing fresh-text block.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_mixed",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_mixed",
+                content: "SUBAGENT-OK",
+              },
+              // A trailing fresh text block in the same user turn. Before
+              // the loop-6 fix, the tool_result was pushed BEFORE the
+              // parent user message, so extractToolOutput saw the text
+              // turn as the last user-role item and found no
+              // function_call_output after it → returned "". The
+              // downstream dispatcher then behaved as if no tool output
+              // was present at all.
+              {
+                type: "text",
+                text: "Keep going with the fanout.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = (await debugResponse.json()) as {
+      prompt: string;
+      allInputText: string;
+      toolOutput: string;
+    };
+    // extractToolOutput should surface the tool_result content because
+    // the function_call_output item is placed AFTER the parent user
+    // message in the converted input array.
+    expect(debug.toolOutput).toBe("SUBAGENT-OK");
+    // extractLastUserText should surface the fresh-text block (the parent
+    // user message that was pushed BEFORE the function_call_output).
+    expect(debug.prompt).toBe("Keep going with the fanout.");
+    // The converted history still records both turns, including the
+    // original delegate prompt from the first user turn.
+    expect(debug.allInputText).toContain("Delegate one bounded QA task");
+  });
+
+  it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain("event: message_start");
+    expect(body).toContain("event: content_block_start");
+    expect(body).toContain('"type":"tool_use"');
+    expect(body).toContain('"name":"read"');
+    expect(body).toContain("QA_SCENARIO_PLAN.md");
+    expect(body).toContain("event: message_delta");
+    expect(body).toContain("event: message_stop");
+  });
+
+  it("streams Anthropic /v1/messages tool_result follow-ups as text deltas", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_spawn_1",
+                name: "sessions_spawn",
+                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_spawn_1",
+                content: "SUBAGENT-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain("event: content_block_delta");
+    expect(body).toContain('"type":"text_delta"');
+    expect(body).toContain("Delegated task");
+    expect(body).toContain("Evidence");
+  });
+
+  it("rejects malformed Anthropic /v1/messages JSON with an invalid_request_error", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"model":"claude-opus-4-6","messages":[',
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      type: string;
+      error: { type: string; message: string };
+    };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(body.error.message).toContain("Malformed JSON body");
+  });
+
+  it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-6", async () => {
+    // Regression for the loop-7 Copilot finding: a bare `typeof
+    // body.model === "string"` check lets an empty-string model leak
+    // through to `lastRequest.model` and `responseBody.model`. Empty
+    // strings must be treated the same as absent and default to
+    // `"claude-opus-4-6"` so parity consumers can trust the echoed label.
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: "Read the plan",
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { model: string };
+    expect(body.model).toBe("claude-opus-4-6");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = (await debugResponse.json()) as { model: string };
+    expect(debug.model).toBe("claude-opus-4-6");
+  });
+});
+
+describe("resolveProviderVariant", () => {
+  it("tags prefix-qualified openai models", () => {
+    expect(resolveProviderVariant("openai/gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("openai:gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("openai-codex/gpt-5.4")).toBe("openai");
+  });
+
+  it("tags prefix-qualified anthropic models", () => {
+    expect(resolveProviderVariant("anthropic/claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("anthropic:claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-cli/claude-opus-4-6")).toBe("anthropic");
+  });
+
+  it("tags bare model names by prefix", () => {
+    expect(resolveProviderVariant("gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("gpt-5.4-alt")).toBe("openai");
+    expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
+    expect(resolveProviderVariant("o1-preview")).toBe("openai");
+    expect(resolveProviderVariant("claude-opus-4-6")).toBe("anthropic");
+    expect(resolveProviderVariant("claude-sonnet-4-6")).toBe("anthropic");
+  });
+
+  it("handles case drift and whitespace", () => {
+    expect(resolveProviderVariant("  OpenAI/GPT-5.4  ")).toBe("openai");
+    expect(resolveProviderVariant("ANTHROPIC/CLAUDE-OPUS-4-6")).toBe("anthropic");
+  });
+
+  it("falls through to unknown for unrecognized providers", () => {
+    expect(resolveProviderVariant("")).toBe("unknown");
+    expect(resolveProviderVariant(undefined)).toBe("unknown");
+    expect(resolveProviderVariant("mistral/mistral-large")).toBe("unknown");
+    expect(resolveProviderVariant("some-random-model")).toBe("unknown");
+  });
+});
+
+describe("qa mock openai server provider variant tagging", () => {
+  it("records providerVariant on /debug/last-request for openai requests", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "openai/gpt-5.4",
+        stream: false,
+        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      model: string;
+      providerVariant: string;
+    };
+    expect(debug.model).toBe("openai/gpt-5.4");
+    expect(debug.providerVariant).toBe("openai");
+  });
+
+  it("records providerVariant=anthropic on /v1/messages requests", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        messages: [{ role: "user", content: "Heartbeat check" }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      model: string;
+      providerVariant: string;
+    };
+    expect(debug.model).toBe("claude-opus-4-6");
+    expect(debug.providerVariant).toBe("anthropic");
+  });
+
+  it("records providerVariant=unknown for unrecognized models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mistral/mistral-large",
+        stream: false,
+        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
+      }),
+    });
+
+    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      providerVariant: string;
+    };
+    expect(debug.providerVariant).toBe("unknown");
+  });
+});
+
+describe("Anthropic exact-reply precedence", () => {
+  it("keeps Anthropic remember prompts on the prose branch even when system text mentions HEARTBEAT", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        system: [
+          {
+            type: "text",
+            text: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain("HEARTBEAT_OK");
+    expect(body).not.toContain('"name":"read"');
+  });
+
+  it("prefers the prompt-local exact reply directive over heartbeat context", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-6",
+        max_tokens: 256,
+        stream: true,
+        system: [
+          {
+            type: "text",
+            text: [
+              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
+              "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+              "HEARTBEAT_OK",
+            ].join("\n"),
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Remembered ALPHA-7.");
+    expect(body).not.toContain("HEARTBEAT_OK");
   });
 });
