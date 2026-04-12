@@ -955,7 +955,7 @@ export async function dispatchReplyFromConfig(
             originatingChannel,
             originatingTo,
             shouldSendToolSummaries,
-            sendPolicy: "allow",
+            sendPolicy,
             isTailDispatch: true,
           },
           {
