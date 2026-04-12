@@ -435,6 +435,40 @@ describe("sanitizeToolCallInputs", () => {
     expect(out).toEqual([]);
   });
 
+  it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "First signed replay turn.",
+            thinkingSignature: "sig_first",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Second signed replay turn.",
+            thinkingSignature: "sig_second",
+          },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([input[0]]);
+  });
+
   it("drops signed-thinking assistant turns that would require attachment redaction", () => {
     const secret = "SIGNED_THINKING_ATTACHMENT_SECRET"; // pragma: allowlist secret
     const input = castAgentMessages([
