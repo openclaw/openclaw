@@ -203,12 +203,24 @@ export async function sessionsCommand(
         toolsReasonChain: [
           "runtime-effective-tool-inventory",
           `tool-profile:${effectiveTools.profile}`,
+          ...(effectiveToolPolicy.globalPolicy ? ["global-tools-policy"] : []),
+          ...(effectiveToolPolicy.globalProviderPolicy ? ["global-provider-policy"] : []),
+          ...(effectiveToolPolicy.agentPolicy ? ["agent-tools-policy"] : []),
+          ...(effectiveToolPolicy.agentProviderPolicy ? ["agent-provider-policy"] : []),
+          ...(effectiveToolPolicy.profile ? ["profile-policy"] : []),
+          ...(effectiveToolPolicy.providerProfile ? ["provider-profile-policy"] : []),
         ],
       },
       tools: {
         profile: effectiveTools.profile,
         policyProfile: effectiveToolPolicy.profile ?? null,
         providerProfile: effectiveToolPolicy.providerProfile ?? null,
+        policySources: {
+          global: Boolean(effectiveToolPolicy.globalPolicy),
+          globalProvider: Boolean(effectiveToolPolicy.globalProviderPolicy),
+          agent: Boolean(effectiveToolPolicy.agentPolicy),
+          agentProvider: Boolean(effectiveToolPolicy.agentProviderPolicy),
+        },
         profileAlsoAllow: effectiveToolPolicy.profileAlsoAllow ?? [],
         providerProfileAlsoAllow: effectiveToolPolicy.providerProfileAlsoAllow ?? [],
         groups: effectiveTools.groups.map((group) => ({
@@ -286,6 +298,14 @@ export async function sessionsCommand(
     );
     runtime.log(
       `${label("Provider alsoAllow")}${muted(": ")}${infoLabel(payload.tools.providerProfileAlsoAllow.join(", ") || "-")}`,
+    );
+    runtime.log(
+      `${label("Policy sources")}${muted(": ")}${infoLabel(
+        Object.entries(payload.tools.policySources)
+          .filter(([, enabled]) => enabled)
+          .map(([name]) => name)
+          .join(", ") || "-",
+      )}`,
     );
     runtime.log(
       `${label("Subagent role")}${muted(": ")}${infoLabel(payload.capabilities.subagent.role)}`,

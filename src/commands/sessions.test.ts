@@ -198,6 +198,12 @@ describe("sessionsCommand", () => {
         profile: string;
         policyProfile: string | null;
         providerProfile: string | null;
+        policySources: {
+          global: boolean;
+          globalProvider: boolean;
+          agent: boolean;
+          agentProvider: boolean;
+        };
         profileAlsoAllow: string[];
         providerProfileAlsoAllow: string[];
         groups: Array<{ id: string; count: number; tools: string[] }>;
@@ -218,6 +224,12 @@ describe("sessionsCommand", () => {
     expect(payload.tools.profile).toBe("coding");
     expect(payload.tools.policyProfile).toBeNull();
     expect(payload.tools.providerProfile).toBeNull();
+    expect(payload.tools.policySources).toEqual({
+      global: false,
+      globalProvider: false,
+      agent: false,
+      agentProvider: false,
+    });
     expect(payload.capabilities.subagent.role).toBe("main");
     expect(payload.capabilities.subagent.controlScope).toBe("children");
     expect(payload.tools.groups).toMatchObject([{ id: "core", count: 2, tools: ["exec", "read"] }]);
@@ -250,6 +262,7 @@ describe("sessionsCommand", () => {
     expect(logs.find((line) => line.includes("Final workspace"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools profile"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Policy profile"))).toBeTruthy();
+    expect(logs.find((line) => line.includes("Policy sources"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Subagent role"))).toBeTruthy();
     expect(logs.find((line) => line.includes("Tools core"))).toBeTruthy();
   });
