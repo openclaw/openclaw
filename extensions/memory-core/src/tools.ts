@@ -176,12 +176,23 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
+          const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
           let surfacedMemoryResults: Array<MemorySearchResult & { corpus: "memory" }> = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
           let searchMode: string | undefined;
+          let searchDebug:
+            | {
+                backend: string;
+                configuredMode?: string;
+                effectiveMode?: string;
+                fallback?: string;
+                searchMs: number;
+                hits: number;
+              }
+            | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
             rawResults = await memory.manager.search(query, {
               maxResults,
@@ -213,7 +224,21 @@ export function createMemorySearchTool(options: {
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
-            searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+            const custom = (status.custom as {
+              searchMode?: string;
+              searchFallbackReason?: string;
+            } | undefined) ?? { searchMode: undefined, searchFallbackReason: undefined };
+            searchMode = custom.searchMode;
+            const configuredMode =
+              typeof cfg.memory?.qmd?.searchMode === "string" ? cfg.memory.qmd.searchMode : undefined;
+            searchDebug = {
+              backend: status.backend,
+              configuredMode,
+              effectiveMode: status.backend === "qmd" ? (custom.searchMode ?? configuredMode) : "n/a",
+              fallback: custom.searchFallbackReason,
+              searchMs: Math.max(0, Date.now() - searchStartedAt),
+              hits: rawResults.length,
+            };
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
@@ -238,6 +263,7 @@ export function createMemorySearchTool(options: {
             fallback,
             citations: citationsMode,
             mode: searchMode,
+            debug: searchDebug,
           });
         } catch (err) {
           const message = formatErrorMessage(err);

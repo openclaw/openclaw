@@ -1,5 +1,10 @@
-import { beforeEach, describe, it } from "vitest";
-import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager-mock.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  resetMemoryToolMockState,
+  setMemoryBackend,
+  setMemorySearchImpl,
+  setMemoryStatusCustom,
+} from "./memory-tool-manager-mock.js";
 import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
@@ -36,5 +41,51 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+  });
+
+  it("returns structured search debug metadata for qmd results", async () => {
+    setMemoryBackend("qmd");
+    setMemoryStatusCustom({
+      searchMode: "query",
+      searchFallbackReason: "unsupported-search-flags",
+    });
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "ramen",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            searchMode: "search",
+            limits: {
+              maxInjectedChars: 1000,
+            },
+          },
+        },
+      },
+    });
+    const result = await tool.execute("debug", { query: "favorite food" });
+    expect(result.details).toMatchObject({
+      mode: "query",
+      debug: {
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "query",
+        fallback: "unsupported-search-flags",
+        hits: 1,
+      },
+    });
+    expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
+      expect.any(Number),
+    );
   });
 });

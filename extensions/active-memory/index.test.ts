@@ -806,13 +806,25 @@ describe("active-memory plugin", () => {
       sessionId: "s-main",
       updatedAt: 0,
     };
-    runEmbeddedPiAgent.mockResolvedValueOnce({
-      payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+    runEmbeddedPiAgent.mockImplementationOnce(async () => {
+      return {
+        meta: {
+          activeMemorySearchDebug: {
+            backend: "qmd",
+            configuredMode: "search",
+            effectiveMode: "query",
+            fallback: "unsupported-search-flags",
+            searchMs: 2590,
+            hits: 3,
+          },
+        },
+        payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+      };
     });
 
     await hooks.before_prompt_build(
       {
-        prompt: "what wings should i order?",
+        prompt: "what wings should i order? debug telemetry",
         messages: [],
       },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
@@ -835,7 +847,7 @@ describe("active-memory plugin", () => {
         lines: expect.arrayContaining([
           expect.stringContaining("🧩 Active Memory: ok"),
           expect.stringContaining(
-            "🔎 Active Memory Debug: User prefers lemon pepper wings, and blue cheese still wins.",
+            "🔎 Active Memory Debug: backend=qmd configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
           ),
         ]),
       },
