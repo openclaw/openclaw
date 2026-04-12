@@ -1624,7 +1624,7 @@ describe("doctor config flow", () => {
       channels: {
         discord: {
           streamMode?: string;
-          streaming?: boolean;
+          streaming?: { mode?: string };
           lifecycle?: unknown;
         };
       };
