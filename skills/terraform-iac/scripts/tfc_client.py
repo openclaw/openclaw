@@ -3781,6 +3781,7 @@ def get_workspace_id(workspace_name):
     )
     if r.status_code == 404:
         print(f"No workspace named '{workspace_name}' found in organization '{org}'.")
+        print(f"  Hint: run `openclaw tfc_client.py list-workspaces` to check the available workspace names.")
         return None
     if r.status_code >= 400:
         print(f"ERROR: Failed to look up workspace '{workspace_name}' in organization '{org}' (HTTP {r.status_code}).")
