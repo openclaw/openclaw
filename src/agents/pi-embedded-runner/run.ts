@@ -119,6 +119,16 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
+/** Fisher-Yates shuffle - returns a new shuffled copy. */
+function shuffleArray<T>(arr: readonly T[]): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j]!, result[i]!];
+  }
+  return result;
+}
+
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
  * The return value is normalized: whitespace-only inputs collapse to undefined, and
@@ -326,10 +336,13 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
+      const isSubagentRun = normalizeOptionalString(params.spawnedBy) !== undefined;
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
         : profileOrder.length > 0
-          ? profileOrder
+          ? isSubagentRun
+            ? shuffleArray(profileOrder)
+            : profileOrder
           : [undefined];
       let profileIndex = 0;
 
