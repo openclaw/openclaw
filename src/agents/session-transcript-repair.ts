@@ -201,18 +201,22 @@ function isReplaySafeThinkingAssistantTurn(
   allowedToolNames: Set<string> | null,
 ): boolean {
   let sawToolCall = false;
+  const seenToolCallIds = new Set<string>();
   for (const block of content) {
     if (!isRawToolCallBlock(block)) {
       continue;
     }
     sawToolCall = true;
+    const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
     if (
       !hasToolCallInput(block) ||
-      !hasToolCallId(block) ||
+      !toolCallId ||
+      seenToolCallIds.has(toolCallId) ||
       !hasToolCallName(block, allowedToolNames)
     ) {
       return false;
     }
+    seenToolCallIds.add(toolCallId);
     if (sanitizeToolCallBlock(block) !== block) {
       return false;
     }

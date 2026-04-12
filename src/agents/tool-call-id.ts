@@ -111,10 +111,6 @@ function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   return hasInput || hasArguments;
 }
 
-function hasNonEmptyStringField(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
   if (!allowedToolNames) {
     return null;
@@ -212,6 +208,7 @@ function isReplaySafeThinkingAssistantMessage(
 
   let sawThinking = false;
   let sawToolCall = false;
+  const seenToolCallIds = new Set<string>();
   for (const block of content) {
     if (isThinkingLikeBlock(block)) {
       sawThinking = true;
@@ -228,16 +225,39 @@ function isReplaySafeThinkingAssistantMessage(
       continue;
     }
     sawToolCall = true;
+    const toolCallId = typeof typedBlock.id === "string" ? typedBlock.id.trim() : "";
     if (
       !hasToolCallInput(typedBlock) ||
-      !hasNonEmptyStringField(typedBlock.id) ||
+      !toolCallId ||
+      seenToolCallIds.has(toolCallId) ||
       !hasReplaySafeToolCallName(typedBlock, allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
     }
+    seenToolCallIds.add(toolCallId);
   }
   return sawThinking && sawToolCall;
+}
+
+function collectReplaySafeThinkingToolIds(
+  messages: AgentMessage[],
+  allowedToolNames: Set<string> | null,
+): Set<string> {
+  const reserved = new Set<string>();
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      continue;
+    }
+    const assistant = message as Extract<AgentMessage, { role: "assistant" }>;
+    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)) {
+      continue;
+    }
+    for (const toolCall of extractToolCallsFromAssistant(assistant)) {
+      reserved.add(toolCall.id);
+    }
+  }
+  return reserved;
 }
 
 export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
@@ -308,13 +328,16 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
 
 function createOccurrenceAwareResolver(
   mode: ToolCallIdMode,
-  options?: { preserveNativeAnthropicToolUseIds?: boolean },
+  options?: {
+    preserveNativeAnthropicToolUseIds?: boolean;
+    reservedIds?: Iterable<string>;
+  },
 ): {
   resolveAssistantId: (id: string) => string;
   resolveToolResultId: (id: string) => string;
   preserveAssistantId: (id: string) => string;
 } {
-  const used = new Set<string>();
+  const used = new Set<string>(options?.reservedIds ?? []);
   const assistantOccurrences = new Map<string, number>();
   const orphanToolResultOccurrences = new Map<string, number>();
   const pendingByRawId = new Map<string, string[]>();
@@ -479,11 +502,17 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   // duplicate tool-call IDs. Track assistant occurrences in-order so repeated
   // raw IDs receive distinct rewritten IDs, while matching tool results consume
   // the same rewritten IDs in encounter order.
-  const { resolveAssistantId, resolveToolResultId, preserveAssistantId } =
-    createOccurrenceAwareResolver(mode, options);
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const preserveReplaySafeThinkingToolCallIds =
     options?.preserveReplaySafeThinkingToolCallIds === true;
+  const reservedIds = preserveReplaySafeThinkingToolCallIds
+    ? collectReplaySafeThinkingToolIds(messages, allowedToolNames)
+    : undefined;
+  const { resolveAssistantId, resolveToolResultId, preserveAssistantId } =
+    createOccurrenceAwareResolver(mode, {
+      ...options,
+      reservedIds,
+    });
 
   let changed = false;
   const out = messages.map((msg) => {

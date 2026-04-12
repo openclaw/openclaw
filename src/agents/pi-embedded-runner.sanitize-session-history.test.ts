@@ -1088,6 +1088,73 @@ describe("sanitizeSessionHistory", () => {
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
   });
 
+  it("keeps earlier mutable ids from colliding with later preserved signed ids", async () => {
+    setNonGoogleModelApi();
+
+    const sessionManager = makeMockSessionManager();
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first result" }],
+        isError: false,
+      }),
+      makeUserMessage("second"),
+      makeAssistantMessage(
+        [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call1", name: "read", arguments: {} },
+        ] as unknown as AssistantMessage["content"],
+        { stopReason: "toolUse" },
+      ),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call1",
+        toolName: "read",
+        content: [{ type: "text", text: "second result" }],
+        isError: false,
+      }),
+      makeUserMessage("retry"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const firstAssistant = sanitized[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const secondAssistant = sanitized[4] as Extract<AgentMessage, { role: "assistant" }>;
+    const firstToolCall = firstAssistant.content[0] as { id?: string };
+    const secondToolCall = secondAssistant.content[1] as { id?: string };
+    expect(firstToolCall.id).not.toBe("call1");
+    expect(secondToolCall.id).toBe("call1");
+    expect(firstToolCall.id).not.toBe(secondToolCall.id);
+    expect((sanitized[2] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+      firstToolCall.id,
+    );
+    expect((sanitized[5] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+      "call1",
+    );
+    expect((validated[4] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "call1", name: "read", arguments: {} },
+    ]);
+  });
+
   it("keeps mutable thinking turns outside exact anthropic replay", async () => {
     setNonGoogleModelApi();
 

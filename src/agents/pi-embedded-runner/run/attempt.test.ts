@@ -1034,6 +1034,51 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
+  it("drops signed thinking turns when sibling replay tool calls reuse an id", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "functionCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
   it("drops signed thinking turns when replay would expose inline sessions_spawn attachments", async () => {
     const attachmentContent = "SIGNED_THINKING_INLINE_ATTACHMENT";
     const messages = [
