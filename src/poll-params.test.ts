@@ -66,6 +66,7 @@ describe("poll params", () => {
 
   it("only treats question or options as real poll intent", () => {
     expect(hasRealPollIntent({ pollQuestion: "Lunch?" })).toBe(true);
+    expect(hasRealPollIntent({ poll_question: "Lunch?" })).toBe(true);
     expect(hasRealPollIntent({ pollOption: ["Pizza", "Sushi"] })).toBe(true);
     expect(hasRealPollIntent({ poll_option: "Pizza" })).toBe(true);
 
