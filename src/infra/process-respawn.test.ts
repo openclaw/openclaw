@@ -5,9 +5,15 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: (...args: unknown[]) => spawnMock(...args),
+    },
+  );
+});
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
@@ -53,7 +59,7 @@ function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: str
   }
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = restartGatewayProcessWithFreshPid();
-  expect(result.mode).toBe("supervised");
+  expect(result).toEqual({ mode: "supervised" });
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
@@ -66,14 +72,22 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
+  it("keeps OPENCLAW_NO_RESPAWN ahead of inherited supervisor hints", () => {
     clearSupervisorHints();
     setPlatform("darwin");
+    process.env.OPENCLAW_NO_RESPAWN = "1";
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+
     const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
+
+    expect(result).toEqual({ mode: "disabled" });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
+    clearSupervisorHints();
+    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
   it("returns supervised on macOS when launchd label is set (no kickstart)", () => {

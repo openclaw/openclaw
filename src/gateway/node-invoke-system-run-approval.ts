@@ -1,5 +1,7 @@
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
@@ -39,23 +41,8 @@ type ApprovalClient = {
   } | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
 function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
-  const s = normalizeString(value);
+  const s = normalizeNullableString(value);
   return s === "allow-once" || s === "allow-always" ? s : null;
 }
 
@@ -102,7 +89,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 }):
   | { ok: true; params: unknown }
   | { ok: false; message: string; details?: Record<string, unknown> } {
-  const obj = asRecord(opts.rawParams);
+  const obj = asNullableRecord(opts.rawParams);
   if (!obj) {
     return { ok: true, params: opts.rawParams };
   }
@@ -117,7 +104,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
-    const cmdTextResolution = resolveSystemRunCommand({
+    const cmdTextResolution = resolveSystemRunCommandRequest({
       command: p.command,
       rawCommand: p.rawCommand,
     });
@@ -131,7 +118,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     return { ok: true, params: next };
   }
 
-  const runId = normalizeString(p.runId);
+  const runId = normalizeNullableString(p.runId);
   if (!runId) {
     return systemRunApprovalGuardError({
       code: "MISSING_RUN_ID",
@@ -165,7 +152,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     });
   }
 
-  const targetNodeId = normalizeString(opts.nodeId);
+  const targetNodeId = normalizeNullableString(opts.nodeId);
   if (!targetNodeId) {
     return systemRunApprovalGuardError({
       code: "MISSING_NODE_ID",
@@ -173,7 +160,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
       details: { runId },
     });
   }
-  const approvalNodeId = normalizeString(snapshot.request.nodeId);
+  const approvalNodeId = normalizeNullableString(snapshot.request.nodeId);
   if (!approvalNodeId) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_NODE_BINDING_MISSING",
@@ -230,8 +217,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   if (runtimeContext.plan) {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
-    if (runtimeContext.rawCommand) {
-      next.rawCommand = runtimeContext.rawCommand;
+    if (runtimeContext.commandText) {
+      next.rawCommand = runtimeContext.commandText;
     } else {
       delete next.rawCommand;
     }

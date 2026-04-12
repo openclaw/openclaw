@@ -1,7 +1,7 @@
 import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
-function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
+function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
@@ -9,19 +9,21 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       model: Type.Optional(Type.String()),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
-      deliver: Type.Optional(Type.Boolean()),
-      channel: Type.Optional(Type.String()),
-      to: Type.Optional(Type.String()),
-      bestEffortDeliver: Type.Optional(Type.Boolean()),
+      toolsAllow: Type.Optional(params.toolsAllow),
     },
     { additionalProperties: false },
   );
 }
 
-const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
+const CronSessionTargetSchema = Type.Union([
+  Type.Literal("main"),
+  Type.Literal("isolated"),
+  Type.Literal("current"),
+  Type.String({ pattern: "^session:.+" }),
+]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 const CronRunStatusSchema = Type.Union([
   Type.Literal("ok"),
@@ -133,7 +135,10 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  cronAgentTurnPayloadSchema({ message: NonEmptyString }),
+  cronAgentTurnPayloadSchema({
+    message: NonEmptyString,
+    toolsAllow: Type.Array(Type.String()),
+  }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -144,7 +149,10 @@ export const CronPayloadPatchSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  cronAgentTurnPayloadSchema({
+    message: Type.Optional(NonEmptyString),
+    toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  }),
 ]);
 
 export const CronFailureAlertSchema = Type.Object(

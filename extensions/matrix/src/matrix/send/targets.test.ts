@@ -1,13 +1,11 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MatrixClient } from "../sdk.js";
 import { EventType } from "./types.js";
 
-let resolveMatrixRoomId: typeof import("./targets.js").resolveMatrixRoomId;
-let normalizeThreadId: typeof import("./targets.js").normalizeThreadId;
+const { resolveMatrixRoomId, normalizeThreadId } = await import("./targets.js");
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ resolveMatrixRoomId, normalizeThreadId } = await import("./targets.js"));
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("resolveMatrixRoomId", () => {
@@ -17,17 +15,16 @@ describe("resolveMatrixRoomId", () => {
       getAccountData: vi.fn().mockResolvedValue({
         [userId]: ["!room:example.org"],
       }),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn(),
-      getJoinedRoomMembers: vi.fn(),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
       setAccountData: vi.fn(),
     } as unknown as MatrixClient;
 
     const roomId = await resolveMatrixRoomId(client, userId);
 
     expect(roomId).toBe("!room:example.org");
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.getJoinedRooms).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
@@ -37,6 +34,7 @@ describe("resolveMatrixRoomId", () => {
     const setAccountData = vi.fn().mockResolvedValue(undefined);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue([roomId]),
       getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
       setAccountData,
@@ -51,6 +49,58 @@ describe("resolveMatrixRoomId", () => {
     );
   });
 
+  it("prefers joined rooms marked direct in local member state over plain strict rooms", async () => {
+    const userId = "@fallback:example.org";
+    const client = {
+      getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi.fn().mockResolvedValue(["!fallback:example.org", "!explicit:example.org"]),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      getRoomStateEvent: vi
+        .fn()
+        .mockImplementation(async (roomId: string, _eventType: string, stateKey: string) =>
+          roomId === "!explicit:example.org" && stateKey === "@bot:example.org"
+            ? { is_direct: true }
+            : {},
+        ),
+      setAccountData: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MatrixClient;
+
+    const resolved = await resolveMatrixRoomId(client, userId);
+
+    expect(resolved).toBe("!explicit:example.org");
+    expect(client.setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({ [userId]: ["!explicit:example.org"] }),
+    );
+  });
+
+  it("ignores remote member-state direct flags when resolving a direct room", async () => {
+    const userId = "@fallback:example.org";
+    const client = {
+      getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi
+        .fn()
+        .mockResolvedValue(["!fallback:example.org", "!remote-marked:example.org"]),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      getRoomStateEvent: vi
+        .fn()
+        .mockImplementation(async (roomId: string, _eventType: string, stateKey: string) =>
+          roomId === "!remote-marked:example.org" && stateKey === userId ? { is_direct: true } : {},
+        ),
+      setAccountData: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MatrixClient;
+
+    const resolved = await resolveMatrixRoomId(client, userId);
+
+    expect(resolved).toBe("!fallback:example.org");
+    expect(client.setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({ [userId]: ["!fallback:example.org"] }),
+    );
+  });
+
   it("continues when a room member lookup fails", async () => {
     const userId = "@continue:example.org";
     const roomId = "!good:example.org";
@@ -61,6 +111,7 @@ describe("resolveMatrixRoomId", () => {
       .mockResolvedValueOnce(["@bot:example.org", userId]);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue(["!bad:example.org", roomId]),
       getJoinedRoomMembers,
       setAccountData,
@@ -72,11 +123,12 @@ describe("resolveMatrixRoomId", () => {
     expect(setAccountData).toHaveBeenCalled();
   });
 
-  it("allows larger rooms when no 1:1 match exists", async () => {
+  it("does not fall back to larger shared rooms for direct-user sends", async () => {
     const userId = "@group:example.org";
     const roomId = "!group:example.org";
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue([roomId]),
       getJoinedRoomMembers: vi
         .fn()
@@ -84,9 +136,113 @@ describe("resolveMatrixRoomId", () => {
       setAccountData: vi.fn().mockResolvedValue(undefined),
     } as unknown as MatrixClient;
 
-    const resolved = await resolveMatrixRoomId(client, userId);
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `No direct room found for ${userId} (m.direct missing)`,
+    );
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("accepts nested Matrix user target prefixes", async () => {
+    const userId = "@prefixed:example.org";
+    const roomId = "!prefixed-room:example.org";
+    const client = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: [roomId],
+      }),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const resolved = await resolveMatrixRoomId(client, `matrix:user:${userId}`);
 
     expect(resolved).toBe(roomId);
+    expect(client.resolveRoom).not.toHaveBeenCalled();
+  });
+
+  it("scopes direct-room cache per Matrix client", async () => {
+    const userId = "@shared:example.org";
+    const clientA = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: ["!room-a:example.org"],
+      }),
+      getUserId: vi.fn().mockResolvedValue("@bot-a:example.org"),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot-a:example.org", userId]),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+    const clientB = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: ["!room-b:example.org"],
+      }),
+      getUserId: vi.fn().mockResolvedValue("@bot-b:example.org"),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot-b:example.org", userId]),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+
+    await expect(resolveMatrixRoomId(clientA, userId)).resolves.toBe("!room-a:example.org");
+    await expect(resolveMatrixRoomId(clientB, userId)).resolves.toBe("!room-b:example.org");
+
+    expect(clientA.getAccountData).toHaveBeenCalledTimes(1);
+    expect(clientB.getAccountData).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores m.direct entries that point at shared rooms", async () => {
+    const userId = "@shared:example.org";
+    const client = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: ["!shared-room:example.org", "!dm-room:example.org"],
+      }),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi
+        .fn()
+        .mockResolvedValueOnce(["@bot:example.org", userId, "@extra:example.org"])
+        .mockResolvedValueOnce(["@bot:example.org", userId]),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe("!dm-room:example.org");
+  });
+
+  it("revalidates cached direct rooms before reuse when membership changes", async () => {
+    const userId = "@shared:example.org";
+    const directRooms = ["!dm-room-1:example.org"];
+    const membersByRoom = new Map<string, string[]>([
+      ["!dm-room-1:example.org", ["@bot:example.org", userId]],
+      ["!dm-room-2:example.org", ["@bot:example.org", userId]],
+    ]);
+    const client = {
+      getAccountData: vi.fn().mockImplementation(async () => ({
+        [userId]: [...directRooms],
+      })),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getJoinedRooms: vi
+        .fn()
+        .mockResolvedValue(["!dm-room-1:example.org", "!dm-room-2:example.org"]),
+      getJoinedRoomMembers: vi
+        .fn()
+        .mockImplementation(async (roomId: string) => membersByRoom.get(roomId) ?? []),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe("!dm-room-1:example.org");
+
+    directRooms.splice(0, directRooms.length, "!dm-room-1:example.org", "!dm-room-2:example.org");
+    membersByRoom.set("!dm-room-1:example.org", [
+      "@bot:example.org",
+      userId,
+      "@mallory:example.org",
+    ]);
+
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe("!dm-room-2:example.org");
   });
 });
 

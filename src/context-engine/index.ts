@@ -3,7 +3,12 @@ export type {
   ContextEngineInfo,
   AssembleResult,
   CompactResult,
+  ContextEngineMaintenanceResult,
+  ContextEngineRuntimeContext,
   IngestResult,
+  TranscriptRewriteReplacement,
+  TranscriptRewriteRequest,
+  TranscriptRewriteResult,
 } from "./types.js";
 
 export {
@@ -14,6 +19,8 @@ export {
 } from "./registry.js";
 export type { ContextEngineFactory } from "./registry.js";
 
-export { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
+export { LegacyContextEngine } from "./legacy.js";
+export { registerLegacyContextEngine } from "./legacy.registration.js";
+export { delegateCompactionToRuntime } from "./delegate.js";
 
 export { ensureContextEnginesInitialized } from "./init.js";

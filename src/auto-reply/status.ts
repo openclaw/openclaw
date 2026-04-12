@@ -7,32 +7,33 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { resolveExtraParams } from "../agents/pi-embedded-runner/extra-params.js";
+import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
-import type { SkillCommandSpec } from "../agents/skills.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
+import { describeToolForVerbose } from "../agents/tool-description-summary.js";
+import { normalizeToolName } from "../agents/tool-policy-shared.js";
+import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
-import { isCommandFlagEnabled } from "../config/commands.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
+  resolveSessionPluginDebugLines,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  getTtsMaxLength,
-  getTtsProvider,
-  isSummarizationEnabled,
-  resolveTtsAutoMode,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-} from "../tts/tts.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
@@ -40,12 +41,13 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
-import {
-  listChatCommands,
-  listChatCommandsForConfig,
-  type ChatCommandDefinition,
-} from "./commands-registry.js";
-import type { CommandCategory } from "./commands-registry.types.js";
+export {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+  type CommandsMessageOptions,
+  type CommandsMessageResult,
+} from "./command-status-builders.js";
 import { resolveActiveFallbackState } from "./fallback-state.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
@@ -70,6 +72,8 @@ type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  runtimeContextTokens?: number;
+  explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -77,6 +81,7 @@ type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  resolvedFast?: boolean;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -87,6 +92,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -94,7 +100,7 @@ type StatusArgs = {
 type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
   }
@@ -117,6 +123,27 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
     return "unknown";
   }
   return undefined;
+}
+
+function resolveConfiguredTextVerbosity(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider?: string | null;
+  model?: string | null;
+}): "low" | "medium" | "high" | undefined {
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+    return undefined;
+  }
+  return resolveOpenAITextVerbosity(
+    resolveExtraParams({
+      cfg: params.config,
+      provider,
+      modelId: model,
+      agentId: params.agentId,
+    }),
+  );
 }
 
 function resolveRuntimeLabel(
@@ -217,6 +244,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -243,61 +272,40 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    // Read the tail only; we only need the most recent usage entries.
-    const TAIL_BYTES = 8192;
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - TAIL_BYTES);
-    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
-    const fd = fs.openSync(logPath, "r");
-    try {
-      fs.readSync(fd, buf, 0, buf.length, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const tail = buf.toString("utf-8");
-    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
-
-    let input = 0;
-    let output = 0;
-    let promptTokens = 0;
-    let model: string | undefined;
-    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: {
-            usage?: UsageLike;
-            model?: string;
-          };
-          usage?: UsageLike;
-          model?: string;
-        };
-        const usageRaw = parsed.message?.usage ?? parsed.usage;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          lastUsage = usage;
-        }
-        model = parsed.message?.model ?? parsed.model ?? model;
-      } catch {
-        // ignore bad lines (including a truncated first tail line)
-      }
-    }
-
-    if (!lastUsage) {
+    const snapshot = readLatestSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      sessionEntry?.sessionFile,
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+    );
+    if (!snapshot) {
       return undefined;
     }
-    input = lastUsage.input ?? 0;
-    output = lastUsage.output ?? 0;
-    promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
-    const total = lastUsage.total ?? promptTokens + output;
+
+    const input = snapshot.inputTokens ?? 0;
+    const output = snapshot.outputTokens ?? 0;
+    const cacheRead = snapshot.cacheRead ?? 0;
+    const cacheWrite = snapshot.cacheWrite ?? 0;
+    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    const model = snapshot.modelProvider
+      ? snapshot.model
+        ? `${snapshot.modelProvider}/${snapshot.model}`
+        : snapshot.modelProvider
+      : snapshot.model;
+
+    return {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -392,20 +400,14 @@ const formatVoiceModeLine = (
   if (!config) {
     return null;
   }
-  const ttsConfig = resolveTtsConfig(config);
-  const prefsPath = resolveTtsPrefsPath(ttsConfig);
-  const autoMode = resolveTtsAutoMode({
-    config: ttsConfig,
-    prefsPath,
+  const snapshot = resolveStatusTtsSnapshot({
+    cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
   });
-  if (autoMode === "off") {
+  if (!snapshot) {
     return null;
   }
-  const provider = getTtsProvider(ttsConfig, prefsPath);
-  const maxLength = getTtsMaxLength(prefsPath);
-  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -436,6 +438,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
@@ -444,16 +447,47 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+  const initialFallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    state: entry,
+  });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
-  let contextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      provider: activeProvider,
-      model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  let contextLookupProvider: string | undefined = activeProvider;
+  let contextLookupModel = activeModel;
+  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
+  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
+
+  if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
+    const slashIndex = runtimeModelRaw.indexOf("/");
+    const embeddedProvider =
+      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
+    const fallbackMatchesRuntimeModel =
+      initialFallbackState.active &&
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+        normalizeLowercaseStringOrEmpty(
+          normalizeOptionalString(entry?.fallbackNoticeActiveModel ?? "") ?? "",
+        );
+    const runtimeMatchesSelectedModel =
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
+    // Legacy fallback sessions can persist provider-qualified runtime ids
+    // without a separate modelProvider field. Preserve provider-aware lookup
+    // when the stored slash id is the selected model or the active fallback
+    // target; otherwise keep the raw model-only lookup for OpenRouter-style
+    // slash ids.
+    if (
+      (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
+      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
+    ) {
+      contextLookupProvider = activeProvider;
+      contextLookupModel = activeModel;
+    } else {
+      contextLookupProvider = undefined;
+      contextLookupModel = runtimeModelRaw;
+    }
+  }
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -484,18 +518,20 @@ export function buildStatusMessage(args: StatusArgs): string {
           if (provider && model) {
             activeProvider = provider;
             activeModel = model;
+            // Preserve model-only lookup for transcript-derived provider/model IDs
+            // like "google/gemini-2.5-pro" that may come from a different upstream
+            // provider (for example OpenRouter).
+            contextLookupProvider = undefined;
+            contextLookupModel = logUsage.model;
           }
         } else {
           activeModel = logUsage.model;
+          // Bare transcript model IDs should keep provider-aware lookup when the
+          // active provider is already known so shared model names still resolve
+          // to the correct provider-specific window.
+          contextLookupProvider = activeProvider;
+          contextLookupModel = logUsage.model;
         }
-      }
-      if (!contextTokens && logUsage.model) {
-        contextTokens =
-          resolveContextTokensForModel({
-            cfg: contextConfig,
-            model: logUsage.model,
-            fallbackContextTokens: contextTokens ?? undefined,
-          }) ?? contextTokens;
       }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;
@@ -503,13 +539,104 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
       }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
+      }
     }
   }
+
+  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const selectedContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    provider: selectedProvider,
+    model: selectedModel,
+    allowAsyncLoad: false,
+  });
+  const activeContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    model: contextLookupModel,
+    allowAsyncLoad: false,
+  });
+  const persistedContextTokens =
+    typeof entry?.contextTokens === "number" && entry.contextTokens > 0
+      ? entry.contextTokens
+      : undefined;
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  const explicitConfiguredContextTokens =
+    typeof args.explicitConfiguredContextTokens === "number" &&
+    args.explicitConfiguredContextTokens > 0
+      ? args.explicitConfiguredContextTokens
+      : undefined;
+  const cappedConfiguredContextTokens =
+    typeof explicitConfiguredContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
+        : explicitConfiguredContextTokens
+      : undefined;
+  // When a fallback model is active, the selected-model context limit that
+  // callers keep on the agent config is often stale. Prefer an explicit runtime
+  // snapshot when available. Separately, callers can pass an explicit configured
+  // cap that should still apply on fallback paths, but it cannot exceed the
+  // active runtime window when that window is known. Persisted runtime snapshots
+  // still take precedence over configured caps so historical fallback sessions
+  // keep their last known live limit even if the active model later becomes
+  // unresolvable.
+  const contextTokens = runtimeDiffersFromSelected
+    ? (explicitRuntimeContextTokens ??
+      (() => {
+        if (persistedContextTokens !== undefined) {
+          const persistedLooksSelectedWindow =
+            typeof selectedContextTokens === "number" &&
+            persistedContextTokens === selectedContextTokens;
+          const activeWindowDiffersFromSelected =
+            typeof selectedContextTokens === "number" &&
+            typeof activeContextTokens === "number" &&
+            activeContextTokens !== selectedContextTokens;
+          const explicitConfiguredMatchesPersisted =
+            typeof explicitConfiguredContextTokens === "number" &&
+            explicitConfiguredContextTokens === persistedContextTokens;
+          if (
+            persistedLooksSelectedWindow &&
+            activeWindowDiffersFromSelected &&
+            !explicitConfiguredMatchesPersisted
+          ) {
+            return activeContextTokens;
+          }
+          if (typeof activeContextTokens === "number") {
+            return Math.min(persistedContextTokens, activeContextTokens);
+          }
+          return persistedContextTokens;
+        }
+        if (cappedConfiguredContextTokens !== undefined) {
+          return cappedConfiguredContextTokens;
+        }
+        if (typeof activeContextTokens === "number") {
+          return activeContextTokens;
+        }
+        return DEFAULT_CONTEXT_TOKENS;
+      })())
+    : (resolveContextTokensForModel({
+        cfg: contextConfig,
+        ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+        model: contextLookupModel,
+        contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
+      }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
+  const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
@@ -547,15 +674,25 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+  const pluginDebugLines = verboseLevel !== "off" ? resolveSessionPluginDebugLines(entry) : [];
+  const pluginStatusLine = pluginDebugLines.length > 0 ? pluginDebugLines.join(" · ") : null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
+  const textVerbosity = resolveConfiguredTextVerbosity({
+    config: args.config,
+    agentId: args.agentId,
+    provider: activeProvider,
+    model: activeModel,
+  });
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
+    fastMode ? "Fast: on" : null,
+    textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -578,7 +715,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const fallbackState = resolveActiveFallbackState({
     selectedModelRef: selectedModelLabel,
     activeModelRef: activeModelLabel,
@@ -593,6 +729,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        allowPluginNormalization: false,
       })
     : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
@@ -613,13 +750,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     if (!args.config || !entry) {
       return undefined;
     }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+    if (
+      normalizeOptionalString(entry.modelOverride) ||
+      normalizeOptionalString(entry.providerOverride)
+    ) {
       return undefined;
     }
     const channelOverride = resolveChannelModelOverride({
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -630,11 +771,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
       defaultProvider: DEFAULT_PROVIDER,
+      allowPluginNormalization: false,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      allowPluginNormalization: false,
     });
     if (!resolvedOverride) {
       return undefined;
@@ -649,6 +792,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+
+  // Show configured fallback models (from agent model config)
+  const configuredFallbacks = (() => {
+    const modelConfig = args.agent?.model;
+    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
+      return modelConfig.fallbacks;
+    }
+    return undefined;
+  })();
+  const configuredFallbacksLine = configuredFallbacks?.length
+    ? `🔄 Fallbacks: ${configuredFallbacks.join(", ")}`
+    : null;
+
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -669,6 +825,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    configuredFallbacksLine,
     fallbackLine,
     usageCostLine,
     cacheLine,
@@ -677,7 +834,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.taskLine,
     `⚙️ ${optionsLine}`,
+    pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
   ]
@@ -685,213 +844,87 @@ export function buildStatusMessage(args: StatusArgs): string {
     .join("\n");
 }
 
-const CATEGORY_LABELS: Record<CommandCategory, string> = {
-  session: "Session",
-  options: "Options",
-  status: "Status",
-  management: "Management",
-  media: "Media",
-  tools: "Tools",
-  docks: "Docks",
+type ToolsMessageItem = {
+  id: string;
+  name: string;
+  description: string;
+  rawDescription: string;
+  source: EffectiveToolInventoryResult["groups"][number]["source"];
+  pluginId?: string;
+  channelId?: string;
 };
 
-const CATEGORY_ORDER: CommandCategory[] = [
-  "session",
-  "options",
-  "status",
-  "management",
-  "media",
-  "tools",
-  "docks",
-];
-
-function groupCommandsByCategory(
-  commands: ChatCommandDefinition[],
-): Map<CommandCategory, ChatCommandDefinition[]> {
-  const grouped = new Map<CommandCategory, ChatCommandDefinition[]>();
-  for (const category of CATEGORY_ORDER) {
-    grouped.set(category, []);
-  }
-  for (const command of commands) {
-    const category = command.category ?? "tools";
-    const list = grouped.get(category) ?? [];
-    list.push(command);
-    grouped.set(category, list);
-  }
-  return grouped;
+function sortToolsMessageItems(items: ToolsMessageItem[]): ToolsMessageItem[] {
+  return items.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-export function buildHelpMessage(cfg?: OpenClawConfig): string {
-  const lines = ["ℹ️ Help", ""];
-
-  lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
-  lines.push("");
-
-  const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
-  if (isCommandFlagEnabled(cfg, "config")) {
-    optionParts.push("/config");
+function formatCompactToolEntry(tool: ToolsMessageItem): string {
+  if (tool.source === "plugin") {
+    return tool.pluginId ? `${tool.id} (${tool.pluginId})` : tool.id;
   }
-  if (isCommandFlagEnabled(cfg, "debug")) {
-    optionParts.push("/debug");
+  if (tool.source === "channel") {
+    return tool.channelId ? `${tool.id} (${tool.channelId})` : tool.id;
   }
-  lines.push("Options");
-  lines.push(`  ${optionParts.join("  |  ")}`);
-  lines.push("");
-
-  lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
-  lines.push("");
-
-  lines.push("Skills");
-  lines.push("  /skill <name> [input]");
-
-  lines.push("");
-  lines.push("More: /commands for full list");
-
-  return lines.join("\n");
+  return tool.id;
 }
 
-const COMMANDS_PER_PAGE = 8;
+function formatVerboseToolDescription(tool: ToolsMessageItem): string {
+  return describeToolForVerbose({
+    rawDescription: tool.rawDescription,
+    fallback: tool.description,
+  });
+}
 
-export type CommandsMessageOptions = {
-  page?: number;
-  surface?: string;
-};
+export function buildToolsMessage(
+  result: EffectiveToolInventoryResult,
+  options?: { verbose?: boolean },
+): string {
+  const groups = result.groups
+    .map((group) => ({
+      label: group.label,
+      tools: sortToolsMessageItems(
+        group.tools.map((tool) => ({
+          id: normalizeToolName(tool.id),
+          name: tool.label,
+          description: tool.description || "Tool",
+          rawDescription: tool.rawDescription || tool.description || "Tool",
+          source: tool.source,
+          pluginId: tool.pluginId,
+          channelId: tool.channelId,
+        })),
+      ),
+    }))
+    .filter((group) => group.tools.length > 0);
 
-export type CommandsMessageResult = {
-  text: string;
-  totalPages: number;
-  currentPage: number;
-  hasNext: boolean;
-  hasPrev: boolean;
-};
+  if (groups.length === 0) {
+    const lines = [
+      "No tools are available for this agent right now.",
+      "",
+      `Profile: ${result.profile}`,
+    ];
+    return lines.join("\n");
+  }
 
-function formatCommandEntry(command: ChatCommandDefinition): string {
-  const primary = command.nativeName
-    ? `/${command.nativeName}`
-    : command.textAliases[0]?.trim() || `/${command.key}`;
-  const seen = new Set<string>();
-  const aliases = command.textAliases
-    .map((alias) => alias.trim())
-    .filter(Boolean)
-    .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
-    .filter((alias) => {
-      const key = alias.toLowerCase();
-      if (seen.has(key)) {
-        return false;
+  const verbose = options?.verbose === true;
+  const lines = verbose
+    ? ["Available tools", "", `Profile: ${result.profile}`, "What this agent can use right now:"]
+    : ["Available tools", "", `Profile: ${result.profile}`];
+
+  for (const group of groups) {
+    lines.push("", group.label);
+    if (verbose) {
+      for (const tool of group.tools) {
+        lines.push(`  ${tool.name} - ${formatVerboseToolDescription(tool)}`);
       }
-      seen.add(key);
-      return true;
-    });
-  const aliasLabel = aliases.length ? ` (${aliases.join(", ")})` : "";
-  const scopeLabel = command.scope === "text" ? " [text]" : "";
-  return `${primary}${aliasLabel}${scopeLabel} - ${command.description}`;
-}
-
-type CommandsListItem = {
-  label: string;
-  text: string;
-};
-
-function buildCommandItems(
-  commands: ChatCommandDefinition[],
-  pluginCommands: ReturnType<typeof listPluginCommands>,
-): CommandsListItem[] {
-  const grouped = groupCommandsByCategory(commands);
-  const items: CommandsListItem[] = [];
-
-  for (const category of CATEGORY_ORDER) {
-    const categoryCommands = grouped.get(category) ?? [];
-    if (categoryCommands.length === 0) {
       continue;
     }
-    const label = CATEGORY_LABELS[category];
-    for (const command of categoryCommands) {
-      items.push({ label, text: formatCommandEntry(command) });
-    }
+    lines.push(`  ${group.tools.map((tool) => formatCompactToolEntry(tool)).join(", ")}`);
   }
 
-  for (const command of pluginCommands) {
-    const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
-    items.push({
-      label: "Plugins",
-      text: `/${command.name}${pluginLabel} - ${command.description}`,
-    });
+  if (verbose) {
+    lines.push("", "Tool availability depends on this agent's configuration.");
+  } else {
+    lines.push("", "Use /tools verbose for descriptions.");
   }
-
-  return items;
-}
-
-function formatCommandList(items: CommandsListItem[]): string {
-  const lines: string[] = [];
-  let currentLabel: string | null = null;
-
-  for (const item of items) {
-    if (item.label !== currentLabel) {
-      if (lines.length > 0) {
-        lines.push("");
-      }
-      lines.push(item.label);
-      currentLabel = item.label;
-    }
-    lines.push(`  ${item.text}`);
-  }
-
   return lines.join("\n");
-}
-
-export function buildCommandsMessage(
-  cfg?: OpenClawConfig,
-  skillCommands?: SkillCommandSpec[],
-  options?: CommandsMessageOptions,
-): string {
-  const result = buildCommandsMessagePaginated(cfg, skillCommands, options);
-  return result.text;
-}
-
-export function buildCommandsMessagePaginated(
-  cfg?: OpenClawConfig,
-  skillCommands?: SkillCommandSpec[],
-  options?: CommandsMessageOptions,
-): CommandsMessageResult {
-  const page = Math.max(1, options?.page ?? 1);
-  const surface = options?.surface?.toLowerCase();
-  const isTelegram = surface === "telegram";
-
-  const commands = cfg
-    ? listChatCommandsForConfig(cfg, { skillCommands })
-    : listChatCommands({ skillCommands });
-  const pluginCommands = listPluginCommands();
-  const items = buildCommandItems(commands, pluginCommands);
-
-  if (!isTelegram) {
-    const lines = ["ℹ️ Slash commands", ""];
-    lines.push(formatCommandList(items));
-    return {
-      text: lines.join("\n").trim(),
-      totalPages: 1,
-      currentPage: 1,
-      hasNext: false,
-      hasPrev: false,
-    };
-  }
-
-  const totalCommands = items.length;
-  const totalPages = Math.max(1, Math.ceil(totalCommands / COMMANDS_PER_PAGE));
-  const currentPage = Math.min(page, totalPages);
-  const startIndex = (currentPage - 1) * COMMANDS_PER_PAGE;
-  const endIndex = startIndex + COMMANDS_PER_PAGE;
-  const pageItems = items.slice(startIndex, endIndex);
-
-  const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
-  lines.push(formatCommandList(pageItems));
-
-  return {
-    text: lines.join("\n").trim(),
-    totalPages,
-    currentPage,
-    hasNext: currentPage < totalPages,
-    hasPrev: currentPage > 1,
-  };
 }

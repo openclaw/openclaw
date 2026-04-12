@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { extractConfigSummary, resolveAuthForTarget } from "./helpers.js";
+import {
+  buildNetworkHints,
+  extractConfigSummary,
+  isProbeReachable,
+  isScopeLimitedProbeFailure,
+  renderProbeSummaryLine,
+  resolveAuthForTarget,
+  resolveProbeBudgetMs,
+  resolveTargets,
+} from "./helpers.js";
+import { createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -10,25 +20,7 @@ describe("extractConfigSummary", () => {
       valid: true,
       issues: [],
       legacyIssues: [],
-      config: {
-        secrets: {
-          defaults: {
-            env: "default",
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-            password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
-          },
-          remote: {
-            url: "wss://remote.example:18789",
-            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-            password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
-          },
-        },
-      },
+      config: createSecretRefGatewayConfig(),
     });
 
     expect(summary.gateway.authTokenConfigured).toBe(true);
@@ -67,6 +59,37 @@ describe("extractConfigSummary", () => {
 });
 
 describe("resolveAuthForTarget", () => {
+  function createConfigRemoteTarget() {
+    return {
+      id: "configRemote",
+      kind: "configRemote" as const,
+      url: "wss://remote.example:18789",
+      active: true,
+    };
+  }
+
+  function createRemoteGatewayTargetConfig(params?: { mode?: "none" | "password" | "token" }) {
+    return {
+      secrets: {
+        providers: {
+          default: { source: "env" as const },
+        },
+      },
+      gateway: {
+        ...(params?.mode
+          ? {
+              auth: {
+                mode: params.mode,
+              },
+            }
+          : {}),
+        remote: {
+          token: { source: "env" as const, provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+        },
+      },
+    };
+  }
+
   it("resolves local auth token SecretRef before probing local targets", async () => {
     await withEnvAsync(
       {
@@ -109,24 +132,8 @@ describe("resolveAuthForTarget", () => {
       },
       async () => {
         const auth = await resolveAuthForTarget(
-          {
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-            gateway: {
-              remote: {
-                token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-              },
-            },
-          },
-          {
-            id: "configRemote",
-            kind: "configRemote",
-            url: "wss://remote.example:18789",
-            active: true,
-          },
+          createRemoteGatewayTargetConfig(),
+          createConfigRemoteTarget(),
           {},
         );
 
@@ -142,27 +149,8 @@ describe("resolveAuthForTarget", () => {
       },
       async () => {
         const auth = await resolveAuthForTarget(
-          {
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-            gateway: {
-              auth: {
-                mode: "none",
-              },
-              remote: {
-                token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-              },
-            },
-          },
-          {
-            id: "configRemote",
-            kind: "configRemote",
-            url: "wss://remote.example:18789",
-            active: true,
-          },
+          createRemoteGatewayTargetConfig({ mode: "none" }),
+          createConfigRemoteTarget(),
           {},
         );
 
@@ -231,5 +219,141 @@ describe("resolveAuthForTarget", () => {
         expect(auth.diagnostics?.join("\n")).not.toContain("missing or empty");
       },
     );
+  });
+});
+
+describe("probe reachability classification", () => {
+  it("treats missing-scope RPC failures as scope-limited and reachable", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(true);
+    expect(isProbeReachable(probe)).toBe(true);
+    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: limited");
+  });
+
+  it("keeps non-scope RPC failures as unreachable", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 43,
+      error: "unknown method: status",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(false);
+    expect(isProbeReachable(probe)).toBe(false);
+    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
+  });
+});
+describe("gateway-status local target scheme", () => {
+  it("uses wss for local loopback targets and network hints when gateway TLS is enabled", () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+      },
+    };
+
+    const targets = resolveTargets(cfg as never);
+    expect(targets).toContainEqual(
+      expect.objectContaining({
+        id: "localLoopback",
+        url: "wss://127.0.0.1:18789",
+      }),
+    );
+
+    const hints = buildNetworkHints(cfg as never);
+    expect(hints.localLoopbackUrl).toBe("wss://127.0.0.1:18789");
+  });
+});
+
+describe("resolveProbeBudgetMs", () => {
+  it("lets active local loopback probes use the full caller budget", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "localLoopback",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveProbeBudgetMs(3_000, {
+        kind: "localLoopback",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(3_000);
+  });
+
+  it("keeps inactive local loopback probes on the short cap", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "localLoopback",
+        active: false,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(800);
+    expect(
+      resolveProbeBudgetMs(500, {
+        kind: "localLoopback",
+        active: false,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(500);
+  });
+
+  it("lets explicit loopback URLs use the full caller budget", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "explicit",
+        active: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveProbeBudgetMs(2_500, {
+        kind: "explicit",
+        active: true,
+        url: "wss://localhost:18789/ws",
+      }),
+    ).toBe(2_500);
+  });
+
+  it("keeps non-local probe caps unchanged", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "configRemote",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "explicit",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "sshTunnel",
+        active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(2000);
   });
 });

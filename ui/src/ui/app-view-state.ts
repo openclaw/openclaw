@@ -1,34 +1,45 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "./controllers/skills.ts";
+import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode } from "./theme.ts";
+import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  AttentionItem,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   ConfigUiHints,
-  HealthSnapshot,
+  HealthSummary,
   LogEntry,
   LogLevel,
+  ChatModelOverride,
+  ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  SessionCompactionCheckpoint,
   SkillStatusReport,
-  ToolsCatalogResult,
   StatusSummary,
+  ToolsCatalogResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -37,12 +48,16 @@ import type { SessionLogEntry } from "./views/usage.ts";
 export type AppViewState = {
   settings: UiSettings;
   password: string;
+  loginShowGatewayToken: boolean;
+  loginShowGatewayPassword: boolean;
   tab: Tab;
   onboarding: boolean;
   basePath: string;
   connected: boolean;
-  theme: ThemeMode;
-  themeResolved: "light" | "dark";
+  theme: ThemeName;
+  themeMode: ThemeMode;
+  themeResolved: ResolvedTheme;
+  themeOrder: ThemeName[];
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -50,6 +65,9 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: EmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -61,17 +79,23 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatSideResult: ChatSideResult | null;
+  chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
+  chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelsLoading: boolean;
+  chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
+  navDrawerOpen: boolean;
   sidebarOpen: boolean;
-  sidebarContent: string | null;
+  sidebarContent: SidebarContent | null;
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -106,10 +130,47 @@ export type AppViewState = {
   configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: import("./controllers/dreaming.js").WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
+  communicationsFormMode: "form" | "raw";
+  communicationsSearchQuery: string;
+  communicationsActiveSection: string | null;
+  communicationsActiveSubsection: string | null;
+  appearanceFormMode: "form" | "raw";
+  appearanceSearchQuery: string;
+  appearanceActiveSection: string | null;
+  appearanceActiveSubsection: string | null;
+  automationFormMode: "form" | "raw";
+  automationSearchQuery: string;
+  automationActiveSection: string | null;
+  automationActiveSubsection: string | null;
+  infrastructureFormMode: "form" | "raw";
+  infrastructureSearchQuery: string;
+  infrastructureActiveSection: string | null;
+  infrastructureActiveSubsection: string | null;
+  aiAgentsFormMode: "form" | "raw";
+  aiAgentsSearchQuery: string;
+  aiAgentsActiveSection: string | null;
+  aiAgentsActiveSubsection: string | null;
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
@@ -132,6 +193,11 @@ export type AppViewState = {
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
+  toolsEffectiveLoading: boolean;
+  toolsEffectiveLoadingKey: string | null;
+  toolsEffectiveResultKey: string | null;
+  toolsEffectiveError: string | null;
+  toolsEffectiveResult: import("./types.js").ToolsEffectiveResult | null;
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
@@ -150,11 +216,25 @@ export type AppViewState = {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
+  threadsLoading: boolean;
+  threadsResult: SessionsListResult | null;
+  threadsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsHideCron: boolean;
+  sessionsSearchQuery: string;
+  sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
+  sessionsSortDir: "asc" | "desc";
+  sessionsPage: number;
+  sessionsPageSize: number;
+  sessionsSelectedKeys: Set<string>;
+  sessionsExpandedCheckpointKey: string | null;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  sessionsCheckpointLoadingKey: string | null;
+  sessionsCheckpointBusyKey: string | null;
+  sessionsCheckpointErrorByKey: Record<string, string>;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -230,13 +310,28 @@ export type AppViewState = {
     skillsReport: SkillStatusReport | null;
     skillsError: string | null;
     skillsFilter: string;
+    skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
     skillEdits: Record<string, string>;
     skillMessages: Record<string, SkillMessage>;
     skillsBusyKey: string | null;
+    skillsDetailKey: string | null;
+    clawhubSearchQuery: string;
+    clawhubSearchResults: ClawHubSearchResult[] | null;
+    clawhubSearchLoading: boolean;
+    clawhubSearchError: string | null;
+    clawhubDetail: ClawHubSkillDetail | null;
+    clawhubDetailSlug: string | null;
+    clawhubDetailLoading: boolean;
+    clawhubDetailError: string | null;
+    clawhubInstallSlug: string | null;
+    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    healthLoading: boolean;
+    healthResult: HealthSummary | null;
+    healthError: string | null;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
-    debugHealth: HealthSnapshot | null;
-    debugModels: unknown[];
+    debugHealth: HealthSummary | null;
+    debugModels: ModelCatalogEntry[];
     debugHeartbeat: unknown;
     debugCallMethod: string;
     debugCallParams: string;
@@ -256,11 +351,22 @@ export type AppViewState = {
     logsMaxBytes: number;
     logsAtBottom: boolean;
     updateAvailable: import("./types.js").UpdateAvailable | null;
+    attentionItems: AttentionItem[];
+    paletteOpen: boolean;
+    paletteQuery: string;
+    paletteActiveIndex: number;
+    streamMode: boolean;
+    overviewShowGatewayToken: boolean;
+    overviewShowGatewayPassword: boolean;
+    overviewLogLines: string[];
+    overviewLogCursor: number;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;
     setTab: (tab: Tab) => void;
-    setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
+    setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+    setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
@@ -306,7 +412,6 @@ export type AppViewState = {
     handleDebugCall: () => Promise<void>;
     handleRunUpdate: () => Promise<void>;
     setPassword: (next: string) => void;
-    setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     handleAbortChat: () => Promise<void>;
@@ -316,7 +421,7 @@ export type AppViewState = {
     resetChatScroll: () => void;
     exportLogs: (lines: string[], label: string) => void;
     handleLogsScroll: (event: Event) => void;
-    handleOpenSidebar: (content: string) => void;
+    handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
   };

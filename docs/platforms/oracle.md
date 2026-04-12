@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on Oracle Cloud
   - Looking for low-cost VPS hosting for OpenClaw
   - Want 24/7 OpenClaw on a small server
-title: "Oracle Cloud"
+title: "Oracle Cloud (Platform)"
 ---
 
 # OpenClaw on Oracle Cloud (OCI)
@@ -123,8 +123,10 @@ openclaw doctor --generate-gateway-token
 openclaw config set gateway.tailscale.mode serve
 openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
+
+`gateway.trustedProxies=["127.0.0.1"]` here is only for the local Tailscale Serve proxy's forwarded-IP/local-client handling. It is **not** `gateway.auth.mode: "trusted-proxy"`. Diff viewer routes keep fail-closed behavior in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers can return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
 
 ## 7) Verify
 
@@ -133,7 +135,7 @@ systemctl --user restart openclaw-gateway
 openclaw --version
 
 # Check daemon status
-systemctl --user status openclaw-gateway
+systemctl --user status openclaw-gateway.service
 
 # Check Tailscale Serve
 tailscale serve status
@@ -180,7 +182,7 @@ With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback
 
 This setup often removes the _need_ for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.
 
-### What's Already Protected
+### Already protected
 
 | Traditional Step   | Needed?     | Why                                                                          |
 | ------------------ | ----------- | ---------------------------------------------------------------------------- |
@@ -236,7 +238,7 @@ Free tier ARM instances are popular. Try:
 - Retry during off-peak hours (early morning)
 - Use the "Always Free" filter when selecting shape
 
-### Tailscale won't connect
+### Tailscale will not connect
 
 ```bash
 # Check status
@@ -246,15 +248,15 @@ sudo tailscale status
 sudo tailscale up --ssh --hostname=openclaw --reset
 ```
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl --user -u openclaw-gateway -n 50
+journalctl --user -u openclaw-gateway.service -n 50
 ```
 
-### Can't reach Control UI
+### Cannot reach Control UI
 
 ```bash
 # Verify Tailscale Serve is running
@@ -264,7 +266,7 @@ tailscale serve status
 curl http://localhost:18789
 
 # Restart if needed
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
 
 ### ARM binary issues
@@ -283,13 +285,13 @@ Most npm packages work fine. For binaries, look for `linux-arm64` or `aarch64` r
 
 All state lives in:
 
-- `~/.openclaw/` — config, credentials, session data
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, artifacts)
 
 Back up periodically:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
+openclaw backup create
 ```
 
 ---

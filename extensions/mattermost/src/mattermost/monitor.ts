@@ -1,53 +1,18 @@
-import type {
-  ChannelAccountSnapshot,
-  ChatType,
-  OpenClawConfig,
-  ReplyPayload,
-  RuntimeEnv,
-} from "openclaw/plugin-sdk/mattermost";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  buildAgentMediaPayload,
-  buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  logInboundDrop,
-  logTypingFailure,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
-  isDangerousNameMatchingEnabled,
-  parseStrictPositiveInteger,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveChannelMediaMaxBytes,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  listSkillCommandsForAgents,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/mattermost";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
+import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
-  fetchMattermostChannel,
   fetchMattermostMe,
-  fetchMattermostUser,
-  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
-  sendMattermostTyping,
-  updateMattermostPost,
-  type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import {
-  buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   resolveInteractionCallbackPath,
@@ -68,32 +33,67 @@ import {
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import {
+  evaluateMattermostMentionGate,
+  mapMattermostChannelTypeToChatType,
+} from "./monitor-gating.js";
+import {
   createDedupeCache,
   formatInboundFromLabel,
   normalizeMention,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
+import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
+import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import {
   createMattermostConnectOnce,
   type MattermostEventPayload,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import type {
+  ChannelAccountSnapshot,
+  ChatType,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "./runtime-api.js";
+import {
+  buildAgentMediaPayload,
+  buildModelsProviderData,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  DM_GROUP_ACCESS_REASON,
+  isDangerousNameMatchingEnabled,
+  logInboundDrop,
+  logTypingFailure,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  registerPluginHttpRoute,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
+  resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
+} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
-import {
-  DEFAULT_COMMAND_SPECS,
-  cleanupSlashCommands,
-  isSlashCommandsEnabled,
-  registerSlashCommands,
-  resolveCallbackUrl,
-  resolveSlashCommandConfig,
-} from "./slash-commands.js";
-import {
-  activateSlashCommands,
-  deactivateSlashCommands,
-  getSlashCommandState,
-} from "./slash-state.js";
+import { cleanupSlashCommands } from "./slash-commands.js";
+import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+
+export {
+  evaluateMattermostMentionGate,
+  mapMattermostChannelTypeToChatType,
+} from "./monitor-gating.js";
+export type {
+  MattermostMentionGateInput,
+  MattermostRequireMentionResolverInput,
+} from "./monitor-gating.js";
 
 export type MonitorMattermostOpts = {
   botToken?: string;
@@ -116,15 +116,15 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
-const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
-const USER_CACHE_TTL_MS = 10 * 60_000;
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
-  return (values ?? []).map((value) => value.trim()).filter(Boolean);
+  return (values ?? [])
+    .map((value) => normalizeOptionalString(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 const recentInboundMessages = createDedupeCache({
@@ -145,29 +145,7 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
 }
 
 function isSystemPost(post: MattermostPost): boolean {
-  const type = post.type?.trim();
-  return Boolean(type);
-}
-
-export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
-  if (!channelType) {
-    return "channel";
-  }
-  // Mattermost channel types: D=direct, G=group DM, O=public channel, P=private channel.
-  const normalized = channelType.trim().toUpperCase();
-  if (normalized === "D") {
-    return "direct";
-  }
-  if (normalized === "G") {
-    return "group";
-  }
-  if (normalized === "P") {
-    // Private channels are invitation-restricted spaces; route as "group" so
-    // groupPolicy / groupAllowFrom can gate access separately from open public
-    // channels (type "O"), and the From prefix becomes mattermost:group:<id>.
-    return "group";
-  }
-  return "channel";
+  return normalizeOptionalString(post.type) !== undefined;
 }
 
 function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
@@ -180,105 +158,74 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
   return "channel";
 }
 
-export type MattermostRequireMentionResolverInput = {
-  cfg: OpenClawConfig;
-  channel: "mattermost";
-  accountId: string;
-  groupId: string;
-  requireMentionOverride?: boolean;
-};
-
-export type MattermostMentionGateInput = {
-  kind: ChatType;
-  cfg: OpenClawConfig;
-  accountId: string;
-  channelId: string;
-  threadRootId?: string;
-  requireMentionOverride?: boolean;
-  resolveRequireMention: (params: MattermostRequireMentionResolverInput) => boolean;
-  wasMentioned: boolean;
-  isControlCommand: boolean;
-  commandAuthorized: boolean;
-  oncharEnabled: boolean;
-  oncharTriggered: boolean;
-  canDetectMention: boolean;
-};
-
-type MattermostMentionGateDecision = {
-  shouldRequireMention: boolean;
-  shouldBypassMention: boolean;
-  effectiveWasMentioned: boolean;
-  dropReason: "onchar-not-triggered" | "missing-mention" | null;
-};
-
-export function evaluateMattermostMentionGate(
-  params: MattermostMentionGateInput,
-): MattermostMentionGateDecision {
-  const shouldRequireMention =
-    params.kind !== "direct" &&
-    params.resolveRequireMention({
-      cfg: params.cfg,
-      channel: "mattermost",
-      accountId: params.accountId,
-      groupId: params.channelId,
-      requireMentionOverride: params.requireMentionOverride,
-    });
-  const shouldBypassMention =
-    params.isControlCommand &&
-    shouldRequireMention &&
-    !params.wasMentioned &&
-    params.commandAuthorized;
-  const effectiveWasMentioned =
-    params.wasMentioned || shouldBypassMention || params.oncharTriggered;
-  if (
-    params.oncharEnabled &&
-    !params.oncharTriggered &&
-    !params.wasMentioned &&
-    !params.isControlCommand
-  ) {
-    return {
-      shouldRequireMention,
-      shouldBypassMention,
-      effectiveWasMentioned,
-      dropReason: "onchar-not-triggered",
-    };
-  }
-  if (
-    params.kind !== "direct" &&
-    shouldRequireMention &&
-    params.canDetectMention &&
-    !effectiveWasMentioned
-  ) {
-    return {
-      shouldRequireMention,
-      shouldBypassMention,
-      effectiveWasMentioned,
-      dropReason: "missing-mention",
-    };
-  }
-  return {
-    shouldRequireMention,
-    shouldBypassMention,
-    effectiveWasMentioned,
-    dropReason: null,
-  };
-}
-
 export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
-  return params.replyToId?.trim() || undefined;
+  return normalizeOptionalString(params.replyToId);
 }
-type MattermostMediaInfo = {
-  path: string;
-  contentType?: string;
-  kind: MediaKind;
-};
+
+export function resolveMattermostEffectiveReplyToId(params: {
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): string | undefined {
+  const threadRootId = normalizeOptionalString(params.threadRootId);
+  if (threadRootId && params.replyToMode !== "off") {
+    return threadRootId;
+  }
+  if (params.kind === "direct") {
+    return undefined;
+  }
+  const postId = normalizeOptionalString(params.postId);
+  if (!postId) {
+    return undefined;
+  }
+  return params.replyToMode === "all" ||
+    params.replyToMode === "first" ||
+    params.replyToMode === "batched"
+    ? postId
+    : undefined;
+}
+
+export function resolveMattermostThreadSessionContext(params: {
+  baseSessionKey: string;
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
+  const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
+    kind: params.kind,
+    postId: params.postId,
+    replyToMode: params.replyToMode,
+    threadRootId: params.threadRootId,
+  });
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: params.baseSessionKey,
+    threadId: effectiveReplyToId,
+    parentSessionKey: effectiveReplyToId ? params.baseSessionKey : undefined,
+  });
+  return {
+    effectiveReplyToId,
+    sessionKey: threadKeys.sessionKey,
+    parentSessionKey: threadKeys.parentSessionKey,
+  };
+}
+
+export function resolveMattermostReactionChannelId(
+  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
+): string | undefined {
+  return (
+    normalizeOptionalString(payload.broadcast?.channel_id) ??
+    normalizeOptionalString(payload.data?.channel_id)
+  );
+}
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
   if (mediaList.length === 0) {
@@ -312,13 +259,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg,
     accountId: opts.accountId,
   });
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "mattermost",
     accountId: account.accountId,
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
-  const botToken = opts.botToken?.trim() || account.botToken?.trim();
+  const botToken =
+    normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
   if (!botToken) {
     throw new Error(
       `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
@@ -331,145 +279,50 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     );
   }
 
-  const client = createMattermostClient({ baseUrl, botToken });
-  const botUser = await fetchMattermostMe(client);
-  const botUserId = botUser.id;
-  const botUsername = botUser.username?.trim() || undefined;
-  runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+  const client = createMattermostClient({
+    baseUrl,
+    botToken,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+  });
 
-  // ─── Slash command registration ──────────────────────────────────────────
-  const commandsRaw = account.config.commands as
-    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-    | undefined;
-  const slashConfig = resolveSlashCommandConfig(commandsRaw);
-  const slashEnabled = isSlashCommandsEnabled(slashConfig);
-
-  if (slashEnabled) {
-    try {
-      const teams = await fetchMattermostUserTeams(client, botUserId);
-
-      // Use the *runtime* listener port when available (e.g. `openclaw gateway run --port <port>`).
-      // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
-      // a different port.
-      const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
-      const envPort = parseStrictPositiveInteger(envPortRaw);
-      const slashGatewayPort = envPort ?? cfg.gateway?.port ?? 18789;
-
-      const slashCallbackUrl = resolveCallbackUrl({
-        config: slashConfig,
-        gatewayPort: slashGatewayPort,
-        gatewayHost: cfg.gateway?.customBindHost ?? undefined,
-      });
-
-      try {
-        const mmHost = new URL(baseUrl).hostname;
-        const callbackHost = new URL(slashCallbackUrl).hostname;
-
-        // NOTE: We cannot infer network reachability from hostnames alone.
-        // Mattermost might be accessed via a public domain while still running on the same
-        // machine as the gateway (where http://localhost:<port> is valid).
-        // So treat loopback callback URLs as an advisory warning only.
-        if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
-          runtime.error?.(
-            `mattermost: slash commands callbackUrl resolved to ${slashCallbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
-          );
-        }
-      } catch {
-        // URL parse failed; ignore and continue (we'll fail naturally if registration requests break).
-      }
-
-      const commandsToRegister: import("./slash-commands.js").MattermostCommandSpec[] = [
-        ...DEFAULT_COMMAND_SPECS,
-      ];
-
-      if (slashConfig.nativeSkills === true) {
-        try {
-          const skillCommands = listSkillCommandsForAgents({ cfg: cfg as any });
-          for (const spec of skillCommands) {
-            const name = typeof spec.name === "string" ? spec.name.trim() : "";
-            if (!name) continue;
-            const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
-            commandsToRegister.push({
-              trigger,
-              description: spec.description || `Run skill ${name}`,
-              autoComplete: true,
-              autoCompleteHint: "[args]",
-              originalName: name,
-            });
-          }
-        } catch (err) {
-          runtime.error?.(`mattermost: failed to list skill commands: ${String(err)}`);
-        }
-      }
-
-      // Deduplicate by trigger
-      const seen = new Set<string>();
-      const dedupedCommands = commandsToRegister.filter((cmd) => {
-        const key = cmd.trigger.trim();
-        if (!key) return false;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
-      let teamRegistrationFailures = 0;
-
-      for (const team of teams) {
-        try {
-          const registered = await registerSlashCommands({
-            client,
-            teamId: team.id,
-            creatorUserId: botUserId,
-            callbackUrl: slashCallbackUrl,
-            commands: dedupedCommands,
-            log: (msg) => runtime.log?.(msg),
-          });
-          allRegistered.push(...registered);
-        } catch (err) {
-          teamRegistrationFailures += 1;
-          runtime.error?.(
-            `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
-          );
-        }
-      }
-
-      if (allRegistered.length === 0) {
-        runtime.error?.(
-          "mattermost: native slash commands enabled but no commands could be registered; keeping slash callbacks inactive",
-        );
-      } else {
-        if (teamRegistrationFailures > 0) {
-          runtime.error?.(
-            `mattermost: slash command registration completed with ${teamRegistrationFailures} team error(s)`,
-          );
-        }
-
-        // Build trigger→originalName map for accurate command name resolution
-        const triggerMap = new Map<string, string>();
-        for (const cmd of dedupedCommands) {
-          if (cmd.originalName) {
-            triggerMap.set(cmd.trigger, cmd.originalName);
-          }
-        }
-
-        activateSlashCommands({
-          account,
-          commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
-          registeredCommands: allRegistered,
-          triggerMap,
-          api: { cfg, runtime },
-          log: (msg) => runtime.log?.(msg),
-        });
-
-        runtime.log?.(
-          `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${slashCallbackUrl})`,
-        );
-      }
-    } catch (err) {
-      runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
-    }
+  // Wait for the Mattermost API to accept our bot token before proceeding.
+  // When a bot account is disabled and re-enabled, the session is invalidated
+  // and API calls return 401 until the account is fully active again.  Retrying
+  // here (with exponential backoff) keeps the monitor alive and prevents the
+  // framework's auto-restart budget from being exhausted.
+  let botUser!: MattermostUser;
+  await runWithReconnect(
+    async () => {
+      botUser = await fetchMattermostMe(client);
+    },
+    {
+      abortSignal: opts.abortSignal,
+      jitterRatio: 0.2,
+      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      onError: (err) => {
+        runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
+        opts.statusSink?.({ lastError: String(err), connected: false });
+      },
+      onReconnect: (delayMs) => {
+        runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
+      },
+    },
+  );
+  if (opts.abortSignal?.aborted) {
+    return;
   }
+  const botUserId = botUser.id;
+  const botUsername = normalizeOptionalString(botUser.username);
+  runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+  await registerMattermostMonitorSlashCommands({
+    client,
+    cfg,
+    runtime,
+    account,
+    baseUrl,
+    botUserId,
+  });
+  const slashEnabled = getSlashCommandState(account.accountId) != null;
 
   // ─── Interactive buttons registration ──────────────────────────────────────
   // Derive a stable HMAC secret from the bot token so CLI and gateway share it.
@@ -521,7 +374,46 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
-      resolveSessionKey: async (channelId: string, userId: string) => {
+      authorizeButtonClick: async ({ payload, post }) => {
+        const channelInfo = await resolveChannelInfo(payload.channel_id);
+        const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
+        const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+          cfg,
+          surface: "mattermost",
+        });
+        const decision = authorizeMattermostCommandInvocation({
+          account,
+          cfg,
+          senderId: payload.user_id,
+          senderName: payload.user_name ?? "",
+          channelId: payload.channel_id,
+          channelInfo,
+          storeAllowFrom: isDirect
+            ? await readStoreAllowFromForDmPolicy({
+                provider: "mattermost",
+                accountId: account.accountId,
+                dmPolicy: account.config.dmPolicy ?? "pairing",
+                readStore: pairing.readStoreForDmPolicy,
+              })
+            : undefined,
+          allowTextCommands,
+          hasControlCommand: false,
+        });
+        if (decision.ok) {
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          response: {
+            update: {
+              message: post.message ?? "",
+              props: post.props ?? undefined,
+            },
+            ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
+          },
+        };
+      },
+      resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
         const teamId = channelInfo?.team_id ?? undefined;
@@ -535,7 +427,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: kind === "direct" ? userId : channelId,
           },
         });
-        return route.sessionKey;
+        const replyToMode = resolveMattermostReplyToMode(account, kind);
+        return resolveMattermostThreadSessionContext({
+          baseSessionKey: route.sessionKey,
+          kind,
+          postId: post.id || undefined,
+          replyToMode,
+          threadRootId: post.root_id,
+        }).sessionKey;
       },
       dispatchButtonClick: async (opts) => {
         const channelInfo = await resolveChannelInfo(opts.channelId);
@@ -554,6 +453,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: kind === "direct" ? opts.userId : opts.channelId,
           },
         });
+        const replyToMode = resolveMattermostReplyToMode(account, kind);
+        const threadContext = resolveMattermostThreadSessionContext({
+          baseSessionKey: route.sessionKey,
+          kind,
+          postId: opts.post.id || opts.postId,
+          replyToMode,
+          threadRootId: opts.post.root_id,
+        });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
         const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -568,7 +475,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 ? `mattermost:group:${opts.channelId}`
                 : `mattermost:channel:${opts.channelId}`,
           To: to,
-          SessionKey: route.sessionKey,
+          SessionKey: threadContext.sessionKey,
+          ParentSessionKey: threadContext.parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
           ConversationLabel: `mattermost:${opts.userName}`,
@@ -580,6 +488,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
           MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
+          ReplyToId: threadContext.effectiveReplyToId,
+          MessageThreadId: threadContext.effectiveReplyToId,
           WasMentioned: true,
           CommandAuthorized: false,
           OriginatingChannel: "mattermost" as const,
@@ -597,64 +507,49 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
         });
-        const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
           cfg,
           agentId: route.agentId,
           channel: "mattermost",
           accountId: account.accountId,
-        });
-        const typingCallbacks = createTypingCallbacks({
-          start: () => sendTypingIndicator(opts.channelId),
-          onStartError: (err) => {
-            logTypingFailure({
-              log: (message) => logger.debug?.(message),
-              channel: "mattermost",
-              target: opts.channelId,
-              error: err,
-            });
+          typing: {
+            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => logger.debug?.(message),
+                channel: "mattermost",
+                target: opts.channelId,
+                error: err,
+              });
+            },
           },
         });
         const { dispatcher, replyOptions, markDispatchIdle } =
           core.channel.reply.createReplyDispatcherWithTyping({
-            ...prefixOptions,
+            ...replyPipeline,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-              const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-              if (mediaUrls.length === 0) {
-                const chunkMode = core.channel.text.resolveChunkMode(
-                  cfg,
-                  "mattermost",
-                  account.accountId,
-                );
-                const chunks = core.channel.text.chunkMarkdownTextWithMode(
-                  text,
-                  textLimit,
-                  chunkMode,
-                );
-                for (const chunk of chunks.length > 0 ? chunks : [text]) {
-                  if (!chunk) continue;
-                  await sendMessageMattermost(to, chunk, {
-                    accountId: account.accountId,
-                  });
-                }
-              } else {
-                let first = true;
-                for (const mediaUrl of mediaUrls) {
-                  const caption = first ? text : "";
-                  first = false;
-                  await sendMessageMattermost(to, caption, {
-                    accountId: account.accountId,
-                    mediaUrl,
-                  });
-                }
-              }
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: threadContext.effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
             },
-            onReplyStart: typingCallbacks.onReplyStart,
+            onReplyStart: typingCallbacks?.onReplyStart,
           });
 
         await core.channel.reply.dispatchReplyFromConfig({
@@ -678,8 +573,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     log: (msg: string) => runtime.log?.(msg),
   });
 
-  const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
-  const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
@@ -712,128 +605,32 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     log: (message) => logVerboseMessage(message),
   });
 
-  const resolveMattermostMedia = async (
-    fileIds?: string[] | null,
-  ): Promise<MattermostMediaInfo[]> => {
-    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
-    if (ids.length === 0) {
-      return [];
-    }
-    const out: MattermostMediaInfo[] = [];
-    for (const fileId of ids) {
-      try {
-        const fetched = await core.channel.media.fetchRemoteMedia({
-          url: `${client.apiBaseUrl}/files/${fileId}`,
-          requestInit: {
-            headers: {
-              Authorization: `Bearer ${client.token}`,
-            },
-          },
-          filePathHint: fileId,
-          maxBytes: mediaMaxBytes,
-          // Allow fetching from the Mattermost server host (may be localhost or
-          // a private IP). Without this, SSRF guards block media downloads.
-          // Credit: #22594 (@webclerk)
-          ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
-        });
-        const saved = await core.channel.media.saveMediaBuffer(
-          fetched.buffer,
-          fetched.contentType ?? undefined,
-          "inbound",
-          mediaMaxBytes,
-        );
-        const contentType = saved.contentType ?? fetched.contentType ?? undefined;
-        out.push({
-          path: saved.path,
-          contentType,
-          kind: core.media.mediaKindFromMime(contentType) ?? "unknown",
-        });
-      } catch (err) {
-        logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
-      }
-    }
-    return out;
-  };
-
-  const sendTypingIndicator = async (channelId: string, parentId?: string) => {
-    await sendMattermostTyping(client, { channelId, parentId });
-  };
-
-  const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
-    const cached = channelCache.get(channelId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
-    }
-    try {
-      const info = await fetchMattermostChannel(client, channelId);
-      channelCache.set(channelId, {
-        value: info,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
-      return info;
-    } catch (err) {
-      logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
-      channelCache.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
-      return null;
-    }
-  };
-
-  const resolveUserInfo = async (userId: string): Promise<MattermostUser | null> => {
-    const cached = userCache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
-    }
-    try {
-      const info = await fetchMattermostUser(client, userId);
-      userCache.set(userId, {
-        value: info,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
-      return info;
-    } catch (err) {
-      logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
-      userCache.set(userId, {
-        value: null,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
-      return null;
-    }
-  };
-
-  const buildModelPickerProps = (
-    channelId: string,
-    buttons: Array<unknown>,
-  ): Record<string, unknown> | undefined =>
-    buildButtonProps({
-      callbackUrl,
-      accountId: account.accountId,
-      channelId,
-      buttons,
-    });
-
-  const updateModelPickerPost = async (params: {
-    channelId: string;
-    postId: string;
-    message: string;
-    buttons?: Array<unknown>;
-  }): Promise<MattermostInteractionResponse> => {
-    const props = buildModelPickerProps(params.channelId, params.buttons ?? []) ?? {
-      attachments: [],
-    };
-    await updateMattermostPost(client, params.postId, {
-      message: params.message,
-      props,
-    });
-    return {};
-  };
+  const {
+    resolveMattermostMedia,
+    sendTypingIndicator,
+    resolveChannelInfo,
+    resolveUserInfo,
+    updateModelPickerPost,
+  } = createMattermostMonitorResources({
+    accountId: account.accountId,
+    callbackUrl,
+    client,
+    logger: {
+      debug: (message) => logger.debug?.(String(message)),
+    },
+    mediaMaxBytes,
+    fetchRemoteMedia: (params) => core.channel.media.fetchRemoteMedia(params),
+    saveMediaBuffer: (buffer, contentType, direction, maxBytes) =>
+      core.channel.media.saveMediaBuffer(Buffer.from(buffer), contentType, direction, maxBytes),
+    mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
+  });
 
   const runModelPickerCommand = async (params: {
     commandText: string;
     commandAuthorized: boolean;
     route: ReturnType<typeof core.channel.routing.resolveAgentRoute>;
+    sessionKey: string;
+    parentSessionKey?: string;
     channelId: string;
     senderId: string;
     senderName: string;
@@ -844,6 +641,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     roomLabel: string;
     teamId?: string;
     postId: string;
+    effectiveReplyToId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
@@ -863,7 +661,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ? `mattermost:group:${params.channelId}`
             : `mattermost:channel:${params.channelId}`,
       To: to,
-      SessionKey: params.route.sessionKey,
+      SessionKey: params.sessionKey,
+      ParentSessionKey: params.parentSessionKey,
       AccountId: params.route.accountId,
       ChatType: params.chatType,
       ConversationLabel: fromLabel,
@@ -876,6 +675,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       Provider: "mattermost" as const,
       Surface: "mattermost" as const,
       MessageSid: `interaction:${params.postId}:${Date.now()}`,
+      ReplyToId: params.effectiveReplyToId,
+      MessageThreadId: params.effectiveReplyToId,
       Timestamp: Date.now(),
       WasMentioned: true,
       CommandAuthorized: params.commandAuthorized,
@@ -897,71 +698,60 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         fallbackLimit: account.textChunkLimit ?? 4000,
       },
     );
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const shouldDeliverReplies = params.deliverReplies === true;
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: params.route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
+      typing: shouldDeliverReplies
+        ? {
+            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => logger.debug?.(message),
+                channel: "mattermost",
+                target: params.channelId,
+                error: err,
+              });
+            },
+          }
+        : undefined,
     });
-    const shouldDeliverReplies = params.deliverReplies === true;
     const capturedTexts: string[] = [];
-    const typingCallbacks = shouldDeliverReplies
-      ? createTypingCallbacks({
-          start: () => sendTypingIndicator(params.channelId),
-          onStartError: (err) => {
-            logTypingFailure({
-              log: (message) => logger.debug?.(message),
-              channel: "mattermost",
-              target: params.channelId,
-              error: err,
-            });
-          },
-        })
-      : undefined;
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        ...prefixOptions,
+        ...replyPipeline,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text
-            .convertMarkdownTables(payload.text ?? "", tableMode)
-            .trim();
+          const trimmedPayload = {
+            ...payload,
+            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
+          };
 
           if (!shouldDeliverReplies) {
-            if (text) {
-              capturedTexts.push(text);
+            if (trimmedPayload.text) {
+              capturedTexts.push(trimmedPayload.text);
             }
             return;
           }
 
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-              });
-            }
-            return;
-          }
-
-          let first = true;
-          for (const mediaUrl of mediaUrls) {
-            const caption = first ? text : "";
-            first = false;
-            await sendMessageMattermost(to, caption, {
-              accountId: account.accountId,
-              mediaUrl,
-            });
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload: trimmedPayload,
+            to,
+            accountId: account.accountId,
+            agentId: params.route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: params.effectiveReplyToId,
+              replyToId: trimmedPayload.replyToId,
+            }),
+            textLimit,
+            // The picker path already converts and trims text before capture/delivery.
+            tableMode: "off",
+            sendMessage: sendMessageMattermost,
+          });
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -1000,6 +790,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     };
     userName: string;
     context: Record<string, unknown>;
+    post: MattermostPost;
   }): Promise<MattermostInteractionResponse | null> {
     const pickerState = parseMattermostModelPickerContext(params.context);
     if (!pickerState) {
@@ -1088,6 +879,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         id: kind === "direct" ? params.payload.user_id : params.payload.channel_id,
       },
     });
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadContext = resolveMattermostThreadSessionContext({
+      baseSessionKey: route.sessionKey,
+      kind,
+      postId: params.post.id || params.payload.post_id,
+      replyToMode,
+      threadRootId: params.post.root_id,
+    });
+    const modelSessionRoute = {
+      agentId: route.agentId,
+      sessionKey: threadContext.sessionKey,
+    };
 
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
@@ -1101,7 +904,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (pickerState.action === "providers" || pickerState.action === "back") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
-        route,
+        route: modelSessionRoute,
         data,
       });
       const view = renderMattermostProviderPickerView({
@@ -1120,7 +923,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (pickerState.action === "list") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
-        route,
+        route: modelSessionRoute,
         data,
       });
       const view = renderMattermostModelsPickerView({
@@ -1151,6 +954,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           commandText: `/model ${targetModelRef}`,
           commandAuthorized: auth.commandAuthorized,
           route,
+          sessionKey: threadContext.sessionKey,
+          parentSessionKey: threadContext.parentSessionKey,
           channelId: params.payload.channel_id,
           senderId: params.payload.user_id,
           senderName: params.userName,
@@ -1161,11 +966,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           roomLabel,
           teamId,
           postId: params.payload.post_id,
+          effectiveReplyToId: threadContext.effectiveReplyToId,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
           cfg,
-          route,
+          route: modelSessionRoute,
           data,
           skipCache: true,
         });
@@ -1237,10 +1043,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const chatType = channelChatType(kind);
 
     const senderName =
-      payload.data?.sender_name?.trim() ||
-      (await resolveUserInfo(senderId))?.username?.trim() ||
+      normalizeOptionalString(payload.data?.sender_name) ??
+      normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
       senderId;
-    const rawText = post.message?.trim() || "";
+    const rawText = normalizeOptionalString(post.message) ?? "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
     const normalizedGroupAllowFrom = normalizeMattermostAllowList(
@@ -1326,7 +1132,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   idLine: `Your Mattermost user id: ${senderId}`,
                   code,
                 }),
-                { accountId: account.accountId },
+                { cfg, accountId: account.accountId },
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
@@ -1384,19 +1190,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
-    const threadKeys = resolveThreadSessionKeys({
+    const threadRootId = normalizeOptionalString(post.root_id);
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
-      threadId: threadRootId,
-      parentSessionKey: threadRootId ? baseSessionKey : undefined,
+      kind,
+      postId: post.id,
+      replyToMode,
+      threadRootId,
     });
-    const sessionKey = threadKeys.sessionKey;
+    const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
     const historyKey = kind === "direct" ? null : sessionKey;
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       kind !== "direct" &&
-      ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
+      ((botUsername
+        ? normalizeLowercaseStringOrEmpty(rawText).includes(
+            `@${normalizeLowercaseStringOrEmpty(botUsername)}`,
+          )
+        : false) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const pendingBody =
       rawText ||
@@ -1554,7 +1367,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             : `mattermost:channel:${channelId}`,
       To: to,
       SessionKey: sessionKey,
-      ParentSessionKey: threadKeys.parentSessionKey,
+      ParentSessionKey: parentSessionKey,
       AccountId: route.accountId,
       ChatType: chatType,
       ConversationLabel: fromLabel,
@@ -1570,8 +1383,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      ReplyToId: threadRootId,
-      MessageThreadId: threadRootId,
+      ReplyToId: effectiveReplyToId,
+      MessageThreadId: effectiveReplyToId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
@@ -1615,66 +1428,44 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
-    });
-
-    const typingCallbacks = createTypingCallbacks({
-      start: () => sendTypingIndicator(channelId, threadRootId),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (message) => logger.debug?.(message),
-          channel: "mattermost",
-          target: channelId,
-          error: err,
-        });
+      typing: {
+        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: (message) => logger.debug?.(message),
+            channel: "mattermost",
+            target: channelId,
+            error: err,
+          });
+        },
       },
     });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        ...prefixOptions,
+        ...replyPipeline,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          } else {
-            let first = true;
-            for (const mediaUrl of mediaUrls) {
-              const caption = first ? text : "";
-              first = false;
-              await sendMessageMattermost(to, caption, {
-                accountId: account.accountId,
-                mediaUrl,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload,
+            to,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: effectiveReplyToId,
+              replyToId: payload.replyToId,
+            }),
+            textLimit,
+            tableMode,
+            sendMessage: sendMessageMattermost,
+          });
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {
@@ -1744,10 +1535,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const action = isRemoved ? "removed" : "added";
 
     const senderInfo = await resolveUserInfo(userId);
-    const senderName = senderInfo?.username?.trim() || userId;
+    const senderName = normalizeOptionalString(senderInfo?.username) ?? userId;
 
     // Resolve the channel from broadcast or post to route to the correct agent session
-    const channelId = payload.broadcast?.channel_id;
+    const channelId = resolveMattermostReactionChannelId(payload);
     if (!channelId) {
       // Without a channel id we cannot verify DM/group policies — drop to be safe
       logVerboseMessage(
@@ -1843,7 +1634,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!channelId) {
         return null;
       }
-      const threadId = entry.post.root_id?.trim();
+      const threadId = normalizeOptionalString(entry.post.root_id);
       const threadKey = threadId ? `thread:${threadId}` : "channel";
       return `mattermost:${account.accountId}:${channelId}:${threadKey}`;
     },
@@ -1851,7 +1642,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (entry.post.file_ids && entry.post.file_ids.length > 0) {
         return false;
       }
-      const text = entry.post.message?.trim() ?? "";
+      const text = normalizeOptionalString(entry.post.message) ?? "";
       if (!text) {
         return false;
       }
@@ -1867,7 +1658,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
       const combinedText = entries
-        .map((entry) => entry.post.message?.trim() ?? "")
+        .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
         .filter(Boolean)
         .join("\n");
       const mergedPost: MattermostPost = {
@@ -1893,6 +1684,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     webSocketFactory: opts.webSocketFactory,
     nextSeq: () => seq++,
+    getBotUpdateAt: async () => {
+      const me = await fetchMattermostMe(client);
+      return me.update_at ?? 0;
+    },
     onPosted: async (post, payload) => {
       await debouncer.enqueue({ post, payload });
     },
@@ -1948,7 +1743,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     unregisterInteractions?.();
   }
 
-  if (slashShutdownCleanup) {
-    await slashShutdownCleanup;
+  const slashShutdownCleanupPromise = slashShutdownCleanup;
+  if (slashShutdownCleanupPromise) {
+    await Promise.resolve(slashShutdownCleanupPromise);
   }
 }

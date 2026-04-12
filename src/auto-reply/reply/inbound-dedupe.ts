@@ -1,25 +1,35 @@
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
-import { createDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
 const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
 
-const inboundDedupeCache = createDedupeCache({
+/**
+ * Keep inbound dedupe shared across bundled chunks so the same provider
+ * message cannot bypass dedupe by entering through a different chunk copy.
+ */
+const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
+
+const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
-
-const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined)?.trim() ||
-    ctx.SessionKey?.trim() ||
+    (ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined) ||
+    normalizeOptionalString(ctx.SessionKey) ||
     "";
   if (!sessionKey) {
     return "";
@@ -34,8 +44,9 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
 }
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
-  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+  const provider =
+    normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
+  const messageId = normalizeOptionalString(ctx.MessageSid);
   if (!provider || !messageId) {
     return null;
   }
@@ -44,7 +55,7 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     return null;
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
-  const accountId = ctx.AccountId?.trim() ?? "";
+  const accountId = normalizeOptionalString(ctx.AccountId) ?? "";
   const threadId =
     ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
       ? String(ctx.MessageThreadId)

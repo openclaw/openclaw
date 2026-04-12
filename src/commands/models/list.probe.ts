@@ -12,27 +12,32 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+
+let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+
+function loadEmbeddedRunnerModule() {
+  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
+  return embeddedRunnerModulePromise;
+}
 
 export type AuthProbeStatus =
   | "ok"
@@ -125,7 +130,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of modelCandidates) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }
@@ -148,9 +153,9 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => entry.provider === provider);
+  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
   if (fromCatalog) {
-    return { provider: fromCatalog.provider, model: fromCatalog.id };
+    return { provider, model: fromCatalog.id };
   }
   return null;
 }
@@ -373,8 +378,7 @@ export async function buildProbeTargets(params: {
     }
 
     const envKey = resolveEnvApiKey(providerKey);
-    const customKey = getCustomProviderApiKey(cfg, providerKey);
-    const hasUsableModelsJsonKey = Boolean(customKey && !isNonSecretApiKeyMarker(customKey));
+    const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
@@ -433,13 +437,26 @@ async function probeTarget(params: {
       error: "No model available for probe",
     };
   }
+  const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
   await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
+  const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
+    provider: target.provider,
+    model: `${model.provider}/${model.model}`,
+    profileId: target.profileId,
+    label: target.label,
+    source: target.source,
+    mode: target.mode,
+    status,
+    ...(error ? { error } : {}),
+    latencyMs: Date.now() - start,
+  });
   try {
+    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
       sessionFile,
@@ -460,29 +477,13 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
     });
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: "ok",
-      latencyMs: Date.now() - start,
-    };
+    return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: mapFailoverReasonToProbeStatus(described.reason),
-      error: redactSecrets(described.message),
-      latencyMs: Date.now() - start,
-    };
+    return buildResult(
+      mapFailoverReasonToProbeStatus(described.reason),
+      redactSecrets(described.message),
+    );
   }
 }
 

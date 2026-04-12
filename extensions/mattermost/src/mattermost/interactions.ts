@@ -1,12 +1,13 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import {
-  isTrustedProxyAddress,
-  resolveClientIp,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { updateMattermostPost, type MattermostClient } from "./client.js";
+import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
+import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
@@ -36,6 +37,10 @@ export type MattermostInteractionResponse = {
   };
   ephemeral_text?: string;
 };
+
+export type MattermostInteractionAuthorizationResult =
+  | { ok: true }
+  | { ok: false; statusCode?: number; response?: MattermostInteractionResponse };
 
 export type MattermostInteractiveButtonInput = {
   id?: string;
@@ -71,7 +76,9 @@ export function resolveInteractionCallbackPath(accountId: string): string {
 
 function isWildcardBindHost(rawHost: string): boolean {
   const trimmed = rawHost.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
   const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
   return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
 }
@@ -82,9 +89,9 @@ function normalizeCallbackBaseUrl(baseUrl: string): string {
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
-    return value[0]?.trim() || undefined;
+    return normalizeOptionalString(value[0]);
   }
-  return value?.trim() || undefined;
+  return normalizeOptionalString(value);
 }
 
 function isAllowedInteractionSource(params: {
@@ -120,8 +127,8 @@ export function computeInteractionCallbackUrl(
   // Prefer merged per-account config when available, but keep the top-level path for
   // callers/tests that still pass the root Mattermost config shape directly.
   const callbackBaseUrl =
-    cfg?.interactions?.callbackBaseUrl?.trim() ??
-    cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
+    normalizeOptionalString(cfg?.interactions?.callbackBaseUrl) ??
+    normalizeOptionalString(cfg?.channels?.mattermost?.interactions?.callbackBaseUrl);
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }
@@ -201,7 +208,7 @@ function canonicalizeInteractionContext(value: unknown): unknown {
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, entryValue]) => [key, canonicalizeInteractionContext(entryValue)]);
     return Object.fromEntries(entries);
   }
@@ -223,10 +230,7 @@ export function verifyInteractionToken(
   accountId?: string,
 ): boolean {
   const expected = generateInteractionToken(context, accountId);
-  if (expected.length !== token.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+  return safeEqualSecret(expected, token);
 }
 
 // ── Button builder helpers ─────────────────────────────────────────────
@@ -319,8 +323,8 @@ export function buildButtonProps(params: {
 
   const buttons = rawButtons
     .map((btn) => ({
-      id: String(btn.id ?? btn.callback_data ?? "").trim(),
-      name: String(btn.text ?? btn.name ?? btn.label ?? "").trim(),
+      id: normalizeStringifiedOptionalString(btn.id ?? btn.callback_data) ?? "",
+      name: normalizeStringifiedOptionalString(btn.text ?? btn.name ?? btn.label) ?? "",
       style: btn.style ?? "default",
       context:
         typeof btn.context === "object" && btn.context !== null
@@ -390,7 +394,11 @@ export function createMattermostInteractionHandler(params: {
   allowedSourceIps?: string[];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
+  resolveSessionKey?: (params: {
+    channelId: string;
+    userId: string;
+    post: MattermostPost;
+  }) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
     userName: string;
@@ -398,7 +406,12 @@ export function createMattermostInteractionHandler(params: {
     actionName: string;
     originalMessage: string;
     context: Record<string, unknown>;
+    post: MattermostPost;
   }) => Promise<MattermostInteractionResponse | null>;
+  authorizeButtonClick?: (opts: {
+    payload: MattermostInteractionPayload;
+    post: MattermostPost;
+  }) => Promise<MattermostInteractionAuthorizationResult>;
   dispatchButtonClick?: (opts: {
     channelId: string;
     userId: string;
@@ -406,6 +419,7 @@ export function createMattermostInteractionHandler(params: {
     actionId: string;
     actionName: string;
     postId: string;
+    post: MattermostPost;
   }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -503,13 +517,10 @@ export function createMattermostInteractionHandler(params: {
 
     const userName = payload.user_name ?? payload.user_id;
     let originalMessage = "";
+    let originalPost: MattermostPost | null = null;
     let clickedButtonName: string | null = null;
     try {
-      const originalPost = await client.request<{
-        channel_id?: string | null;
-        message?: string;
-        props?: Record<string, unknown>;
-      }>(`/posts/${payload.post_id}`);
+      originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);
       const postChannelId = originalPost.channel_id?.trim();
       if (!postChannelId || postChannelId !== payload.channel_id) {
         log?.(
@@ -550,10 +561,45 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
+    if (!originalPost) {
+      log?.(`mattermost interaction: missing fetched post ${payload.post_id}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Failed to load interaction post" }));
+      return;
+    }
+
     log?.(
       `mattermost interaction: action=${actionId} user=${payload.user_name ?? payload.user_id} ` +
         `post=${payload.post_id} channel=${payload.channel_id}`,
     );
+
+    if (params.authorizeButtonClick) {
+      try {
+        const authorization = await params.authorizeButtonClick({
+          payload,
+          post: originalPost,
+        });
+        if (!authorization.ok) {
+          res.statusCode = authorization.statusCode ?? 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify(
+              authorization.response ?? {
+                ephemeral_text: "You are not allowed to use this action here.",
+              },
+            ),
+          );
+          return;
+        }
+      } catch (err) {
+        log?.(`mattermost interaction: authorization failed: ${String(err)}`);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Interaction authorization failed" }));
+        return;
+      }
+    }
 
     if (params.handleInteraction) {
       try {
@@ -564,6 +610,7 @@ export function createMattermostInteractionHandler(params: {
           actionName: clickedButtonName,
           originalMessage,
           context: contextWithoutToken,
+          post: originalPost,
         });
         if (response !== null) {
           res.statusCode = 200;
@@ -590,7 +637,11 @@ export function createMattermostInteractionHandler(params: {
         `in channel ${payload.channel_id}`;
 
       const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey(payload.channel_id, payload.user_id)
+        ? await params.resolveSessionKey({
+            channelId: payload.channel_id,
+            userId: payload.user_id,
+            post: originalPost,
+          })
         : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
 
       core.system.enqueueSystemEvent(eventLabel, {
@@ -632,6 +683,7 @@ export function createMattermostInteractionHandler(params: {
           actionId,
           actionName: clickedButtonName,
           postId: payload.post_id,
+          post: originalPost,
         });
       } catch (err) {
         log?.(`mattermost interaction: dispatchButtonClick failed: ${String(err)}`);

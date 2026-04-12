@@ -1,17 +1,17 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
@@ -59,7 +59,10 @@ export function resolveModelAuthLabel(params: {
     return `api-key (${envKey.source})`;
   }
 
-  const customKey = getCustomProviderApiKey(params.cfg, providerKey);
+  const customKey = resolveUsableCustomProviderApiKey({
+    cfg: params.cfg,
+    provider: providerKey,
+  });
   if (customKey) {
     return `api-key (models.json)`;
   }

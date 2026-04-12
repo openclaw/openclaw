@@ -1,5 +1,7 @@
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
+import { formatErrorMessage } from "../errors.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
@@ -50,13 +52,10 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
  * Returns undefined when no proxy is configured.
  * Gracefully returns undefined if the proxy URL is malformed.
  */
-export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
-  const proxyUrl =
-    process.env.HTTPS_PROXY ||
-    process.env.HTTP_PROXY ||
-    process.env.https_proxy ||
-    process.env.http_proxy;
-  if (!proxyUrl?.trim()) {
+export function resolveProxyFetchFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): typeof fetch | undefined {
+  if (!hasEnvHttpProxyConfigured("https", env)) {
     return undefined;
   }
   try {
@@ -68,7 +67,7 @@ export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
       }) as unknown as Promise<Response>) as typeof fetch;
   } catch (err) {
     logWarn(
-      `Proxy env var set but agent creation failed — falling back to direct fetch: ${err instanceof Error ? err.message : String(err)}`,
+      `Proxy env var set but agent creation failed — falling back to direct fetch: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }

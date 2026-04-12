@@ -136,6 +136,17 @@ final class AppState {
             forKey: voicePushToTalkEnabledKey) } }
     }
 
+    var voiceWakeTriggersTalkMode: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
+                if self.swabbleEnabled {
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
+    }
+
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -275,6 +286,8 @@ final class AppState {
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
+        self.voiceWakeTriggersTalkMode = UserDefaults.standard
+            .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
@@ -600,28 +613,27 @@ final class AppState {
     private func syncGatewayConfigIfNeeded() {
         guard !self.isPreview, !self.isInitializing else { return }
 
-        let connectionMode = self.connectionMode
-        let remoteTarget = self.remoteTarget
-        let remoteIdentity = self.remoteIdentity
-        let remoteTransport = self.remoteTransport
-        let remoteUrl = self.remoteUrl
-        let remoteToken = self.remoteToken
-        let remoteTokenDirty = self.remoteTokenDirty
-
         Task { @MainActor in
-            // Keep app-only connection settings local to avoid overwriting remote gateway config.
-            let synced = Self.syncedGatewayRoot(
-                currentRoot: OpenClawConfigFile.loadDict(),
-                connectionMode: connectionMode,
-                remoteTransport: remoteTransport,
-                remoteTarget: remoteTarget,
-                remoteIdentity: remoteIdentity,
-                remoteUrl: remoteUrl,
-                remoteToken: remoteToken,
-                remoteTokenDirty: remoteTokenDirty)
-            guard synced.changed else { return }
-            OpenClawConfigFile.saveDict(synced.root)
+            self.syncGatewayConfigNow()
         }
+    }
+
+    @MainActor
+    func syncGatewayConfigNow() {
+        guard !self.isPreview, !self.isInitializing else { return }
+
+        // Keep app-only connection settings local to avoid overwriting remote gateway config.
+        let synced = Self.syncedGatewayRoot(
+            currentRoot: OpenClawConfigFile.loadDict(),
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteTarget: self.remoteTarget,
+            remoteIdentity: self.remoteIdentity,
+            remoteUrl: self.remoteUrl,
+            remoteToken: self.remoteToken,
+            remoteTokenDirty: self.remoteTokenDirty)
+        guard synced.changed else { return }
+        OpenClawConfigFile.saveDict(synced.root)
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
@@ -784,7 +796,7 @@ extension AppState {
         remoteToken: String,
         remoteTokenDirty: Bool) -> [String: Any]
     {
-        Self.updatedRemoteGatewayConfig(
+        self.updatedRemoteGatewayConfig(
             current: current,
             transport: transport,
             remoteUrl: remoteUrl,
@@ -805,7 +817,7 @@ extension AppState {
         remoteToken: String,
         remoteTokenDirty: Bool) -> [String: Any]
     {
-        Self.syncedGatewayRoot(
+        self.syncedGatewayRoot(
             currentRoot: currentRoot,
             connectionMode: connectionMode,
             remoteTransport: remoteTransport,

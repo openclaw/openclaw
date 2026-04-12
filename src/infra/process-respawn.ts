@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
@@ -11,10 +13,7 @@ export type GatewayRespawnResult = {
 };
 
 function isTruthy(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
@@ -30,10 +29,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
-    // launchd: exit(0) is sufficient — KeepAlive=true restarts the service.
-    // Self-issued `kickstart -k` races with launchd's bootout state machine
-    // and can leave the LaunchAgent permanently unloaded.
-    // See: https://github.com/openclaw/openclaw/issues/39760
+    // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
+    // Avoid detached kickstart/start handoffs here so restart timing stays tied
+    // to launchd's native supervision rather than a second helper process.
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -64,7 +62,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     child.unref();
     return { mode: "spawned", pid: child.pid ?? undefined };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = formatErrorMessage(err);
     return { mode: "failed", detail };
   }
 }

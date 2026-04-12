@@ -35,6 +35,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
@@ -53,20 +54,31 @@ import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
+const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
+
+type DisconnectContext = {
+  generation: number;
+  reason: string;
+};
 
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
   idempotencyKey: string;
+  sendAccepted?: boolean;
+  disconnectContext?: DisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
   sentTextLength?: number;
   sentText?: string;
+  sentThoughtLength?: number;
+  sentThought?: string;
   toolCalls?: Map<string, PendingToolCall>;
 };
 
@@ -88,6 +100,7 @@ type GatewaySessionPresentationRow = Pick<
   | "derivedTitle"
   | "updatedAt"
   | "thinkingLevel"
+  | "fastMode"
   | "modelProvider"
   | "model"
   | "verboseLevel"
@@ -114,14 +127,49 @@ type SessionUsageSnapshot = {
   used: number;
 };
 
+function isAdminScopeProvenanceRejection(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode =
+    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
+      ? (err as { gatewayCode?: string }).gatewayCode
+      : undefined;
+  return (
+    err.name === "GatewayClientRequestError" &&
+    gatewayCode === "INVALID_REQUEST" &&
+    err.message.includes("system provenance fields require admin scope")
+  );
+}
+
+function isGatewayCloseError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("gateway closed (");
+}
+
 type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
 };
 
+type AgentWaitResult = {
+  status?: "ok" | "error" | "timeout";
+  error?: string;
+};
+
 type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;
+};
+
+type GatewayChatContentBlock = {
+  type?: string;
+  text?: string;
+  thinking?: string;
+};
+
+type ReplayChunk = {
+  sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
+  text: string;
 };
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
@@ -185,7 +233,7 @@ function buildSessionPresentation(params: {
     ...params.overrides,
   };
   const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
-  const currentModeId = row.thinkingLevel?.trim() || "adaptive";
+  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
   }
@@ -210,18 +258,25 @@ function buildSessionPresentation(params: {
       values: availableLevelIds,
     }),
     buildSelectConfigOption({
+      id: ACP_FAST_MODE_CONFIG_ID,
+      name: "Fast mode",
+      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
+      currentValue: row.fastMode ? "on" : "off",
+      values: ["off", "on"],
+    }),
+    buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
       name: "Tool verbosity",
       description:
         "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: row.verboseLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.verboseLevel) || "off",
       values: ["off", "on", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_REASONING_LEVEL_CONFIG_ID,
       name: "Reasoning stream",
       description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: row.reasoningLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.reasoningLevel) || "off",
       values: ["off", "on", "stream"],
     }),
     buildSelectConfigOption({
@@ -229,14 +284,14 @@ function buildSessionPresentation(params: {
       name: "Usage detail",
       description:
         "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: row.responseUsage?.trim() || "off",
+      currentValue: normalizeOptionalString(row.responseUsage) || "off",
       values: ["off", "tokens", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,
       name: "Elevated actions",
       description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: row.elevatedLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
       values: ["off", "on", "ask", "full"],
     }),
   ];
@@ -244,25 +299,51 @@ function buildSessionPresentation(params: {
   return { configOptions, modes };
 }
 
-function extractReplayText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.length > 0 ? content : undefined;
+function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
+  const role = typeof message.role === "string" ? message.role : "";
+  if (role !== "user" && role !== "assistant") {
+    return [];
   }
-  if (!Array.isArray(content)) {
-    return undefined;
+  if (typeof message.content === "string") {
+    return message.content.length > 0
+      ? [
+          {
+            sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+            text: message.content,
+          },
+        ]
+      : [];
   }
-  const text = content
-    .map((block) => {
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
-        return "";
-      }
-      const typedBlock = block as { type?: unknown; text?: unknown };
-      return typedBlock.type === "text" && typeof typedBlock.text === "string"
-        ? typedBlock.text
-        : "";
-    })
-    .join("");
-  return text.length > 0 ? text : undefined;
+  if (!Array.isArray(message.content)) {
+    return [];
+  }
+
+  const replayChunks: ReplayChunk[] = [];
+  for (const block of message.content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      continue;
+    }
+    const typedBlock = block as GatewayChatContentBlock;
+    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
+      replayChunks.push({
+        sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+        text: typedBlock.text,
+      });
+      continue;
+    }
+    if (
+      role === "assistant" &&
+      typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking
+    ) {
+      replayChunks.push({
+        sessionUpdate: "agent_thought_chunk",
+        text: typedBlock.thinking,
+      });
+    }
+  }
+  return replayChunks;
 }
 
 function buildSessionMetadata(params: {
@@ -270,9 +351,9 @@ function buildSessionMetadata(params: {
   sessionKey: string;
 }): SessionMetadata {
   const title =
-    params.row?.derivedTitle?.trim() ||
-    params.row?.displayName?.trim() ||
-    params.row?.label?.trim() ||
+    normalizeOptionalString(params.row?.derivedTitle) ||
+    normalizeOptionalString(params.row?.displayName) ||
+    normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
   const updatedAt =
     typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
@@ -335,6 +416,17 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private disconnectTimer: NodeJS.Timeout | null = null;
+  private activeDisconnectContext: DisconnectContext | null = null;
+  private disconnectGeneration = 0;
+
+  private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
+    const pending = this.pendingPrompts.get(sessionId);
+    if (pending?.idempotencyKey !== runId) {
+      return undefined;
+    }
+    return pending;
+  }
 
   constructor(
     connection: AgentSideConnection,
@@ -364,15 +456,29 @@ export class AcpGatewayAgent implements Agent {
 
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
+    const disconnectContext = this.activeDisconnectContext;
+    this.activeDisconnectContext = null;
+    if (!disconnectContext) {
+      return;
+    }
+    void this.reconcilePendingPrompts(disconnectContext.generation, false);
   }
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
-    for (const pending of this.pendingPrompts.values()) {
-      pending.reject(new Error(`Gateway disconnected: ${reason}`));
-      this.sessionStore.clearActiveRun(pending.sessionId);
+    const disconnectContext = {
+      generation: this.disconnectGeneration + 1,
+      reason,
+    };
+    this.disconnectGeneration = disconnectContext.generation;
+    this.activeDisconnectContext = disconnectContext;
+    if (this.pendingPrompts.size === 0) {
+      return;
     }
-    this.pendingPrompts.clear();
+    for (const pending of this.pendingPrompts.values()) {
+      pending.disconnectContext = disconnectContext;
+    }
+    this.armDisconnectTimer(disconnectContext);
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -594,37 +700,71 @@ export class AcpGatewayAgent implements Agent {
     const abortController = new AbortController();
     const runId = randomUUID();
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
+    const requestParams = {
+      sessionKey: session.sessionKey,
+      message,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      idempotencyKey: runId,
+      thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
+      deliver: readBool(params._meta, ["deliver"]),
+      timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+    };
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
         idempotencyKey: runId,
+        disconnectContext: this.activeDisconnectContext ?? undefined,
         resolve,
         reject,
       });
+      if (this.activeDisconnectContext && !this.disconnectTimer) {
+        this.armDisconnectTimer(this.activeDisconnectContext);
+      }
 
-      this.gateway
-        .request(
-          "chat.send",
-          {
-            sessionKey: session.sessionKey,
-            message,
-            attachments: attachments.length > 0 ? attachments : undefined,
-            idempotencyKey: runId,
-            thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
-            deliver: readBool(params._meta, ["deliver"]),
-            timeoutMs: readNumber(params._meta, ["timeoutMs"]),
-            systemInputProvenance,
-            systemProvenanceReceipt,
-          },
-          { expectFinal: true },
-        )
-        .catch((err) => {
-          this.pendingPrompts.delete(params.sessionId);
-          this.sessionStore.clearActiveRun(params.sessionId);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        });
+      const sendWithProvenanceFallback = async () => {
+        try {
+          await this.gateway.request(
+            "chat.send",
+            {
+              ...requestParams,
+              systemInputProvenance,
+              systemProvenanceReceipt,
+            },
+            { timeoutMs: null },
+          );
+          const pending = this.getPendingPrompt(params.sessionId, runId);
+          if (pending) {
+            pending.sendAccepted = true;
+          }
+        } catch (err) {
+          if (
+            (systemInputProvenance || systemProvenanceReceipt) &&
+            isAdminScopeProvenanceRejection(err)
+          ) {
+            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            const pending = this.getPendingPrompt(params.sessionId, runId);
+            if (pending) {
+              pending.sendAccepted = true;
+            }
+            return;
+          }
+          throw err;
+        }
+      };
+
+      void sendWithProvenanceFallback().catch((err) => {
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+          return;
+        }
+        this.pendingPrompts.delete(params.sessionId);
+        this.sessionStore.clearActiveRun(params.sessionId);
+        if (this.pendingPrompts.size === 0) {
+          this.clearDisconnectTimer();
+        }
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
     });
   }
 
@@ -633,16 +773,30 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
+    // Capture runId before cancelActiveRun clears session.activeRunId.
+    const activeRunId = session.activeRunId;
+
     this.sessionStore.cancelActiveRun(params.sessionId);
+    const pending = this.pendingPrompts.get(params.sessionId);
+    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
+    if (!scopedRunId) {
+      return;
+    }
+
     try {
-      await this.gateway.request("chat.abort", { sessionKey: session.sessionKey });
+      await this.gateway.request("chat.abort", {
+        sessionKey: session.sessionKey,
+        runId: scopedRunId,
+      });
     } catch (err) {
       this.log(`cancel error: ${String(err)}`);
     }
 
-    const pending = this.pendingPrompts.get(params.sessionId);
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
       pending.resolve({ stopReason: "cancelled" });
     }
   }
@@ -672,6 +826,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     const stream = payload.stream as string | undefined;
+    const runId = payload.runId as string | undefined;
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
     if (!stream || !data || !sessionKey) {
@@ -688,7 +843,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
@@ -774,17 +929,20 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
-    if (runId && pending.idempotencyKey !== runId) {
-      return;
-    }
 
-    if (state === "delta" && messageData) {
+    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
+    if (shouldHandleMessageSnapshot) {
+      // Gateway chat events can carry the latest full assistant snapshot on both
+      // incremental updates and the terminal final event. Process the snapshot
+      // first so ACP clients never drop the last visible assistant text.
       await this.handleDeltaEvent(pending.sessionId, messageData);
-      return;
+      if (state === "delta") {
+        return;
+      }
     }
 
     if (state === "final") {
@@ -798,11 +956,9 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
-      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
-      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
-      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
-      void this.finishPrompt(pending.sessionId, pending, "end_turn");
+      const errorKind = payload.errorKind as string | undefined;
+      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
+      void this.finishPrompt(pending.sessionId, pending, stopReason);
     }
   }
 
@@ -810,22 +966,44 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     messageData: Record<string, unknown>,
   ): Promise<void> {
-    const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
-    const fullText = content?.find((c) => c.type === "text")?.text ?? "";
+    const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) {
       return;
     }
 
+    const fullThought = content
+      ?.filter((block) => block?.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("\n")
+      .trimEnd();
+    const sentThoughtSoFar = pending.sentThoughtLength ?? 0;
+    if (fullThought && fullThought.length > sentThoughtSoFar) {
+      const newThought = fullThought.slice(sentThoughtSoFar);
+      pending.sentThoughtLength = fullThought.length;
+      pending.sentThought = fullThought;
+      await this.connection.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: newThought },
+        },
+      });
+    }
+
+    const fullText = content
+      ?.filter((block) => block?.type === "text")
+      .map((block) => block.text ?? "")
+      .join("\n")
+      .trimEnd();
     const sentSoFar = pending.sentTextLength ?? 0;
-    if (fullText.length <= sentSoFar) {
+    if (!fullText || fullText.length <= sentSoFar) {
       return;
     }
 
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
     pending.sentText = fullText;
-
     await this.connection.sessionUpdate({
       sessionId,
       update: {
@@ -842,6 +1020,9 @@ export class AcpGatewayAgent implements Agent {
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
     try {
       await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
@@ -853,13 +1034,168 @@ export class AcpGatewayAgent implements Agent {
     pending.resolve({ stopReason });
   }
 
-  private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+  private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey === sessionKey) {
-        return pending;
+      if (pending.sessionKey !== sessionKey) {
+        continue;
       }
+      if (runId && pending.idempotencyKey !== runId) {
+        continue;
+      }
+      return pending;
     }
     return undefined;
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.disconnectTimer) {
+      return;
+    }
+    clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
+  private armDisconnectTimer(disconnectContext: DisconnectContext): void {
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      void this.reconcilePendingPrompts(disconnectContext.generation, true);
+    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
+    this.disconnectTimer.unref?.();
+  }
+
+  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+    const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
+    if (currentPending !== pending) {
+      return;
+    }
+    this.pendingPrompts.delete(pending.sessionId);
+    this.sessionStore.clearActiveRun(pending.sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
+    pending.reject(error);
+  }
+
+  private clearPendingDisconnectState(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): void {
+    if (pending.disconnectContext !== disconnectContext) {
+      return;
+    }
+    pending.disconnectContext = undefined;
+  }
+
+  private shouldRejectPendingAtDisconnectDeadline(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): boolean {
+    return (
+      pending.disconnectContext === disconnectContext &&
+      (!pending.sendAccepted ||
+        this.activeDisconnectContext?.generation === disconnectContext.generation)
+    );
+  }
+
+  private async reconcilePendingPrompts(
+    observedDisconnectGeneration: number,
+    deadlineExpired: boolean,
+  ): Promise<void> {
+    if (this.pendingPrompts.size === 0) {
+      if (this.disconnectGeneration === observedDisconnectGeneration) {
+        this.clearDisconnectTimer();
+      }
+      return;
+    }
+
+    const pendingEntries = [...this.pendingPrompts.entries()];
+    let keepDisconnectTimer = false;
+    for (const [sessionId, pending] of pendingEntries) {
+      if (this.pendingPrompts.get(sessionId) !== pending) {
+        continue;
+      }
+      if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
+        continue;
+      }
+      const shouldKeepPending = await this.reconcilePendingPrompt(
+        sessionId,
+        pending,
+        deadlineExpired,
+      );
+      if (shouldKeepPending) {
+        keepDisconnectTimer = true;
+      }
+    }
+
+    if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
+      this.clearDisconnectTimer();
+    }
+  }
+
+  private async reconcilePendingPrompt(
+    sessionId: string,
+    pending: PendingPrompt,
+    deadlineExpired: boolean,
+  ): Promise<boolean> {
+    const disconnectContext = pending.disconnectContext;
+    if (!disconnectContext) {
+      return false;
+    }
+    let result: AgentWaitResult | undefined;
+    try {
+      result = await this.gateway.request(
+        "agent.wait",
+        {
+          runId: pending.idempotencyKey,
+          timeoutMs: 0,
+        },
+        { timeoutMs: null },
+      );
+    } catch (err) {
+      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+      if (deadlineExpired) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
+          this.rejectPendingPrompt(
+            pending,
+            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+          );
+          return false;
+        }
+        this.clearPendingDisconnectState(pending, disconnectContext);
+        return false;
+      }
+      return true;
+    }
+
+    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+    if (!currentPending) {
+      return false;
+    }
+    if (result?.status === "ok") {
+      await this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (result?.status === "error") {
+      void this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (deadlineExpired) {
+      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
+        const currentDisconnectContext = currentPending.disconnectContext;
+        if (!currentDisconnectContext) {
+          return false;
+        }
+        this.rejectPendingPrompt(
+          currentPending,
+          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+        );
+        return false;
+      }
+      this.clearPendingDisconnectState(currentPending, disconnectContext);
+      return false;
+    }
+    return true;
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {
@@ -912,6 +1248,7 @@ export class AcpGatewayAgent implements Agent {
       thinkingLevel: session.thinkingLevel,
       modelProvider: session.modelProvider,
       model: session.model,
+      fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
@@ -924,16 +1261,26 @@ export class AcpGatewayAgent implements Agent {
 
   private resolveSessionConfigPatch(
     configId: string,
-    value: string,
+    value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string>;
+    patch: Record<string, string | boolean>;
   } {
+    if (typeof value !== "string") {
+      throw new Error(
+        `ACP bridge does not support non-string session config option values for "${configId}".`,
+      );
+    }
     switch (configId) {
       case ACP_THOUGHT_LEVEL_CONFIG_ID:
         return {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
+        };
+      case ACP_FAST_MODE_CONFIG_ID:
+        return {
+          patch: { fastMode: value === "on" },
+          overrides: { fastMode: value === "on" },
         };
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
@@ -961,7 +1308,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {
-    const result = await this.gateway.request<{ messages?: unknown[] }>("sessions.get", {
+    const result = await this.gateway.request("sessions.get", {
       key: sessionKey,
       limit: ACP_LOAD_SESSION_REPLAY_LIMIT,
     });
@@ -976,21 +1323,16 @@ export class AcpGatewayAgent implements Agent {
     transcript: ReadonlyArray<GatewayTranscriptMessage>,
   ): Promise<void> {
     for (const message of transcript) {
-      const role = typeof message.role === "string" ? message.role : "";
-      if (role !== "user" && role !== "assistant") {
-        continue;
+      const replayChunks = extractReplayChunks(message);
+      for (const chunk of replayChunks) {
+        await this.connection.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: chunk.sessionUpdate,
+            content: { type: "text", text: chunk.text },
+          },
+        });
       }
-      const text = extractReplayText(message.content);
-      if (!text) {
-        continue;
-      }
-      await this.connection.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-          content: { type: "text", text },
-        },
-      });
     }
   }
 

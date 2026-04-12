@@ -11,13 +11,15 @@ import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeElevatedLevel,
+  normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   supportsXHighThinking,
 } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -29,6 +31,10 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
@@ -39,16 +45,8 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
-function normalizeExecHost(raw: string): "sandbox" | "gateway" | "node" | undefined {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -56,7 +54,7 @@ function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | und
 }
 
 function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
   }
@@ -65,6 +63,22 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
 
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
+}
+
+function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (normalized === "orchestrator" || normalized === "leaf") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (normalized === "children" || normalized === "none") {
+    return normalized;
+  }
+  return undefined;
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -98,7 +112,7 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedBy cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
@@ -112,6 +126,27 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnedWorkspaceDir" in patch) {
+    const raw = patch.spawnedWorkspaceDir;
+    if (raw === null) {
+      if (existing?.spawnedWorkspaceDir) {
+        return invalid("spawnedWorkspaceDir cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedWorkspaceDir: empty");
+      }
+      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
+        return invalid("spawnedWorkspaceDir cannot be changed once set");
+      }
+      next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
   if ("spawnDepth" in patch) {
     const raw = patch.spawnDepth;
     if (raw === null) {
@@ -122,7 +157,7 @@ export async function applySessionsPatchToStore(params: {
       if (!supportsSpawnLineage(storeKey)) {
         return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
       }
-      const numeric = Number(raw);
+      const numeric = raw;
       if (!Number.isInteger(numeric) || numeric < 0) {
         return invalid("invalid spawnDepth (use an integer >= 0)");
       }
@@ -131,6 +166,48 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnDepth cannot be changed once set");
       }
       next.spawnDepth = normalized;
+    }
+  }
+
+  if ("subagentRole" in patch) {
+    const raw = patch.subagentRole;
+    if (raw === null) {
+      if (existing?.subagentRole) {
+        return invalid("subagentRole cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentRole is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentRole(raw);
+      if (!normalized) {
+        return invalid('invalid subagentRole (use "orchestrator" or "leaf")');
+      }
+      if (existing?.subagentRole && existing.subagentRole !== normalized) {
+        return invalid("subagentRole cannot be changed once set");
+      }
+      next.subagentRole = normalized;
+    }
+  }
+
+  if ("subagentControlScope" in patch) {
+    const raw = patch.subagentControlScope;
+    if (raw === null) {
+      if (existing?.subagentControlScope) {
+        return invalid("subagentControlScope cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentControlScope is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentControlScope(raw);
+      if (!normalized) {
+        return invalid('invalid subagentControlScope (use "children" or "none")');
+      }
+      if (existing?.subagentControlScope && existing.subagentControlScope !== normalized) {
+        return invalid("subagentControlScope cannot be changed once set");
+      }
+      next.subagentControlScope = normalized;
     }
   }
 
@@ -161,15 +238,29 @@ export async function applySessionsPatchToStore(params: {
       // Clear the override and fall back to model default
       delete next.thinkingLevel;
     } else if (raw !== undefined) {
-      const normalized = normalizeThinkLevel(String(raw));
+      const normalized = normalizeThinkLevel(raw);
       if (!normalized) {
-        const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
-        const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
+        const hintProvider =
+          normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
+        const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
       }
       next.thinkingLevel = normalized;
+    }
+  }
+
+  if ("fastMode" in patch) {
+    const raw = patch.fastMode;
+    if (raw === null) {
+      delete next.fastMode;
+    } else if (raw !== undefined) {
+      const normalized = normalizeFastMode(raw);
+      if (normalized === undefined) {
+        return invalid("invalid fastMode (use true or false)");
+      }
+      next.fastMode = normalized;
     }
   }
 
@@ -187,7 +278,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.reasoningLevel;
     } else if (raw !== undefined) {
-      const normalized = normalizeReasoningLevel(String(raw));
+      const normalized = normalizeReasoningLevel(raw);
       if (!normalized) {
         return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
       }
@@ -202,7 +293,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.responseUsage;
     } else if (raw !== undefined) {
-      const normalized = normalizeUsageDisplay(String(raw));
+      const normalized = normalizeUsageDisplay(raw);
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
@@ -219,7 +310,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.elevatedLevel;
     } else if (raw !== undefined) {
-      const normalized = normalizeElevatedLevel(String(raw));
+      const normalized = normalizeElevatedLevel(raw);
       if (!normalized) {
         return invalid('invalid elevatedLevel (use "on"|"off"|"ask"|"full")');
       }
@@ -233,9 +324,9 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execHost;
     } else if (raw !== undefined) {
-      const normalized = normalizeExecHost(String(raw));
+      const normalized = normalizeExecTarget(raw) ?? undefined;
       if (!normalized) {
-        return invalid('invalid execHost (use "sandbox"|"gateway"|"node")');
+        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
       }
       next.execHost = normalized;
     }
@@ -246,7 +337,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execSecurity;
     } else if (raw !== undefined) {
-      const normalized = normalizeExecSecurity(String(raw));
+      const normalized = normalizeExecSecurity(raw);
       if (!normalized) {
         return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
       }
@@ -259,7 +350,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execAsk;
     } else if (raw !== undefined) {
-      const normalized = normalizeExecAsk(String(raw));
+      const normalized = normalizeExecAsk(raw);
       if (!normalized) {
         return invalid('invalid execAsk (use "off"|"on-miss"|"always")');
       }
@@ -272,7 +363,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execNode;
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
@@ -290,9 +381,10 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
@@ -323,6 +415,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        markLiveSwitchPending: true,
       });
     }
   }
@@ -343,7 +436,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.sendPolicy;
     } else if (raw !== undefined) {
-      const normalized = normalizeSendPolicy(String(raw));
+      const normalized = normalizeSendPolicy(raw);
       if (!normalized) {
         return invalid('invalid sendPolicy (use "allow"|"deny")');
       }
@@ -356,7 +449,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.groupActivation;
     } else if (raw !== undefined) {
-      const normalized = normalizeGroupActivation(String(raw));
+      const normalized = normalizeGroupActivation(raw);
       if (!normalized) {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }

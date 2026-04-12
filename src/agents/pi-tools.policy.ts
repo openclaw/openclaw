@@ -1,44 +1,29 @@
-import { getChannelDock } from "../channels/dock.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
-
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
-  const deny = compileGlobPatterns({
-    raw: expandToolGroups(policy.deny ?? []),
-    normalize: normalizeToolName,
-  });
-  const allow = compileGlobPatterns({
-    raw: expandToolGroups(policy.allow ?? []),
-    normalize: normalizeToolName,
-  });
-  return (name: string) => {
-    const normalized = normalizeToolName(name);
-    if (matchesAnyGlobPattern(normalized, deny)) {
-      return false;
-    }
-    if (allow.length === 0) {
-      return true;
-    }
-    if (matchesAnyGlobPattern(normalized, allow)) {
-      return true;
-    }
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("exec", allow)) {
-      return true;
-    }
-    return false;
-  };
-}
+import {
+  resolveStoredSubagentCapabilities,
+  type SubagentSessionRole,
+} from "./subagent-capabilities.js";
+import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 /**
  * Tools always denied for sub-agents regardless of depth.
@@ -53,9 +38,6 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // Status/scheduling - main agent coordinates
   "session_status",
   "cron",
-  // Memory - pass relevant info in spawn prompt instead
-  "memory_search",
-  "memory_get",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
 ];
@@ -64,15 +46,20 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
  * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
  * These are tools that only make sense for orchestrator sub-agents that can spawn children.
  */
-const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list", "sessions_history", "sessions_spawn"];
+const SUBAGENT_TOOL_DENY_LEAF = [
+  "subagents",
+  "sessions_list",
+  "sessions_history",
+  "sessions_spawn",
+];
 
 /**
  * Build the deny list for a sub-agent at a given depth.
  *
  * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn,
  *   subagents, sessions_list, sessions_history so it can manage its children.
- * - Depth >= maxSpawnDepth (leaf): denied sessions_spawn and
- *   session management tools. Still allowed subagents (for list/status visibility).
+ * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
+ *   session management tools.
  */
 function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[] {
   const isLeaf = depth >= Math.max(1, Math.floor(maxSpawnDepth));
@@ -81,6 +68,13 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
   }
   // Orchestrator sub-agent: only deny the always-denied tools.
   // sessions_spawn, subagents, sessions_list, sessions_history are allowed.
+  return [...SUBAGENT_TOOL_DENY_ALWAYS];
+}
+
+function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
+  if (role === "leaf") {
+    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
+  }
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
@@ -103,19 +97,32 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
   return { allow: mergedAllow, deny };
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
-  return makeToolPolicyMatcher(policy)(name);
+export function resolveSubagentToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string,
+): SandboxToolPolicy {
+  const configured = cfg?.tools?.subagents?.tools;
+  const capabilities = resolveStoredSubagentCapabilities(sessionKey, { cfg });
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const explicitAllow = new Set(
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+  );
+  const deny = [
+    ...resolveSubagentDenyListForRole(capabilities.role).filter(
+      (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
+    ),
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return { allow: mergedAllow, deny };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) {
     return tools;
   }
-  const matcher = makeToolPolicyMatcher(policy);
-  return tools.filter((tool) => matcher(tool.name));
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 type ToolPolicyConfig = {
@@ -126,18 +133,77 @@ type ToolPolicyConfig = {
 };
 
 function normalizeProviderKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
+}
+
+function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    resolved.push(trimmed);
+  }
+  return resolved;
+}
+
+function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
+  const raw = groupId?.trim();
+  if (!raw) {
+    return [];
+  }
+  const topicSenderMatch = raw.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const [, chatId, topicId] = topicSenderMatch;
+    // Sender-scoped sessions still inherit topic/base group tool policies.
+    return collectUniqueStrings([raw, `${chatId}:topic:${topicId}`, chatId]);
+  }
+  const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const [, chatId, topicId] = topicMatch;
+    return collectUniqueStrings([`${chatId}:topic:${topicId}`, chatId]);
+  }
+  const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const [, chatId] = senderMatch;
+    return collectUniqueStrings([raw, chatId]);
+  }
+  return [raw];
 }
 
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
-  groupId?: string;
+  groupIds?: string[];
 } {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return {};
   }
-  const base = resolveThreadParentSessionKey(raw) ?? raw;
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
+  const conversationKey = threadId ? baseSessionKey : raw;
+  const conversation = parseRawSessionConversationRef(conversationKey);
+  if (conversation) {
+    const resolvedConversation = /:(?:sender|thread|topic):/iu.test(conversation.rawId)
+      ? resolveSessionConversation({
+          channel: conversation.channel,
+          kind: conversation.kind,
+          rawId: conversation.rawId,
+        })
+      : null;
+    return {
+      channel: conversation.channel,
+      groupIds: collectUniqueStrings([
+        ...buildScopedGroupIdCandidates(conversation.rawId),
+        resolvedConversation?.id,
+        resolvedConversation?.baseConversationId,
+        ...(resolvedConversation?.parentConversationCandidates ?? []),
+      ]),
+    };
+  }
+  const base = conversationKey ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
@@ -154,7 +220,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
-  return { channel: channel.trim().toLowerCase(), groupId };
+  return {
+    channel: normalizeLowercaseStringOrEmpty(channel),
+    groupIds: buildScopedGroupIdCandidates(groupId),
+  };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -182,7 +251,7 @@ function resolveProviderToolPolicy(params: {
   }
 
   const normalizedProvider = normalizeProviderKey(provider);
-  const rawModelId = params.modelId?.trim().toLowerCase();
+  const rawModelId = normalizeOptionalLowercaseString(params.modelId);
   const fullModelId =
     rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
 
@@ -304,8 +373,12 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
-  if (!groupId) {
+  const groupIds = collectUniqueStrings([
+    ...buildScopedGroupIdCandidates(params.groupId),
+    ...(sessionContext.groupIds ?? []),
+    ...(spawnedContext.groupIds ?? []),
+  ]);
+  if (groupIds.length === 0) {
     return undefined;
   }
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
@@ -313,14 +386,14 @@ export function resolveGroupToolPolicy(params: {
   if (!channel) {
     return undefined;
   }
-  let dock;
+  let plugin;
   try {
-    dock = getChannelDock(channel);
+    plugin = getChannelPlugin(channel);
   } catch {
-    dock = undefined;
+    plugin = undefined;
   }
-  const toolsConfig =
-    dock?.groups?.resolveToolPolicy?.({
+  for (const groupId of groupIds) {
+    const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: params.groupChannel,
@@ -330,23 +403,24 @@ export function resolveGroupToolPolicy(params: {
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-    }) ??
-    resolveChannelGroupToolsPolicy({
-      cfg: params.config,
-      channel,
-      groupId,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
     });
-  return pickSandboxToolPolicy(toolsConfig);
+    const policy = pickSandboxToolPolicy(toolsConfig);
+    if (policy) {
+      return policy;
+    }
+  }
+  const configTools = resolveChannelGroupToolsPolicy({
+    cfg: params.config,
+    channel,
+    groupId: groupIds[0],
+    groupIdCandidates: groupIds.slice(1),
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  return pickSandboxToolPolicy(configTools);
 }
 
-export function isToolAllowedByPolicies(
-  name: string,
-  policies: Array<SandboxToolPolicy | undefined>,
-) {
-  return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
-}
+export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

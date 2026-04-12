@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId | "webchat";
+export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -18,6 +19,8 @@ export type SessionOrigin = {
   chatType?: SessionChatType;
   from?: string;
   to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -65,6 +68,46 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  authEpoch?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+};
+
+export type SessionCompactionCheckpointReason =
+  | "manual"
+  | "auto-threshold"
+  | "overflow-retry"
+  | "timeout-retry";
+
+export type SessionCompactionTranscriptReference = {
+  sessionId: string;
+  sessionFile?: string;
+  leafId?: string;
+  entryId?: string;
+};
+
+export type SessionCompactionCheckpoint = {
+  checkpointId: string;
+  sessionKey: string;
+  sessionId: string;
+  createdAt: number;
+  reason: SessionCompactionCheckpointReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  summary?: string;
+  firstKeptEntryId?: string;
+  preCompaction: SessionCompactionTranscriptReference;
+  postCompaction: SessionCompactionTranscriptReference;
+};
+
+export type SessionPluginDebugEntry = {
+  pluginId: string;
+  lines: string[];
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -73,17 +116,41 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /**
+   * Base session key for heartbeat-created isolated sessions.
+   * When present, `<base>:heartbeat` is a synthetic isolated session rather than
+   * a real user/session-scoped key that merely happens to end with `:heartbeat`.
+   */
+  heartbeatIsolatedBaseSessionKey?: string;
+  /** Heartbeat task state (task name -> last run timestamp ms). */
+  heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
+  spawnedWorkspaceDir?: string;
+  /** Explicit parent session linkage for dashboard-created child sessions. */
+  parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
   spawnDepth?: number;
+  /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
+  subagentRole?: "orchestrator" | "leaf";
+  /** Explicit control scope assigned at spawn time for subagent control decisions. */
+  subagentControlScope?: "children" | "none";
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Stable first-run start time for subagent sessions, persisted after completion. */
+  startedAt?: number;
+  /** Latest completed run end time for subagent sessions, persisted after completion. */
+  endedAt?: number;
+  /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
+  runtimeMs?: number;
+  /** Final persisted subagent run status, used after in-memory run archival. */
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
@@ -94,6 +161,7 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -105,9 +173,23 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Tracks whether the persisted model override came from an explicit user
+   * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
+   * Resets only preserve user-driven overrides.
+   */
+  modelOverrideSource?: "auto" | "user";
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
+  /**
+   * Set on explicit user-driven session model changes (for example `/model`
+   * and `sessions.patch`) during an active run. The embedded runner checks
+   * this flag to decide whether to throw `LiveSessionModelSwitchError`.
+   * System-initiated fallbacks (rate-limit retry rotation) never set this
+   * flag, so they are never mistaken for user-initiated switches.
+   */
+  liveModelSwitchPending?: boolean;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
@@ -131,6 +213,7 @@ export type SessionEntry = {
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
+  estimatedCostUsd?: number;
   cacheRead?: number;
   cacheWrite?: number;
   modelProvider?: string;
@@ -144,9 +227,12 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   compactionCount?: number;
+  compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
@@ -163,17 +249,31 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
+   * Each plugin owns and may overwrite only its own entry between turns.
+   */
+  pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
 
-function normalizeRuntimeField(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+export function resolveSessionPluginDebugLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string => typeof line === "string" && line.trim().length > 0,
+            )
+          : [],
+      )
+    : [];
 }
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
-  const normalizedModel = normalizeRuntimeField(entry.model);
-  const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
+  const normalizedModel = normalizeOptionalString(entry.model);
+  const normalizedProvider = normalizeOptionalString(entry.modelProvider);
   let next = entry;
 
   if (!normalizedModel) {
@@ -258,8 +358,8 @@ export function mergeSessionEntryWithPolicy(
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
-    const patchedModel = normalizeRuntimeField(patch.model);
-    const existingModel = normalizeRuntimeField(existing.model);
+    const patchedModel = normalizeOptionalString(patch.model);
+    const existingModel = normalizeOptionalString(existing.model);
     if (patchedModel && patchedModel !== existingModel) {
       delete next.modelProvider;
     }
@@ -372,4 +472,4 @@ export type SessionSystemPromptReport = {
 
 export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
-export const DEFAULT_IDLE_MINUTES = 60;
+export const DEFAULT_IDLE_MINUTES = 0;

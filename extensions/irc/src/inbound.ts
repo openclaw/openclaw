@@ -1,22 +1,7 @@
 import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  createScopedPairingAccess,
-  dispatchInboundReplyWithBase,
-  formatTextWithAttachmentLinks,
-  issuePairingChallenge,
-  logInboundDrop,
-  isDangerousNameMatchingEnabled,
-  readStoreAllowFromForDmPolicy,
-  resolveControlCommandGate,
-  resolveOutboundMediaUrls,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveEffectiveAllowFromLists,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type OutboundReplyPayload,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk/irc";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -26,6 +11,23 @@ import {
   resolveIrcGroupSenderAllowed,
   resolveIrcRequireMention,
 } from "./policy.js";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  createChannelPairingController,
+  deliverFormattedTextWithAttachments,
+  dispatchInboundReplyWithBase,
+  logInboundDrop,
+  isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
+  resolveControlCommandGate,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveEffectiveAllowFromLists,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type OutboundReplyPayload,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -61,23 +63,23 @@ async function deliverIrcReply(params: {
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
-  const combined = formatTextWithAttachmentLinks(
-    params.payload.text,
-    resolveOutboundMediaUrls(params.payload),
-  );
-  if (!combined) {
+  const delivered = await deliverFormattedTextWithAttachments({
+    payload: params.payload,
+    send: async ({ text, replyToId }) => {
+      if (params.sendReply) {
+        await params.sendReply(params.target, text, replyToId);
+      } else {
+        await sendMessageIrc(params.target, text, {
+          accountId: params.accountId,
+          replyTo: replyToId,
+        });
+      }
+      params.statusSink?.({ lastOutboundAt: Date.now() });
+    },
+  });
+  if (!delivered) {
     return;
   }
-
-  if (params.sendReply) {
-    await params.sendReply(params.target, combined, params.payload.replyToId);
-  } else {
-    await sendMessageIrc(params.target, combined, {
-      accountId: params.accountId,
-      replyTo: params.payload.replyToId,
-    });
-  }
-  params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleIrcInbound(params: {
@@ -91,7 +93,7 @@ export async function handleIrcInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, connectedNick, statusSink } = params;
   const core = getIrcRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -209,12 +211,10 @@ export async function handleIrcInbound(params: {
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          await issuePairingChallenge({
-            channel: CHANNEL_ID,
-            senderId: senderDisplay.toLowerCase(),
+          await pairing.issueChallenge({
+            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
             senderIdLine: `Your IRC id: ${senderDisplay}`,
             meta: { name: message.senderNick || undefined },
-            upsertPairingRequest: pairing.upsertPairingRequest,
             sendPairingReply: async (text) => {
               await deliverIrcReply({
                 payload: { text },
@@ -303,7 +303,7 @@ export async function handleIrcInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
