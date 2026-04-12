@@ -134,7 +134,7 @@ export function installVitestNoOutputWatchdog(params) {
   };
 }
 
-function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
   }
