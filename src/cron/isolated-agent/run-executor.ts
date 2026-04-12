@@ -67,10 +67,12 @@ export function createCronPromptExecutor(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
 }) {
-  const sessionFile = resolveSessionTranscriptPath(
-    params.cronSession.sessionEntry.sessionId,
-    params.agentId,
-  );
+  const sessionFile =
+    params.cronSession.sessionEntry.sessionFile?.trim() ||
+    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
+    params.cronSession.sessionEntry.sessionFile = sessionFile;
+  }
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
