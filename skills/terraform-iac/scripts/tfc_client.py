@@ -3775,13 +3775,17 @@ def get_workspace_id(workspace_name):
     from urllib.parse import quote
     org = get_org()
     ws_name = quote(workspace_name, safe="")
-    r = requests.get(
-        f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
-        headers=api_headers()
-    )
+    try:
+        r = requests.get(
+            f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
+            headers=api_headers()
+        )
+    except requests.RequestException as exc:
+        print(f"ERROR: Failed to look up workspace '{workspace_name}' in organization '{org}': {exc}")
+        return None
     if r.status_code == 404:
         print(f"No workspace named '{workspace_name}' found in organization '{org}'.")
-        print(f"  Hint: run `openclaw tfc_client.py list-workspaces` to check the available workspace names.")
+        print("  Hint: run `openclaw tfc_client.py list-workspaces` to check the available workspace names.")
         return None
     if r.status_code >= 400:
         print(f"ERROR: Failed to look up workspace '{workspace_name}' in organization '{org}' (HTTP {r.status_code}).")
