@@ -1,6 +1,8 @@
-import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { expectProviderOnboardMergedLegacyConfig } from "../../test/helpers/plugins/provider-onboard.js";
+import {
+  expectProviderOnboardMergedLegacyConfig,
+  expectProviderOnboardPrimaryModel,
+} from "../../test/helpers/plugins/provider-onboard.js";
 import { SYNTHETIC_DEFAULT_MODEL_REF as SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC } from "./api.js";
 import {
   applySyntheticConfig,
@@ -15,9 +17,18 @@ describe("synthetic onboard", () => {
       baseUrl: "https://api.synthetic.new/anthropic",
       api: "anthropic-messages",
     });
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC,
-    );
+    expectProviderOnboardPrimaryModel({
+      applyConfig: applySyntheticConfig,
+      modelRef: SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC,
+    });
+  });
+
+  it("keeps the public default model ref aligned", () => {
+    expect(SYNTHETIC_DEFAULT_MODEL_REF).toBe(SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC);
+    expectProviderOnboardPrimaryModel({
+      applyConfig: applySyntheticConfig,
+      modelRef: SYNTHETIC_DEFAULT_MODEL_REF,
+    });
   });
 
   it("merges existing synthetic provider models", () => {
