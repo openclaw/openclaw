@@ -1,10 +1,17 @@
 export type PluginIdScope = readonly string[] | undefined;
 
-export function normalizePluginIdScope(ids?: readonly string[]): string[] | undefined {
+export function normalizePluginIdScope(ids?: readonly unknown[]): string[] | undefined {
   if (ids === undefined) {
     return undefined;
   }
-  return Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean))).toSorted();
+  return Array.from(
+    new Set(
+      ids
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ).toSorted();
 }
 
 export function hasExplicitPluginIdScope(ids?: readonly string[]): boolean {
