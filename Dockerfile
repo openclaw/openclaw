@@ -175,8 +175,15 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 1password-cli
 
-# Install Homebrew
-RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Install Homebrew (requires build-essential, file, ruby)
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential file ruby && \
+    NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" && \
+    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> /etc/profile.d/brew.sh
 
 # Install gogcli from GitHub releases
 RUN curl -fsSL https://api.github.com/repos/steipete/gogcli/releases/latest | grep -o '"browser_download_url": "[^"]*linux[^"]*"' | head -1 | cut -d'"' -f4 | xargs curl -fsSL -o /tmp/gogcli && \
