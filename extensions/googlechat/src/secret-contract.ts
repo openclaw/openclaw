@@ -63,7 +63,7 @@ function resolveSecretInputRef(params: {
 function collectGoogleChatAccountAssignment(params: {
   target: GoogleChatAccountLike;
   path: string;
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
@@ -107,7 +107,7 @@ function collectGoogleChatAccountAssignment(params: {
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
   const resolved = getChannelSurface(params.config, "googlechat");

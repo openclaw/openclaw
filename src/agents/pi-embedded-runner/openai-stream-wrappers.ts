@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
@@ -82,7 +82,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = readStringValue(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -110,7 +110,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = readStringValue(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -335,18 +335,18 @@ export function createCodexNativeWebSearchWrapper(
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {
         log.debug(
-          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
-            model.provider ?? "unknown",
-          )}/${String(model.id ?? "unknown")}`,
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
+            model.provider ?? "unknown"
+          }/${model.id ?? "unknown"}`,
         );
       }
       return underlying(model, context, options);
     }
 
     log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${String(
-        model.provider ?? "unknown",
-      )}/${String(model.id ?? "unknown")}`,
+      `activating Codex native web search (${activation.codexMode}) for ${
+        model.provider ?? "unknown"
+      }/${model.id ?? "unknown"}`,
     );
 
     const originalOnPayload = options?.onPayload;

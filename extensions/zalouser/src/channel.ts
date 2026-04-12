@@ -1,11 +1,16 @@
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { checkZcaAuthenticated, type ResolvedZalouserAccount } from "./accounts.js";
+import {
+  checkZcaAuthenticated,
+  resolveZalouserAccountSync,
+  type ResolvedZalouserAccount,
+} from "./accounts.js";
 import type { ChannelDirectoryEntry, ChannelPlugin } from "./channel-api.js";
 import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
 import {
@@ -15,6 +20,7 @@ import {
   zalouserMessagingAdapter,
   zalouserOutboundAdapter,
   zalouserPairingTextAdapter,
+  resolveZalouserQrProfile,
   zalouserResolverAdapter,
   zalouserSecurityAdapter,
   zalouserThreadingAdapter,
@@ -75,7 +81,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             return null;
           }
           return mapUser({
-            id: String(parsed.userId),
+            id: parsed.userId,
             name: parsed.displayName ?? null,
             avatarUrl: parsed.avatar ?? null,
             raw: parsed,
@@ -87,7 +93,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const friends = await listZaloFriendsMatching(account.profile, query);
           const rows = friends.map((friend) =>
             mapUser({
-              id: String(friend.userId),
+              id: friend.userId,
               name: friend.displayName ?? null,
               avatarUrl: friend.avatar ?? null,
               raw: friend,
@@ -101,7 +107,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const groups = await listZaloGroupsMatching(account.profile, query);
           const rows = groups.map((group) =>
             mapGroup({
-              id: `group:${String(group.groupId)}`,
+              id: `group:${group.groupId}`,
               name: group.name ?? null,
               raw: group,
             }),

@@ -1,17 +1,20 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
-import type { RunCliAgentParams } from "./cli-runner/types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
   const context = await prepareCliRunContext(params);
+  return runPreparedCliAgent(context);
+}
 
+export async function runPreparedCliAgent(
+  context: PreparedCliRunContext,
+): Promise<EmbeddedPiRunResult> {
+  const { params } = context;
   const buildCliRunResult = (resultParams: {
     output: Awaited<ReturnType<typeof executePreparedCliRun>>;
     effectiveCliSessionId?: string;
@@ -89,25 +92,13 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
   }
 }
 
-export async function runClaudeCliAgent(params: {
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-  sessionFile: string;
-  workspaceDir: string;
-  config?: OpenClawConfig;
-  prompt: string;
+export type RunClaudeCliAgentParams = Omit<RunCliAgentParams, "provider" | "cliSessionId"> & {
   provider?: string;
-  model?: string;
-  thinkLevel?: ThinkLevel;
-  timeoutMs: number;
-  runId: string;
-  extraSystemPrompt?: string;
-  ownerNumbers?: string[];
   claudeSessionId?: string;
-  images?: ImageContent[];
-}): Promise<EmbeddedPiRunResult> {
-  return runCliAgent({
+};
+
+export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): RunCliAgentParams {
+  return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -122,7 +113,16 @@ export async function runClaudeCliAgent(params: {
     runId: params.runId,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
-    cliSessionId: params.claudeSessionId,
+    // Legacy `claudeSessionId` callers predate the shared CLI session contract.
+    // Ignore it here so the compatibility wrapper does not accidentally resume
+    // an incompatible Claude session on the generic runner path.
     images: params.images,
-  });
+    senderIsOwner: params.senderIsOwner,
+  };
+}
+
+export async function runClaudeCliAgent(
+  params: RunClaudeCliAgentParams,
+): Promise<EmbeddedPiRunResult> {
+  return runCliAgent(buildRunClaudeCliAgentParams(params));
 }

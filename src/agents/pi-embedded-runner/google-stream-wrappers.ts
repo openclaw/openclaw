@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 function isGemini31Model(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
 }
 

@@ -1,6 +1,9 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -10,6 +13,7 @@ export type NormalizedPluginsConfig = {
   loadPaths: string[];
   slots: {
     memory?: string | null;
+    contextEngine?: string | null;
   };
   entries: Record<
     string,
@@ -46,7 +50,7 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.toLowerCase() === "none") {
+  if (normalizeOptionalLowercaseString(trimmed) === "none") {
     return null;
   }
   return trimmed;
@@ -139,6 +143,7 @@ export function normalizePluginsConfigWithResolver(
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),
   };

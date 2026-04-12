@@ -1,9 +1,14 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../loader.js";
+import {
+  hasExplicitPluginIdScope,
+  hasNonEmptyPluginIdScope,
+  normalizePluginIdScope,
+} from "../plugin-scope.js";
 import { getActivePluginRegistry } from "../runtime.js";
 import { buildPluginRuntimeLoadOptions, resolvePluginRuntimeLoadContext } from "./load-context.js";
 
@@ -22,18 +27,22 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
     case "all":
       return 3;
   }
+  throw new Error("Unsupported plugin registry scope");
 }
 
 function activeRegistrySatisfiesScope(
   scope: PluginRegistryScope,
   active: ReturnType<typeof getActivePluginRegistry>,
   expectedChannelPluginIds: readonly string[],
-  requestedPluginIds: readonly string[],
+  requestedPluginIds: readonly string[] | undefined,
 ): boolean {
   if (!active) {
     return false;
   }
-  if (requestedPluginIds.length > 0) {
+  if (requestedPluginIds !== undefined) {
+    if (requestedPluginIds.length === 0) {
+      return false;
+    }
     const activePluginIds = new Set(
       active.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
     );
@@ -50,6 +59,7 @@ function activeRegistrySatisfiesScope(
     case "all":
       return false;
   }
+  throw new Error("Unsupported plugin registry scope");
 }
 
 export function ensurePluginRegistryLoaded(options?: {
@@ -60,12 +70,11 @@ export function ensurePluginRegistryLoaded(options?: {
   onlyPluginIds?: string[];
 }): void {
   const scope = options?.scope ?? "all";
-  const requestedPluginIds =
-    options?.onlyPluginIds?.map((pluginId) => pluginId.trim()).filter(Boolean) ?? [];
-  const scopedLoad = requestedPluginIds.length > 0;
+  const requestedPluginIds = normalizePluginIdScope(options?.onlyPluginIds);
+  const scopedLoad = hasExplicitPluginIdScope(requestedPluginIds);
   const context = resolvePluginRuntimeLoadContext(options);
   const expectedChannelPluginIds = scopedLoad
-    ? requestedPluginIds
+    ? (requestedPluginIds ?? [])
     : scope === "configured-channels"
       ? resolveConfiguredChannelPluginIds({
           config: context.config,
@@ -83,13 +92,13 @@ export function ensurePluginRegistryLoaded(options?: {
   if (
     !scopedLoad &&
     scopeRank(pluginRegistryLoaded) >= scopeRank(scope) &&
-    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, expectedChannelPluginIds)
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, undefined)
   ) {
     return;
   }
   if (
     (pluginRegistryLoaded === "none" || scopedLoad) &&
-    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, expectedChannelPluginIds)
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, requestedPluginIds)
   ) {
     if (!scopedLoad) {
       pluginRegistryLoaded = scope;
@@ -99,7 +108,10 @@ export function ensurePluginRegistryLoaded(options?: {
   loadOpenClawPlugins(
     buildPluginRuntimeLoadOptions(context, {
       throwOnLoadError: true,
-      ...(expectedChannelPluginIds.length > 0 ? { onlyPluginIds: expectedChannelPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(requestedPluginIds) ||
+      hasNonEmptyPluginIdScope(expectedChannelPluginIds)
+        ? { onlyPluginIds: expectedChannelPluginIds }
+        : {}),
     }),
   );
   if (!scopedLoad) {

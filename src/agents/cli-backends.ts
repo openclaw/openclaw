@@ -1,10 +1,24 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
-import type { CliBundleMcpMode } from "../plugins/types.js";
+import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
+import type { CliBundleMcpMode, CliBackendPlugin, PluginTextTransforms } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+
+type CliBackendsDeps = {
+  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
+  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
+};
+
+const defaultCliBackendsDeps: CliBackendsDeps = {
+  resolvePluginSetupCliBackend,
+  resolveRuntimeCliBackends,
+};
+
+let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 export type ResolvedCliBackend = {
   id: string;
@@ -12,6 +26,8 @@ export type ResolvedCliBackend = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
+  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
+  textTransforms?: PluginTextTransforms;
 };
 
 export type ResolvedCliBackendLiveTest = {
@@ -32,6 +48,8 @@ type FallbackCliBackendPolicy = {
   bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
+  textTransforms?: PluginTextTransforms;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -47,7 +65,7 @@ function normalizeBundleMcpMode(
 }
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  const entry = resolvePluginSetupCliBackend({
+  const entry = cliBackendsDeps.resolvePluginSetupCliBackend({
     backend: provider,
   });
   if (!entry) {
@@ -63,6 +81,8 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ),
     baseConfig: entry.backend.config,
     normalizeConfig: entry.backend.normalizeConfig,
+    transformSystemPrompt: entry.backend.transformSystemPrompt,
+    textTransforms: entry.backend.textTransforms,
   };
 }
 
@@ -94,7 +114,9 @@ function pickBackendConfig(
 
 function resolveRegisteredBackend(provider: string) {
   const normalized = normalizeBackendKey(provider);
-  return resolveRuntimeCliBackends().find((entry) => normalizeBackendKey(entry.id) === normalized);
+  return cliBackendsDeps
+    .resolveRuntimeCliBackends()
+    .find((entry) => normalizeBackendKey(entry.id) === normalized);
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -136,7 +158,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
 
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
-  for (const backend of resolveRuntimeCliBackends()) {
+  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
     ids.add(normalizeBackendKey(backend.id));
   }
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -149,8 +171,10 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
   const entry =
-    resolvePluginSetupCliBackend({ backend: normalized }) ??
-    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
+    cliBackendsDeps
+      .resolveRuntimeCliBackends()
+      .find((backend) => normalizeBackendKey(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -169,7 +193,7 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
-  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
+  const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
@@ -189,9 +213,12 @@ export function resolveCliBackendConfig(
         registered.bundleMcp === true,
       ),
       pluginId: registered.pluginId,
+      transformSystemPrompt: registered.transformSystemPrompt,
+      textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
     };
   }
 
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   if (!override) {
     if (!fallbackPolicy?.baseConfig) {
       return null;
@@ -208,6 +235,11 @@ export function resolveCliBackendConfig(
       config: { ...baseConfig, command },
       bundleMcp: fallbackPolicy.bundleMcp,
       bundleMcpMode: fallbackPolicy.bundleMcpMode,
+      transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
+      textTransforms: mergePluginTextTransforms(
+        runtimeTextTransforms,
+        fallbackPolicy.textTransforms,
+      ),
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -225,5 +257,22 @@ export function resolveCliBackendConfig(
     config: { ...config, command },
     bundleMcp: fallbackPolicy?.bundleMcp === true,
     bundleMcpMode: fallbackPolicy?.bundleMcpMode,
+    transformSystemPrompt: fallbackPolicy?.transformSystemPrompt,
+    textTransforms: mergePluginTextTransforms(
+      runtimeTextTransforms,
+      fallbackPolicy?.textTransforms,
+    ),
   };
 }
+
+export const __testing = {
+  resetDepsForTest(): void {
+    cliBackendsDeps = defaultCliBackendsDeps;
+  },
+  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
+    cliBackendsDeps = {
+      ...defaultCliBackendsDeps,
+      ...deps,
+    };
+  },
+} as const;

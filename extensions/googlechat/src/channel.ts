@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -25,6 +26,8 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   GoogleChatConfigSchema,
+  isGoogleChatSpaceTarget,
+  isGoogleChatUserTarget,
   listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
   resolveDefaultGoogleChatAccountId,
@@ -38,6 +41,11 @@ import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
+
+const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
+  () => import("./channel.runtime.js"),
+  "googleChatChannelRuntime",
+);
 
 const meta = {
   id: "googlechat",
@@ -119,7 +127,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           },
         }),
     },
-    auth: googleChatApprovalAuth,
+    approvalCapability: googleChatApprovalAuth,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -170,7 +178,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts): ChannelStatusIssue[] =>
         accounts.flatMap((entry) => {
-          const accountId = String(entry.accountId ?? DEFAULT_ACCOUNT_ID);
+          const accountId = entry.accountId ?? DEFAULT_ACCOUNT_ID;
           const enabled = entry.enabled !== false;
           const configured = entry.configured === true;
           if (!enabled || !configured) {

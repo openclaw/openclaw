@@ -285,6 +285,7 @@ describe("exec approvals", () => {
           invokeParams = params;
           return { payload: { success: true, stdout: "ok" } };
         }
+        return undefined;
       },
     });
 
@@ -1236,7 +1237,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
-      security: "allowlist",
+      security: "full",
       trigger: "cron",
       approvalRunningNoticeMs: 0,
     });
@@ -1247,6 +1248,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
+
     expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
       "exec.approval.request",
       expect.anything(),

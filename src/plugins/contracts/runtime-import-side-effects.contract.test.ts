@@ -92,6 +92,20 @@ describe("runtime import side-effect contracts", () => {
     expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-channel.ts");
   });
 
+  it("keeps plugin-sdk/approval-handler-adapter-runtime cold on import", async () => {
+    mockChannelRegistry();
+    await import("../../plugin-sdk/approval-handler-adapter-runtime.js");
+
+    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-handler-adapter-runtime.ts");
+  });
+
+  it("keeps plugin-sdk/approval-gateway-runtime cold on import", async () => {
+    mockChannelRegistry();
+    await import("../../plugin-sdk/approval-gateway-runtime.js");
+
+    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-gateway-runtime.ts");
+  });
+
   it("keeps plugins/runtime/runtime-system cold on import", async () => {
     mockChannelRegistry();
     await import("../runtime/runtime-system.js");

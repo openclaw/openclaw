@@ -45,7 +45,7 @@ function normalizeGroupLabel(raw?: string) {
 }
 
 function shortenGroupId(value?: string) {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return "";
   }

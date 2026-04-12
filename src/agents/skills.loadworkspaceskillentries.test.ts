@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
@@ -15,7 +18,14 @@ async function createTempWorkspaceDir() {
   return workspaceDir;
 }
 
+function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+}
+
 afterEach(async () => {
+  setLoggerOverride(null);
+  loggingState.rawConsole = null;
+  resetLogger();
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -59,10 +69,12 @@ describe("loadWorkspaceSkillEntries", () => {
     const managedDir = path.join(workspaceDir, ".managed");
     await fs.mkdir(managedDir, { recursive: true });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const entries = withWorkspaceHome(workspaceDir, () =>
+      loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
 
     expect(entries).toEqual([]);
   });
@@ -275,7 +287,16 @@ describe("loadWorkspaceSkillEntries", () => {
         description: "Outside",
       });
       await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      await fs.symlink(escapedSkillDir, path.join(workspaceDir, "skills", "escaped-skill"), "dir");
+      const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
+      await fs.symlink(escapedSkillDir, requestedPath, "dir");
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warn = vi.fn();
+      loggingState.rawConsole = {
+        log: vi.fn(),
+        info: vi.fn(),
+        warn,
+        error: vi.fn(),
+      };
 
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -283,6 +304,15 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+      const [line] = warn.mock.calls[0] ?? [];
+      const warningLine = String(line);
+      expect(warningLine).toContain(
+        "Skipping skill path that resolves outside its configured root:",
+      );
+      expect(warningLine).toContain("source=openclaw-workspace");
+      expect(warningLine).toContain(`root=${path.join(workspaceDir, "skills")}`);
+      expect(warningLine).toContain(`requested=${requestedPath}`);
+      expect(warningLine).toContain("resolved=");
     },
   );
 

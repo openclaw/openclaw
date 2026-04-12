@@ -1,9 +1,10 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -21,12 +22,12 @@ const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
   GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.length - 1];
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
-  const configured = req.cfg?.models?.providers?.google?.baseUrl?.trim();
+  const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
   return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
-  const trimmed = size?.trim();
+  const trimmed = normalizeOptionalString(size);
   if (!trimmed) {
     return undefined;
   }
@@ -46,7 +47,7 @@ function resolveAspectRatio(params: {
   aspectRatio?: string;
   size?: string;
 }): "16:9" | "9:16" | undefined {
-  const direct = params.aspectRatio?.trim();
+  const direct = normalizeOptionalString(params.aspectRatio);
   if (direct === "16:9" || direct === "9:16") {
     return direct;
   }
@@ -103,7 +104,7 @@ function resolveInputImage(req: VideoGenerationRequest) {
   }
   return {
     imageBytes: input.buffer.toString("base64"),
-    mimeType: input.mimeType?.trim() || "image/png",
+    mimeType: normalizeOptionalString(input.mimeType) || "image/png",
   };
 }
 
@@ -114,7 +115,7 @@ function resolveInputVideo(req: VideoGenerationRequest) {
   }
   return {
     videoBytes: input.buffer.toString("base64"),
-    mimeType: input.mimeType?.trim() || "video/mp4",
+    mimeType: normalizeOptionalString(input.mimeType) || "video/mp4",
   };
 }
 
@@ -123,7 +124,9 @@ async function downloadGeneratedVideo(params: {
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-video-"));
+  const tempDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-google-video-"),
+  );
   const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
   try {
     await params.client.files.download({
@@ -230,12 +233,11 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         },
       });
       let operation = await client.models.generateVideos({
-        model: req.model?.trim() || DEFAULT_GOOGLE_VIDEO_MODEL,
+        model: normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL,
         prompt: req.prompt,
         image: resolveInputImage(req),
         video: resolveInputVideo(req),
         config: {
-          numberOfVideos: 1,
           ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
           ...(resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size })
             ? { aspectRatio: resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size }) }
@@ -267,7 +269,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           if (inline?.videoBytes) {
             return {
               buffer: Buffer.from(inline.videoBytes, "base64"),
-              mimeType: inline.mimeType?.trim() || "video/mp4",
+              mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
               fileName: `video-${index + 1}.mp4`,
             };
           }
@@ -283,7 +285,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       );
       return {
         videos,
-        model: req.model?.trim() || DEFAULT_GOOGLE_VIDEO_MODEL,
+        model: normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL,
         metadata: operation.name
           ? {
               operationName: operation.name,

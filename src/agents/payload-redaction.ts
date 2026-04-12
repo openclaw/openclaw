@@ -14,7 +14,7 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
 ]);
 
 function normalizeFieldName(value: string): string {
-  return value.replaceAll(/[^a-z0-9]/gi, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value.replaceAll(/[^a-z0-9]/gi, ""));
 }
 
 function isCredentialFieldName(key: string): boolean {

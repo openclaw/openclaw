@@ -4,6 +4,7 @@ import { isCronJobActive } from "../cron/active-jobs.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -14,7 +15,11 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import {
+  configureTaskAuditTaskProvider,
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -81,9 +86,9 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
   if (direct) {
     return direct;
   }
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const [key, entry] of Object.entries(store)) {
-    if (key.toLowerCase() === normalized) {
+    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
       return entry;
     }
   }
@@ -227,6 +232,8 @@ export function reconcileInspectableTasks(): TaskRecord[] {
     .listTaskRecords()
     .map((task) => reconcileTaskRecordForOperatorInspection(task));
 }
+
+configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());

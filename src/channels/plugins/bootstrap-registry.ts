@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { listBundledChannelPluginIds } from "./bundled-ids.js";
 import {
   getBundledChannelPlugin,
@@ -5,7 +6,8 @@ import {
   getBundledChannelSetupPlugin,
   getBundledChannelSetupSecrets,
 } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 type CachedBootstrapPlugins = {
   sortedIds: string[];
@@ -93,7 +95,7 @@ export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
 }
 
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
@@ -120,7 +122,7 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
 }
 
 export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }

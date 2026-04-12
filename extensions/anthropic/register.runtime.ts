@@ -193,7 +193,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   fallbackTemplateIds: readonly string[];
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -244,6 +244,16 @@ function resolveAnthropicForwardCompatModel(
       dotTemplateId: "claude-sonnet-4.5",
       fallbackTemplateIds: ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS,
     })
+  );
+}
+
+function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
+  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
   );
 }
 
@@ -468,11 +478,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     resolveReasoningOutputMode: () => "native",
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      matchesAnthropicModernModel(modelId) &&
-      (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID))
+      matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
         ? "adaptive"
         : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

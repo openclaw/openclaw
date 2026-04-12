@@ -1,100 +1,84 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { resolveImplicitProvidersForTest } from "../../src/agents/models-config.e2e-harness.js";
-import type { ModelDefinitionConfig } from "../../src/config/types.models.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import plugin from "./index.js";
 
-function buildExplicitKimiModels(): ModelDefinitionConfig[] {
-  return [
-    {
-      id: "kimi-code",
-      name: "Kimi Code",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 262144,
-      maxTokens: 32768,
+async function runKimiCatalog(params: {
+  apiKey?: string;
+  explicitProvider?: Record<string, unknown>;
+}) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const catalogResult = await provider.catalog?.run({
+    config: {
+      models: {
+        providers: params.explicitProvider
+          ? {
+              "kimi-coding": params.explicitProvider,
+            }
+          : {},
+      },
     },
-  ];
+    resolveProviderApiKey: () => ({ apiKey: params.apiKey ?? "" }),
+  } as never);
+  return catalogResult ?? null;
+}
+
+async function runKimiCatalogProvider(params: {
+  apiKey: string;
+  explicitProvider?: Record<string, unknown>;
+}) {
+  const result = await runKimiCatalog(params);
+  if (!result || !("provider" in result)) {
+    throw new Error("expected Kimi catalog to return one provider");
+  }
+  return result.provider;
 }
 
 describe("Kimi implicit provider (#22409)", () => {
-  it("should include Kimi when KIMI_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
-    process.env.KIMI_API_KEY = "test-key";
+  it("publishes the env vars used by core api-key auto-detection", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
 
-    try {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.kimi).toBeDefined();
-    } finally {
-      envSnapshot.restore();
-    }
+    expect(provider.envVars).toEqual(["KIMI_API_KEY", "KIMICODE_API_KEY"]);
   });
 
-  it("should not include Kimi when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
-    delete process.env.KIMI_API_KEY;
+  it("does not publish a provider when no API key is resolved", async () => {
+    await expect(runKimiCatalog({})).resolves.toBeNull();
+  });
 
-    try {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.kimi).toBeUndefined();
-    } finally {
-      envSnapshot.restore();
-    }
+  it("publishes the Kimi provider when an API key is resolved", async () => {
+    const provider = await runKimiCatalogProvider({ apiKey: "test-key" });
+
+    expect(provider).toMatchObject({
+      apiKey: "test-key",
+      baseUrl: "https://api.kimi.com/coding/",
+      api: "anthropic-messages",
+    });
   });
 
   it("uses explicit legacy kimi-coding baseUrl when provided", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
-    process.env.KIMI_API_KEY = "test-key";
+    const provider = await runKimiCatalogProvider({
+      apiKey: "test-key",
+      explicitProvider: {
+        baseUrl: "https://kimi.example.test/coding/",
+      },
+    });
 
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        explicitProviders: {
-          "kimi-coding": {
-            baseUrl: "https://kimi.example.test/coding/",
-            api: "anthropic-messages",
-            models: buildExplicitKimiModels(),
-          },
-        },
-      });
-      expect(providers?.kimi?.baseUrl).toBe("https://kimi.example.test/coding/");
-    } finally {
-      envSnapshot.restore();
-    }
+    expect(provider.baseUrl).toBe("https://kimi.example.test/coding/");
   });
 
   it("merges explicit legacy kimi-coding headers on top of the built-in user agent", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
-    process.env.KIMI_API_KEY = "test-key";
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        explicitProviders: {
-          "kimi-coding": {
-            baseUrl: "https://api.kimi.com/coding/",
-            api: "anthropic-messages",
-            headers: {
-              "User-Agent": "custom-kimi-client/1.0",
-              "X-Kimi-Tenant": "tenant-a",
-            },
-            models: buildExplicitKimiModels(),
-          },
+    const provider = await runKimiCatalogProvider({
+      apiKey: "test-key",
+      explicitProvider: {
+        headers: {
+          "User-Agent": "custom-kimi-client/1.0",
+          "X-Kimi-Tenant": "tenant-a",
         },
-      });
-      expect(providers?.kimi?.headers).toEqual({
-        "User-Agent": "custom-kimi-client/1.0",
-        "X-Kimi-Tenant": "tenant-a",
-      });
-    } finally {
-      envSnapshot.restore();
-    }
+      },
+    });
+
+    expect(provider.headers).toEqual({
+      "User-Agent": "custom-kimi-client/1.0",
+      "X-Kimi-Tenant": "tenant-a",
+    });
   });
 });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listSpeechProviders } from "./provider-registry.js";
@@ -76,7 +76,7 @@ export function parseTtsDirectives(
       if (!rawKey || !rawValue) {
         continue;
       }
-      const key = rawKey.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(rawKey);
       if (key === "provider") {
         if (policy.allowProvider) {
           const providerId = normalizeLowercaseStringOrEmpty(rawValue);

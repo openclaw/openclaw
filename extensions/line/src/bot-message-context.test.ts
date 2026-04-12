@@ -17,8 +17,6 @@ import type { ResolvedLineAccount } from "./types.js";
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 
-type AgentBinding = NonNullable<OpenClawConfig["bindings"]>[number];
-
 const lineBindingsPlugin = {
   id: "line",
   bindings: lineBindingsAdapter,
@@ -331,11 +329,6 @@ describe("buildLineMessageContext", () => {
 
   it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
       conversationId: "line:user:U1234567890abcdef1234567890abcdef",
     });
 
@@ -344,11 +337,6 @@ describe("buildLineMessageContext", () => {
     });
     expect(
       lineBindingsAdapter.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),
@@ -360,11 +348,6 @@ describe("buildLineMessageContext", () => {
 
   it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
 
@@ -373,7 +356,6 @@ describe("buildLineMessageContext", () => {
     });
     expect(
       lineBindingsAdapter.resolveCommandConversation({
-        accountId: "default",
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
     ).toEqual({
@@ -381,11 +363,6 @@ describe("buildLineMessageContext", () => {
     });
     expect(
       lineBindingsAdapter.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),

@@ -161,6 +161,17 @@ describe("version resolution", () => {
     ).toBe("2026.3.99");
   });
 
+  it("prefers explicit compatibility host overrides over runtime and stale env versions", () => {
+    expect(
+      resolveCompatibilityHostVersion({
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.4.8",
+        OPENCLAW_VERSION: "2026.3.99",
+        OPENCLAW_SERVICE_VERSION: "2026.3.98",
+        npm_package_version: "2026.3.97",
+      }),
+    ).toBe("2026.4.8");
+  });
+
   it("normalizes runtime version candidate for fallback handling", () => {
     expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
     expect(resolveUsableRuntimeVersion("")).toBeUndefined();

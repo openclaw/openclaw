@@ -635,7 +635,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             },
           }),
       },
-      auth: feishuApprovalAuth,
+      approvalCapability: feishuApprovalAuth,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
@@ -1058,7 +1058,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             return jsonActionResult({ ok: true, reactions });
           }
 
-          throw new Error(`Unsupported Feishu action: "${String(ctx.action)}"`);
+          throw new Error(`Unsupported Feishu action: "${ctx.action}"`);
         },
       },
       bindings: {

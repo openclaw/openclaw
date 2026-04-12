@@ -11,7 +11,10 @@ import {
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import {
   fitsTelegramCallbackData,
@@ -114,9 +117,8 @@ export function readTelegramButtons(
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
       }
       const rawButton = button as RawTelegramButton;
-      const text = typeof rawButton.text === "string" ? rawButton.text.trim() : "";
-      const callbackData =
-        typeof rawButton.callback_data === "string" ? rawButton.callback_data.trim() : "";
+      const text = normalizeOptionalString(rawButton.text) ?? "";
+      const callbackData = normalizeOptionalString(rawButton.callback_data) ?? "";
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
