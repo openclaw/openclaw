@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import {
+  PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
@@ -43,6 +44,15 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(isChromeCdpReady).toHaveBeenCalled();
+    expect(isChromeCdpReady).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:18800",
+      1000,
+      PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
@@ -54,7 +64,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     const promise = profile.ensureBrowserAvailable();
     const rejected = expect(promise).rejects.toThrow("not reachable after start");
-    await vi.advanceTimersByTimeAsync(8100);
+    await vi.advanceTimersByTimeAsync(15_100);
     await rejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
