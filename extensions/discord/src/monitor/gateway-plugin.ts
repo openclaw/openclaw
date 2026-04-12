@@ -458,8 +458,8 @@ function createGatewayPlugin(params: {
           }
           case carbonGateway.GatewayOpcodes.InvalidSession: {
             const canResume = Boolean(d);
+            closed = true;
             setTimeout(() => {
-              closed = true;
               if (canResume && this.canResume()) {
                 this.connect(true);
               } else {

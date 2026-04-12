@@ -573,4 +573,40 @@ describe("createDiscordGatewayPlugin", () => {
       "Ignoring gateway reconnect opcode for an already-closed connection",
     );
   });
+
+  it("marks invalid-session reconnects as closed before the delayed reconnect fires", () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = createRuntime();
+      const plugin = createDiscordGatewayPlugin({
+        discordConfig: {},
+        runtime,
+      }) as unknown as {
+        ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+        setupWebSocket: () => void;
+        connect: ReturnType<typeof vi.fn>;
+        handleClose: ReturnType<typeof vi.fn>;
+      };
+      const socket = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
+      socket.close = vi.fn();
+
+      plugin.ws = socket;
+      plugin.setupWebSocket();
+
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ op: GatewayOpcodes.InvalidSession, d: false })),
+      );
+      socket.emit("close", 1000, "");
+
+      expect(plugin.handleClose).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(5_000);
+
+      expect(plugin.connect).toHaveBeenCalledTimes(1);
+      expect(plugin.connect).toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
