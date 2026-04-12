@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -114,9 +115,19 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
+type TwilioTestProvider = VoiceCallProvider &
+  Pick<
+    TwilioProvider,
+    | "clearTtsQueue"
+    | "hasRegisteredStream"
+    | "isValidStreamToken"
+    | "registerCallStream"
+    | "unregisterCallStream"
+  >;
+
 function createTwilioVerificationProvider(
-  overrides: Partial<VoiceCallProvider> = {},
-): VoiceCallProvider {
+  overrides: Partial<TwilioTestProvider> = {},
+): TwilioTestProvider {
   return {
     ...provider,
     name: "twilio",
@@ -126,8 +137,8 @@ function createTwilioVerificationProvider(
 }
 
 function createTwilioStreamingProvider(
-  overrides: Partial<VoiceCallProvider> = {},
-): VoiceCallProvider {
+  overrides: Partial<TwilioTestProvider> = {},
+): TwilioTestProvider {
   return createTwilioVerificationProvider({
     parseWebhookEvent: () => ({ events: [] }),
     initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
