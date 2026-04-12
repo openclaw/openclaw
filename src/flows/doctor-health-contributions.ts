@@ -55,9 +55,14 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import {
+  hasConfiguredGatewayAuthSecretInput,
+  resolveGatewayTokenSecretRefValue,
+} from "../gateway/auth-config-utils.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { hasGatewayTokenEnvCandidate } from "../gateway/credential-planner.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -163,10 +168,25 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
+  // Pre-resolve any env-backed SecretRef for the token so that
+  // `resolveGatewayAuth` sees the actual token value, not undefined.
+  // Without this step the doctor incorrectly reports the token as
+  // unavailable even when the referenced env var is set (false positive).
+  const env = process.env;
+  const explicitMode = ctx.cfg.gateway?.auth?.mode;
+  const resolvedTokenRef = await resolveGatewayTokenSecretRefValue({
+    cfg: ctx.cfg,
+    env,
+    mode: explicitMode,
+    hasTokenCandidate: hasGatewayTokenEnvCandidate(env),
+    hasPasswordCandidate: hasConfiguredGatewayAuthSecretInput(ctx.cfg, "gateway.auth.password"),
+  });
+  const authOverride = resolvedTokenRef ? { token: resolvedTokenRef } : undefined;
   const auth = resolveGatewayAuth({
     authConfig: ctx.cfg.gateway?.auth,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-    env: process.env,
+    env,
+    authOverride,
   });
   const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
   if (!needsToken) {
