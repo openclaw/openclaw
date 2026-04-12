@@ -105,6 +105,7 @@ const mocks = vi.hoisted(() => ({
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
+  buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -181,6 +182,11 @@ vi.mock("../media-understanding/runtime.js", () => ({
   describeVideoFile: vi.fn(),
   transcribeAudioFile:
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
+}));
+
+vi.mock("../media-understanding/provider-registry.js", () => ({
+  buildMediaUnderstandingRegistry:
+    mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
@@ -288,6 +294,7 @@ describe("capability cli", () => {
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
+    mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -918,6 +925,55 @@ describe("capability cli", () => {
         registerMemoryEmbeddingProvider: expect.any(Function),
       }),
     );
+  });
+
+  it("marks env-backed audio providers as configured", async () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+        [
+          "groq",
+          {
+            id: "groq",
+            capabilities: ["audio"],
+            defaultModels: { audio: "whisper-large-v3-turbo" },
+          },
+        ],
+      ]),
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "deepgram",
+        capabilities: ["audio"],
+        defaultModels: { audio: "nova-3" },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "groq",
+        capabilities: ["audio"],
+        defaultModels: { audio: "whisper-large-v3-turbo" },
+      },
+    ]);
   });
 
   it("surfaces available, configured, and selected for web providers", async () => {
