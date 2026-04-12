@@ -439,15 +439,30 @@ function extractAnthropicReplayToolResultIds(block: AnthropicToolResultContentBl
   return ids;
 }
 
+function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return (
+    content.some((block) => isThinkingLikeReplayBlock(block)) &&
+    content.some((block) => isReplayToolCallBlock(block))
+  );
+}
+
 function sanitizeAnthropicReplayToolResults(
   messages: AgentMessage[],
   options?: {
-    allowEmbeddedUserToolResults?: boolean;
+    disallowEmbeddedUserToolResultsForSignedThinkingReplay?: boolean;
   },
 ): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
-  const allowEmbeddedUserToolResults = options?.allowEmbeddedUserToolResults !== false;
+  const disallowEmbeddedUserToolResultsForSignedThinkingReplay =
+    options?.disallowEmbeddedUserToolResultsForSignedThinkingReplay === true;
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
@@ -461,6 +476,9 @@ function sanitizeAnthropicReplayToolResults(
     }
 
     const previous = messages[index - 1];
+    const shouldStripEmbeddedToolResults =
+      disallowEmbeddedUserToolResultsForSignedThinkingReplay &&
+      isSignedThinkingReplayAssistantSpan(previous);
     const validToolUseIds = new Set<string>();
     if (previous && typeof previous === "object" && previous.role === "assistant") {
       const previousContent = (previous as { content?: unknown }).content;
@@ -489,7 +507,7 @@ function sanitizeAnthropicReplayToolResults(
       if (typedBlock.type !== "toolResult" && typedBlock.type !== "tool") {
         return true;
       }
-      if (!allowEmbeddedUserToolResults) {
+      if (shouldStripEmbeddedToolResults) {
         changed = true;
         return false;
       }
@@ -702,7 +720,8 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       : sanitized.messages;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
-        allowEmbeddedUserToolResults: !allowProviderOwnedThinkingReplay,
+        disallowEmbeddedUserToolResultsForSignedThinkingReplay:
+          allowProviderOwnedThinkingReplay,
       });
     }
     if (nextMessages === messages) {
