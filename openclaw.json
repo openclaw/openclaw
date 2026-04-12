@@ -98,7 +98,7 @@
         "name": "life-coach",
         "workspace": "/home/node/.openclaw/workspace-life-coach",
         "agentDir": "/home/node/.openclaw/agents/life-coach/agent",
-        "model": "openrouter/minimax/minimax-m2.5",
+        "model": "openrouter/minimax/minimax-m2.7",
         "tools": {
           "allow": [
             "sessions_send",
@@ -123,7 +123,7 @@
         "name": "linux-coach",
         "workspace": "/home/node/.openclaw/workspace-linux-coach",
         "agentDir": "/home/node/.openclaw/agents/linux-coach/agent",
-        "model": "openrouter/minimax/minimax-m2.5",
+        "model": "openrouter/minimax/minimax-m2.7",
         "tools": {
           "allow": [
             "sessions_send",
