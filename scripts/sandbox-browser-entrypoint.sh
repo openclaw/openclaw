@@ -113,8 +113,6 @@ CHROME_ARGS=(
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--no-zygote"
-  "--no-sandbox"
-  "--disable-setuid-sandbox"
   "--metrics-recording-only"
   "--password-store=basic"
   "--use-mock-keychain"
@@ -131,6 +129,9 @@ if [[ -n "${OPENCLAW_BROWSER_EXTRA_ARGS:-}" ]]; then
   CHROME_ARGS+=("${EXTRA_ARGS[@]}")
 fi
 
+if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
+  CHROME_ARGS+=("--no-sandbox" "--disable-setuid-sandbox")
+fi
 
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
   x11vnc -display :1 -rfbport "${VNC_PORT}" -shared -forever -nopw -localhost &
