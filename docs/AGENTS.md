@@ -8,9 +8,6 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/configuration)`).
 - Section cross-references should use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings should avoid em dashes and apostrophes because Mintlify anchor generation is brittle there.
-- When working on docs, use the Mintlify skill.
-- When the user asks for links, reply with full `https://docs.openclaw.ai/...` URLs.
-- When you touch docs, end the reply with the `https://docs.openclaw.ai/...` URLs you referenced.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside Mintlify.
 - Docs content must stay generic: no personal device names, hostnames, or local paths; use placeholders like `user@gateway-host`.
 
@@ -29,4 +26,3 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - `pnpm docs:check-i18n-glossary` is the guard for changed English doc titles and short internal doc labels.
 - Translation memory lives in generated `docs/.i18n/*.tm.jsonl` files in the publish repo.
 - See `docs/.i18n/README.md`.
-- If the docs i18n pipeline is dragging, ping @jospalmbier on Discord instead of hacking around it.
