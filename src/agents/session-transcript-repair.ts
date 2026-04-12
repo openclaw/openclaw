@@ -17,6 +17,14 @@ type RawToolCallBlock = {
   arguments?: unknown;
 };
 
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -235,6 +243,14 @@ export function repairToolCallInputs(
     }
 
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    // Preserve provider-owned thinking turns verbatim. Anthropic replays can
+    // reject any historical assistant turn whose signed thinking block no
+    // longer matches the original response, including sibling tool calls.
+    if (msg.content.some((block) => isThinkingLikeBlock(block))) {
       out.push(msg);
       continue;
     }
