@@ -122,14 +122,63 @@ describe("ensurePluginRegistryLoaded", () => {
     });
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: resolvedConfig,
-        activationSourceConfig: { plugins: { allow: ["demo-channel"] } },
+        config: expect.objectContaining({
+          ...resolvedConfig,
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              demo: { enabled: true },
+              "demo-channel": { enabled: true },
+            }),
+            allow: ["demo-channel"],
+          }),
+        }),
+        activationSourceConfig: {
+          plugins: {
+            allow: ["demo-channel"],
+            entries: {
+              "demo-channel": { enabled: true },
+            },
+          },
+        },
         autoEnabledReasons: {
           demo: ["demo configured"],
         },
         workspaceDir: "/resolved-workspace",
         onlyPluginIds: ["demo-channel"],
         throwOnLoadError: true,
+      }),
+    );
+  });
+
+  it("temporarily activates configured-channel owners before loading them", () => {
+    const rawConfig = { channels: { demo: { enabled: true } } };
+
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["activation-only-channel"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: rawConfig as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "activation-only-channel": { enabled: true },
+            }),
+            allow: ["activation-only-channel"],
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "activation-only-channel": { enabled: true },
+            }),
+            allow: ["activation-only-channel"],
+          }),
+        }),
+        onlyPluginIds: ["activation-only-channel"],
       }),
     );
   });

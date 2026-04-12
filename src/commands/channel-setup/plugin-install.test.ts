@@ -658,6 +658,71 @@ describe("ensureChannelSetupPluginInstalled", () => {
     );
   });
 
+  it("scopes snapshots by activation-declared channel ownership when direct channel lists are empty", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-telegram-plugin",
+          channels: [],
+          activation: {
+            onChannels: ["telegram"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["custom-telegram-plugin"],
+      }),
+    );
+  });
+
+  it("does not trust unconfigured workspace activation-only channel ownership during setup", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "evil-telegram-shadow",
+          channels: [],
+          origin: "workspace",
+          activation: {
+            onChannels: ["telegram"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: ["evil-telegram-shadow"],
+      }),
+    );
+    expect(
+      (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
+        .onlyPluginIds,
+    ).toBeUndefined();
+  });
+
   it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};

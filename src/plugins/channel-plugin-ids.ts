@@ -1,10 +1,13 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,
   normalizePluginId,
@@ -36,6 +39,176 @@ function isGatewayStartupMemoryPlugin(plugin: PluginManifestRecord): boolean {
 
 function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
+}
+
+function dedupeSortedPluginIds(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function normalizeChannelIds(channelIds: Iterable<string>): string[] {
+  return Array.from(
+    new Set(
+      [...channelIds]
+        .map((channelId) => normalizeOptionalLowercaseString(channelId))
+        .filter((channelId): channelId is string => Boolean(channelId)),
+    ),
+  ).toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveEffectiveChannelOwnershipConfig(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): OpenClawConfig {
+  return applyPluginAutoEnable({ config, env }).config;
+}
+
+function isChannelPluginEligibleForSetupDiscovery(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig: OpenClawConfig;
+}): boolean {
+  if (params.plugin.origin !== "workspace") {
+    return true;
+  }
+  const activation = resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+    enabledByDefault: params.plugin.enabledByDefault,
+  });
+  if (activation.activated) {
+    return true;
+  }
+  return (
+    params.normalizedConfig.enabled &&
+    !params.normalizedConfig.deny.includes(params.plugin.id) &&
+    params.normalizedConfig.allow.includes(params.plugin.id) &&
+    params.normalizedConfig.entries[params.plugin.id]?.enabled === false
+  );
+}
+
+function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig: OpenClawConfig;
+}): boolean {
+  if (!params.normalizedConfig.enabled) {
+    return false;
+  }
+  if (params.normalizedConfig.deny.includes(params.plugin.id)) {
+    return false;
+  }
+  if (params.normalizedConfig.entries[params.plugin.id]?.enabled === false) {
+    return false;
+  }
+  if (
+    params.normalizedConfig.allow.length > 0 &&
+    !params.normalizedConfig.allow.includes(params.plugin.id)
+  ) {
+    return false;
+  }
+  if (params.plugin.origin !== "workspace") {
+    return true;
+  }
+  return resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+    enabledByDefault: params.plugin.enabledByDefault,
+  }).activated;
+}
+
+function resolveScopedChannelOwnerPluginIds(params: {
+  config: OpenClawConfig;
+  channelIds: readonly string[];
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  mode: "runtime" | "setup";
+}): string[] {
+  const channelIds = normalizeChannelIds(params.channelIds);
+  if (channelIds.length === 0) {
+    return [];
+  }
+  const effectiveConfig = resolveEffectiveChannelOwnershipConfig(params.config, params.env);
+  const registry = loadPluginManifestRegistry({
+    config: effectiveConfig,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(effectiveConfig.plugins);
+  const candidateIds = dedupeSortedPluginIds(
+    channelIds.flatMap((channelId) => {
+      const planned = resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "channel",
+          channel: channelId,
+        },
+        config: effectiveConfig,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+      if (planned.length > 0) {
+        return planned;
+      }
+      return registry.plugins
+        .filter((plugin) =>
+          plugin.channels.some(
+            (candidateChannelId) =>
+              normalizeOptionalLowercaseString(candidateChannelId) === channelId,
+          ),
+        )
+        .map((plugin) => plugin.id);
+    }),
+  );
+  if (candidateIds.length === 0) {
+    return [];
+  }
+  const candidateIdSet = new Set(candidateIds);
+  return registry.plugins
+    .filter((plugin) => {
+      if (!candidateIdSet.has(plugin.id)) {
+        return false;
+      }
+      return params.mode === "setup"
+        ? isChannelPluginEligibleForSetupDiscovery({
+            plugin,
+            normalizedConfig,
+            rootConfig: effectiveConfig,
+          })
+        : isChannelPluginEligibleForRuntimeOwnerActivation({
+            plugin,
+            normalizedConfig,
+            rootConfig: effectiveConfig,
+          });
+    })
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveScopedChannelPluginIds(params: {
+  config: OpenClawConfig;
+  channelIds: readonly string[];
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  return resolveScopedChannelOwnerPluginIds({
+    ...params,
+    mode: "runtime",
+  });
+}
+
+export function resolveDiscoverableScopedChannelPluginIds(params: {
+  config: OpenClawConfig;
+  channelIds: readonly string[];
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  return resolveScopedChannelOwnerPluginIds({
+    ...params,
+    mode: "setup",
+  });
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -99,7 +272,10 @@ export function resolveConfiguredChannelPluginIds(params: {
   if (configuredChannelIds.size === 0) {
     return [];
   }
-  return resolveChannelPluginIds(params).filter((pluginId) => configuredChannelIds.has(pluginId));
+  return resolveScopedChannelPluginIds({
+    ...params,
+    channelIds: [...configuredChannelIds],
+  });
 }
 
 export function resolveConfiguredDeferredChannelPluginIds(params: {
