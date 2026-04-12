@@ -221,6 +221,9 @@ should activate it later.
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
+Current consumers use it as a narrowing hint before broader plugin loading, so
+missing activation metadata only costs performance; it should not change
+correctness.
 
 ```json
 {
@@ -241,6 +244,10 @@ not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 | `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
 | `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
 | `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
+
+For command-triggered planning specifically, OpenClaw still falls back to
+legacy `commandAliases[].cliCommand` or `commandAliases[].name` when a plugin
+has not added explicit `activation.onCommands` metadata yet.
 
 ## setup reference
 

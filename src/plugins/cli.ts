@@ -48,7 +48,12 @@ export async function registerPluginCliCommands(
 
   await registerPluginCliCommandGroups(
     program,
-    await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, loaderOptions }),
+    await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg,
+      env,
+      loaderOptions,
+      primaryCommand: primary,
+    }),
     {
       mode,
       primary,
