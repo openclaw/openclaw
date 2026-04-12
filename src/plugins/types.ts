@@ -305,6 +305,7 @@ export type ProviderAuthMethodNonInteractiveContext = {
   runtime: RuntimeEnv;
   agentDir?: string;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   resolveApiKey: (
     params: ProviderResolveNonInteractiveApiKeyParams,
   ) => Promise<ProviderNonInteractiveApiKeyResult | null>;

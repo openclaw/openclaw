@@ -147,6 +147,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     runtime: params.runtime,
     agentDir,
     workspaceDir,
+    env: process.env,
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,
   });
