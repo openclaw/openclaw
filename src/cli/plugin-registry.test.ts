@@ -68,25 +68,6 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
   resolvePluginRuntimeLoadContext: (
     ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
   ) => mocks.resolvePluginRuntimeLoadContext(...args),
-  buildPluginRuntimeLoadOptionsFromValues: (
-    values: {
-      config: unknown;
-      activationSourceConfig: unknown;
-      autoEnabledReasons: Readonly<Record<string, string[]>>;
-      workspaceDir: string | undefined;
-      env: NodeJS.ProcessEnv;
-      logger: typeof logger;
-    },
-    overrides?: Record<string, unknown>,
-  ) => ({
-    config: values.config,
-    activationSourceConfig: values.activationSourceConfig,
-    autoEnabledReasons: values.autoEnabledReasons,
-    workspaceDir: values.workspaceDir,
-    env: values.env,
-    logger: values.logger,
-    ...overrides,
-  }),
   buildPluginRuntimeLoadOptions: (
     context: Parameters<MockBuildPluginRuntimeLoadOptions>[0],
     overrides?: Parameters<MockBuildPluginRuntimeLoadOptions>[1],
