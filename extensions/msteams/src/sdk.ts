@@ -48,6 +48,29 @@ type MSTeamsProcessContext = MSTeamsSendContext & {
   ) => Promise<unknown[]>;
 };
 
+type AzureAccessToken = {
+  token?: string;
+} | null;
+
+type AzureTokenCredential = {
+  getToken: (scope: string | string[]) => Promise<AzureAccessToken>;
+};
+
+type AzureIdentityModule = {
+  ClientCertificateCredential: new (
+    tenantId: string,
+    clientId: string,
+    options: { certificate: string },
+  ) => AzureTokenCredential;
+  ManagedIdentityCredential: new (clientId?: string) => AzureTokenCredential;
+};
+
+const AZURE_IDENTITY_MODULE = "@azure/identity";
+
+async function loadAzureIdentity(): Promise<AzureIdentityModule> {
+  return (await import(AZURE_IDENTITY_MODULE)) as AzureIdentityModule;
+}
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
   const [appsModule, apiModule] = await Promise.all([
     import("@microsoft/teams.apps"),
@@ -129,13 +152,11 @@ function createCertificateApp(
   sdk: MSTeamsTeamsSdk,
 ): MSTeamsApp {
   // Lazily create and cache the credential so the token cache is reused.
-  let credentialPromise: Promise<
-    InstanceType<typeof import("@azure/identity").ClientCertificateCredential>
-  > | null = null;
+  let credentialPromise: Promise<AzureTokenCredential> | null = null;
 
   const getCredential = async () => {
     if (!credentialPromise) {
-      credentialPromise = import("@azure/identity").then(
+      credentialPromise = loadAzureIdentity().then(
         (az) =>
           new az.ClientCertificateCredential(creds.tenantId, creds.appId, {
             certificate: privateKey,
@@ -170,13 +191,11 @@ function createManagedIdentityApp(
 ): MSTeamsApp {
   // Lazily create and cache the credential instance so the token cache is
   // reused across calls instead of hitting IMDS/AAD on every message.
-  let credentialPromise: Promise<
-    InstanceType<typeof import("@azure/identity").ManagedIdentityCredential>
-  > | null = null;
+  let credentialPromise: Promise<AzureTokenCredential> | null = null;
 
   const getCredential = async () => {
     if (!credentialPromise) {
-      credentialPromise = import("@azure/identity").then((az) =>
+      credentialPromise = loadAzureIdentity().then((az) =>
         creds.managedIdentityClientId
           ? new az.ManagedIdentityCredential(creds.managedIdentityClientId)
           : new az.ManagedIdentityCredential(),
@@ -625,7 +644,11 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
     jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
   },
   {
-    issuer: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    // SingleTenant bot deployments (Microsoft's default since 2025-07-31) get
+    // tokens signed by the Azure AD v1 endpoint, whose issuer is scoped to the
+    // bot's tenant. This must be a function so each deployment accepts its own
+    // tenant rather than a single hardcoded one (#64270).
+    issuer: (tenantId: string) => `https://sts.windows.net/${tenantId}/`,
     jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
   },
 ];

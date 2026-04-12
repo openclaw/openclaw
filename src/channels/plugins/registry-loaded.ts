@@ -1,3 +1,4 @@
+import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
 import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistryVersionFromState,
@@ -5,14 +6,9 @@ import {
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
-export type LoadedChannelPlugin = {
+export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
-  meta: {
-    order?: number;
-  };
-  capabilities?: {
-    nativeCommands?: boolean;
-  };
+  meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
 type CachedChannelPlugins = {
@@ -30,6 +26,19 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 };
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
+
+function coerceLoadedChannelPlugin(
+  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
+): LoadedChannelPlugin | null {
+  const id = normalizeOptionalString(plugin?.id) ?? "";
+  if (!plugin || !id) {
+    return null;
+  }
+  if (!plugin.meta || typeof plugin.meta !== "object") {
+    plugin.meta = {};
+  }
+  return plugin as LoadedChannelPlugin;
+}
 
 function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
   const seen = new Set<string>();
@@ -56,8 +65,9 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const channelPlugins: LoadedChannelPlugin[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
-      if (entry?.plugin) {
-        channelPlugins.push(entry.plugin);
+      const plugin = coerceLoadedChannelPlugin(entry?.plugin);
+      if (plugin) {
+        channelPlugins.push(plugin);
       }
     }
   }

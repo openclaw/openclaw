@@ -1,23 +1,23 @@
-import type { PluginRegistry } from "./registry-types.js";
+import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 
 export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
     activeVersion?: number;
-    activeRegistry?: PluginRegistry | null;
+    activeRegistry?: ActivePluginChannelRegistry | null;
     channel?: {
-      registry: PluginRegistry | null;
+      registry: ActivePluginChannelRegistry | null;
       version?: number;
     };
   };
 };
 
-function countChannels(registry: PluginRegistry | null | undefined): number {
+function countChannels(registry: ActivePluginChannelRegistry | null | undefined): number {
   return registry?.channels?.length ?? 0;
 }
 
-export function getActivePluginChannelRegistryFromState(): PluginRegistry | null {
+export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
   const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
   const pinnedRegistry = state?.channel?.registry ?? null;
   if (countChannels(pinnedRegistry) > 0) {

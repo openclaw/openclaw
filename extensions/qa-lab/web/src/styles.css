@@ -359,7 +359,10 @@ select {
   border-right: 1px solid var(--border);
   background: var(--bg-sidebar);
   overflow: hidden;
-  transition: width 140ms ease, min-width 140ms ease, border-color 140ms ease;
+  transition:
+    width 140ms ease,
+    min-width 140ms ease,
+    border-color 140ms ease;
 }
 
 .app-shell--sidebar-collapsed .sidebar {
@@ -2132,7 +2135,10 @@ select {
   opacity: 0;
   max-height: 0;
   pointer-events: none;
-  transition: opacity 120ms ease, max-height 120ms ease, margin-top 120ms ease;
+  transition:
+    opacity 120ms ease,
+    max-height 120ms ease,
+    margin-top 120ms ease;
 }
 
 .capture-timeline-lane:hover .capture-timeline-lane-compact-meta,

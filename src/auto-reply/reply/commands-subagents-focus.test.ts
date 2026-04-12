@@ -165,6 +165,7 @@ function buildCommandParams(params?: {
     hasVerboseDirective: false,
     hasFastDirective: false,
     hasReasoningDirective: false,
+    hasTraceDirective: false,
     hasElevatedDirective: false,
     hasExecDirective: false,
     hasExecOptions: false,
