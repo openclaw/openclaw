@@ -81,6 +81,7 @@ export type PluginHookName =
   | "gateway_stop"
   | "before_dispatch"
   | "reply_dispatch"
+  | "final_reply_payloads"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
@@ -112,6 +113,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_stop",
   "before_dispatch",
   "reply_dispatch",
+  "final_reply_payloads",
   "before_install",
 ] as const satisfies readonly PluginHookName[];
 
@@ -277,6 +279,26 @@ export type PluginHookReplyDispatchResult = {
   handled: boolean;
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+};
+
+export type PluginHookFinalReplyPayloadsEvent = {
+  payloads: ReplyPayload[];
+  sessionKey?: string;
+  channelId?: string;
+  providerUsed?: string;
+  modelUsed?: string;
+  responseUsageMode?: "off" | "tokens" | "full";
+  responseUsageLine?: string;
+};
+
+export type PluginHookFinalReplyPayloadsContext = {
+  cfg: OpenClawConfig;
+  runId?: string;
+};
+
+export type PluginHookFinalReplyPayloadsResult = {
+  payloads?: ReplyPayload[];
+  responseUsageLine?: string;
 };
 
 export type PluginHookToolContext = {
@@ -615,6 +637,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
   ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
+  final_reply_payloads: (
+    event: PluginHookFinalReplyPayloadsEvent,
+    ctx: PluginHookFinalReplyPayloadsContext,
+  ) => Promise<PluginHookFinalReplyPayloadsResult | void> | PluginHookFinalReplyPayloadsResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

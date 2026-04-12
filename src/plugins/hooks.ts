@@ -23,6 +23,9 @@ import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
+  PluginHookFinalReplyPayloadsContext,
+  PluginHookFinalReplyPayloadsEvent,
+  PluginHookFinalReplyPayloadsResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -80,6 +83,9 @@ export type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
+  PluginHookFinalReplyPayloadsContext,
+  PluginHookFinalReplyPayloadsEvent,
+  PluginHookFinalReplyPayloadsResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -727,6 +733,28 @@ export function createHookRunner(
   }
 
   /**
+   * Run final_reply_payloads hook.
+   * Allows plugins to modify finalized reply payloads with resolved model/usage context.
+   * Runs sequentially.
+   */
+  async function runFinalReplyPayloads(
+    event: PluginHookFinalReplyPayloadsEvent,
+    ctx: PluginHookFinalReplyPayloadsContext,
+  ): Promise<PluginHookFinalReplyPayloadsResult | undefined> {
+    return runModifyingHook<"final_reply_payloads", PluginHookFinalReplyPayloadsResult>(
+      "final_reply_payloads",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({
+          payloads: lastDefined(acc?.payloads, next.payloads),
+          responseUsageLine: lastDefined(acc?.responseUsageLine, next.responseUsageLine),
+        }),
+      },
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1125,6 +1153,7 @@ export function createHookRunner(
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,
+    runFinalReplyPayloads,
     runMessageSending,
     runMessageSent,
     // Tool hooks
