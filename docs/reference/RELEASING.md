@@ -46,7 +46,8 @@ OpenClaw has three public release lanes:
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
-- That workflow accepts either an existing release tag or a commit SHA on
+- That workflow accepts either an existing release tag or a full 40-character
+  commit SHA on
   `main` and runs
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
   using both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` workflow secrets
@@ -102,7 +103,8 @@ OpenClaw has three public release lanes:
 
 `OpenClaw Release Checks` accepts these operator-controlled inputs:
 
-- `ref`: existing release tag or commit SHA on `main` to validate
+- `ref`: existing release tag or full 40-character commit SHA on `main` to
+  validate
 
 Rules:
 
@@ -123,7 +125,7 @@ When cutting a stable npm release:
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
 3. Run `OpenClaw Release Checks` separately with the same tag or the
-   release commit SHA when you want live prompt cache coverage
+   full release commit SHA when you want live prompt cache coverage
    - This is separate on purpose so live coverage stays available without
      recoupling long-running or flaky checks to the publish workflow
 4. Save the successful `preflight_run_id`

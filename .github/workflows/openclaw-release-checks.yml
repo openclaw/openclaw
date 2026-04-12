@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Existing release tag or commit SHA on main to validate (for example v2026.4.12 or 0123abcd)
+        description: Existing release tag or full 40-character commit SHA on main to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
 
@@ -32,8 +32,8 @@ jobs:
           RELEASE_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
-            echo "Expected an existing release tag or commit SHA on main, got: ${RELEASE_REF}" >&2
+          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Expected an existing release tag or full 40-character commit SHA on main, got: ${RELEASE_REF}" >&2
             exit 1
           fi
 
