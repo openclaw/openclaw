@@ -58,7 +58,7 @@ const log = createSubsystemLogger("model-auth");
  */
 const providerRuntimeAuthOverrideReentry = new AsyncLocalStorage<true>();
 
-const VALID_RESOLVED_PROVIDER_AUTH_MODES: ReadonlyArray<ResolvedProviderAuth["mode"]> = new Set([
+const VALID_RESOLVED_PROVIDER_AUTH_MODES = new Set<ResolvedProviderAuth["mode"]>([
   "api-key",
   "oauth",
   "token",
@@ -676,15 +676,15 @@ export async function hasAvailableAuthForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  runtimeOverrideRegistrationIsAvailable?: boolean;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
   // Plugin runtime auth override registered for this provider.
-  // Note: we can't invoke run() here (it may be async and side-effecting),
-  // so registration presence is treated as "auth may be available."
-  // A registered override that returns null at runtime will fall through
-  // to default resolution at actual resolve time.
-  {
+  // Callers that need a conservative "auth definitely available now" answer
+  // should keep the default false here. Opt-in callers may treat registration
+  // presence as "auth may be available" when they only need a coarse UI signal.
+  if (params.runtimeOverrideRegistrationIsAvailable) {
     const { getGlobalProviderRuntimeAuthOverrides } =
       await import("../plugins/provider-runtime-auth-override-global.js");
     const overrides = getGlobalProviderRuntimeAuthOverrides();

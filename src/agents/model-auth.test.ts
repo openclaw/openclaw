@@ -1271,14 +1271,15 @@ describe("resetGlobalProviderRuntimeAuthOverridesForTest", () => {
   });
 });
 
-// 10. hasAvailableAuthForProvider — registration presence treated as "may be available"
+// 10. hasAvailableAuthForProvider — default is conservative; opt-in may treat
+//     override registration as "may be available" for coarse UI signals.
 describe("hasAvailableAuthForProvider — plugin runtime auth overrides", () => {
   afterEach(() => {
     resetGlobalProviderRuntimeAuthOverridesForTest();
   });
 
-  it("returns true when a matching override is registered, false otherwise", async () => {
-    // Before registering: no override, empty store, no env vars → false
+  it("stays false by default for registration-only overrides, and opt-in callers can treat registration as available", async () => {
+    // Before registering: no override, empty store, no env vars -> false
     const before = await hasAvailableAuthForProvider({
       provider: FAKE_PROVIDER,
       store: emptyStore,
@@ -1293,14 +1294,27 @@ describe("hasAvailableAuthForProvider — plugin runtime auth overrides", () => 
       })),
     ]);
 
-    // After registering: provider is in override list → true (without invoking run())
-    const after = await hasAvailableAuthForProvider({ provider: FAKE_PROVIDER, store: emptyStore });
-    expect(after).toBe(true);
+    // Default remains conservative because overrides may return null at runtime.
+    const afterDefault = await hasAvailableAuthForProvider({
+      provider: FAKE_PROVIDER,
+      store: emptyStore,
+    });
+    expect(afterDefault).toBe(false);
+
+    // Opt-in callers that only need a coarse "may be available" signal can
+    // treat registration presence as available without invoking plugin code.
+    const afterOptIn = await hasAvailableAuthForProvider({
+      provider: FAKE_PROVIDER,
+      store: emptyStore,
+      runtimeOverrideRegistrationIsAvailable: true,
+    });
+    expect(afterOptIn).toBe(true);
 
     // A provider not covered by any override stays false
     const other = await hasAvailableAuthForProvider({
       provider: "nonexistent-provider-zzztestonly",
       store: emptyStore,
+      runtimeOverrideRegistrationIsAvailable: true,
     });
     expect(other).toBe(false);
   });
