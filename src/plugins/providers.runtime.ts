@@ -8,6 +8,7 @@ import {
   type PluginLoadOptions,
 } from "./loader.js";
 import {
+  resolveDiscoverableProviderOwnerPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -132,22 +133,28 @@ function resolveSetupProviderPluginLoadState(
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
 ) {
   const providerPluginIds = resolveDiscoveredProviderPluginIds({
-    config: base.runtimeConfig,
+    config: params.config,
     workspaceDir: base.workspaceDir,
     env: base.env,
     onlyPluginIds: base.requestedPluginIds,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
-  if (providerPluginIds.length === 0) {
-    if (base.explicitOwnerPluginIds.length === 0) {
-      return undefined;
-    }
+  const explicitOwnerPluginIds = resolveDiscoverableProviderOwnerPluginIds({
+    pluginIds: base.explicitOwnerPluginIds,
+    config: params.config,
+    workspaceDir: base.workspaceDir,
+    env: base.env,
+    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+  });
+  const setupPluginIds = mergeExplicitOwnerPluginIds(providerPluginIds, explicitOwnerPluginIds);
+  if (setupPluginIds.length === 0) {
+    return undefined;
   }
   const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
     {
       config: withActivatedPluginIds({
         config: base.runtimeConfig,
-        pluginIds: mergeExplicitOwnerPluginIds(providerPluginIds, base.explicitOwnerPluginIds),
+        pluginIds: setupPluginIds,
       }),
       activationSourceConfig: base.runtimeConfig,
       autoEnabledReasons: {},
@@ -156,7 +163,7 @@ function resolveSetupProviderPluginLoadState(
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      onlyPluginIds: mergeExplicitOwnerPluginIds(providerPluginIds, base.explicitOwnerPluginIds),
+      onlyPluginIds: setupPluginIds,
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? false,
       activate: params.activate ?? false,
