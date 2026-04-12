@@ -1,6 +1,8 @@
-import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { expectProviderOnboardMergedLegacyConfig } from "../../test/helpers/plugins/provider-onboard.js";
+import {
+  expectProviderOnboardMergedLegacyConfig,
+  expectProviderOnboardPrimaryModel,
+} from "../../test/helpers/plugins/provider-onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "./onboard.js";
 
 describe("xiaomi onboard", () => {
@@ -15,7 +17,10 @@ describe("xiaomi onboard", () => {
       "mimo-v2-pro",
       "mimo-v2-omni",
     ]);
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xiaomi/mimo-v2-flash");
+    expectProviderOnboardPrimaryModel({
+      applyConfig: applyXiaomiConfig,
+      modelRef: "xiaomi/mimo-v2-flash",
+    });
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
