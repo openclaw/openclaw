@@ -78,11 +78,12 @@ function buildUnownedProviderTransportReplayFallback(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi);
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const requiresOpenAiCompatibleToolIdSanitization =
-    params.modelApi === "openai-completions" ||
+  const isResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" || isResponsesApi;
 
   if (
     !isGoogle &&
@@ -98,7 +99,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
       ? {
-          sanitizeToolCallIds: true,
+          sanitizeToolCallIds: !isResponsesApi,
           toolCallIdMode: "strict" as const,
         }
       : {}),

@@ -22,6 +22,17 @@ describe("provider replay helpers", () => {
     });
   });
 
+  it("disables tool call ID sanitization for Responses API providers", () => {
+    for (const api of ["openai-responses", "openai-codex-responses", "azure-openai-responses"]) {
+      const policy = buildOpenAICompatibleReplayPolicy(api);
+      expect(policy).toMatchObject({
+        sanitizeToolCallIds: false,
+        toolCallIdMode: "strict",
+        applyAssistantFirstOrderingFix: false,
+      });
+    }
+  });
+
   it("builds strict anthropic replay policy", () => {
     expect(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true })).toMatchObject({
       sanitizeMode: "full",
