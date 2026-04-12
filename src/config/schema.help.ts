@@ -1209,6 +1209,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
   "agents.list[].embeddedPi.executionContract":
     'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+  "agents.defaults.embeddedPi.continuationMode":
+    'Auto-continuation mode for multi-step tasks: "auto" injects a continue prompt when the model shows intent to keep working (strict-agentic GPT-5 default), "prompt" returns to the user between steps, "off" disables auto-continuation entirely.',
+  "agents.defaults.embeddedPi.continuationBudget":
+    "Maximum number of auto-continuation turns before returning to the user. Only meaningful when continuationMode is auto. Default: 5, range: 1-20.",
+  "agents.list[].embeddedPi.continuationMode":
+    'Optional per-agent auto-continuation mode override. Set "auto" to enable multi-step continuation for this agent, "prompt" for manual step-by-step, or "off" to disable.',
+  "agents.list[].embeddedPi.continuationBudget":
+    "Optional per-agent auto-continuation budget override. Controls how many turns the agent can auto-continue before returning to the user.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

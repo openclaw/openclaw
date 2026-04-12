@@ -56,11 +56,13 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
-  // Use the defaults type (which includes continuationMode/continuationBudget)
-  // rather than the narrower agent-entry type, so per-agent overrides can set
-  // these fields without type errors. The runtime zod schema already accepts
-  // them; this keeps the TypeScript surface aligned.
-  embeddedPi?: AgentDefaultsConfig["embeddedPi"];
+  // Pick only the fields that are valid on per-agent entries. The defaults
+  // type also includes `projectSettingsPolicy` which is defaults-only; using
+  // the full defaults type here would leak that field to per-agent resolvers.
+  embeddedPi?: Pick<
+    NonNullable<AgentDefaultsConfig["embeddedPi"]>,
+    "executionContract" | "continuationMode" | "continuationBudget"
+  >;
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };

@@ -398,18 +398,32 @@ export function resolvePlanningOnlyRetryInstruction(params: {
 }
 
 /**
+ * Continuation-specific intent regex. Tighter than `PLANNING_ONLY_PROMISE_RE`
+ * because bare "let me" catches completion phrases like "Let me know if you
+ * need anything" that are NOT continuation intent. This regex requires "let
+ * me" to be followed by a verb (not "know") so only genuine "let me check",
+ * "let me fix" patterns match.
+ */
+const CONTINUATION_INTENT_RE =
+  /\b(?:i(?:'ll| will)|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|let me (?!know\b)\w)/i;
+
+/**
  * Detect continuation intent in a successful turn's visible text. Returns
- * true when the text contains promise patterns ("I'll", "let me", "going
- * to") that signal the model intends to keep working but stopped the turn
- * before acting. Used by the auto-continuation loop in `run.ts` to decide
- * whether to inject a "continue" prompt instead of returning to the user.
+ * true when the text contains promise patterns ("I'll", "let me [verb]",
+ * "going to") that signal the model intends to keep working but stopped
+ * the turn before acting. Used by the auto-continuation loop in `run.ts`
+ * to decide whether to inject a "continue" prompt instead of returning to
+ * the user.
+ *
+ * Does NOT match "let me know" — that's a completion/handoff phrase, not
+ * continuation intent.
  */
 export function hasContinuationIntent(texts: readonly string[]): boolean {
   const text = texts.join("\n\n").trim();
   if (!text || text.length > 1500) {
     return false;
   }
-  return PLANNING_ONLY_PROMISE_RE.test(text);
+  return CONTINUATION_INTENT_RE.test(text);
 }
 
 /**
