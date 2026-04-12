@@ -394,6 +394,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaType: undefined,
         mediaPaths: undefined,
         mediaTypes: undefined,
+        replyToId: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
       });
     },
     onError: (err) => {
@@ -870,8 +874,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
-      replyToId:
-        dataMessage?.quote?.id != null ? String(dataMessage.quote.id) : undefined,
+      replyToId: visibleQuoteText && dataMessage?.quote?.id != null
+        ? String(dataMessage.quote.id)
+        : undefined,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
