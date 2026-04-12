@@ -37,7 +37,7 @@ function scoreFallbackKeywordResult(params: {
   text: string;
   ftsScore: number;
 }): number {
-  const queryTokens = normalizeSearchTokens(params.query);
+  const queryTokens = [...new Set(normalizeSearchTokens(params.query))];
   if (queryTokens.length === 0) {
     return params.ftsScore;
   }
@@ -234,6 +234,7 @@ export async function searchKeyword(params: {
   sourceFilter: { sql: string; params: SearchSource[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
+  boostFallbackRanking?: boolean;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
   if (params.limit <= 0) {
     return [];
@@ -285,19 +286,21 @@ export async function searchKeyword(params: {
 
   return rows.map((row) => {
     const textScore = plan.matchQuery ? params.bm25RankToScore(row.rank) : 1;
-    const score = scoreFallbackKeywordResult({
-      query: params.query,
-      path: row.path,
-      text: row.text,
-      ftsScore: textScore,
-    });
+    const score = params.boostFallbackRanking
+      ? scoreFallbackKeywordResult({
+          query: params.query,
+          path: row.path,
+          text: row.text,
+          ftsScore: textScore,
+        })
+      : textScore;
     return {
       id: row.id,
       path: row.path,
       startLine: row.start_line,
       endLine: row.end_line,
       score,
-      textScore: score,
+      textScore,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
     };
