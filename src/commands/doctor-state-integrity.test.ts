@@ -170,6 +170,19 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
   });
 
+  it("detects orphaned agent dirs even when the on-disk folder casing differs", async () => {
+    createAgentDir("Research");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: research");
+  });
+
   it("ignores configured agent dirs and incomplete agent folders", async () => {
     createAgentDir("main");
     createAgentDir("ops");

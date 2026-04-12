@@ -72,13 +72,17 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): string[] {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter((agentId) => {
+      .map((entry) => ({
+        dirName: entry.name,
+        agentId: normalizeAgentId(entry.name),
+      }))
+      .filter(({ dirName, agentId }) => {
         if (!agentId || configuredIds.has(agentId)) {
           return false;
         }
-        return existsDir(path.join(agentsRoot, agentId, "agent"));
+        return existsDir(path.join(agentsRoot, dirName, "agent"));
       })
+      .map(({ agentId }) => agentId)
       .toSorted((left, right) => left.localeCompare(right));
   } catch {
     return [];
