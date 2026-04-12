@@ -684,6 +684,12 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
+  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+    const message = "Unknown error (no error details in response)";
+    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(isFailoverErrorMessage(message)).toBe(true);
+  });
+
   it("classifies provider-scoped generic upstream messages", () => {
     expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
       "timeout",
