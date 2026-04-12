@@ -284,8 +284,39 @@ function countPlanOnlyToolMetas(toolMetas: PlanningOnlyAttempt["toolMetas"]): nu
   return toolMetas.filter((entry) => entry.toolName === "update_plan").length;
 }
 
+function countNonPlanToolCalls(toolMetas: PlanningOnlyAttempt["toolMetas"]): number {
+  return toolMetas.filter((entry) => entry.toolName !== "update_plan").length;
+}
+
 function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
   return toolMetas.some((entry) => entry.toolName !== "update_plan");
+}
+
+/**
+ * A turn that produced exactly one non-plan tool call AND then wrote
+ * planning prose for the next steps is still effectively planning-only
+ * from the user's perspective. The model did one `read_file` and then
+ * narrated "Now I need to analyze the structure and make changes" without
+ * actually doing it. This is the "one step, return with plan, ask for
+ * permission" pattern the strict-agentic contract should catch.
+ *
+ * Returns true when the turn is dominated by a single tool call followed
+ * by planning prose — the caller should treat this as planning-only and
+ * allow a retry instead of exempting it from the detector.
+ */
+function isSingleActionThenNarrativePattern(params: {
+  toolMetas: PlanningOnlyAttempt["toolMetas"];
+  assistantTexts: readonly string[];
+}): boolean {
+  const nonPlanCount = countNonPlanToolCalls(params.toolMetas);
+  if (nonPlanCount !== 1) {
+    return false;
+  }
+  const text = params.assistantTexts.join("\n\n").trim();
+  if (!text || text.length > 700) {
+    return false;
+  }
+  return PLANNING_ONLY_PROMISE_RE.test(text);
 }
 
 export function resolvePlanningOnlyRetryLimit(
@@ -316,7 +347,14 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
-    hasNonPlanToolActivity(params.attempt.toolMetas) ||
+    // Exempt turns with 2+ non-plan tool calls — that's real multi-step
+    // progress. But allow retry when exactly 1 non-plan tool call + planning
+    // prose is detected (the "one step then ask permission" loophole).
+    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
+      !isSingleActionThenNarrativePattern({
+        toolMetas: params.attempt.toolMetas,
+        assistantTexts: params.attempt.assistantTexts,
+      })) ||
     params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
