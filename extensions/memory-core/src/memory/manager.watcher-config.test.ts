@@ -123,7 +123,7 @@ describe("memory watcher config", () => {
     manager = result.manager as unknown as MemoryIndexManager;
   }
 
-  it("watches markdown globs and ignores dependency directories", async () => {
+  it("watches the memory directory and ignores non-markdown churn", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
@@ -138,7 +138,7 @@ describe("memory watcher config", () => {
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory.md"),
-        path.join(workspaceDir, "memory", "**", "*.md"),
+        path.join(workspaceDir, "memory"),
         path.join(extraDir, "**", "*.md"),
       ]),
     );
@@ -151,7 +151,12 @@ describe("memory watcher config", () => {
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.tmp"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"))).toBe(true);
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    expect(
+      ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
+    ).toBe(false);
   });
 
   it("watches multimodal extensions with case-insensitive globs", async () => {
