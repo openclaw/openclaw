@@ -1,110 +1,66 @@
 ---
 name: line-sticker
-description: LINEチャンネルでスタンプを送る。カジュアルな会話での短い感情表現に使う。質問・長い会話・シリアスな場面・LINE以外のチャンネルでは絶対に使わない。
+description: Send a LINE sticker to express emotions or reactions in LINE conversations. Use for casual greetings, sticker replies, and short emotional exchanges.
 metadata: { "openclaw": { "emoji": "🎨", "requires": { "config": ["channels.line"] } } }
 ---
 
-# LINE スタンプ送信 Skill
+# LINE Sticker Skill
 
-このSkillは **LINEチャンネルのみ** で使用する。
+Send a sticker on the LINE channel using the STICKER directive.
+Stickers are a primary emotional communication tool in Japanese LINE culture —
+not a decoration, but a genuine social gesture.
 
-## 【最優先】スタンプを絶対に使わない場面
+## Output format
 
-以下の場面では、どれほど適切に見えるスタンプがあっても **絶対に使わない**。
-テキストで回答すること。
-
-- フォーマルな場面・ビジネスの相談・真剣な議論
-- シリアスな謝罪・トラブル・クレーム対応
-- 悲しみ・怒り・悩みの相談
-- 初対面・関係性が不明な相手
-- 相手がスタンプを使っていないのにこちらから送る
-
-**注意**: 「謝罪系」パッケージが存在するが、これらはコミカルな表現であり、
-本気の謝罪場面で使うと相手を馬鹿にしているように受け取られる。
-本気の謝罪にはテキストを使うこと。
-
-## スタンプを使って良い条件（全て満たすこと）
-
-1. **LINEチャンネルである**
-2. **カジュアルな会話である**（友達・家族など親しい相手）
-3. 以下のいずれかに該当する:
-   - 相手がスタンプを送ってきた → スタンプで返す
-   - 挨拶・短い相槌・会話の締めくくり
-   - 感情の短い反応（笑い・驚き・共感）
-
-上記を満たさない場合はテキストで回答する。
-
-## 選択手順（2段階）
-
-### Step 1: パッケージを選ぶ
-
-以下のパッケージ一覧を参照する:
-
-| packageId | name                                    | lang      | character | expression_style | animated | description                                                             |
-| --------- | --------------------------------------- | --------- | --------- | ---------------- | -------- | ----------------------------------------------------------------------- |
-| 789       | サリー スペシャル                       | universal | sally     | subtle           | false    | ひよこキャラ、コミカル、可愛い系                                        |
-| 1070      | ムーン スペシャル                       | universal | moon      | expressive       | false    | 人間キャラ、キモカワ系、表情で感情表現、テキストなし                    |
-| 11537     | 動くブラウン＆コニー・サリー スペシャル | universal | mixed     | subtle           | true     | 動物キャラ、可愛い系、アニメーション（動く）                            |
-| 11538     | 動くチョコ＆LINEキャラ スペシャル       | universal | choco     | expressive       | true     | 人間キャラ中心、キモカワ系、アニメーション（動く）                      |
-| 11539     | ユニバースター BT21 スペシャル          | universal | bt21      | subtle           | true     | 動物キャラ中心、BT21、可愛い系、アニメーション（動く）、K-POPファン向け |
-| 6136      | 謝罪のプロ！LINEキャラクターズ          | ja        | mixed     | expressive       | false    | 謝罪系コミカル、日本語テキスト混在、大げさな謝罪表現                    |
-| 6632      | LINE Characters: Making Amends          | zh-tw     | mixed     | expressive       | false    | 謝罪系コミカル、中国語テキスト混在、大げさな謝罪表現                    |
-| 6325      | ちっちゃいブラコニ                      | ja        | brown     | subtle           | false    | 日本語テキスト混在、動物キャラ、可愛い系                                |
-| 6359      | Brown and Cony Fun Size Pack            | th        | brown     | subtle           | false    | タイ語テキスト混在、動物キャラ、可愛い系                                |
-| 6362      | Brown and Cony Fun Size Pack            | zh-tw     | brown     | subtle           | false    | 中国語テキスト混在、動物キャラ、可愛い系                                |
-| 6370      | ちっちゃいブラコニ                      | en        | brown     | subtle           | false    | 英語テキスト混在、動物キャラ、可愛い系                                  |
-| 8515      | ゆる敬語★LINEキャラクターズ             | ja        | mixed     | subtle           | false    | 日本語テキスト混在、敬語・丁寧表現、可愛い系                            |
-| 8522      | ゆる敬語★LINEキャラクターズ             | en        | mixed     | subtle           | false    | 英語テキスト混在、丁寧表現(polite/formal)、可愛い系                     |
-| 8525      | LINE Characters: Pretty Phrases         | zh-tw     | mixed     | subtle           | false    | 中国語テキスト混在、丁寧表現、可愛い系                                  |
-
-**パッケージ選択ルール（この順番で絞り込む）:**
-
-1. **言語で絞る**: 相手のメッセージ言語と lang が一致するパッケージを優先する。
-   一致するものがなければ universal を選ぶ。
-
-2. **場面で絞る**: description を読んで会話の雰囲気に合うパッケージを選ぶ。
-   - 丁寧・敬語が必要 → descriptionに「敬語・丁寧表現」があるパッケージ
-   - カジュアルな笑い・コミカル → descriptionに「コミカル」「キモカワ」があるパッケージ
-   - 可愛い・無難 → descriptionに「可愛い系」「動物キャラ」があるパッケージ
-   - アニメーションを使いたい → animated=true のパッケージ（デフォルトはfalse優先）
-   - expression_style はデフォルト subtle 優先（感情を強調したい場合のみ expressive）
-
-3. **候補が複数ある場合**: より description が会話の雰囲気に近いものを選ぶ。
-
-### Step 2: スタンプを選ぶ
-
-選んだパッケージのJSONファイル（{baseDir}/package-{packageId}.json）を読み込む。
-
-**スタンプ選択ルール:**
-
-1. **descを読む**: 各スタンプの desc フィールドに画像の内容が記述されている。
-   キャラクターの表情・ポーズ・テキストを確認する。
-
-2. **会話の文脈と照合する**:
-   - 相手が何を言ったか・どんな感情か → それに対するリアクションとして自然か
-   - テキストが入っているスタンプは lang フィールドで言語を確認する
-   - 相手の言語と一致するテキスト、またはテキストなし（universal）を優先する
-
-3. **消去法で絞る**:
-   - 場面にそぐわない感情のスタンプは除外する
-   - テキストの言語が相手の言語と合わないスタンプは除外する
-   - 複数残った場合はより desc が文脈に近いものを選ぶ
-
-4. **【重要】中止条件 — 以下の場合はスタンプを送らずテキストで回答する**:
-   - descを読んで「これが自然」と確信できるスタンプが見つからない場合
-   - 消去法で絞った結果、残ったスタンプが文脈に合っているか自信がない場合
-   - パッケージを変えても適切なスタンプが見つからない場合
-
-   **妥協してそれっぽいスタンプを送ることは絶対にしない。**
-   迷ったらテキストで回答する。スタンプは確信がある時だけ使う。
-
-## 出力形式
-
+```
 STICKER:packageId:stickerId
+```
 
-テキストと同時送信しない。スタンプのみ送信する。
+Send stickers alone. Do not combine with text in the same reply.
 
-## スタンプカタログ参照先
+## When not to use a sticker
 
-{baseDir}/package-index.json
-{baseDir}/package-{packageId}.json
+- Serious topics: grief, anger, crisis, formal complaints
+- The conversation clearly calls for a substantive text response
+
+Everything else is a judgment call — trust your read of the room.
+
+## Package selection (Step 1)
+
+| packageId | name                                   | lang      | character | expression_style | animated | description                              |
+| --------- | -------------------------------------- | --------- | --------- | ---------------- | -------- | ---------------------------------------- |
+| 789       | Sally Special                          | universal | sally     | subtle           | false    | Chick character, playful, cute           |
+| 1070      | Moon Special                           | universal | moon      | expressive       | false    | Human character, quirky-cute, no text    |
+| 11537     | Moving Brown & Cony & Sally Special    | universal | mixed     | subtle           | true     | Animal characters, cute, animated        |
+| 11538     | Moving Choco & LINE Characters Special | universal | choco     | expressive       | true     | Human characters, quirky-cute, animated  |
+| 11539     | Universe Star BT21 Special             | universal | bt21      | subtle           | true     | BT21 characters, cute, animated, K-pop   |
+| 6136      | Apology Pros! LINE Characters          | ja        | mixed     | expressive       | false    | Comic apology expressions, Japanese text |
+| 6632      | LINE Characters: Making Amends         | zh-tw     | mixed     | expressive       | false    | Comic apology expressions, Chinese text  |
+| 6325      | Chibi Brown & Cony                     | ja        | brown     | subtle           | false    | Animal characters, cute, Japanese text   |
+| 6359      | Brown and Cony Fun Size Pack           | th        | brown     | subtle           | false    | Animal characters, cute, Thai text       |
+| 6362      | Brown and Cony Fun Size Pack           | zh-tw     | brown     | subtle           | false    | Animal characters, cute, Chinese text    |
+| 6370      | Chibi Brown & Cony                     | en        | brown     | subtle           | false    | Animal characters, cute, English text    |
+| 8515      | Gentle Keigo★ LINE Characters          | ja        | mixed     | subtle           | false    | Polite/formal expressions, Japanese text |
+| 8522      | Gentle Keigo★ LINE Characters          | en        | mixed     | subtle           | false    | Polite expressions, English text         |
+| 8525      | LINE Characters: Pretty Phrases        | zh-tw     | mixed     | subtle           | false    | Polite expressions, Chinese text         |
+
+**Selection rules:**
+
+1. Match lang to the conversation language. Fall back to universal if no match.
+2. Read description to match the mood: polite, playful, comic, animated, etc.
+3. Match expression_style to the emotional intensity: subtle by default, expressive for stronger reactions.
+
+## Sticker selection (Step 2)
+
+Read {baseDir}/package-{packageId}.json and select using these fields:
+
+- **desc** (primary): Visual description with embedded context. Includes pose, expression, action, and usage scene. Match to the current conversational moment.
+- **text** (filter): Printed text on the sticker. Must match the conversation language or be absent.
+
+Prefer the sticker whose desc most specifically matches the moment over the safest generic choice.
+If no sticker fits naturally, do not send one.
+
+## Catalog location
+
+- {baseDir}/package-index.json
+- {baseDir}/package-{packageId}.json

@@ -13,7 +13,6 @@
   --info-bg:#e6f1fb;--info-text:#0c447c;--info-border:#b5d4f4;
   --success-bg:#eaf3de;--success-text:#27500a;--success-border:#c0dd97;
   --warn-bg:#faeeda;--warn-text:#633806;--warn-border:#fac775;
-  --scene-bg:#eeedfe;--scene-text:#3c3489;
   --guide-bg:#f0f7ff;--guide-border:#b5d4f4;--guide-text:#0c447c;
   --edited-border:#378add;--edited-bg:#e6f1fb;
   --r:8px;--rl:12px;
@@ -25,7 +24,6 @@
   --info-bg:#0c2240;--info-text:#85b7eb;--info-border:#185fa5;
   --success-bg:#172d08;--success-text:#97c459;--success-border:#3b6d11;
   --warn-bg:#2a1e08;--warn-text:#fac775;--warn-border:#854f0b;
-  --scene-bg:#1e1c3a;--scene-text:#afa9ec;
   --guide-bg:#0c2240;--guide-border:#185fa5;--guide-text:#85b7eb;
   --edited-border:#85b7eb;--edited-bg:#0c2240;
 }}
@@ -53,8 +51,6 @@ button:disabled{opacity:.4;cursor:default}
 .flabel-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
 .flabel-row label{font-size:12px;color:var(--text2);font-weight:500;margin:0}
 .ftag{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600}
-.ftag-char{background:var(--bg3);color:var(--text2)}
-.ftag-scene{background:var(--scene-bg);color:var(--scene-text)}
 .ftag-text{background:var(--warn-bg);color:var(--warn-text)}
 .field{width:100%;border:1px solid var(--border2);border-radius:var(--r);padding:8px 10px;font-size:14px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;transition:border-color .1s}
 .field:focus{border-color:var(--info-text)}
@@ -126,7 +122,6 @@ textarea.field{resize:vertical;line-height:1.6}
 .sticker-tile img{width:96px;height:96px;object-fit:contain;display:block;margin:0 auto}
 .tile-img-ph{width:96px;height:96px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto}
 .st-id{font-size:10px;color:var(--text3);margin-top:6px}
-.st-scene{font-size:10px;color:var(--scene-text);background:var(--scene-bg);padding:1px 5px;border-radius:3px;margin:3px auto 0;display:inline-block;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st-text-badge{position:absolute;top:5px;right:5px;background:var(--warn-bg);color:var(--warn-text);font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* list table */
@@ -139,7 +134,6 @@ textarea.field{resize:vertical;line-height:1.6}
 .list-wrap tbody tr.has-edit td{background:var(--edited-bg)}
 .list-wrap td img{width:48px;height:48px;object-fit:contain}
 .td-desc{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2);font-size:12px}
-.td-scene{font-size:11px;color:var(--scene-text);background:var(--scene-bg);padding:1px 6px;border-radius:3px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;display:inline-block}
 .td-text{font-size:11px;color:var(--warn-text);background:var(--warn-bg);padding:1px 5px;border-radius:3px;white-space:nowrap}
 
 /* ══ FULLSCREEN EDITOR ══ */
@@ -240,8 +234,6 @@ details[open] .guide-arrow{transform:rotate(90deg)}
 .guide-body table td{padding:5px 8px;border-bottom:1px solid var(--guide-border);vertical-align:top;color:var(--guide-text);background:transparent}
 .guide-body table tr:last-child td{border-bottom:none}
 .gtag{display:inline-block;padding:1px 5px;border-radius:3px;font-weight:600;font-size:10px;margin-right:3px}
-.gtag-char{background:var(--bg3);color:var(--text2)}
-.gtag-scene{background:var(--scene-bg);color:var(--scene-text)}
 .gtag-text{background:var(--warn-bg);color:var(--warn-text)}
 .guide-notes{margin-top:8px;font-size:11px;color:var(--guide-text)}
 
@@ -360,29 +352,25 @@ details[open] .guide-arrow{transform:rotate(90deg)}
         <summary><span class="guide-arrow">▸</span> How the AI uses each field to select a sticker</summary>
         <div class="guide-body">
           <p style="margin-bottom:8px">
-            The AI reads conversation context, emotion, and language, then narrows down candidates using the fields below.<br>
-            <span style="font-size:10px">AIは会話の文脈・感情・言語を判断し、以下フィールドを参照してスタンプを選びます。</span>
+            The AI reads the desc field as the primary signal for sticker selection.<br>
+            Write desc as if describing the sticker to someone who cannot see it —<br>
+            include the character pose, facial expression, action, and the emotional<br>
+            context in which this sticker would feel natural.<br>
+            The text field captures any printed words on the sticker exactly as shown,<br>
+            including emoji. This is used to filter by language.
           </p>
           <table>
-            <tr><th style="width:95px">Field</th><th>How AI uses it / 入力のコツ</th></tr>
+            <tr><th style="width:95px">Field</th><th>How to write it</th></tr>
             <tr>
-              <td><span class="gtag gtag-char">char</span>Characters</td>
-              <td>Write character names in English (e.g. <code>yellow chick</code>). Catalog consistency, not directly for selection.<br><span style="font-size:10px">英語でキャラ名。選択への直接影響は小さい。</span></td>
+              <td><span class="gtag">desc</span>desc</td>
+              <td>Describe pose, expression, action, and the moment this sticker fits. Be specific — the AI selects the sticker whose desc best matches the conversation. Example: 'jumping for joy with arms raised, celebrating good news'</td>
             </tr>
             <tr>
-              <td><span class="gtag">desc</span>Description</td>
-              <td>Describe pose, expression, and action. Include both emotion and action words.<br><span style="font-size:10px">ポーズ・表情・動作を具体的に。感情語＋動作語で精度UP。</span></td>
-            </tr>
-            <tr>
-              <td><span class="gtag gtag-scene">scene</span>Scene</td>
-              <td><strong>Most important.</strong> "When …" form. Separate multiple with <code>/</code>.<br><span style="font-size:10px">AIが最重視。「〇〇する時」形式で。複数は / で区切る。<strong>空欄だとほぼ選ばれない。</strong></span></td>
-            </tr>
-            <tr>
-              <td><span class="gtag gtag-text">text</span>Text</td>
-              <td>Copy printed text exactly, including emoji. Leave blank if none.<br><span style="font-size:10px">印字文字を絵文字ごとそのまま転記。なければ空欄。</span></td>
+              <td><span class="gtag gtag-text">text</span>text</td>
+              <td>Copy the printed text exactly, including emoji. Leave blank if none.</td>
             </tr>
           </table>
-          <p class="guide-notes">⚠ <strong>Empty Scene = AI will almost never choose this sticker.</strong><br>✓ Multiple: <code>when greeting / when parting</code></p>
+          <p class="guide-notes">A well-written desc is the single most important factor in sticker selection accuracy.</p>
         </div>
       </details>
 
@@ -392,21 +380,10 @@ details[open] .guide-arrow{transform:rotate(90deg)}
       </div>
       <div class="divider"></div>
       <div class="fgroup">
-        <div class="flabel-row"><label>Characters</label><span class="ftag ftag-char">char</span></div>
-        <input class="field" id="edit-char" placeholder="e.g. yellow chick / brown bear, white rabbit" oninput="autoSave()">
-      </div>
-      <div class="fgroup">
         <div class="flabel-row"><label>Description</label></div>
         <textarea class="field" id="edit-desc" rows="4"
           placeholder="e.g. Raises both arms joyfully / 両手を上げて嬉しそうに飛び跳ねている"
           oninput="autoSave()"></textarea>
-      </div>
-      <div class="fgroup">
-        <div class="flabel-row"><label>Scene / use case</label><span class="ftag ftag-scene">scene</span></div>
-        <textarea class="field" id="edit-scene" rows="2"
-          placeholder="e.g. when agreeing / when celebrating — 承諾する時 / お祝いの時"
-          oninput="autoSave()"></textarea>
-        <div class="field-note">Most important for AI. "When …" form. Separate with /. / AIが最重視。「〇〇する時」で。複数は / で区切る。</div>
       </div>
       <div class="fgroup">
         <div class="flabel-row"><label>Text on sticker</label><span class="ftag ftag-text">text</span></div>
@@ -520,22 +497,14 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 /* ── desc parse / build ── */
 function parseDesc(raw){
-  if(!raw)return{char:'',desc:'',scene:'',text:''};
-  let s=raw,char='',desc='',scene='',text='';
+  if(!raw)return{desc:'',text:''};
+  let s=raw,text='';
   const tm=s.match(/,\s*text:"([^"]*)"$/);
   if(tm){text=tm[1];s=s.slice(0,s.length-tm[0].length);}
-  const si=s.lastIndexOf(', scene:');
-  if(si!==-1){scene=s.slice(si+8).trim();s=s.slice(0,si);}
-  const fc=s.indexOf(', ');
-  if(fc!==-1&&s.slice(0,fc).length<50){char=s.slice(0,fc).trim();desc=s.slice(fc+2).trim();}
-  else{desc=s.trim();}
-  return{char,desc,scene,text};
+  return{desc:s.trim(),text};
 }
-function buildDesc(char,desc,scene,text){
-  let r=[char,desc].filter(Boolean).join(', ');
-  if(scene)r+=`, scene:${scene}`;
-  if(text)r+=`, text:"${text}"`;
-  return r;
+function buildDesc(desc){
+  return desc;
 }
 
 /* ── file loading ── */
@@ -646,12 +615,11 @@ function renderStickers(){
         ${textStr?`<div class="st-text-badge">${esc(textStr)}</div>`:''}
         ${url?`<img src="${esc(url)}" onerror="this.outerHTML='<div class=tile-img-ph>🖼</div>'" loading="lazy" alt="">`:'<div class="tile-img-ph">🖼</div>'}
         <div class="st-id">#${esc(String(sid))}</div>
-        ${parsed.scene?`<div class="st-scene">${esc(parsed.scene)}</div>`:''}
       </div>`;
     }).join('')}</div>`;
   }else{
     area.innerHTML=`<div class="list-wrap"><table>
-      <thead><tr><th>Preview</th><th>ID</th><th>Description</th><th>Scene</th><th>Text</th></tr></thead>
+      <thead><tr><th>Preview</th><th>ID</th><th>Description</th><th>Text</th></tr></thead>
       <tbody>${list.map((s,i)=>{
         const url=imgUrl(s.id,currentPkgAnim);
         const sid=stickerNumId(s.id);
@@ -661,7 +629,6 @@ function renderStickers(){
           <td>${url?`<img src="${esc(url)}" onerror="this.style.display='none'" loading="lazy" alt="">`:'🖼'}</td>
           <td>#${esc(String(sid))}</td>
           <td class="td-desc">${esc(parsed.desc||'—')}</td>
-          <td>${parsed.scene?`<span class="td-scene">${esc(parsed.scene)}</span>`:'—'}</td>
           <td>${textStr?`<span class="td-text">${esc(textStr)}</span>`:'—'}</td>
         </tr>`;
       }).join('')}</tbody>
@@ -680,9 +647,7 @@ function openEdit(idx){
   document.getElementById('edit-pkg-sub').textContent=`Sticker #${sid}`;
   document.getElementById('edit-counter').textContent=`${idx+1} / ${editList.length}`;
   document.getElementById('edit-id').value=s.id;
-  document.getElementById('edit-char').value=parsed.char;
   document.getElementById('edit-desc').value=parsed.desc;
-  document.getElementById('edit-scene').value=parsed.scene;
   document.getElementById('edit-text').value=s.text!==undefined?s.text:parsed.text;
   animUrl=imgUrl(s.id,currentPkgAnim);
   document.getElementById('edit-img-wrap').innerHTML=animUrl
@@ -705,11 +670,9 @@ function replayAnim(){
 function autoSave(){
   if(editIdx===null)return;
   const s=editList[editIdx];
-  const char=document.getElementById('edit-char').value.trim();
   const desc=document.getElementById('edit-desc').value.trim();
-  const scene=document.getElementById('edit-scene').value.trim();
   const text=document.getElementById('edit-text').value.trim();
-  s.desc=buildDesc(char,desc,scene,text);
+  s.desc=buildDesc(desc);
   if(text)s.text=text;else delete s.text;
   s._edited=true;
   editedPkgs.add(selectedPkgKey);
