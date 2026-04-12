@@ -10,12 +10,17 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
+  claimCompletionDelivery,
+  resolveCompletionKeyFromTask,
+} from "./completion-delivery-gate.js";
+import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
   isTerminalTaskStatus,
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
+  shouldSilentWakeAcpChildSession,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -993,8 +998,35 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
-    return current ? cloneTaskRecord(current) : null;
+  if (!current) {
+    return null;
+  }
+  // ACP child-session runs get a silent parent wake instead of a user-visible
+  // banner. This check runs BEFORE the notifyPolicy gate so that orchestration
+  // continuation works even if notifyPolicy is set to "silent" on these tasks.
+  // Uses "session_queued" because delivery was handled via session-layer
+  // infrastructure (heartbeat wake), not via a user-facing channel.
+  if (
+    shouldSilentWakeAcpChildSession(current) &&
+    isTerminalTaskStatus(current.status) &&
+    current.deliveryStatus === "pending"
+  ) {
+    const gateKey = resolveCompletionKeyFromTask(current);
+    if (gateKey) {
+      const claim = claimCompletionDelivery(gateKey, "silent_wake", "silent_wake");
+      if (!claim.claimed) {
+        return updateTask(taskId, { deliveryStatus: "session_queued", lastEventAt: Date.now() });
+      }
+    }
+    const owner = resolveTaskDeliveryOwner(current);
+    const ownerKey = owner.sessionKey?.trim();
+    if (ownerKey) {
+      requestHeartbeatNow({ reason: "background-task", sessionKey: ownerKey });
+    }
+    return updateTask(taskId, { deliveryStatus: "session_queued", lastEventAt: Date.now() });
+  }
+  if (!shouldAutoDeliverTaskTerminalUpdate(current)) {
+    return cloneTaskRecord(current);
   }
   if (tasksWithPendingDelivery.has(taskId)) {
     return cloneTaskRecord(current);
@@ -1015,6 +1047,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         deliveryStatus: "not_applicable",
         lastEventAt: Date.now(),
       });
+    }
+    // Cross-path dedup: if the announce flow already claimed delivery for this
+    // run, skip the task-registry visible banner entirely.
+    const gateKey = resolveCompletionKeyFromTask(latest);
+    if (gateKey) {
+      const claim = claimCompletionDelivery(gateKey, "task_registry", "visible_banner");
+      if (!claim.claimed) {
+        return updateTask(taskId, { deliveryStatus: "delivered", lastEventAt: Date.now() });
+      }
     }
     const owner = resolveTaskDeliveryOwner(latest);
     const ownerSessionKey = owner.sessionKey?.trim();

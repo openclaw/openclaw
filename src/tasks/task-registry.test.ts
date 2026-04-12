@@ -522,7 +522,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("delivers ACP completion to the requester channel when a delivery origin exists", async () => {
+  it("silently wakes the parent for ACP child-session completions instead of sending a banner", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -561,23 +561,15 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(findTaskByRunId("run-delivery")).toMatchObject({
           status: "succeeded",
-          deliveryStatus: "delivered",
+          deliveryStatus: "session_queued",
         }),
       );
-      await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "telegram",
-            to: "telegram:123",
-            threadId: "321",
-            content: expect.stringContaining("Background task done: ACP background task"),
-            mirror: expect.objectContaining({
-              sessionKey: "agent:main:main",
-            }),
-          }),
-        ),
-      );
+      // No user-visible banner sent
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      // No raw system event queued into parent session
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      // Parent session was woken via heartbeat
+      expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
 
@@ -675,7 +667,6 @@ describe("task-registry", () => {
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
-        childSessionKey: "agent:main:acp:child",
         runId: "run-session-queued",
         task: "Investigate issue",
         status: "running",
@@ -757,7 +748,6 @@ describe("task-registry", () => {
           to: "telegram:123",
           threadId: "321",
         },
-        childSessionKey: "agent:main:acp:child",
         runId: "run-detail-leak",
         task: "Create the file and verify it",
         status: "running",
@@ -850,7 +840,6 @@ describe("task-registry", () => {
           channel: "telegram",
           to: "telegram:123",
         },
-        childSessionKey: "agent:main:acp:child",
         runId: "run-succeeded-outcome",
         task: "Create the file and verify it",
         status: "succeeded",
@@ -976,7 +965,6 @@ describe("task-registry", () => {
           channel: "telegram",
           to: "telegram:123",
         },
-        childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
         task: "Direct ACP child",
         status: "succeeded",
@@ -990,7 +978,6 @@ describe("task-registry", () => {
           channel: "telegram",
           to: "telegram:123",
         },
-        childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
         task: "Spawn ACP child",
         preferMetadata: true,
@@ -1647,7 +1634,6 @@ describe("task-registry", () => {
           channel: "discord",
           to: "discord:123",
         },
-        childSessionKey: "agent:codex:acp:child",
         runId: "run-quiet-terminal",
         task: "Create the file",
         status: "running",
@@ -2001,6 +1987,201 @@ describe("task-registry", () => {
           taskId: task.taskId,
           status: "cancelled",
         }),
+      });
+    });
+  });
+
+  describe("ACP child-session silent wake regression", () => {
+    it("two runs in the same child session produce zero user-visible banners and wake the parent", async () => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        resetHeartbeatWakeStateForTests();
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: "telegram",
+          to: "telegram:822430204",
+          via: "direct",
+        });
+
+        // Initial spawn run
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:telegram:main:direct:822430204",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "telegram:822430204",
+          },
+          childSessionKey: "agent:claude:acp:5435d550",
+          runId: "d8dcebd3",
+          label: "pr68-fix-followup",
+          task: "Implement the fix",
+          status: "running",
+          deliveryStatus: "pending",
+          startedAt: 100,
+        });
+
+        // Follow-up run via sessions_send (different runId, same child session)
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:telegram:main:direct:822430204",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "telegram:822430204",
+          },
+          childSessionKey: "agent:claude:acp:5435d550",
+          runId: "f7d2c6b2",
+          label: "pr68-fix-followup",
+          task: "Continue with verification",
+          status: "running",
+          deliveryStatus: "pending",
+          startedAt: 200,
+        });
+
+        // First run completes
+        emitAgentEvent({
+          runId: "d8dcebd3",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 300 },
+        });
+
+        await waitForAssertion(() =>
+          expect(findTaskByRunId("d8dcebd3")).toMatchObject({
+            status: "succeeded",
+            deliveryStatus: "session_queued",
+          }),
+        );
+
+        // Second run completes
+        emitAgentEvent({
+          runId: "f7d2c6b2",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 400 },
+        });
+
+        await waitForAssertion(() =>
+          expect(findTaskByRunId("f7d2c6b2")).toMatchObject({
+            status: "succeeded",
+            deliveryStatus: "session_queued",
+          }),
+        );
+
+        // No banner sent to Telegram for either run
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        // No raw system events in parent session
+        expect(peekSystemEvents("agent:main:telegram:main:direct:822430204")).toEqual([]);
+        // Parent was woken via heartbeat
+        expect(hasPendingHeartbeatWake()).toBe(true);
+      });
+    });
+
+    it("blocked ACP child-session task still surfaces visibly", async () => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        resetHeartbeatWakeStateForTests();
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: "telegram",
+          to: "telegram:822430204",
+          via: "direct",
+        });
+
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:telegram:main:direct:822430204",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "telegram:822430204",
+          },
+          childSessionKey: "agent:claude:acp:blocked-child",
+          runId: "blocked-run-1",
+          label: "blocked-task",
+          task: "Run blocked command",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          terminalOutcome: "blocked",
+          terminalSummary: "Needs approval",
+        });
+
+        await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+        // Blocked task MUST deliver visibly
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:822430204",
+            content: expect.stringContaining("Background task blocked"),
+          }),
+        );
+      });
+    });
+
+    it("non-ACP tasks with childSessionKey are unaffected", async () => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: "telegram",
+          to: "telegram:123",
+          via: "direct",
+        });
+
+        const task = createTaskRecord({
+          runtime: "cli",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "telegram:123",
+          },
+          childSessionKey: "agent:cli:session:1",
+          runId: "cli-run-1",
+          task: "Run CLI command",
+          status: "succeeded",
+          deliveryStatus: "pending",
+        });
+
+        await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+        // CLI task delivers normally — not affected by ACP silent wake
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:123",
+            content: expect.stringContaining("Background task done"),
+          }),
+        );
+      });
+    });
+
+    it("ACP child-session silent wake fires even when notifyPolicy is silent", async () => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        resetHeartbeatWakeStateForTests();
+
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:claude:acp:silent-child",
+          runId: "silent-run-1",
+          task: "Silent task",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+        });
+
+        await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+        // Even with notifyPolicy=silent, parent gets woken
+        expect(hasPendingHeartbeatWake()).toBe(true);
+        expect(findTaskByRunId("silent-run-1")).toMatchObject({
+          deliveryStatus: "session_queued",
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       });
     });
   });

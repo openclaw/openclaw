@@ -1,4 +1,5 @@
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isCompletionClaimed } from "../tasks/completion-delivery-gate.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -68,13 +69,29 @@ export async function emitSubagentEndedHookOnce(params: {
     if (!hookRunner) {
       return false;
     }
+
+    // If the completion delivery gate already claimed this run (e.g. via silent
+    // wake or announce flow), suppress the farewell to avoid duplicate delivery.
+    let sendFarewell = params.sendFarewell;
+    const requesterKey = params.entry.requesterSessionKey?.trim();
+    if (requesterKey) {
+      const claimed = isCompletionClaimed({
+        runtime: "subagent",
+        runId,
+        ownerSessionKey: requesterKey,
+      });
+      if (claimed) {
+        sendFarewell = false;
+      }
+    }
+
     if (hookRunner?.hasHooks("subagent_ended")) {
       await hookRunner.runSubagentEnded(
         {
           targetSessionKey: params.entry.childSessionKey,
           targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
           reason: params.reason,
-          sendFarewell: params.sendFarewell,
+          sendFarewell,
           accountId: params.accountId,
           runId: params.entry.runId,
           endedAt: params.entry.endedAt,

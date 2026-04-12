@@ -2,6 +2,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { claimCompletionDelivery } from "../tasks/completion-delivery-gate.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -220,6 +221,27 @@ export async function runSubagentAnnounceFlow(params: {
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
+
+  // Cross-path dedup: claim delivery ownership before doing any work. If the
+  // task registry (or silent wake) already claimed this completion, skip the
+  // announce flow entirely and report as already delivered.
+  const childRunId = params.childRunId?.trim();
+  const requesterKey = params.requesterSessionKey?.trim();
+  if (childRunId && requesterKey) {
+    const claim = claimCompletionDelivery(
+      {
+        runtime: announceType === "cron job" ? "cron" : "subagent",
+        runId: childRunId,
+        ownerSessionKey: requesterKey,
+      },
+      "announce_flow",
+      "announce_synthesized",
+    );
+    if (!claim.claimed) {
+      return true;
+    }
+  }
+
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
