@@ -95,3 +95,26 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
   }
   return false;
 }
+
+/**
+ * Stricter poll intent check: only pollQuestion (non-empty) or pollOption (with entries)
+ * indicate real poll intent. Duration, multi, anonymous, public flags alone do NOT
+ * indicate poll intent.
+ */
+export function hasRealPollIntent(params: Record<string, unknown>): boolean {
+  const pollQuestion = readPollParamRaw(params, "pollQuestion");
+  if (typeof pollQuestion === "string" && pollQuestion.trim().length > 0) {
+    return true;
+  }
+  const pollOption = readPollParamRaw(params, "pollOption");
+  if (
+    Array.isArray(pollOption) &&
+    pollOption.some((entry) => typeof entry === "string" && entry.trim())
+  ) {
+    return true;
+  }
+  if (typeof pollOption === "string" && pollOption.trim().length > 0) {
+    return true;
+  }
+  return false;
+}

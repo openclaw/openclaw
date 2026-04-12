@@ -18,7 +18,7 @@ import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interac
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { hasPollCreationParams } from "../../poll-params.js";
+import { hasRealPollIntent } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -910,7 +910,7 @@ export async function runMessageAction(
     cfg,
   });
 
-  if (action === "send" && hasPollCreationParams(params)) {
+  if (action === "send" && hasRealPollIntent(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
 

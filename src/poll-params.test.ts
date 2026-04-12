@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "./poll-params.js";
+import {
+  hasPollCreationParams,
+  hasRealPollIntent,
+  resolveTelegramPollVisibility,
+} from "./poll-params.js";
 
 describe("poll params", () => {
   it("does not treat explicit false booleans as poll creation params", () => {
@@ -58,6 +62,19 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
     expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
+  });
+
+  it("only treats question or options as real poll intent", () => {
+    expect(hasRealPollIntent({ pollQuestion: "Lunch?" })).toBe(true);
+    expect(hasRealPollIntent({ pollOption: ["Pizza", "Sushi"] })).toBe(true);
+    expect(hasRealPollIntent({ poll_option: "Pizza" })).toBe(true);
+
+    expect(hasRealPollIntent({ pollDurationSeconds: 60 })).toBe(false);
+    expect(hasRealPollIntent({ poll_duration_hours: 2 })).toBe(false);
+    expect(hasRealPollIntent({ pollMulti: true })).toBe(false);
+    expect(hasRealPollIntent({ pollAnonymous: true })).toBe(false);
+    expect(hasRealPollIntent({ pollPublic: true })).toBe(false);
+    expect(hasRealPollIntent({ pollQuestion: "   ", pollOption: [] })).toBe(false);
   });
 
   it("resolves telegram poll visibility flags", () => {
