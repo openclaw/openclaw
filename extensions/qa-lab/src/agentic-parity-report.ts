@@ -99,18 +99,12 @@ const SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS = [
   /an error was/i,
 ] as const;
 
-// Positive-tone patterns: a passing scenario whose details read as plausible
-// self-congratulatory prose ("Successfully completed", "Done.", "Task
-// executed successfully") is ALSO suspicious — it's the shape of a fake
-// success that evades the failure-tone net above. Criterion 2 of the
-// GPT-5.4 parity completion gate (#64227) specifically targets this: a
-// model that says "I did the thing" without actually doing it should not
-// Positive-tone patterns (like "Successfully completed") are NOT used in
-// the fakeSuccessCount check because for passing runs the `details` field
-// is the model's outbound prose, which never contains tool-call evidence.
-// The tool-call evidence approach would false-positive on every legitimate
-// pass. Criterion 2 is enforced by per-scenario `/debug/requests` tool-call
-// assertions in the scenario YAML flows (PR J), not by the parity report.
+// Positive-tone patterns (e.g. "Successfully completed", "Done.") are NOT
+// checked in fakeSuccessCount. For passing runs, `details` is the model's
+// outbound prose, which never contains tool-call evidence strings, so a
+// tool-call-evidence exemption would false-positive on every legitimate
+// pass. Criterion 2 ("no fake progress") is enforced by per-scenario
+// `/debug/requests` tool-call assertions in the YAML flows (PR J) instead.
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {
   return status === "pass" || status === "fail" || status === "skip" ? status : "fail";

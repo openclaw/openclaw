@@ -383,11 +383,10 @@ Follow-up:
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
   });
 
-  it("flags positive-tone fake success when the scenario has no tool-call evidence", () => {
-    // A prose-only pass that says "Successfully completed the delegation"
-    // without any recorded `plannedToolName` or tool-call evidence is
-    // exactly the fake-success shape the old failure-tone-only regex set
-    // missed. This regression pins the positive-tone branch.
+  it("does not flag positive-tone prose as fake success (positive-tone detection removed)", () => {
+    // Positive-tone detection was removed because for passing runs the
+    // `details` field is the model's prose, which never contains tool-call
+    // evidence. Criterion 2 is enforced by per-scenario tool-call assertions.
     const summary: QaParitySuiteSummary = {
       scenarios: [
         {
@@ -398,10 +397,10 @@ Follow-up:
       ],
     };
 
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
-  it("flags a bare `Done.` prose pass as fake success", () => {
+  it("does not flag bare 'Done.' prose as fake success", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [
         {
@@ -412,7 +411,7 @@ Follow-up:
       ],
     };
 
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
   it("does not flag structured status lines that end in `done`", () => {
@@ -453,7 +452,7 @@ status=done`,
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
-  it("flags positive-tone passes alongside failure-tone passes when both occur", () => {
+  it("only flags failure-tone passes, not positive-tone", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [
         {
@@ -469,9 +468,9 @@ status=done`,
       ],
     };
 
-    // Both scenarios should count: one is positive-tone (evasive fake
-    // success), the other is failure-tone (classic fake success).
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(2);
+    // Only the failure-tone scenario ("error occurred") counts.
+    // The positive-tone one ("successfully") is not flagged.
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
   });
 
   it("throws QaParityLabelMismatchError when the candidate run.primaryProvider does not match the label", () => {
