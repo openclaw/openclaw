@@ -32,6 +32,8 @@ function createManifestProviderPlugin(params: {
   origin?: "bundled" | "workspace";
   enabledByDefault?: boolean;
   modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
+  activation?: PluginManifestRecord["activation"];
+  setup?: PluginManifestRecord["setup"];
 }): PluginManifestRecord {
   return {
     id: params.id,
@@ -40,6 +42,8 @@ function createManifestProviderPlugin(params: {
     providers: params.providerIds,
     cliBackends: params.cliBackends ?? [],
     modelSupport: params.modelSupport,
+    activation: params.activation,
+    setup: params.setup,
     skills: [],
     hooks: [],
     origin: params.origin ?? "bundled",
@@ -703,6 +707,98 @@ describe("resolvePluginProviders", () => {
             allow: ["openai"],
             entries: {
               openai: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("uses activation.onProviders to keep explicit provider owners on the runtime path", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "activation-owned-provider",
+        providerIds: [],
+        activation: {
+          onProviders: ["activation-owned"],
+        },
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {},
+      providerRefs: ["activation-owned"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["activation-owned-provider"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["activation-owned-provider"],
+            entries: {
+              "activation-owned-provider": { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("uses setup.providers to keep explicit provider owners on the setup path", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "setup-owned-provider",
+        providerIds: [],
+        setup: {
+          providers: [{ id: "setup-owned" }],
+        },
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {},
+      providerRefs: ["setup-owned"],
+      activate: true,
+      mode: "setup",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["setup-owned-provider"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["setup-owned-provider"],
+            entries: {
+              "setup-owned-provider": { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {
+    setOwningProviderManifestPlugins();
+
+    resolvePluginProviders({
+      config: {},
+      providerRefs: ["claude-cli"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["anthropic"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["anthropic"],
+            entries: {
+              anthropic: { enabled: true },
             },
           }),
         }),
