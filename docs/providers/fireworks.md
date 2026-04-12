@@ -1,4 +1,5 @@
 ---
+title: "Fireworks"
 summary: "Fireworks setup (auth + model selection)"
 read_when:
   - You want to use Fireworks with OpenClaw

@@ -1,5 +1,5 @@
 ---
-title: "Perplexity (Provider)"
+title: "Perplexity"
 summary: "Perplexity web search provider setup (API key, search modes, filtering)"
 read_when:
   - You want to configure Perplexity as a web search provider

@@ -3,7 +3,7 @@ summary: "GLM model family overview + how to use it in OpenClaw"
 read_when:
   - You want GLM models in OpenClaw
   - You need the model naming convention and setup
-title: "GLM Models"
+title: "GLM (Zhipu)"
 ---
 
 # GLM models

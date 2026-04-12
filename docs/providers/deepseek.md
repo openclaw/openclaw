@@ -1,4 +1,5 @@
 ---
+title: "DeepSeek"
 summary: "DeepSeek setup (auth + model selection)"
 read_when:
   - You want to use DeepSeek with OpenClaw

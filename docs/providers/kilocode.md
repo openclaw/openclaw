@@ -1,5 +1,5 @@
 ---
-title: "Kilo Gateway"
+title: "Kilocode"
 summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
