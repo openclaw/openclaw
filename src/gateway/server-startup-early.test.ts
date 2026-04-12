@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { HealthSummary } from "../commands/health.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { startGatewayEarlyRuntime } from "./server-startup-early.js";
 
 describe("startGatewayEarlyRuntime", () => {
@@ -22,16 +24,16 @@ describe("startGatewayEarlyRuntime", () => {
       nodeSendToAllSubscribed: () => {},
       getPresenceVersion: () => 0,
       getHealthVersion: () => 0,
-      refreshGatewayHealthSnapshot: async () => ({}) as never,
+      refreshGatewayHealthSnapshot: async () => ({}) as HealthSummary,
       logHealth: { error: () => {} },
-      dedupe: new Map(),
+      dedupe: new Map<string, DedupeEntry>(),
       chatAbortControllers: new Map(),
-      chatRunState: { abortedRuns: new Map() },
+      chatRunState: { abortedRuns: new Map<string, number>() },
       chatRunBuffers: new Map(),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),
       removeChatRun: () => {},
-      agentRunSeq: new Map(),
+      agentRunSeq: new Map<string, number>(),
       nodeSendToSession: () => {},
       skillsRefreshDelayMs: 30_000,
       getSkillsRefreshTimer: () => null,
