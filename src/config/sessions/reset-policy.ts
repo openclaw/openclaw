@@ -71,18 +71,24 @@ export function resolveSessionResetPolicy(params: {
 
 export function evaluateSessionFreshness(params: {
   updatedAt: number;
+  /** Timestamp of the last real (non-system-event) interaction. When provided,
+   *  freshness is evaluated against this anchor instead of `updatedAt`, so that
+   *  automated traffic (heartbeat, cron-event, exec-event) does not prevent
+   *  scheduled resets. Falls back to `updatedAt` when absent. */
+  lastInteractionAt?: number;
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  const freshnessAnchor = params.lastInteractionAt ?? params.updatedAt;
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
     params.policy.idleMinutes != null && params.policy.idleMinutes > 0
-      ? params.updatedAt + params.policy.idleMinutes * 60_000
+      ? freshnessAnchor + params.policy.idleMinutes * 60_000
       : undefined;
-  const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
+  const staleDaily = dailyResetAt != null && freshnessAnchor < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
   return {
     fresh: !(staleDaily || staleIdle),

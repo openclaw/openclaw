@@ -386,7 +386,9 @@ export function runAgentAttempt(params: {
                   params.providerOverride,
                   result.meta.agentMeta.cliSessionBinding,
                 );
-                updatedEntry.updatedAt = Date.now();
+                const bindNow = Date.now();
+                updatedEntry.updatedAt = bindNow;
+                updatedEntry.lastInteractionAt = bindNow;
 
                 await persistSessionEntry({
                   sessionStore: params.sessionStore,

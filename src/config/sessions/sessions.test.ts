@@ -125,6 +125,59 @@ describe("resolveSessionResetPolicy", () => {
     });
   });
 
+  it("uses lastInteractionAt instead of updatedAt when provided", () => {
+    // Simulate: today 8 AM, reset boundary 6 AM, heartbeat bumped updatedAt to 7 AM,
+    // but last real user message was at 2 AM (before the reset boundary).
+    const today = new Date();
+    today.setHours(8, 0, 0, 0);
+    const now = today.getTime();
+    const todayAt = (h: number) => {
+      const d = new Date(today);
+      d.setHours(h, 0, 0, 0);
+      return d.getTime();
+    };
+    const freshness = evaluateSessionFreshness({
+      updatedAt: todayAt(7), // heartbeat bumped this past 6 AM
+      lastInteractionAt: todayAt(2), // last real user message was at 2 AM
+      now,
+      policy: { mode: "daily", atHour: 6 },
+    });
+    // Session should be stale because last real interaction was before the reset boundary
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.dailyResetAt).toBe(todayAt(6));
+  });
+
+  it("falls back to updatedAt when lastInteractionAt is absent", () => {
+    const today = new Date();
+    today.setHours(8, 0, 0, 0);
+    const now = today.getTime();
+    const todayAt = (h: number) => {
+      const d = new Date(today);
+      d.setHours(h, 0, 0, 0);
+      return d.getTime();
+    };
+    const freshness = evaluateSessionFreshness({
+      updatedAt: todayAt(7), // after 6 AM
+      // no lastInteractionAt — backward compat
+      now,
+      policy: { mode: "daily", atHour: 6 },
+    });
+    // Should be fresh because updatedAt is after the reset boundary
+    expect(freshness.fresh).toBe(true);
+  });
+
+  it("uses lastInteractionAt for idle mode expiry", () => {
+    const now = Date.now();
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now, // just updated by heartbeat
+      lastInteractionAt: now - 120 * 60_000, // last real message 2 hours ago
+      now,
+      policy: { mode: "idle", atHour: 4, idleMinutes: 60 },
+    });
+    // Should be stale: 2h since last interaction > 60 min idle timeout
+    expect(freshness.fresh).toBe(false);
+  });
+
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
     const freshness = evaluateSessionFreshness({
       updatedAt: 1_000,

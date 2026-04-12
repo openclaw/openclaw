@@ -126,8 +126,9 @@ function resolveStaleSessionEndReason(params: {
   if (!params.entry || !params.freshness) {
     return undefined;
   }
+  const freshnessAnchor = params.entry.lastInteractionAt ?? params.entry.updatedAt;
   const staleDaily =
-    params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
+    params.freshness.dailyResetAt != null && freshnessAnchor < params.freshness.dailyResetAt;
   const staleIdle =
     params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
   if (staleIdle) {
@@ -433,7 +434,12 @@ export async function initSessionState(params: {
   const entryFreshness = entry
     ? isSystemEvent || skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          lastInteractionAt: entry.lastInteractionAt,
+          now,
+          policy: resetPolicy,
+        })
     : undefined;
   const softResetAllowed =
     softReset.matched &&
@@ -592,10 +598,14 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const nowMs = Date.now();
   sessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: nowMs,
+    // Only advance lastInteractionAt for real user interactions so that
+    // system events (heartbeat, cron, exec) do not prevent daily/idle resets.
+    lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : nowMs,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.

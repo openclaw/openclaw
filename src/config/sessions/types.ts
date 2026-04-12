@@ -128,6 +128,13 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
+  /**
+   * Timestamp (ms) of the last non-system-event interaction (user message, command, etc.).
+   * System events (heartbeat, cron-event, exec-event) update `updatedAt` but not this field.
+   * Used by `evaluateSessionFreshness` so that automated keep-alive traffic does not
+   * prevent scheduled daily/idle resets.  Falls back to `updatedAt` when absent (backward compat).
+   */
+  lastInteractionAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

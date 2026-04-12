@@ -73,14 +73,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
 
+  const storeNow = Date.now();
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: storeNow,
+    lastInteractionAt: storeNow,
   };
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: storeNow,
+    lastInteractionAt: storeNow,
     contextTokens,
   };
   setSessionRuntimeModel(next, {
@@ -176,7 +179,9 @@ export async function clearCliSessionInStore(params: {
 
   const next = { ...entry };
   clearCliSession(next, provider);
-  next.updatedAt = Date.now();
+  const clearNow = Date.now();
+  next.updatedAt = clearNow;
+  next.lastInteractionAt = clearNow;
 
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
