@@ -124,7 +124,10 @@ type AnthropicMessagesRequest = {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
-let subagentFanoutPhase = 0;
+
+type MockScenarioState = {
+  subagentFanoutPhase: number;
+};
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -504,7 +507,11 @@ function isHeartbeatPrompt(text: string) {
   return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
 }
 
-function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
+function buildAssistantText(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+  scenarioState: MockScenarioState,
+) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
@@ -578,7 +585,11 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
         "Status: complete",
       ].join("\n");
     }
-    return "";
+    return [
+      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
+      "Wrote: repo-contract-summary.txt",
+      "Status: blocked",
+    ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
@@ -613,7 +624,11 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
-  if (/subagent fanout synthesis check/i.test(prompt) && toolOutput && subagentFanoutPhase >= 2) {
+  if (
+    /subagent fanout synthesis check/i.test(prompt) &&
+    toolOutput &&
+    scenarioState.subagentFanoutPhase >= 2
+  ) {
     return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
@@ -703,7 +718,10 @@ function buildAssistantEvents(text: string): StreamEvent[] {
   ];
 }
 
-async function buildResponsesPayload(body: Record<string, unknown>) {
+async function buildResponsesPayload(
+  body: Record<string, unknown>,
+  scenarioState: MockScenarioState,
+) {
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -712,7 +730,7 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   if (/remember this fact/i.test(prompt)) {
-    return buildAssistantEvents(buildAssistantText(input, body));
+    return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
@@ -883,16 +901,16 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
     });
   }
   if (/subagent fanout synthesis check/i.test(prompt)) {
-    if (!toolOutput && subagentFanoutPhase === 0) {
-      subagentFanoutPhase = 1;
+    if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
+      scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
         label: "qa-fanout-alpha",
         thread: false,
       });
     }
-    if (toolOutput && subagentFanoutPhase === 1) {
-      subagentFanoutPhase = 2;
+    if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
+      scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
         label: "qa-fanout-beta",
@@ -958,7 +976,7 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   ) {
     await sleep(60_000);
   }
-  return buildAssistantEvents(buildAssistantText(input, body));
+  return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }
 
 // ---------------------------------------------------------------------------
@@ -976,10 +994,9 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
 // baseline lane that exercises the same scenario logic without requiring
 // real Anthropic API keys.
 //
-// Scope: handles non-streaming Anthropic Messages requests with text and
-// tool_result content blocks, which is what the QA suite runner actually
-// sends. Streaming is intentionally out of scope for this mock because the
-// suite runner supports non-streaming fallback.
+// Scope: handles Anthropic Messages requests with text and tool_result
+// content blocks, supporting both non-streaming JSON responses and the
+// streaming SSE path used by the parity harness.
 
 function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
@@ -1297,7 +1314,10 @@ function buildAnthropicMessageStreamEvents(params: {
   return events;
 }
 
-async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
+async function buildMessagesPayload(
+  body: AnthropicMessagesRequest,
+  scenarioState: MockScenarioState,
+): Promise<{
   events: StreamEvent[];
   input: ResponsesInputItem[];
   extracted: ExtractedAssistantOutput;
@@ -1324,7 +1344,7 @@ async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
     model: normalizedModel,
     stream: false,
   };
-  const events = await buildResponsesPayload(dispatchBody);
+  const events = await buildResponsesPayload(dispatchBody, scenarioState);
   const extracted = extractFinalAssistantOutputFromEvents(events);
   const responseBody = buildAnthropicMessageResponse({
     model: normalizedModel,
@@ -1339,7 +1359,7 @@ async function buildMessagesPayload(body: AnthropicMessagesRequest): Promise<{
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
-  subagentFanoutPhase = 0;
+  const scenarioState: MockScenarioState = { subagentFanoutPhase: 0 };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -1417,7 +1437,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-      const events = await buildResponsesPayload(body);
+      const events = await buildResponsesPayload(body, scenarioState);
       const resolvedModel = typeof body.model === "string" ? body.model : "";
       lastRequest = {
         raw,
@@ -1468,7 +1488,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         responseBody,
         streamEvents,
         model: normalizedModel,
-      } = await buildMessagesPayload(body);
+      } = await buildMessagesPayload(body, scenarioState);
       // Record the adapted request snapshot so /debug/requests gives the QA
       // suite the same plannedToolName / allInputText / toolOutput signals
       // on the Anthropic route that the OpenAI route already exposes. This
