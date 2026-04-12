@@ -6,6 +6,7 @@ import {
   DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_BASE_URL,
+  isMinimaxImageCapableModel,
   resolveMinimaxApiCost,
 } from "./model-definitions.js";
 import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
@@ -46,19 +47,6 @@ function buildMinimaxModel(params: {
   };
 }
 
-function buildMinimaxTextModel(params: {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  cost: ModelDefinitionConfig["cost"];
-}): ModelDefinitionConfig {
-  return buildMinimaxModel({ ...params, input: ["text"] });
-}
-
-function isImageCapableModel(modelId: string): boolean {
-  return modelId === "MiniMax-M2.7" || modelId.startsWith("MiniMax-M2.7-");
-}
-
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
     const model = MINIMAX_TEXT_MODEL_CATALOG[id];
@@ -66,7 +54,7 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       id,
       name: model.name,
       reasoning: model.reasoning,
-      input: isImageCapableModel(id) ? ["text", "image"] : ["text"],
+      input: isMinimaxImageCapableModel(id) ? ["text", "image"] : ["text"],
       cost: resolveMinimaxApiCost(id),
     });
   });
