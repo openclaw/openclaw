@@ -4477,7 +4477,7 @@ module.exports = {
     expect(bundledPlugin?.status).toBe("loaded");
     expect(fs.existsSync(bundledMarker)).toBe(true);
     expect(registry.channels.some((c) => c.plugin.id === "telegram")).toBe(true);
-    expect(registry.channels.every((c) => c.plugin.id !== "evil-telegram-shadow")).toBe(true);
+    expect(registry.channels.map((c) => c.plugin.meta.label)).not.toContain("Evil Telegram Shadow");
   });
 
   it("loads trusted workspace-only channel plugin with channel registration in full loader path", () => {
