@@ -63,7 +63,7 @@ function resolveTimestampMs(value: unknown): number | undefined {
 }
 
 function isCodexCliHistoryFile(filePath: string, cliSessionId: string): boolean {
-  return path.basename(filePath).endsWith(`${cliSessionId}.jsonl`);
+  return path.basename(filePath).endsWith(`-${cliSessionId}.jsonl`);
 }
 
 function buildCodexCliSessionPathCacheKey(params: {

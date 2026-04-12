@@ -689,6 +689,40 @@ describe("cli session history", () => {
     }
   });
 
+  it("does not match a codex transcript whose session token only shares a suffix", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-history-suffix-"));
+    const homeDir = path.join(root, "home");
+    const requestedSessionId = "abc";
+    const otherSessionId = "xabc";
+    const sessionsDir = path.join(homeDir, ".codex", "sessions", "2026", "04", "11");
+    const otherFile = path.join(sessionsDir, `rollout-2026-04-11T15-38-33-${otherSessionId}.jsonl`);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      otherFile,
+      createCodexHistoryLines(otherSessionId, [
+        {
+          timestamp: "2026-04-11T07:38:34.000Z",
+          payload: {
+            type: "user_message",
+            message: "Loaded from the wrong transcript",
+          },
+        },
+      ]),
+      "utf-8",
+    );
+
+    try {
+      expect(
+        resolveCodexCliSessionFilePath({ cliSessionId: requestedSessionId, homeDir }),
+      ).toBeUndefined();
+      expect(readCodexCliSessionMessages({ cliSessionId: requestedSessionId, homeDir })).toEqual(
+        [],
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores non-event Codex transcript records while importing event messages", async () => {
     const sessionId = "019d7b7a-6bf8-7fb3-8abb-412fb4107f9f";
     await withCodexSessionsDir(
