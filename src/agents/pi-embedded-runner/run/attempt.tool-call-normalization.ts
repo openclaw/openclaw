@@ -267,18 +267,22 @@ function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): bool
 }
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
+  const seenToolCallIds = new Set<string>();
   for (const block of content) {
     if (!isReplayToolCallBlock(block)) {
       continue;
     }
     const replayBlock = block;
+    const toolCallId = typeof replayBlock.id === "string" ? replayBlock.id.trim() : "";
     if (
       !replayToolCallHasInput(replayBlock) ||
-      !replayToolCallNonEmptyString(replayBlock.id) ||
+      !toolCallId ||
+      seenToolCallIds.has(toolCallId) ||
       hasUnredactedSessionsSpawnAttachments(replayBlock)
     ) {
       return false;
     }
+    seenToolCallIds.add(toolCallId);
     const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
     const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
     if (!resolvedName || replayBlock.name !== resolvedName) {
