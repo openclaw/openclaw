@@ -54,8 +54,8 @@ function truncateText(input: string, maxChars: number): string {
   return `${input.slice(0, maxChars - 1)}…`;
 }
 
-function hashText(text: string): string {
-  return text.trim();
+function hashText(text: string | undefined): string {
+  return (text ?? "").trim();
 }
 
 function normalizeToolStatus(status: string | undefined): string | undefined {
