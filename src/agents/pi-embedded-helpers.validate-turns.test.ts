@@ -525,7 +525,37 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
-  it("preserves assistant turns that include signed thinking blocks", () => {
+  it("preserves signed-thinking turns whose sibling tool calls still resolve", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(4);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+    ]);
+  });
+
+  it("drops signed-thinking turns whose sibling tool calls are dangling", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -541,14 +571,13 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
 
     expect(result).toHaveLength(3);
-    const assistantContent = (result[1] as { content?: unknown[] }).content;
-    expect(assistantContent).toEqual([
-      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-      { type: "toolCall", id: "tool-1", name: "gateway", arguments: {} },
+    expect((result[1] as { role?: unknown }).role).toBe("assistant");
+    expect((result[1] as { content?: unknown[] }).content).toEqual([
+      { type: "text", text: "[tool calls omitted]" },
     ]);
   });
 
-  it("preserves assistant turns that include redacted thinking blocks", () => {
+  it("drops redacted-thinking turns whose sibling tool calls are dangling", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -566,8 +595,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(result).toHaveLength(3);
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([
-      { type: "redacted_thinking", data: "blob", thinkingSignature: "sig_1" },
-      { type: "toolUse", id: "tool-1", name: "gateway", arguments: {} },
+      { type: "text", text: "[tool calls omitted]" },
     ]);
   });
 
