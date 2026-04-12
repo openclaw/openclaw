@@ -455,6 +455,55 @@ describe("active-memory plugin", () => {
       provider: "github-copilot",
       model: "gpt-5.4-mini",
       sessionKey: expect.stringMatching(/^agent:main:main:active-memory:[a-f0-9]{12}$/),
+      config: {
+        memory: {
+          qmd: {
+            searchMode: "search",
+          },
+        },
+      },
+    });
+  });
+
+  it("lets active memory inherit the main QMD search mode when configured", async () => {
+    api.config = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+        },
+      },
+    };
+    api.pluginConfig = {
+      agents: ["main"],
+      qmd: {
+        searchMode: "inherit",
+      },
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what wings should i order? inherit-qmd-mode-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            searchMode: "query",
+          },
+        },
+      },
     });
   });
 

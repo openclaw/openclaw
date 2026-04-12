@@ -27,6 +27,7 @@ const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const DEFAULT_MODEL_REF = "github-copilot/gpt-5.4-mini";
 const DEFAULT_QUERY_MODE = "recent" as const;
+const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const TOGGLE_STATE_FILE = "session-toggles.json";
 
@@ -81,7 +82,12 @@ type ActiveRecallPluginConfig = {
   cacheTtlMs?: number;
   persistTranscripts?: boolean;
   transcriptDir?: string;
+  qmd?: {
+    searchMode?: ActiveMemoryQmdSearchMode;
+  };
 };
+
+type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
 
 type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
@@ -110,6 +116,9 @@ type ResolvedActiveRecallPluginConfig = {
   cacheTtlMs: number;
   persistTranscripts: boolean;
   transcriptDir: string;
+  qmd: {
+    searchMode: ActiveMemoryQmdSearchMode;
+  };
 };
 
 type ActiveRecallRecentTurn = {
@@ -235,6 +244,13 @@ function normalizeTranscriptDir(value: unknown): string {
 function normalizePromptConfigText(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text ? text : undefined;
+}
+
+function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
+  if (value === "inherit" || value === "search" || value === "vsearch" || value === "query") {
+    return value;
+  }
+  return DEFAULT_QMD_SEARCH_MODE;
 }
 
 function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
@@ -486,6 +502,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
+  const qmd = asRecord(raw.qmd);
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
@@ -529,6 +546,28 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     cacheTtlMs: clampInt(raw.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 1000, 120_000),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
+    qmd: {
+      searchMode: resolveQmdSearchMode(qmd?.searchMode),
+    },
+  };
+}
+
+function applyActiveMemoryConfigOverrides(
+  cfg: OpenClawConfig,
+  pluginConfig: ResolvedActiveRecallPluginConfig,
+): OpenClawConfig {
+  if (pluginConfig.qmd.searchMode === "inherit") {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    memory: {
+      ...cfg.memory,
+      qmd: {
+        ...cfg.memory?.qmd,
+        searchMode: pluginConfig.qmd.searchMode,
+      },
+    },
   };
 }
 
@@ -1230,6 +1269,7 @@ async function runRecallSubagent(params: {
   });
 
   try {
+    const embeddedConfig = applyActiveMemoryConfigOverrides(params.api.config, params.config);
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -1237,7 +1277,7 @@ async function runRecallSubagent(params: {
       sessionFile,
       workspaceDir,
       agentDir,
-      config: params.api.config,
+      config: embeddedConfig,
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
