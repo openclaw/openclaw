@@ -52,7 +52,7 @@ type EmbeddedToolContext = {
 type EmbeddedToolEnvelope = {
   protocolVersion?: number;
   ok: boolean;
-  status?: "ok" | "needs_approval" | "cancelled";
+  status?: "ok" | "needs_approval" | "needs_input" | "cancelled";
   output?: unknown[];
   requiresApproval?: {
     type?: "approval_request";
@@ -60,6 +60,13 @@ type EmbeddedToolEnvelope = {
     items: unknown[];
     preview?: string;
     resumeToken?: string;
+  } | null;
+  requiresInput?: {
+    prompt: string;
+    schema?: unknown;
+    items?: unknown[];
+    resumeToken?: string;
+    approvalId?: string;
   } | null;
   error?: {
     type?: string;
@@ -75,8 +82,11 @@ type EmbeddedToolRuntime = {
     ctx?: EmbeddedToolContext;
   }) => Promise<EmbeddedToolEnvelope>;
   resumeToolRequest: (params: {
-    token: string;
-    approved: boolean;
+    token?: string;
+    approvalId?: string;
+    approved?: boolean;
+    response?: unknown;
+    cancel?: boolean;
     ctx?: EmbeddedToolContext;
   }) => Promise<EmbeddedToolEnvelope>;
 };
@@ -125,6 +135,15 @@ function createLimitedSink(maxBytes: number, label: "stdout" | "stderr") {
 
 function normalizeEnvelope(envelope: EmbeddedToolEnvelope): LobsterEnvelope {
   if (envelope.ok) {
+    if (envelope.status === "needs_input") {
+      return {
+        ok: false,
+        error: {
+          type: "unsupported_status",
+          message: "Lobster input requests are not supported by the OpenClaw Lobster tool yet",
+        },
+      };
+    }
     return {
       ok: true,
       status: envelope.status ?? "ok",
