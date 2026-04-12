@@ -3791,7 +3791,12 @@ def get_workspace_id(workspace_name):
         print(f"ERROR: Failed to look up workspace '{workspace_name}' in organization '{org}' (HTTP {r.status_code}).")
         return None
     r.raise_for_status()
-    return r.json()["data"]["id"]
+    payload = r.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or "id" not in data:
+        print(f"ERROR: Workspace lookup for '{workspace_name}' returned an unexpected response shape.")
+        return None
+    return data["id"]
 
 def cmd_state(args):
     ws_id = get_workspace_id(args.workspace)
