@@ -17,6 +17,7 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 
 // We spell out job/patch properties so that LLMs know what fields to send.
 // Nested unions are avoided; runtime validation happens in normalizeCronJob*.
@@ -577,6 +578,37 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                   ...delivery,
                   ...inferred,
                 } satisfies CronDelivery;
+              }
+            }
+
+            // Validate: if delivery.mode is announce/empty and no explicit
+            // channel/to, require explicit targeting when multiple channels configured
+            const finalDelivery = (job as { delivery?: unknown }).delivery;
+            const finalMode =
+              typeof finalDelivery === "object" &&
+              finalDelivery !== null &&
+              "mode" in finalDelivery &&
+              typeof finalDelivery.mode === "string"
+                ? normalizeLowercaseStringOrEmpty(finalDelivery.mode)
+                : "";
+            const hasExplicitTarget =
+              typeof finalDelivery === "object" &&
+              finalDelivery !== null &&
+              (("channel" in finalDelivery &&
+                typeof finalDelivery.channel === "string" &&
+                finalDelivery.channel.trim()) ||
+                ("to" in finalDelivery &&
+                  typeof finalDelivery.to === "string" &&
+                  finalDelivery.to.trim()));
+            if (
+              (finalMode === "" || finalMode === "announce") &&
+              !hasExplicitTarget
+            ) {
+              const configuredChannels = await listConfiguredMessageChannels(cfg);
+              if (configuredChannels.length > 1) {
+                throw new Error(
+                  `Channel is required when multiple channels are configured: ${configuredChannels.join(", ")}. Set delivery.channel or delivery.to explicitly.`,
+                );
               }
             }
           }
