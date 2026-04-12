@@ -19,7 +19,10 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -131,6 +134,25 @@ const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.mjs",
   "cli-metadata.cjs",
 ] as const;
+
+function resolveDreamingSidecarEngineId(params: {
+  cfg: OpenClawConfig;
+  memorySlot: string | null | undefined;
+}): string | null {
+  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
+  if (
+    !normalizedMemorySlot ||
+    normalizedMemorySlot === "none" ||
+    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+  ) {
+    return null;
+  }
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    cfg: params.cfg,
+  });
+  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+}
 
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
@@ -1291,13 +1313,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const memorySlot = normalized.slots.memory;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
-    // Identify the dreaming engine so slot-policy checks can exempt it.
-    // When dreaming is disabled, the engine does not need to load alongside the slot plugin.
-    const dreamingConfig = resolveMemoryDreamingConfig({
-      pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-      cfg,
-    });
-    const dreamingEngineId = dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+    const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
 
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -1521,39 +1537,27 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (!shouldLoadModules && registrationMode === "full") {
-        if (
-          pluginId === dreamingEngineId &&
-          hasKind(record.kind, "memory") &&
-          memorySlot === pluginId
-        ) {
-          // Dreaming engine is also the configured slot — mark it selected so
-          // memorySlotMatched stays accurate on loadModules:false load paths.
+        const memoryDecision = resolveMemorySlotDecision({
+          id: record.id,
+          kind: record.kind,
+          slot: memorySlot,
+          selectedId: selectedMemoryPluginId,
+        });
+
+        if (!memoryDecision.enabled && pluginId !== dreamingEngineId) {
+          record.enabled = false;
+          record.status = "disabled";
+          record.error = memoryDecision.reason;
+          markPluginActivationDisabled(record, memoryDecision.reason);
+          registry.plugins.push(record);
+          seenIds.set(pluginId, candidate.origin);
+          continue;
+        }
+
+        if (memoryDecision.selected && hasKind(record.kind, "memory")) {
           selectedMemoryPluginId = record.id;
           memorySlotMatched = true;
           record.memorySlotSelected = true;
-        } else if (pluginId !== dreamingEngineId) {
-          const memoryDecision = resolveMemorySlotDecision({
-            id: record.id,
-            kind: record.kind,
-            slot: memorySlot,
-            selectedId: selectedMemoryPluginId,
-          });
-
-          if (!memoryDecision.enabled) {
-            record.enabled = false;
-            record.status = "disabled";
-            record.error = memoryDecision.reason;
-            markPluginActivationDisabled(record, memoryDecision.reason);
-            registry.plugins.push(record);
-            seenIds.set(pluginId, candidate.origin);
-            continue;
-          }
-
-          if (memoryDecision.selected && hasKind(record.kind, "memory")) {
-            selectedMemoryPluginId = record.id;
-            memorySlotMatched = true;
-            record.memorySlotSelected = true;
-          }
         }
       }
 
@@ -1919,11 +1923,7 @@ export async function loadOpenClawPluginCliRegistry(
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-    cfg,
-  });
-  const dreamingEngineId = dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+  const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
 
   for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
