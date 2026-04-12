@@ -1127,6 +1127,32 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      origin: {
+        provider: "webchat",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? explicit channel hint", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "webchat",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
   it("clears stale status on skipped non-interactive turns even when agentId is missing", async () => {
     const sessionKey = "noncanonical-session";
     hoisted.sessionStore[sessionKey] = {

@@ -332,9 +332,11 @@ function resolveRecallRunChannelContext(params: {
 } {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  const trustedExplicitChannel =
+    explicitChannel && explicitChannel !== explicitProvider ? explicitChannel : undefined;
   const resolveReturnValue = (resolvedChannel?: string) => ({
-    messageChannel: resolvedChannel ?? explicitChannel,
-    messageProvider: resolvedChannel ?? explicitProvider,
+    messageChannel: trustedExplicitChannel ?? resolvedChannel ?? explicitChannel,
+    messageProvider: trustedExplicitChannel ?? resolvedChannel ?? explicitProvider,
   });
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??
