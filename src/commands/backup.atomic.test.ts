@@ -3,20 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import * as backupShared from "./backup-shared.js";
-import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 import { backupCreateCommand } from "./backup.js";
-
-const tarCreateMock = vi.hoisted(() => vi.fn());
-const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
-
-vi.mock("tar", () => ({
-  c: tarCreateMock,
-}));
-
-vi.mock("./backup-verify.js", () => ({
-  backupVerifyCommand: backupVerifyCommandMock,
-}));
+import {
+  backupVerifyCommandMock,
+  createBackupTestRuntime,
+  mockStateOnlyBackupPlan,
+  tarCreateMock,
+} from "./backup.test-support.js";
 
 describe("backupCreateCommand atomic archive write", () => {
   let tempHome: TempHomeEnv;
@@ -54,24 +47,10 @@ describe("backupCreateCommand atomic archive write", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createBackupTestRuntime();
     const outputPath = path.join(archiveDir, params.outputName ?? "backup.tar.gz");
 
-    vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-      await resolveBackupPlanFromPaths({
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        oauthDir: path.join(stateDir, "credentials"),
-        includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
-        nowMs: 123,
-      }),
-    );
+    await mockStateOnlyBackupPlan(stateDir);
 
     return {
       archiveDir,

@@ -1,5 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
@@ -71,6 +71,8 @@ type MutableAuthControllerHarness = {
   profileIndex: number;
 };
 
+type RuntimeApiKeySetter = Mock<(provider: string, apiKey: string) => void>;
+
 function createMutableAuthControllerHarness(): MutableAuthControllerHarness {
   return {
     runtimeModel: createTestModel(),
@@ -84,7 +86,7 @@ function createMutableAuthControllerHarness(): MutableAuthControllerHarness {
 
 function createMutableEmbeddedRunAuthController(params: {
   harness: MutableAuthControllerHarness;
-  setRuntimeApiKey: ReturnType<typeof vi.fn>;
+  setRuntimeApiKey: RuntimeApiKeySetter;
   profileCandidates?: string[];
 }) {
   return createEmbeddedRunAuthController({
