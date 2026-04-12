@@ -13,16 +13,108 @@ UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
+HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=../install-sh-common/cli-verify.sh
 source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
 
+emit_status() {
+  if [[ -w /dev/tty ]]; then
+    printf "%s\n" "$*" >/dev/tty
+  else
+    printf "%s\n" "$*" >&2
+  fi
+}
+
+global_package_root() {
+  local npm_root
+  npm_root="$(quiet_npm root -g 2>/dev/null || true)"
+  if [[ -n "$npm_root" ]]; then
+    printf "%s/%s" "$npm_root" "$PACKAGE_NAME"
+  fi
+}
+
+describe_installed_package() {
+  local root="$1"
+  local files="missing"
+  local size="missing"
+  local version="missing"
+  if [[ -d "$root" ]]; then
+    files="$(find "$root" -type f 2>/dev/null | wc -l | tr -d " ")"
+    size="$(du -sh "$root" 2>/dev/null | cut -f1 || true)"
+    version="$(
+      node -e '
+try {
+  process.stdout.write(String(require(`${process.argv[1]}/package.json`).version ?? "missing"));
+} catch {
+  process.stdout.write("missing");
+}
+' "$root"
+    )"
+  fi
+  printf "version=%s size=%s files=%s root=%s" "$version" "$size" "$files" "$root"
+}
+
+print_install_audit() {
+  local label="$1"
+  local root
+  root="$(global_package_root)"
+  if [[ -n "$root" ]]; then
+    echo "==> Install audit (${label}): $(describe_installed_package "$root")"
+  fi
+}
+
+run_with_heartbeat() {
+  local label="$1"
+  shift
+  local interval="$HEARTBEAT_INTERVAL"
+  if ! [[ "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" == "0" ]]; then
+    "$@"
+    return
+  fi
+
+  local start
+  local command_pid
+  local heartbeat_pid
+  local status
+  start="$(date +%s)"
+  set +e
+  "$@" &
+  command_pid=$!
+  (
+    while true; do
+      sleep "$interval"
+      kill -0 "$command_pid" >/dev/null 2>&1 || exit 0
+      local now
+      local elapsed
+      local root
+      now="$(date +%s)"
+      elapsed=$((now - start))
+      root="$(global_package_root)"
+      if [[ -n "$root" ]]; then
+        emit_status "==> Still running (${label}, ${elapsed}s): $(describe_installed_package "$root")"
+      else
+        emit_status "==> Still running (${label}, ${elapsed}s)"
+      fi
+    done
+  ) &
+  heartbeat_pid=$!
+  wait "$command_pid"
+  status=$?
+  kill "$heartbeat_pid" >/dev/null 2>&1 || true
+  wait "$heartbeat_pid" >/dev/null 2>&1 || true
+  set -e
+  return "$status"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
     echo "==> Install latest release tarball"
-    quiet_npm install -g --omit=optional "$FRESH_TAG_URL"
+    run_with_heartbeat "install latest release tarball" \
+      quiet_npm install -g --omit=optional "$FRESH_TAG_URL"
+    print_install_audit "fresh install"
 
     echo "==> Verify installed version"
     if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
@@ -75,7 +167,9 @@ NODE
     echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
   else
     echo "==> Preinstall previous (forces installer upgrade path)"
-    quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+    run_with_heartbeat "preinstall previous release" \
+      quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+    print_install_audit "previous install"
   fi
 
   echo "==> Run official installer one-liner"
@@ -103,10 +197,13 @@ run_update_smoke() {
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
   if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
-    quiet_npm install -g --omit=optional "$UPDATE_BASELINE_TAG_URL"
+    run_with_heartbeat "install baseline release" \
+      quiet_npm install -g --omit=optional "$UPDATE_BASELINE_TAG_URL"
   else
-    quiet_npm install -g --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+    run_with_heartbeat "install baseline release" \
+      quiet_npm install -g --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   fi
+  print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
   echo "==> Run openclaw update from host-served tgz"
@@ -116,7 +213,9 @@ run_update_smoke() {
   update_stderr_file="$(mktemp)"
   set +e
   UPDATE_JSON="$(
-    npm_config_omit=optional NPM_CONFIG_OMIT=optional openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
+    run_with_heartbeat "openclaw update" \
+      env npm_config_omit=optional NPM_CONFIG_OMIT=optional \
+      openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
   )"
   update_status=$?
   set -e
@@ -170,6 +269,7 @@ if (typeof updateStep.command !== "string" || !updateStep.command.includes(expec
 NODE
 
   echo "==> Verify updated version"
+  print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
 
   echo "OK"
