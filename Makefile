@@ -1,3 +1,5 @@
+include .makefiles/*.mk
+
 .PHONY: build
 
 build:
