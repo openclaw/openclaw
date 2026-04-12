@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";

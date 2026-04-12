@@ -34,7 +34,7 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookSessionEndReason } from "../../plugins/types.js";
+import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {

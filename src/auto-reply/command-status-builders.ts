@@ -1,6 +1,6 @@
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { isCommandFlagEnabled } from "../config/commands.js";
+import { isCommandFlagEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import {
