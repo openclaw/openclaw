@@ -15,6 +15,7 @@ const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 const emitMessageSentMock = vi.hoisted(() => vi.fn());
 const runMessageSendingMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
+const listFeishuChatMessagesMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
 const listPinsFeishuMock = vi.hoisted(() => vi.fn());
@@ -24,6 +25,11 @@ const getChatMembersMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
+const readFeishuMessagesFromTranscriptMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./transcript-reader.js", () => ({
+  readFeishuMessagesFromTranscript: readFeishuMessagesFromTranscriptMock,
+}));
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -42,6 +48,7 @@ vi.mock("./channel.runtime.js", () => ({
     getChatMembers: getChatMembersMock,
     getFeishuMemberInfo: getFeishuMemberInfoMock,
     getMessageFeishu: getMessageFeishuMock,
+    listFeishuChatMessages: listFeishuChatMessagesMock,
     listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
     listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
     listPinsFeishu: listPinsFeishuMock,
@@ -684,6 +691,176 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toEqual({
       error: "Feishu read failed or message not found: om_missing",
     });
+  });
+
+  it("reads chat history when no messageId is provided", async () => {
+    listFeishuChatMessagesMock.mockResolvedValueOnce({
+      messages: [
+        { messageId: "om_a", content: "first", contentType: "text" },
+        { messageId: "om_b", content: "second", contentType: "text" },
+      ],
+      pageToken: "next_page",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { target: "oc_group_1", limit: 20 },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(listFeishuChatMessagesMock).toHaveBeenCalledWith({
+      cfg,
+      chatId: "oc_group_1",
+      limit: 20,
+      pageToken: undefined,
+      accountId: undefined,
+    });
+    expect(result?.details).toMatchObject({
+      ok: true,
+      channel: "feishu",
+      action: "read",
+      messages: [
+        expect.objectContaining({ messageId: "om_a" }),
+        expect.objectContaining({ messageId: "om_b" }),
+      ],
+      pageToken: "next_page",
+    });
+  });
+
+  it("reads single message from transcript when sessionId is available", async () => {
+    readFeishuMessagesFromTranscriptMock.mockReturnValueOnce([
+      { messageId: "om_cached", content: "from transcript", contentType: "text", chatId: "oc_1" },
+    ]);
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { messageId: "om_cached" },
+      cfg,
+      accountId: undefined,
+      sessionId: "sess_1",
+      agentId: "agent_1",
+    } as never);
+
+    expect(readFeishuMessagesFromTranscriptMock).toHaveBeenCalledWith({
+      sessionId: "sess_1",
+      agentId: "agent_1",
+      store: undefined,
+      messageId: "om_cached",
+    });
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      message: expect.objectContaining({ messageId: "om_cached", content: "from transcript" }),
+      source: "transcript",
+    });
+  });
+
+  it("falls back to API when transcript has no match for single message", async () => {
+    readFeishuMessagesFromTranscriptMock.mockReturnValueOnce([]);
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_api",
+      content: "from api",
+      contentType: "text",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { messageId: "om_api" },
+      cfg,
+      accountId: undefined,
+      sessionId: "sess_1",
+      agentId: "agent_1",
+    } as never);
+
+    expect(readFeishuMessagesFromTranscriptMock).toHaveBeenCalled();
+    expect(getMessageFeishuMock).toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      message: expect.objectContaining({ messageId: "om_api", content: "from api" }),
+    });
+  });
+
+  it("reads chat history from transcript when sessionId is available", async () => {
+    readFeishuMessagesFromTranscriptMock.mockReturnValueOnce([
+      {
+        messageId: "om_t1",
+        content: "transcript msg 1",
+        contentType: "text",
+        chatId: "oc_group_1",
+      },
+      {
+        messageId: "om_t2",
+        content: "transcript msg 2",
+        contentType: "text",
+        chatId: "oc_group_1",
+      },
+    ]);
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { target: "oc_group_1", limit: 20 },
+      cfg,
+      accountId: undefined,
+      sessionId: "sess_1",
+      agentId: "agent_1",
+      toolContext: {},
+    } as never);
+
+    expect(readFeishuMessagesFromTranscriptMock).toHaveBeenCalledWith({
+      sessionId: "sess_1",
+      agentId: "agent_1",
+      store: undefined,
+      chatId: "oc_group_1",
+      limit: 20,
+    });
+    expect(listFeishuChatMessagesMock).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      channel: "feishu",
+      action: "read",
+      messages: expect.arrayContaining([expect.objectContaining({ messageId: "om_t1" })]),
+      source: "transcript",
+    });
+  });
+
+  it("falls back to API when transcript has no messages for chat", async () => {
+    readFeishuMessagesFromTranscriptMock.mockReturnValueOnce([]);
+    listFeishuChatMessagesMock.mockResolvedValueOnce({
+      messages: [{ messageId: "om_api_1", content: "api msg", contentType: "text" }],
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { target: "oc_group_1", limit: 20 },
+      cfg,
+      accountId: undefined,
+      sessionId: "sess_1",
+      agentId: "agent_1",
+      toolContext: {},
+    } as never);
+
+    expect(readFeishuMessagesFromTranscriptMock).toHaveBeenCalled();
+    expect(listFeishuChatMessagesMock).toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      messages: [expect.objectContaining({ messageId: "om_api_1" })],
+    });
+  });
+
+  it("throws when read has neither messageId nor target", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "read",
+        params: {},
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow(
+      "Feishu read requires either messageId (single message) or target/chatId (chat history).",
+    );
   });
 
   it("edits messages", async () => {

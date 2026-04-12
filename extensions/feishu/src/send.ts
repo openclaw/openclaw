@@ -387,6 +387,65 @@ export async function getMessageFeishu(params: {
   }
 }
 
+/**
+ * List messages in a Feishu chat (group or p2p).
+ * Uses container_id_type=chat to query chat messages with optional pagination.
+ */
+export async function listFeishuChatMessages(params: {
+  cfg: ClawdbotConfig;
+  chatId: string;
+  limit?: number;
+  pageToken?: string;
+  accountId?: string;
+}): Promise<{ messages: FeishuMessageInfo[]; pageToken?: string }> {
+  const { cfg, chatId, limit = 20, pageToken, accountId } = params;
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  const pageSize = Math.min(Math.max(limit, 1), 50);
+  const response = (await client.im.message.list({
+    params: {
+      container_id_type: "chat",
+      container_id: chatId,
+      sort_type: "ByCreateTimeDesc",
+      page_size: pageSize,
+      ...(pageToken ? { page_token: pageToken } : {}),
+    },
+  })) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      items?: FeishuMessageGetItem[];
+      page_token?: string;
+      has_more?: boolean;
+    };
+  };
+
+  if (response.code !== 0) {
+    throw new Error(
+      `Feishu chat message list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
+    );
+  }
+
+  const items = response.data?.items ?? [];
+  const messages: FeishuMessageInfo[] = [];
+
+  for (const item of items) {
+    messages.push(parseFeishuMessageItem(item));
+    if (messages.length >= limit) break;
+  }
+
+  // Return newest-first (consistent with API sort and pagination token direction).
+  return {
+    messages,
+    pageToken: response.data?.has_more ? response.data.page_token : undefined,
+  };
+}
+
 export type FeishuThreadMessageInfo = {
   messageId: string;
   senderId?: string;

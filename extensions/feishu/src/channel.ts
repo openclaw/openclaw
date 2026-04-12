@@ -71,6 +71,7 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
+import { readFeishuMessagesFromTranscript } from "./transcript-reader.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -877,30 +878,91 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
 
           if (ctx.action === "read") {
             const messageId = resolveFeishuMessageId(ctx.params);
-            if (!messageId) {
-              throw new Error("Feishu read requires messageId.");
+            if (messageId) {
+              // Single-message read: try transcript first, then API.
+              if (ctx.sessionId) {
+                const local = readFeishuMessagesFromTranscript({
+                  sessionId: ctx.sessionId,
+                  agentId: ctx.agentId ?? undefined,
+                  store: ctx.cfg.session?.store,
+                  messageId,
+                });
+                if (local.length > 0) {
+                  return jsonActionResult({
+                    ok: true,
+                    channel: "feishu",
+                    action: "read",
+                    message: local[0],
+                    source: "transcript",
+                  });
+                }
+              }
+              const { getMessageFeishu } = await loadFeishuChannelRuntime();
+              const message = await getMessageFeishu({
+                cfg: ctx.cfg,
+                messageId,
+                accountId: ctx.accountId ?? undefined,
+              });
+              if (!message) {
+                return {
+                  isError: true,
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: JSON.stringify({
+                        error: `Feishu read failed or message not found: ${messageId}`,
+                      }),
+                    },
+                  ],
+                  details: { error: `Feishu read failed or message not found: ${messageId}` },
+                };
+              }
+              return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
             }
-            const { getMessageFeishu } = await loadFeishuChannelRuntime();
-            const message = await getMessageFeishu({
+
+            // Chat history read: try transcript first, then API.
+            const chatId = resolveFeishuChatId(ctx);
+            if (!chatId) {
+              throw new Error(
+                "Feishu read requires either messageId (single message) or target/chatId (chat history).",
+              );
+            }
+            const limit = readOptionalNumber(ctx.params, ["limit", "count"]) ?? 20;
+
+            if (ctx.sessionId) {
+              const local = readFeishuMessagesFromTranscript({
+                sessionId: ctx.sessionId,
+                agentId: ctx.agentId ?? undefined,
+                store: ctx.cfg.session?.store,
+                chatId,
+                limit,
+              });
+              if (local.length > 0) {
+                return jsonActionResult({
+                  ok: true,
+                  channel: "feishu",
+                  action: "read",
+                  messages: local,
+                  source: "transcript",
+                });
+              }
+            }
+
+            const pageToken = readFirstString(ctx.params, ["pageToken", "page_token"]);
+            const { listFeishuChatMessages } = await loadFeishuChannelRuntime();
+            const result = await listFeishuChatMessages({
               cfg: ctx.cfg,
-              messageId,
+              chatId,
+              limit,
+              pageToken,
               accountId: ctx.accountId ?? undefined,
             });
-            if (!message) {
-              return {
-                isError: true,
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify({
-                      error: `Feishu read failed or message not found: ${messageId}`,
-                    }),
-                  },
-                ],
-                details: { error: `Feishu read failed or message not found: ${messageId}` },
-              };
-            }
-            return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "read",
+              ...result,
+            });
           }
 
           if (ctx.action === "edit") {
