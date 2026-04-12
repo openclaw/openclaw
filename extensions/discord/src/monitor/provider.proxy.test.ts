@@ -1,7 +1,11 @@
+import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   GatewayIntents,
+  GatewayOpcodes,
+  ListenerEvent,
+  startHeartbeatMock,
   baseRegisterClientSpy,
   GatewayPlugin,
   globalFetchMock,
@@ -21,6 +25,7 @@ const {
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
+  const startHeartbeatMock = vi.fn();
 
   const GatewayIntents = {
     Guilds: 1 << 0,
@@ -33,9 +38,58 @@ const {
     GuildMembers: 1 << 7,
   } as const;
 
+  const GatewayOpcodes = {
+    Dispatch: 0,
+    Heartbeat: 1,
+    Reconnect: 7,
+    InvalidSession: 9,
+    Hello: 10,
+    HeartbeatAck: 11,
+  } as const;
+
+  const ListenerEvent = {
+    Ready: "READY",
+    Resumed: "RESUMED",
+    GuildCreate: "GUILD_CREATE",
+    GuildDelete: "GUILD_DELETE",
+  } as const;
+
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    ws: EventEmitter | null = null;
+    emitter = new EventEmitter();
+    monitor = {
+      recordMessageReceived: vi.fn(),
+      recordError: vi.fn(),
+      recordHeartbeatAck: vi.fn(),
+      recordReconnect: vi.fn(),
+      getMetrics: vi.fn(() => ({ latency: 0 })),
+    };
+    state = { sequence: null, sessionId: null, resumeGatewayUrl: null };
+    sequence: number | null = null;
+    lastHeartbeatAck = true;
+    isConnected = false;
+    pings: number[] = [];
+    babyCache = {
+      setGuild: vi.fn(),
+      getGuild: vi.fn(),
+    };
+    client:
+      | {
+          options: { clientId: string };
+          eventHandler: { handleEvent: ReturnType<typeof vi.fn> };
+        }
+      | undefined;
+    connect = vi.fn();
+    disconnect = vi.fn();
+    handleZombieConnection = vi.fn();
+    handleReconnect = vi.fn();
+    handleClose = vi.fn();
+    canResume = vi.fn(() => false);
+    resume = vi.fn();
+    identify = vi.fn();
+    send = vi.fn();
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
@@ -61,11 +115,14 @@ const {
   return {
     baseRegisterClientSpy,
     GatewayIntents,
+    GatewayOpcodes,
     GatewayPlugin,
     globalFetchMock,
     HttpsProxyAgent,
+    ListenerEvent,
     getLastAgent: () => HttpsProxyAgent.lastCreated,
     restProxyAgentSpy,
+    startHeartbeatMock,
     undiciFetchMock,
     undiciProxyAgentSpy,
     resetLastAgent: () => {
@@ -79,12 +136,22 @@ const {
 // Unit test: don't import Carbon just to check the prototype chain.
 vi.mock("@buape/carbon/gateway", () => ({
   GatewayIntents,
+  GatewayOpcodes,
   GatewayPlugin,
+  startHeartbeat: startHeartbeatMock,
+  validatePayload: (raw: string) => JSON.parse(raw),
 }));
 
 vi.mock("@buape/carbon/dist/src/plugins/gateway/index.js", () => ({
   GatewayIntents,
+  GatewayOpcodes,
   GatewayPlugin,
+  startHeartbeat: startHeartbeatMock,
+  validatePayload: (raw: string) => JSON.parse(raw),
+}));
+
+vi.mock("@buape/carbon/dist/src/types/index.js", () => ({
+  ListenerEvent,
 }));
 
 vi.mock("https-proxy-agent", () => ({
@@ -219,6 +286,7 @@ describe("createDiscordGatewayPlugin", () => {
     baseRegisterClientSpy.mockClear();
     globalFetchMock.mockClear();
     restProxyAgentSpy.mockClear();
+    startHeartbeatMock.mockClear();
     undiciFetchMock.mockClear();
     undiciProxyAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
@@ -437,5 +505,72 @@ describe("createDiscordGatewayPlugin", () => {
       url: "wss://gateway.discord.gg/?v=10",
       shards: 8,
     });
+  });
+
+  it("ignores zombie heartbeat reconnect callbacks after the socket is already closed", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      ws: EventEmitter;
+      setupWebSocket: () => void;
+      emitter: EventEmitter;
+      handleZombieConnection: ReturnType<typeof vi.fn>;
+    };
+    const debugEvents: string[] = [];
+    const socket = new EventEmitter();
+
+    plugin.ws = socket;
+    plugin.emitter.on("debug", (message) => debugEvents.push(String(message)));
+    plugin.setupWebSocket();
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: GatewayOpcodes.Hello, d: { heartbeat_interval: 1000 } })),
+    );
+    socket.emit("close", 1000, "");
+
+    const reconnectCallback = startHeartbeatMock.mock.calls.at(-1)?.[1]?.reconnectCallback as
+      | (() => void)
+      | undefined;
+
+    expect(reconnectCallback).toBeTypeOf("function");
+    expect(() => reconnectCallback?.()).not.toThrow();
+    expect(plugin.handleZombieConnection).not.toHaveBeenCalled();
+    expect(debugEvents).toContain(
+      "Ignoring zombie reconnect for an already-closed gateway connection",
+    );
+  });
+
+  it("ignores reconnect opcodes after the socket is already closed", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as {
+      ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+      setupWebSocket: () => void;
+      emitter: EventEmitter;
+      handleReconnect: ReturnType<typeof vi.fn>;
+    };
+    const debugEvents: string[] = [];
+    const socket = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
+    socket.close = vi.fn();
+
+    plugin.ws = socket;
+    plugin.emitter.on("debug", (message) => debugEvents.push(String(message)));
+    plugin.setupWebSocket();
+
+    socket.emit("close", 1000, "");
+
+    expect(() =>
+      socket.emit("message", Buffer.from(JSON.stringify({ op: GatewayOpcodes.Reconnect }))),
+    ).not.toThrow();
+    expect(plugin.handleReconnect).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(debugEvents).toContain(
+      "Ignoring gateway reconnect opcode for an already-closed connection",
+    );
   });
 });
