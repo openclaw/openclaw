@@ -15,6 +15,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -438,6 +439,32 @@ describe("gateway session utils", () => {
       const { agents } = listAgentsForGateway(cfg);
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
     });
+  });
+});
+
+test("getSessionDefaults prefers provider-specific context over poisoned bare model ids", () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        model: { primary: "claude-bridge/claude-sonnet-latest" },
+      },
+    },
+    models: {
+      providers: {
+        "claude-bridge": {
+          models: [{ id: "claude-sonnet-latest", contextWindow: 1_000_000 }],
+        },
+        "lumin-claude-bridge": {
+          models: [{ id: "claude-sonnet-latest", contextWindow: 200_000 }],
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  expect(getSessionDefaults(cfg)).toMatchObject({
+    modelProvider: "claude-bridge",
+    model: "claude-sonnet-latest",
+    contextTokens: 1_000_000,
   });
 });
 

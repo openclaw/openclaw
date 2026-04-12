@@ -149,4 +149,29 @@ describe("models-config merge helpers", () => {
 
     expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
+
+  it("drops orphaned providers that no longer exist in the next models.json plan", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "claude-bridge": {
+          models: [{ id: "claude-sonnet-latest", contextWindow: 1_000_000 }],
+        } as ProviderConfig,
+      },
+      existingProviders: {
+        "claude-bridge": {
+          models: [{ id: "claude-sonnet-latest", contextWindow: 1_000_000 }],
+        } as ExistingProviderConfig,
+        "lumin-claude-bridge": {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: preservedApiKey,
+          models: [{ id: "claude-sonnet-latest", contextWindow: 200_000 }],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+      explicitBaseUrlProviders: new Set<string>(),
+    });
+
+    expect(Object.keys(merged)).toEqual(["claude-bridge"]);
+    expect(merged["lumin-claude-bridge"]).toBeUndefined();
+  });
 });

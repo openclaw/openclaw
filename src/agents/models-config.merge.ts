@@ -220,9 +220,6 @@ export function mergeWithExistingProviderSecrets(params: {
   const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
     params;
   const mergedProviders: Record<string, ProviderConfig> = {};
-  for (const [key, entry] of Object.entries(existingProviders)) {
-    mergedProviders[key] = entry;
-  }
   for (const [key, newEntry] of Object.entries(nextProviders)) {
     const existing = existingProviders[key];
     if (!existing) {
