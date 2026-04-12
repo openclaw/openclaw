@@ -293,6 +293,35 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       ).toBe("call123fc123");
     });
 
+    it("preserves replay-safe signed-thinking tool ids when requested", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveReplaySafeThinkingToolCallIds: true,
+        allowedToolNames: ["read"],
+      });
+
+      expect(out).toBe(input);
+      expect(((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string }).id).toBe(
+        "call_1",
+      );
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
+    });
+
     it("avoids collisions with alphanumeric-only suffixes", () => {
       const input = buildDuplicateIdCollisionInput();
 

@@ -111,7 +111,10 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
-import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import {
+  resolveTranscriptPolicy,
+  shouldAllowProviderOwnedThinkingReplay,
+} from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -1156,11 +1159,17 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
+          const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+            modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+            policy: transcriptPolicy,
+          });
           const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
             messages as AgentMessage[],
             mode,
             {
               preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+              preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+              allowedToolNames,
             },
           );
           if (sanitized === messages) {
