@@ -66,12 +66,16 @@ export function createLineWebhookMiddleware(
         return;
       }
 
+      // Respond to LINE immediately — LINE requires a 200 within 1 second
+      // or it marks the webhook as request_timeout (#65375).
+      res.status(200).json({ status: "ok" });
+
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body);
+        onEvents(body).catch((err) => {
+          runtime?.error?.(danger(`line webhook event processing failed: ${String(err)}`));
+        });
       }
-
-      res.status(200).json({ status: "ok" });
     } catch (err) {
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
       if (!res.headersSent) {
