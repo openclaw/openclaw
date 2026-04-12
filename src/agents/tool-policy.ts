@@ -214,3 +214,16 @@ export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   }
   return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
 }
+
+export function mergeForceAllowPolicy<TPolicy extends { allow?: string[] }>(
+  policy: TPolicy | undefined,
+  forceAllow?: string[],
+): TPolicy | undefined {
+  if (!policy?.allow || !Array.isArray(forceAllow) || forceAllow.length === 0) {
+    return policy;
+  }
+  if (policy.allow.length === 0 || policy.allow.some((entry) => normalizeToolName(entry) === "*")) {
+    return policy;
+  }
+  return { ...policy, allow: Array.from(new Set([...policy.allow, ...forceAllow])) };
+}

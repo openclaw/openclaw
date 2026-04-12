@@ -49,6 +49,45 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
     }
   });
 
+  it("forwards toolsAllow as forceAllowTools before post-filtering the tool list", async () => {
+    vi.resetModules();
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-tools-allow-"));
+    const stop = new Error("stop after tool creation");
+    const capturedOptions: Array<Record<string, unknown> | undefined> = [];
+
+    try {
+      vi.doMock("../../pi-tools.js", async () => {
+        const actual =
+          await vi.importActual<typeof import("../../pi-tools.js")>("../../pi-tools.js");
+        return {
+          ...actual,
+          createOpenClawCodingTools: vi.fn((options) => {
+            capturedOptions.push(options as Record<string, unknown> | undefined);
+            throw stop;
+          }),
+        };
+      });
+
+      const { runEmbeddedAttempt } = await import("./attempt.js");
+
+      await expect(
+        runEmbeddedAttempt({
+          ...createAttemptParams(workspaceDir),
+          toolsAllow: ["exec", "read"],
+        }),
+      ).rejects.toBe(stop);
+
+      expect(capturedOptions).toHaveLength(1);
+      expect(capturedOptions[0]).toMatchObject({
+        forceAllowTools: ["exec", "read"],
+      });
+    } finally {
+      vi.doUnmock("../../pi-tools.js");
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("activates the memory flush append-only write wrapper", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
     const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);

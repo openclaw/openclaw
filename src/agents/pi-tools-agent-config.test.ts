@@ -102,12 +102,13 @@ describe("Agent-specific tool filtering", () => {
     }
   }
 
-  function createMainSessionTools(cfg: OpenClawConfig) {
+  function createMainSessionTools(cfg: OpenClawConfig, options?: { forceAllowTools?: string[] }) {
     return createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
+      forceAllowTools: options?.forceAllowTools,
     });
   }
 
@@ -214,6 +215,42 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("apply_patch");
+  });
+
+  it("re-exposes explicitly requested core tools through restrictive allowlists", () => {
+    const cfg = createMainAgentConfig({
+      tools: {
+        profile: "full",
+        allow: ["group:openclaw"],
+      },
+    });
+
+    const defaultToolNames = createMainSessionTools(cfg).map((tool) => tool.name);
+    expect(defaultToolNames).not.toContain("exec");
+    expect(defaultToolNames).not.toContain("read");
+    expect(defaultToolNames).not.toContain("write");
+
+    const forcedToolNames = createMainSessionTools(cfg, {
+      forceAllowTools: ["exec", "read", "write"],
+    }).map((tool) => tool.name);
+    expect(forcedToolNames).toContain("exec");
+    expect(forcedToolNames).toContain("read");
+    expect(forcedToolNames).toContain("write");
+  });
+
+  it("keeps deny precedence over force-allowed core tools", () => {
+    const cfg = createMainAgentConfig({
+      tools: {
+        profile: "full",
+        allow: ["group:openclaw"],
+        deny: ["exec"],
+      },
+    });
+
+    const toolNames = createMainSessionTools(cfg, {
+      forceAllowTools: ["exec"],
+    }).map((tool) => tool.name);
+    expect(toolNames).not.toContain("exec");
   });
 
   it("should allow disabling apply_patch explicitly", () => {
