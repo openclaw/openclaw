@@ -1,8 +1,7 @@
 import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { ActiveWebListener } from "./active-listener.js";
-import type { WebListenerCloseReason } from "./inbound/types.js";
+import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
   createWaSocket,
