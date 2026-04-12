@@ -140,6 +140,39 @@ describe("preemptive-compaction", () => {
     expect(result.toolResultReducibleChars).toBeGreaterThan(0);
   });
 
+  it("clamps reserveTokens that equal the full context window to leave usable prompt budget", () => {
+    // Regression: #65218 — when reserveTokens equals contextTokenBudget,
+    // promptBudgetBeforeReserve collapses to 1, causing guaranteed overflow.
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 16_384,
+      reserveTokens: 16_384,
+    });
+
+    // With the clamp, promptBudgetBeforeReserve should be at least 10% of
+    // the context window (1638 tokens), not 1.
+    expect(result.promptBudgetBeforeReserve).toBeGreaterThan(1);
+    expect(result.promptBudgetBeforeReserve).toBeGreaterThanOrEqual(Math.floor(16_384 * 0.1));
+    expect(result.shouldCompact).toBe(false);
+  });
+
+  it("clamps reserveTokens exceeding context window to the 90% cap", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 10_000,
+      reserveTokens: 50_000,
+    });
+
+    // Effective reserve should be capped at 9000 (90% of 10000).
+    // Prompt budget = 10000 - 9000 = 1000.
+    expect(result.promptBudgetBeforeReserve).toBe(1_000);
+    expect(result.shouldCompact).toBe(false);
+  });
+
   it("treats mixed oversized-plus-aggregate tool tails as cumulative recovery potential", () => {
     const oversized = "x".repeat(45_000);
     const medium = "alpha beta gamma delta epsilon ".repeat(500);

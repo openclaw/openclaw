@@ -48,9 +48,19 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   toolResultReducibleChars: number;
 } {
   const estimatedPromptTokens = estimatePrePromptTokens(params);
+  // Clamp reserveTokens to at most 90% of the context window.
+  // When the Pi settings manager returns a reserve equal to the full context
+  // budget (e.g. when config overrides do not propagate correctly), the prompt
+  // budget collapses to 1 token, causing guaranteed overflow for any prompt.
+  // See #65218.
+  const maxReserve = Math.floor(params.contextTokenBudget * 0.9);
+  const effectiveReserveTokens = Math.min(
+    Math.max(0, Math.floor(params.reserveTokens)),
+    maxReserve,
+  );
   const promptBudgetBeforeReserve = Math.max(
     1,
-    Math.floor(params.contextTokenBudget) - Math.max(0, Math.floor(params.reserveTokens)),
+    Math.floor(params.contextTokenBudget) - effectiveReserveTokens,
   );
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
